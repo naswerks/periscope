@@ -1,0 +1,19 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "transcript_list",
+      "requestId": "request-2",
+      "fromIndex": 0
+    }
+  },
+  "name": "transcript_list.from-start",
+  "protocolVersion": 9,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"transcript_list\",\"requestId\":\"request-2\",\"fromIndex\":0}}"
+}

@@ -1,0 +1,22 @@
+{
+  "expect": {
+    "encode": "refused",
+    "reason": "frame-malformed"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_new",
+      "cwd": "/work/repo",
+      "correlationId": null,
+      "request": null,
+      "gate": null
+    }
+  },
+  "name": "refused.encode.missing-member",
+  "protocolVersion": 9,
+  "wire": null
+}

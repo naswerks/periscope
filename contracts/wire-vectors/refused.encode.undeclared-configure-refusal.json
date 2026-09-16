@@ -1,0 +1,34 @@
+{
+  "expect": {
+    "encode": "refused",
+    "reason": "frame-malformed"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "host_configure_result",
+      "requestId": "request-1",
+      "configuration": {
+        "repositoryRoot": null,
+        "workspaceRoot": null,
+        "branchScheme": null,
+        "transcriptsRoot": null,
+        "controllerUrl": null,
+        "decisionUrl": null,
+        "agentHome": null
+      },
+      "overriddenByEnvironment": [],
+      "pendingRestart": [],
+      "refusal": {
+        "reason": "a-reason-this-host-does-not-declare",
+        "detail": ""
+      }
+    }
+  },
+  "name": "refused.encode.undeclared-configure-refusal",
+  "protocolVersion": 9,
+  "wire": null
+}

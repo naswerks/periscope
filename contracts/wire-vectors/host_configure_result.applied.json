@@ -1,0 +1,34 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "host_configure_result",
+      "requestId": "request-6",
+      "configuration": {
+        "repositoryRoot": "/srv/repo",
+        "workspaceRoot": "/srv/repo-workspaces",
+        "branchScheme": "{repo}/{key}",
+        "transcriptsRoot": "/home/agent/.claude/projects",
+        "controllerUrl": "wss://controller.example/periscope/link",
+        "decisionUrl": "https://controller.example/periscope/decision",
+        "agentHome": "/home/agent/.claude"
+      },
+      "overriddenByEnvironment": [
+        "PERISCOPE_REPOSITORY_ROOT"
+      ],
+      "pendingRestart": [
+        "PERISCOPE_CONTROLLER_URL"
+      ],
+      "refusal": null
+    }
+  },
+  "name": "host_configure_result.applied",
+  "protocolVersion": 9,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"host_configure_result\",\"requestId\":\"request-6\",\"configuration\":{\"repositoryRoot\":\"/srv/repo\",\"workspaceRoot\":\"/srv/repo-workspaces\",\"branchScheme\":\"{repo}/{key}\",\"transcriptsRoot\":\"/home/agent/.claude/projects\",\"controllerUrl\":\"wss://controller.example/periscope/link\",\"decisionUrl\":\"https://controller.example/periscope/decision\",\"agentHome\":\"/home/agent/.claude\"},\"overriddenByEnvironment\":[\"PERISCOPE_REPOSITORY_ROOT\"],\"pendingRestart\":[\"PERISCOPE_CONTROLLER_URL\"],\"refusal\":null}}"
+}

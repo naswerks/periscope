@@ -1,0 +1,27 @@
+{
+  "expect": {
+    "encode": "refused",
+    "reason": "frame-malformed"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_update",
+      "body": {
+        "update": "wire_refusal",
+        "refusal": {
+          "reason": "a-reason-this-host-does-not-declare",
+          "detail": ""
+        },
+        "expected": 1,
+        "received": 2
+      }
+    }
+  },
+  "name": "refused.encode.undeclared-wire-refusal",
+  "protocolVersion": 9,
+  "wire": null
+}

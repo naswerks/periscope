@@ -1,0 +1,48 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "workspace_list_result",
+      "requestId": "request-7",
+      "entries": [
+        {
+          "key": "session-150",
+          "path": "/srv/repo-workspaces/session-150",
+          "branch": "repo/session-150",
+          "head": "2222222222222222222222222222222222222222",
+          "detached": false,
+          "locked": false,
+          "prunable": false,
+          "merged": true,
+          "aheadCount": 0,
+          "lastCommitAt": "2026-09-09T08:30:00+00:00"
+        },
+        {
+          "key": "solo-detached",
+          "path": "/srv/repo-workspaces/solo-detached",
+          "branch": null,
+          "head": null,
+          "detached": true,
+          "locked": true,
+          "prunable": true,
+          "merged": null,
+          "aheadCount": null,
+          "lastCommitAt": null
+        }
+      ],
+      "totalCount": 27,
+      "nextIndex": 25,
+      "defaultBranch": "main",
+      "refusal": null
+    }
+  },
+  "name": "workspace_list_result.page",
+  "protocolVersion": 9,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"workspace_list_result\",\"requestId\":\"request-7\",\"entries\":[{\"key\":\"session-150\",\"path\":\"/srv/repo-workspaces/session-150\",\"branch\":\"repo/session-150\",\"head\":\"2222222222222222222222222222222222222222\",\"detached\":false,\"locked\":false,\"prunable\":false,\"merged\":true,\"aheadCount\":0,\"lastCommitAt\":\"2026-09-09T08:30:00+00:00\"},{\"key\":\"solo-detached\",\"path\":\"/srv/repo-workspaces/solo-detached\",\"branch\":null,\"head\":null,\"detached\":true,\"locked\":true,\"prunable\":true,\"merged\":null,\"aheadCount\":null,\"lastCommitAt\":null}],\"totalCount\":27,\"nextIndex\":25,\"defaultBranch\":\"main\",\"refusal\":null}}"
+}

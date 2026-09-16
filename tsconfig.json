@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2024"],
+    "types": ["node"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "useUnknownInCatchVariables": true,
+
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "declaration": true,
+    // Members tagged @internal are left out of the emitted .d.ts: the process seam stays the
+    // package's own, and contracts/public-api.txt (read from dist/) never lists it.
+    "stripInternal": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "skipLibCheck": true,
+
+    // LF, pinned: the emitted bin carries a shebang, and a CRLF one fails as "no such file or
+    // directory" naming the interpreter rather than the line ending. .gitattributes only governs
+    // files git checks out; `dist/` is emitted, so this is the only place that decides it.
+    "newLine": "lf",
+
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -1,0 +1,18 @@
+{
+  "expect": {
+    "encode": "refused",
+    "reason": "frame-malformed"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "",
+    "payload": {
+      "kind": "session_cancel"
+    }
+  },
+  "name": "refused.encode.empty-at",
+  "protocolVersion": 9,
+  "wire": null
+}

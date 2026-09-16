@@ -1,0 +1,18 @@
+# Source and documentation are LF on every platform, so a checkout on Windows produces the same
+# bytes the pins and the wire-vector corpus were approved against. The SDK's type definitions are
+# never checked in; `contracts/sdk.sha256` hashes the installed copy with line endings normalised.
+*.ts text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.floor text eol=lf
+LICENSE text eol=lf
+CODEOWNERS text eol=lf
+*.sha256 text eol=lf
+.editorconfig text eol=lf
+.prettierignore text eol=lf
+.npmrc text eol=lf
+.nvmrc text eol=lf

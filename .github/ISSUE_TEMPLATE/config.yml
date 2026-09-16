@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security
+    url: https://github.com/naswerks/periscope/security/advisories/new
+    about: Report a vulnerability privately; never in a public issue.

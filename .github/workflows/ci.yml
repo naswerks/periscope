@@ -1,0 +1,270 @@
+name: ci
+
+# The suite, the gates and the pack check on every change; the consumer smoke on every change;
+# mutation testing weekly.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  # Weekly, Monday 06:00 UTC: the mutation job's trigger. The suite and gates run alongside it.
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+# A new push to the same PR branch supersedes the run in flight: cancel it rather than pay for two
+# verdicts on a commit nobody will merge. Pushes to main are never cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------------------------------------
+  # Both legs of the matrix are load-bearing, and they prove different things.
+  #
+  #   windows  - USERPROFILE (not HOME), windowsHide, case-insensitive env matching, path handling.
+  #   ubuntu   - the other install path, where a container would build, and the only place POSIX
+  #              file modes mean anything. On win32 a 0600 file and a world-readable 0666 one are
+  #              byte-identical at 666, so the credential-privacy assertion is unobservable there.
+  #
+  # The node versions are derived from `engines.node`: the floor it states is tested, and the
+  # current release is tested. A floor no leg proves is a claim, not a constraint, and a leg below
+  # the floor proves a floor the package does not claim.
+  # ---------------------------------------------------------------------------------------------
+  suite:
+    name: suite (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['22', '24']
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # `npm ci`, never `npm install`: the lockfile is the pin, and the SDK is pre-1.0.
+      - name: install
+        run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      # `npm test` runs clean -> build -> node --test as one script, so a stale `dist/` can never be
+      # tested: the build's failure fails the step. Hand-chaining a build and a test without reading
+      # the build's exit code passes every assertion in a stale binary.
+      - name: suite
+        run: npm test
+
+      # The examples resolve `@naswerks/periscope` and `@naswerks/periscope/protocol` through the
+      # export map and the emitted `.d.ts`, so this needs the `dist/` the suite step just built.
+      - name: typecheck examples
+        run: npm run typecheck:examples
+
+      # The type-checked lint covers examples/ too, so it needs that same dist/; run before the build,
+      # every example import types as an error and the rule set reports hundreds of unsafe uses that
+      # are not the finding. The lint script refuses by name when dist/ is absent.
+      - name: lint
+        run: npm run lint
+
+      # The engines floor and this matrix must agree. Nothing else notices when one moves: the floor
+      # is read from the manifest and compared with the legs this matrix runs.
+      - name: engines floor agrees with the matrix
+        shell: bash
+        env:
+          MATRIX_NODE_VERSIONS: '22 24'
+        run: |
+          node -e "
+            const declared = require('./package.json').engines.node;
+            const floor = /^>=(\d+)$/.exec(declared)?.[1];
+            const legs = process.env.MATRIX_NODE_VERSIONS.split(' ');
+            console.log('engines.node = ' + declared + '; matrix legs: ' + legs.join(', ') + '; this leg is ' + process.version);
+            if (floor === undefined) { console.error('engines.node must read >=<major>'); process.exit(1); }
+            if (!legs.includes(floor)) { console.error('the floor ' + floor + ' is not a matrix leg; one moved without the other'); process.exit(1); }
+            if (legs.some((leg) => Number(leg) < Number(floor))) { console.error('a matrix leg is below the floor'); process.exit(1); }
+          "
+
+  # ---------------------------------------------------------------------------------------------
+  # The gates. One leg each: they are platform-independent, and running them four times would only
+  # make a red harder to read.
+  # ---------------------------------------------------------------------------------------------
+  gates:
+    name: gates (drift, coverage, publish, pack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: install
+        run: npm ci
+
+      # The drift detector. The SDK is 0.3.x: every SessionStore member is @alpha, there is a method
+      # named usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET, and the message union grows
+      # between patch releases. A bump that changes the surface cannot land without someone
+      # accepting a new baseline and reading the diff.
+      - name: SDK drift
+        run: npm run check:drift
+
+      # The formatter. Committed config, checked here once: the first outside pull request must not
+      # be a reformat, and a contributor's editor should agree with CI before they open one.
+      - name: format
+        run: npm run format:check
+
+      # The ratchet. The floor is derived from what the suite achieved, then rounded down; it is not
+      # chosen in advance and back-filled.
+      - name: coverage
+        run: |
+          npm run test:coverage > coverage-receipt.txt 2>&1 || (cat coverage-receipt.txt; exit 1)
+          node scripts/check-coverage.mjs coverage-receipt.txt coverage.floor
+
+      # The pack checks read the tarball a consumer receives: publint audits the manifest, attw resolves
+      # the packed types under the resolution modes an ESM-only package offers. After coverage, which
+      # built dist/.
+      - name: pack checks (publint, attw)
+        run: npm run check:pack
+
+      # Inert while `private` is true; red the moment that line is removed with anything missing.
+      - name: publish gate
+        run: npm run check:publish
+
+      # The `files` allowlist is only an allowlist if something checks what it admits. A pack that
+      # ships src/, node_modules or a stray receipt is a different package from the audited one. The
+      # admitted set is read from the manifest, so widening `files` and this check move together.
+      - name: pack ships only what the allowlist names
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e "
+            const fs = require('node:fs');
+            const packed = JSON.parse(fs.readFileSync('pack.json','utf8'))[0].files.map(f => f.path);
+            const allow = require('./package.json').files.filter(f => !f.startsWith('!'));
+            const admitted = (p) => p === 'package.json' || allow.some(a => a.endsWith('/') ? p.startsWith(a) : p === a);
+            const stray = packed.filter(p => !admitted(p));
+            const tests = packed.filter(p => /\.test\./.test(p));
+            const pins  = packed.filter(p => p.startsWith('dist/pins/'));
+            const support = packed.filter(p => p.startsWith('dist/test-support/'));
+            const maps = packed.filter(p => p.endsWith('.map'));
+            console.log(packed.length + ' file(s) would ship under: ' + allow.join(', '));
+            if (stray.length) { console.error('OUTSIDE THE ALLOWLIST: ' + stray.join(', ')); process.exit(1); }
+            // An allowlist of dist/ alone ships every compiled test file and source map. Every
+            // shipped file is surface.
+            if (tests.length) { console.error('TEST FILES WOULD SHIP: ' + tests.slice(0,10).join(', ')); process.exit(1); }
+            if (pins.length)  { console.error('PIN FILES WOULD SHIP: ' + pins.slice(0,10).join(', ')); process.exit(1); }
+            if (support.length) { console.error('TEST-SUPPORT FILES WOULD SHIP: ' + support.slice(0,10).join(', ')); process.exit(1); }
+            if (maps.length) { console.error('SOURCE MAPS WOULD SHIP: ' + maps.slice(0,10).join(', ')); process.exit(1); }
+            console.log('pack matches the allowlist.');
+          "
+
+  # ---------------------------------------------------------------------------------------------
+  # The consumer smoke: the tarball a stranger installs, installed the way a stranger installs it.
+  # Packs the package, installs the tarball into an empty project, and proves the binary runs and
+  # both entry points import. The automated half of the from-scratch walk-through.
+  # ---------------------------------------------------------------------------------------------
+  consumer-smoke:
+    name: consumer smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: install
+        run: npm ci
+
+      # `prepack` builds, so the tarball is what a publish would carry.
+      - name: pack
+        shell: bash
+        run: |
+          npm pack --json > packed.json
+          node -e "console.log(JSON.parse(require('node:fs').readFileSync('packed.json','utf8'))[0].filename)" > tarball.txt
+          cat tarball.txt
+
+      - name: install the tarball into an empty project
+        shell: bash
+        run: |
+          tarball="$(pwd)/$(cat tarball.txt)"
+          mkdir -p "${RUNNER_TEMP}/consumer" && cd "${RUNNER_TEMP}/consumer"
+          npm init -y > /dev/null
+          npm install "${tarball}"
+
+      - name: the binary runs
+        shell: bash
+        run: |
+          cd "${RUNNER_TEMP}/consumer"
+          npx periscope version
+          npx periscope help
+          # No credential, no controller: status still answers, from nothing.
+          PERISCOPE_CONFIG_DIR="${RUNNER_TEMP}/consumer/config" npx periscope status
+
+      - name: both entry points import
+        shell: bash
+        run: |
+          cd "${RUNNER_TEMP}/consumer"
+          node --input-type=module -e "
+            const main = await import('@naswerks/periscope');
+            const protocol = await import('@naswerks/periscope/protocol');
+            if (typeof main.PeriscopeHost !== 'function') throw new Error('PeriscopeHost is not exported');
+            if (typeof protocol.encode !== 'function') throw new Error('encode is not exported from the protocol subpath');
+            console.log('imports ok: protocol v' + protocol.PROTOCOL_VERSION);
+          "
+
+  # ---------------------------------------------------------------------------------------------
+  # Mutation testing. Runs on the schedule and on a manual dispatch only: it is minutes of compute
+  # per file under mutation and its output is a score, not a pass. `thresholds.break` is null, so
+  # the job reports and never fails the run on the number; the report is the artifact.
+  # ---------------------------------------------------------------------------------------------
+  mutation:
+    name: mutation (weekly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: install
+        run: npm ci
+
+      # The pull-request suite pins a seed so it is reproducible; exploration with fresh seeds is here.
+      - name: property tests with random seeds
+        run: |
+          npx tsc
+          for i in 1 2 3 4 5; do PERISCOPE_FC_SEED=random node --test "dist/**/*.property.test.js" || exit 1; done
+
+      - name: mutation
+        run: npm run test:mutation
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mutation-report
+          path: reports/
+          if-no-files-found: warn

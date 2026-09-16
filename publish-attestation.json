@@ -1,0 +1,11 @@
+{
+  "npmNameAvailable": {
+    "name": "@naswerks/periscope",
+    "checkedOn": "2026-09-11",
+    "how": "npm view @naswerks/periscope answered E404 (nas-periscope, the unscoped alternative, also E404); periscope itself is a 2012 package"
+  },
+  "ciGreen": {
+    "commit": "",
+    "note": "recorded from the first green run of ci.yml in this repository, before the tag; the gate lists this until it is filled"
+  }
+}
