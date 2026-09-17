@@ -29,6 +29,13 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
+      # Trusted publishing (the OIDC exchange behind --provenance with no token) needs npm 11.5 or
+      # later; node 22 ships npm 10, which publishes unauthenticated and is answered with a 404.
+      - name: npm that can publish through trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
+
       - name: install
         run: npm ci
 
