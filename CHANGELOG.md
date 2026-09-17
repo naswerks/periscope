@@ -8,6 +8,12 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-17
+
+- The package carries `src/` (without its tests) and `contracts/wire-vectors/`, so a controller in
+  another language, and a consumer that generates types from the wire, read the contract from the
+  installed package rather than from the repository. No wire or API change.
+
 ## [1.0.0] - 2026-09-17
 
 Initial public release.

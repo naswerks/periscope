@@ -32,7 +32,15 @@ test('the files allowlist exists and excludes tests, maps and pins', () => {
   const files = manifest.files;
   assert.ok(Array.isArray(files) && files.length > 0, 'a package with no `files` allowlist ships everything');
 
-  for (const exclusion of ['!dist/**/*.test.js', '!dist/**/*.map', '!dist/pins/', '!dist/test-support/']) {
+  for (const exclusion of [
+    '!dist/**/*.test.js',
+    '!dist/**/*.map',
+    '!dist/pins/',
+    '!dist/test-support/',
+    '!src/**/*.test.ts',
+    '!src/pins/',
+    '!src/test-support/',
+  ]) {
     assert.ok(
       files.includes(exclusion),
       `the allowlist does not exclude ${exclusion} — the suite and its maps would ship as API`,

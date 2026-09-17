@@ -1,6 +1,6 @@
 {
   "name": "@naswerks/periscope",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "description": "Self-hosted runner for agent sessions: dials out to your controller, then spawns, gates, observes, prompts and streams.",
   "keywords": [
@@ -36,6 +36,11 @@
     "!dist/**/*.map",
     "!dist/pins/",
     "!dist/test-support/",
+    "src/",
+    "!src/**/*.test.ts",
+    "!src/pins/",
+    "!src/test-support/",
+    "contracts/wire-vectors/",
     "docs/",
     "examples/",
     "README.md",

@@ -67,8 +67,8 @@ with a signed-in identity instead of a machine credential: [identity](docs/ident
 A controller serves two transports: the WebSocket the host dials, and an HTTP endpoint the host
 POSTs each permission decision to. The second is easy to miss, because nothing on the wire announces
 it. `@naswerks/periscope/protocol` ships the wire types and the codec without anything that can
-reach a process or a disk; `contracts/wire-vectors/` is the same contract as bytes, for a controller
-in any language.
+reach a process or a disk; `contracts/wire-vectors/`, shipped in the package, is the same contract
+as bytes, for a controller in any language.
 
 ```sh
 git clone https://github.com/naswerks/periscope && cd periscope && npm ci && npm run build

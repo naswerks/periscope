@@ -143,7 +143,7 @@ jobs:
         run: npm run check:publish
 
       # The `files` allowlist is only an allowlist if something checks what it admits. A pack that
-      # ships src/, node_modules or a stray receipt is a different package from the audited one. The
+      # ships node_modules or a stray receipt is a different package from the audited one. The
       # admitted set is read from the manifest, so widening `files` and this check move together.
       - name: pack ships only what the allowlist names
         run: |
@@ -155,8 +155,8 @@ jobs:
             const admitted = (p) => p === 'package.json' || allow.some(a => a.endsWith('/') ? p.startsWith(a) : p === a);
             const stray = packed.filter(p => !admitted(p));
             const tests = packed.filter(p => /\.test\./.test(p));
-            const pins  = packed.filter(p => p.startsWith('dist/pins/'));
-            const support = packed.filter(p => p.startsWith('dist/test-support/'));
+            const pins  = packed.filter(p => p.startsWith('dist/pins/') || p.startsWith('src/pins/'));
+            const support = packed.filter(p => p.startsWith('dist/test-support/') || p.startsWith('src/test-support/'));
             const maps = packed.filter(p => p.endsWith('.map'));
             console.log(packed.length + ' file(s) would ship under: ' + allow.join(', '));
             if (stray.length) { console.error('OUTSIDE THE ALLOWLIST: ' + stray.join(', ')); process.exit(1); }
