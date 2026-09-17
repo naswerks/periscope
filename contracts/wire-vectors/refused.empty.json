@@ -1,0 +1,10 @@
+{
+  "expect": {
+    "decode": "refused",
+    "reason": "frame-not-json"
+  },
+  "frame": null,
+  "name": "refused.empty",
+  "protocolVersion": 9,
+  "wire": ""
+}

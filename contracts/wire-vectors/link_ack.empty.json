@@ -1,0 +1,16 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "control",
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "link_ack",
+      "cursors": []
+    }
+  },
+  "name": "link_ack.empty",
+  "protocolVersion": 9,
+  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_ack\",\"cursors\":[]}}"
+}

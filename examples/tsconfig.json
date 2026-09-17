@@ -1,0 +1,30 @@
+{
+  // Typechecks the examples against the built package, by package name, exactly as a consumer would.
+  //
+  // It deliberately does not extend the package's own config: the package compiles its own source
+  // from `src/`, so an example compiled that way would be proving that the files exist. This
+  // resolves `@naswerks/periscope` and `@naswerks/periscope/protocol` through the `exports` map and the emitted `.d.ts`,
+  // so a missing export is a build error here rather than a surprise for the first consumer who
+  // installs it. Run `npm run build` first; there is nothing to typecheck against until `dist/`
+  // exists.
+  //
+  // No emit: the examples run under Node's own type stripping (>=22.18), so there is no build step
+  // and no second artifact to keep in step with the source.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2024"],
+    "types": ["node"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}

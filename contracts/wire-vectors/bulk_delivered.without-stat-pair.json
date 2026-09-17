@@ -1,0 +1,22 @@
+{
+  "decoded": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "bulk_delivered",
+      "deliveryId": "delivery-1",
+      "byteCount": 7,
+      "sizeBytes": null,
+      "mtimeMs": null
+    }
+  },
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": null,
+  "name": "bulk_delivered.without-stat-pair",
+  "protocolVersion": 9,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"bulk_delivered\",\"deliveryId\":\"delivery-1\",\"byteCount\":7}}"
+}

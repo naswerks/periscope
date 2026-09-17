@@ -1,0 +1,111 @@
+name: release
+
+# A `v*` tag releases: the suite and the gates run again on the tagged tree, the publish gate is
+# consulted, and the package is published to npm with provenance through trusted publishing (no
+# token in this repository). While `package.json` still carries `private: true` the workflow runs
+# every check and performs a dry-run publish, and says so; nothing leaves the runner.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: release ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: install
+        run: npm ci
+
+      - name: suite
+        run: npm test
+
+      - name: lint and format
+        run: |
+          npm run lint
+          npm run format:check
+
+      - name: pack checks
+        run: npm run check:pack
+
+      # Armed once `private` is gone: every item the gate lists must be satisfied, or this is the
+      # step that stops the release.
+      - name: publish gate
+        run: npm run check:publish
+
+      - name: the tag names the manifest version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "${version}" != "${tag}" ]; then
+            echo "package.json is ${version} but the tag is v${tag}" >&2
+            exit 1
+          fi
+
+      - name: is the package publishable
+        id: publishable
+        run: |
+          if node -e "process.exit(require('./package.json').private === true ? 1 : 0)"; then
+            name="$(node -p "require('./package.json').name")"
+            version="$(node -p "require('./package.json').version")"
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "value=false" >> "$GITHUB_OUTPUT"
+              echo "${name}@${version} is already on the registry; nothing to publish"
+            else
+              echo "value=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+            echo "package.json carries private: true; this run performs a dry-run publish only"
+          fi
+
+      # npm refuses to publish a private package even as a dry run, so the rehearsal is the pack: the
+      # tarball a publish would carry, built and listed, nothing sent. The same step runs when the
+      # version is already published, so a tag placed after a hand publish is a release, not a failure.
+      - name: pack (the rehearsal when nothing is published)
+        if: steps.publishable.outputs.value == 'false'
+        run: npm pack --dry-run
+
+      - name: publish
+        if: steps.publishable.outputs.value == 'true'
+        run: npm publish --provenance --access public
+
+      # The release notes are the CHANGELOG section for this version, extracted rather than retyped.
+      - name: release notes from the changelog
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          node -e "
+            const fs = require('node:fs');
+            const version = require('./package.json').version;
+            const text = fs.readFileSync('CHANGELOG.md', 'utf8');
+            const start = text.indexOf('## [' + version + ']');
+            if (start < 0) { console.error('CHANGELOG.md has no section for ' + version); process.exit(1); }
+            const rest = text.slice(start);
+            const next = rest.indexOf('\n## [', 1);
+            fs.writeFileSync('release-notes.md', (next < 0 ? rest : rest.slice(0, next)).trim() + '\n');
+          "
+          cat release-notes.md
+
+      - name: github release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-file release-notes.md --verify-tag \
+            || gh release edit "${GITHUB_REF_NAME}" --notes-file release-notes.md

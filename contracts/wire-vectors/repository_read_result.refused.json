@@ -1,0 +1,25 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "repository_read_result",
+      "requestId": "request-10",
+      "text": null,
+      "sizeBytes": 0,
+      "truncated": false,
+      "refusal": {
+        "reason": "repository-read-failed",
+        "detail": "the path is not a file"
+      }
+    }
+  },
+  "name": "repository_read_result.refused",
+  "protocolVersion": 9,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"repository_read_result\",\"requestId\":\"request-10\",\"text\":null,\"sizeBytes\":0,\"truncated\":false,\"refusal\":{\"reason\":\"repository-read-failed\",\"detail\":\"the path is not a file\"}}}"
+}

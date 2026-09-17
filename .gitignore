@@ -1,0 +1,10 @@
+dist/
+node_modules/
+coverage/
+
+# `src/bin/` is source, whatever an enclosing checkout's ignore rules say about a `bin` directory.
+!src/bin/
+
+# Local build and test residue that must never be committed.
+.stryker-tmp/
+reports/

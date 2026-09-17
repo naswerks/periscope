@@ -1,0 +1,21 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_list_result",
+      "requestId": "request-1",
+      "sessions": [],
+      "liveCount": 0,
+      "provisioningCount": 0
+    }
+  },
+  "name": "session_list_result.empty",
+  "protocolVersion": 9,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_list_result\",\"requestId\":\"request-1\",\"sessions\":[],\"liveCount\":0,\"provisioningCount\":0}}"
+}

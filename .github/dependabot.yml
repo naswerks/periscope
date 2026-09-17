@@ -1,0 +1,17 @@
+# Weekly dependency updates. The agent SDK is excluded on purpose: it is pinned exactly, its type
+# surface is hashed (`npm run check:drift`), and a bump is accepted by hand after reading the diff.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: '@anthropic-ai/claude-agent-sdk'
+    groups:
+      development:
+        dependency-type: development
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

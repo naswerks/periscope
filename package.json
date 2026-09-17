@@ -1,0 +1,98 @@
+{
+  "name": "@naswerks/periscope",
+  "version": "1.0.0",
+  "license": "MIT",
+  "description": "Self-hosted runner for agent sessions: dials out to your controller, then spawns, gates, observes, prompts and streams.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "agent",
+    "agent-sdk",
+    "websocket",
+    "runner",
+    "permissions"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/naswerks/periscope.git"
+  },
+  "bugs": {
+    "url": "https://github.com/naswerks/periscope/issues"
+  },
+  "homepage": "https://github.com/naswerks/periscope#readme",
+  "author": "Nathan Sloma",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist/",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "!dist/**/*.map",
+    "!dist/pins/",
+    "!dist/test-support/",
+    "docs/",
+    "examples/",
+    "README.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "default": "./dist/protocol.js"
+    }
+  },
+  "bin": {
+    "periscope": "dist/bin/periscope.js"
+  },
+  "scripts": {
+    "start": "npm run build && node dist/bin/periscope.js",
+    "build": "tsc",
+    "prepack": "npm run clean && npm run build",
+    "clean": "node --input-type=module -e \"import{rmSync}from'node:fs';rmSync('dist',{recursive:true,force:true})\"",
+    "typecheck": "tsc --noEmit",
+    "typecheck:examples": "tsc -p examples/tsconfig.json",
+    "lint": "node scripts/require-dist.mjs && eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run clean && npm run build && node --test \"dist/**/*.test.js\"",
+    "test:live": "npm run clean && npm run build && node --test \"dist/**/*.live.test.js\"",
+    "test:coverage": "npm run clean && npm run build && node --test --experimental-test-coverage --test-coverage-exclude=\"dist/**/*.test.js\" --test-coverage-exclude=\"dist/pins/**\" --test-coverage-exclude=\"dist/test-support/**\" \"dist/**/*.test.js\"",
+    "check:drift": "node scripts/check-drift.mjs",
+    "check:publish": "node scripts/publish-gate.mjs",
+    "check:pack": "publint --strict && attw --pack . --profile esm-only",
+    "test:mutation": "stryker run",
+    "contracts:update": "node scripts/update-contracts.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.220",
+    "@anthropic-ai/sdk": "^0.115.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ws": "^8.21.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@eslint/js": "^10.0.1",
+    "@stryker-mutator/core": "^10.0.0",
+    "@types/node": "^22.19.0",
+    "@types/ws": "^8.18.1",
+    "eslint": "^10.8.0",
+    "fast-check": "^4.9.0",
+    "prettier": "^3.9.6",
+    "publint": "^0.3.24",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.70.0"
+  }
+}

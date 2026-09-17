@@ -1,0 +1,36 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_list_result",
+      "requestId": "request-1",
+      "sessions": [
+        {
+          "sessionKey": "session-1",
+          "sessionId": "agent-session-1",
+          "state": "working",
+          "cwd": "/work/repo",
+          "startedAt": "2000-01-01T00:00:00.000Z"
+        },
+        {
+          "sessionKey": "session-2",
+          "sessionId": null,
+          "state": "spawning",
+          "cwd": null,
+          "startedAt": null
+        }
+      ],
+      "liveCount": 1,
+      "provisioningCount": 1
+    }
+  },
+  "name": "session_list_result.full",
+  "protocolVersion": 9,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_list_result\",\"requestId\":\"request-1\",\"sessions\":[{\"sessionKey\":\"session-1\",\"sessionId\":\"agent-session-1\",\"state\":\"working\",\"cwd\":\"/work/repo\",\"startedAt\":\"2000-01-01T00:00:00.000Z\"},{\"sessionKey\":\"session-2\",\"sessionId\":null,\"state\":\"spawning\",\"cwd\":null,\"startedAt\":null}],\"liveCount\":1,\"provisioningCount\":1}}"
+}

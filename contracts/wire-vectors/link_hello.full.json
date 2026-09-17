@@ -1,0 +1,44 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "control",
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "link_hello",
+      "protocolVersion": 9,
+      "hostId": "host-1",
+      "capabilities": [
+        "bulk-post",
+        "workspace:git-worktree",
+        "workspace:branch-scheme"
+      ],
+      "cursors": [
+        {
+          "sessionId": "session-1",
+          "seq": 4
+        }
+      ],
+      "configuration": {
+        "repositoryRoot": "/srv/repo",
+        "workspaceRoot": "/srv/repo-workspaces",
+        "branchScheme": "{repo}/{key}",
+        "transcriptsRoot": "/home/agent/.claude/projects",
+        "controllerUrl": "wss://controller.example/periscope/link",
+        "decisionUrl": "https://controller.example/periscope/decision",
+        "agentHome": "/home/agent/.claude"
+      },
+      "pendingRestart": [
+        "PERISCOPE_DECISION_URL"
+      ],
+      "protocolRange": {
+        "min": 9,
+        "max": 9
+      }
+    }
+  },
+  "name": "link_hello.full",
+  "protocolVersion": 9,
+  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_hello\",\"protocolVersion\":9,\"hostId\":\"host-1\",\"capabilities\":[\"bulk-post\",\"workspace:git-worktree\",\"workspace:branch-scheme\"],\"cursors\":[{\"sessionId\":\"session-1\",\"seq\":4}],\"configuration\":{\"repositoryRoot\":\"/srv/repo\",\"workspaceRoot\":\"/srv/repo-workspaces\",\"branchScheme\":\"{repo}/{key}\",\"transcriptsRoot\":\"/home/agent/.claude/projects\",\"controllerUrl\":\"wss://controller.example/periscope/link\",\"decisionUrl\":\"https://controller.example/periscope/decision\",\"agentHome\":\"/home/agent/.claude\"},\"pendingRestart\":[\"PERISCOPE_DECISION_URL\"],\"protocolRange\":{\"min\":9,\"max\":9}}}"
+}

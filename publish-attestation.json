@@ -1,0 +1,11 @@
+{
+  "npmNameAvailable": {
+    "name": "@naswerks/periscope",
+    "checkedOn": "2026-09-11",
+    "how": "npm view @naswerks/periscope answered E404 (nas-periscope, the unscoped alternative, also E404); periscope itself is a 2012 package"
+  },
+  "ciGreen": {
+    "commit": "the commit the tag v1.0.0 names",
+    "note": "a commit cannot carry its own hash, so the tag names it: the tag is placed only once ci.yml is green there (four suite legs at 1485 / 1462 / 0 / 23, the gates, the consumer smoke on ubuntu and windows), and release.yml runs the whole suite on the tag again before it publishes"
+  }
+}

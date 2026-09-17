@@ -1,0 +1,24 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "repository_list_result",
+      "requestId": "request-9",
+      "entries": [],
+      "truncated": false,
+      "refusal": {
+        "reason": "repository-path-escape",
+        "detail": "outside the repository root"
+      }
+    }
+  },
+  "name": "repository_list_result.refused",
+  "protocolVersion": 9,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"repository_list_result\",\"requestId\":\"request-9\",\"entries\":[],\"truncated\":false,\"refusal\":{\"reason\":\"repository-path-escape\",\"detail\":\"outside the repository root\"}}}"
+}
