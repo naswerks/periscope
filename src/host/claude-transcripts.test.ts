@@ -17,10 +17,12 @@ import { TRANSCRIPT_PAGE_SIZE, TRANSCRIPT_WHAT_PREFIX } from '../control/frames.
 import {
   claudeProjectsRoot,
   claudeTranscriptResolver,
+  defaultAgentHome,
   isMatchingUserEntry,
   listTranscripts,
   resolveTranscriptPath,
   tailTranscript,
+  transcriptsRootUnder,
 } from './claude-transcripts.js';
 
 const userLine = (text: string): string =>
@@ -45,6 +47,13 @@ async function plant(
 }
 
 // --- the cwd on each row ----------------------------------------------------
+
+test('regression: a backslash home reports the agent home and transcripts root in its own separator', () => {
+  assert.equal(defaultAgentHome({ USERPROFILE: 'C:\\Users\\agent' }), 'C:\\Users\\agent\\.claude');
+  assert.equal(transcriptsRootUnder('C:\\Users\\agent\\.claude'), 'C:\\Users\\agent\\.claude\\projects');
+  assert.equal(defaultAgentHome({ HOME: '/home/agent/' }), '/home/agent/.claude');
+  assert.equal(transcriptsRootUnder('/home/agent/.claude'), '/home/agent/.claude/projects');
+});
 
 test('the listing carries the cwd the CLI recorded on the transcript, read off its head — null when none', async () => {
   const root = await makeRoot();
@@ -79,7 +88,7 @@ test('the listing carries the cwd the CLI recorded on the transcript, read off i
 test('the projects root derives from the home directory, and no home means null, never a guess', () => {
   assert.equal(
     claudeProjectsRoot({ USERPROFILE: 'C:\\Users\\someone' }),
-    'C:/Users/someone/.claude/projects',
+    'C:\\Users\\someone\\.claude\\projects',
   );
   assert.equal(claudeProjectsRoot({ HOME: '/home/someone' }), '/home/someone/.claude/projects');
   assert.equal(claudeProjectsRoot({}), null);

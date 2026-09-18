@@ -55,14 +55,24 @@ export const NAME_ALLOWLIST = /^[A-Za-z0-9._-]+$/;
 export function defaultAgentHome(env: NodeJS.ProcessEnv = process.env): string | null {
   const home = env['USERPROFILE'] ?? env['HOME'];
   if (typeof home === 'string' && home.trim() !== '') {
-    return normalizePath(`${home.replace(/[\\/]+$/, '')}/.claude`);
+    // Spelled as the home is spelled: a Windows profile keeps its backslashes, so the value the
+    // hello reports and a controller displays reads like every other path on that machine. The
+    // transcript locator normalises for itself when it resolves.
+    return beneath(home, '.claude');
   }
   return null;
 }
 
 /** Where the agent CLI keeps transcripts under its home: derived, never configured on its own. */
 export function transcriptsRootUnder(agentHome: string): string {
-  return normalizePath(`${agentHome.replace(/[\\/]+$/, '')}/projects`);
+  return beneath(agentHome, 'projects');
+}
+
+/** One segment beneath a base, in the base's own separator. */
+function beneath(base: string, segment: string): string {
+  const trimmed = base.replace(/[\\/]+$/, '');
+  const separator = trimmed.includes('\\') && !trimmed.includes('/') ? '\\' : '/';
+  return `${trimmed}${separator}${segment}`;
 }
 
 /** The transcripts root under the default agent home, or null when there is no home. */

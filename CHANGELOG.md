@@ -8,6 +8,15 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-09-18
+
+- `SECURITY.md` states the permission mode as it is: the controller's to set per session, in the
+  SDK's own vocabulary, `bypassPermissions` included, under which the `PreToolUse` hook is the only
+  control; it is listed among the things a pairing extends. The README's naming sentence says what
+  does ride the wire under the agent's names, and its safety paragraph points at that reach.
+- The agent home and the transcripts root are reported in the home directory's own separator, so a
+  Windows path reads as one on the controller's side. No wire or API change.
+
 ## [1.0.1] - 2026-09-17
 
 - The package carries `src/` (without its tests) and `contracts/wire-vectors/`, so a controller in

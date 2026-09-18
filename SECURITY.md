@@ -7,11 +7,20 @@ posture, what each control covers, and what it does not.
 ## The permission model
 
 Periscope runs the agent headless under the Agent SDK, so there is no interactive prompt. It does
-not pass `--dangerously-skip-permissions` and sets no permission mode; it registers a `PreToolUse`
-hook on every session, and that hook is the only path to a yes: the host turns `grantOnAllow` on
-for every session it opens, so the hook's allow is what lets a tool run and its deny, or its
-silence, is what stops one. Read on its own that looks like the safety being switched off. It is
-the opposite: the interactive prompt is replaced by a stricter gate, not removed.
+not pass `--dangerously-skip-permissions` and sets no permission mode of its own; it registers a
+`PreToolUse` hook on every session, and that hook is the only path to a yes: the host turns
+`grantOnAllow` on for every session it opens, so the hook's allow is what lets a tool run and its
+deny, or its silence, is what stops one. Read on its own that looks like the safety being switched
+off. It is the opposite: the interactive prompt is replaced by a stricter gate, not removed.
+
+The permission mode is the controller's to set, per session, in the SDK's own vocabulary
+(`session_new.request.permissionMode`, and `session_configure` mid-session), and that includes
+`bypassPermissions`. The hook's deny survives every mode; what changes under bypass is that the
+agent's own allow and ask rules no longer apply, so the hook is then the only control there is. A
+controller that sets bypass is choosing that, and this document counts it among the things a
+pairing extends (below). The one thing the host refuses on its own is a grant layered over loaded
+settings files in any other mode, `permission-grant-shadows-settings`, because two mechanisms
+would then answer one question with no stated precedence.
 
 The interactive prompt asks a human sitting at the terminal. That is a fine control when someone is
 sitting there. Periscope exists for the case where nobody is, so the question has to be answered by
@@ -257,6 +266,10 @@ over the link and without a further credential:
   repository doors also honour the host's protected set: a path at or beneath a credential
   directory refuses `credential-path-denied` whatever the root is, on the lexical resolution and
   on the real path.
+- **Choose the agent's permission mode.** `session_new.request.permissionMode` and
+  `session_configure` take the SDK's own vocabulary, `bypassPermissions` included; under bypass the
+  agent's allow and ask rules are off and the `PreToolUse` hook is the only control, so a
+  controller that sets it is relying on its own decision endpoint entirely.
 - **Reconfigure the host.** The workspace root, the repository root, the branch scheme, the agent
   home and the two controller URLs through `host_configure`, written to the config file; the URLs
   apply at the next start.

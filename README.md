@@ -17,7 +17,8 @@ The process on your machine dials out to the controller and takes its orders fro
 hosts is a live conversation you can steer mid-turn, not a job you collect at the end. It opens no
 port and carries no opinion about what a session _means_: it emits what happened, and the
 controller decides what to do about it. The agent it hosts is Claude Code, through the Claude Agent
-SDK, behind a seam that names no agent on the wire.
+SDK, behind a seam whose own vocabulary names no agent; the agent's hook and message names ride
+the wire as `cause.event`, and the transcript locator is `claude-transcript:`.
 
 ## Run a host
 
@@ -47,7 +48,7 @@ PERISCOPE_CONTROLLER_URL and PERISCOPE_DECISION_URL written to the config file -
 The fourth starts the host, in the foreground, until you stop it:
 
 ```
-[host] periscope 1.0.0 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
+[host] periscope 1.0.2 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
 [credential] paired as ph-8cb226ae… - the paired credential is presented on every dial
 [link] idle -> connecting (start_requested)
 [link] connecting -> open (socket_connected)
@@ -93,8 +94,11 @@ replays exactly what was missed. [protocol](docs/protocol.md)
 pass `--dangerously-skip-permissions`, and registers a `PreToolUse` hook on every session that is
 the only path to a yes. That is a stricter gate than the prompt, not a weaker one: path escapes,
 credential reads and unrecognised git verbs are refused locally before the controller is asked,
-everything else is the controller's decision, and no answer is a refusal. What a paired controller
-can reach on the machine is stated in [`SECURITY.md`](SECURITY.md); read it before you install this.
+everything else is the controller's decision, and no answer is a refusal. The gate is the host's
+one control; the rest is the controller's trust: it chooses the permission mode (`bypassPermissions`
+included), it can run a command at session start, set the agent's environment, remove worktrees and
+read transcripts. [`SECURITY.md`](SECURITY.md) states that reach exactly; read it before you install
+this.
 [gate](docs/gate.md)
 
 **Workspaces are the host's.** A session runs in the directory the controller names, or in a plain
