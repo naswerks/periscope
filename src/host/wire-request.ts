@@ -20,6 +20,7 @@
  * They have no JSON form, so the wire type has no member for them and this file has nothing to read.
  * That is the boundary, and it is structural rather than a check somebody remembered to write.
  */
+import { EXTRA_ENV_FLOOR, extraEnvKeyBeneathFloor } from '../sessions/spawn-env.js';
 import type { JsonObject, SessionNewRequest } from '../control/frames.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
@@ -115,7 +116,10 @@ export function readSessionConfigure(payload: SessionConfigure): Result<SessionC
  * `null` in means "every default", which is byte-for-byte the behaviour before this payload grew —
  * so a controller that sends nothing new is unaffected by any of this.
  */
-export function readSessionRequest(request: SessionNewRequest | null): Result<ComposableRequest> {
+export function readSessionRequest(
+  request: SessionNewRequest | null,
+  extraEnvFloor: readonly string[] = EXTRA_ENV_FLOOR,
+): Result<ComposableRequest> {
   if (request === null) return ok({});
 
   const composed: Record<string, unknown> = {};
@@ -207,6 +211,15 @@ export function readSessionRequest(request: SessionNewRequest | null): Result<Co
   }
 
   if (request.env !== null) {
+    // Beneath the floor, refused by name before anything is reserved: the allow-list protects
+    // against accidental inheritance, this protects against the controller.
+    const beneath = extraEnvKeyBeneathFloor(request.env.extraEnv ?? undefined, extraEnvFloor);
+    if (beneath !== null) {
+      return refuse<ComposableRequest>(
+        'env-key-refused',
+        `extraEnv sets ${beneath}, which is beneath this host's floor (${extraEnvFloor.join(', ')})`,
+      );
+    }
     const policy: SpawnEnvPolicy = {
       ...(request.env.extraAllowedKeys === null
         ? {}

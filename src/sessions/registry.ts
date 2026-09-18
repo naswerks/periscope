@@ -153,7 +153,17 @@ export interface SessionRequest {
   readonly permissionMode?: PermissionMode;
 }
 
+/** How many sessions one host holds at once, live and opening together, unless told otherwise. */
+export const DEFAULT_MAX_SESSIONS = 8;
+
 export interface SessionRegistryOptions {
+  /**
+   * The bound on sessions held at once, live and opening together. A `create` past it refuses
+   * `session-cap-reached` before anything is started; the remedy is another session ending. The
+   * offline frame queue is shared by every session on the link, so the bound is what keeps one host's
+   * share of it finite. Defaults to `DEFAULT_MAX_SESSIONS`.
+   */
+  readonly maxSessions?: number;
   /** The environment sessions are filtered from. The composition root passes `process.env`. */
   readonly baseEnv: Readonly<Record<string, string | undefined>>;
   /** Absolute path to the user's home, for the trust read. */
@@ -186,6 +196,7 @@ const DEFAULT_START_TIMEOUT_MS = 60_000;
 
 export class SessionRegistry {
   readonly #live = new Map<string, HostedSession>();
+  readonly #maxSessions: number;
   readonly #provisioning = new Set<HostedSession>();
   readonly #baseEnv: Readonly<Record<string, string | undefined>>;
   readonly #homeDir: string;
@@ -199,6 +210,7 @@ export class SessionRegistry {
     this.#clock = options.clock ?? systemClock;
     this.#startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
     this.#startProcess = options.startProcess ?? startAgentProcess;
+    this.#maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
   }
 
   /** Every live session. A copy — a caller iterating this cannot be surprised by one ending. */
@@ -239,6 +251,14 @@ export class SessionRegistry {
   create(request: SessionRequest): Result<HostedSession> {
     const cwd = requireAbsolute(request.cwd);
     if (!cwd.ok) return refuse<HostedSession>(cwd.refusal.reason, cwd.refusal.detail);
+
+    const held = this.#live.size + this.#provisioning.size;
+    if (held >= this.#maxSessions) {
+      return refuse<HostedSession>(
+        'session-cap-reached',
+        `this host holds ${held} session(s), its bound of ${this.#maxSessions}; end one before opening another`,
+      );
+    }
 
     const settingSources = request.settingSources ?? [];
     const trust = readWorkspaceTrust(trustConfigPath(this.#homeDir), cwd.value);

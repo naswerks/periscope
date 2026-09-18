@@ -12,17 +12,32 @@
 export class AsyncQueue<T> implements AsyncIterable<T> {
   readonly #items: T[] = [];
   readonly #waiting: ((result: IteratorResult<T>) => void)[] = [];
+  readonly #capacity: number;
   #ended = false;
 
-  /** Hand a value to the consumer, or hold it until one asks. Ignored after `end()`. */
-  push(item: T): void {
-    if (this.#ended) return;
+  /**
+   * `capacity` bounds what waits for the consumer; `Infinity` is the unbounded queue. A value a
+   * peer can grow must have one: an unbounded per-handle buffer is the shape this package refuses
+   * everywhere else, and the live prompt queue was the one place it had none.
+   */
+  constructor(capacity: number = Number.POSITIVE_INFINITY) {
+    this.#capacity = capacity;
+  }
+
+  /**
+   * Hand a value to the consumer, or hold it until one asks. False when the queue has ended or
+   * holds `capacity` items already — the item was not taken, and the caller says so.
+   */
+  push(item: T): boolean {
+    if (this.#ended) return false;
     const waiter = this.#waiting.shift();
     if (waiter !== undefined) {
       waiter({ value: item, done: false });
-      return;
+      return true;
     }
+    if (this.#items.length >= this.#capacity) return false;
     this.#items.push(item);
+    return true;
   }
 
   /**

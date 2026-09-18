@@ -82,6 +82,7 @@ class TestController {
           payload: {
             kind: 'link_welcome',
             protocolVersion: PROTOCOL_VERSION,
+            protocolRange: null,
             capabilities: [],
             cursors: this.#ackTo > 0 ? [{ sessionId: SESSION, seq: this.#ackTo }] : [],
           },

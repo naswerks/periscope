@@ -27,6 +27,6 @@
     }
   },
   "name": "workspace_release_bulk.two-entries",
-  "protocolVersion": 9,
+  "protocolVersion": 10,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"workspace_release_bulk\",\"requestId\":\"request-8\",\"releases\":[{\"workspaceKey\":\"workspace-1\",\"path\":null,\"deleteBranch\":true,\"force\":false},{\"workspaceKey\":null,\"path\":\"C:/work/workspace-2\",\"deleteBranch\":false,\"force\":false}]}}"
 }

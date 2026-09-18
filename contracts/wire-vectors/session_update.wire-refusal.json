@@ -21,6 +21,6 @@
     }
   },
   "name": "session_update.wire-refusal",
-  "protocolVersion": 9,
+  "protocolVersion": 10,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"wire_refusal\",\"refusal\":{\"reason\":\"seq-gap\",\"detail\":\"expected 4, received 6\"},\"expected\":4,\"received\":6}}}"
 }

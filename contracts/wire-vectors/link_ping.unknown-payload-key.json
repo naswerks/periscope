@@ -13,6 +13,6 @@
   },
   "frame": null,
   "name": "link_ping.unknown-payload-key",
-  "protocolVersion": 9,
+  "protocolVersion": 10,
   "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_ping\",\"nonce\":\"nonce-1\",\"futureField\":\"from a newer peer\"}}"
 }

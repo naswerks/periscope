@@ -62,6 +62,7 @@ class TestController {
           payload: {
             kind: 'link_welcome',
             protocolVersion: PROTOCOL_VERSION,
+            protocolRange: null,
             capabilities: [],
             cursors: this.#cursors.cursors(),
           },
@@ -186,7 +187,13 @@ test('an acked frame is released, so the retention window does not grow without 
       const welcome = encode({
         frame: 'control',
         at: new Date().toISOString(),
-        payload: { kind: 'link_welcome', protocolVersion: PROTOCOL_VERSION, capabilities: [], cursors: [] },
+        payload: {
+          kind: 'link_welcome',
+          protocolVersion: PROTOCOL_VERSION,
+          protocolRange: null,
+          capabilities: [],
+          cursors: [],
+        },
       });
       if (welcome.ok) socket.send(welcome.value);
     });

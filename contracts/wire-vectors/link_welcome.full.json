@@ -7,7 +7,8 @@
     "at": "2000-01-01T00:00:00.000Z",
     "payload": {
       "kind": "link_welcome",
-      "protocolVersion": 9,
+      "protocolVersion": 10,
+      "protocolRange": null,
       "capabilities": [
         "bulk-post"
       ],
@@ -20,6 +21,6 @@
     }
   },
   "name": "link_welcome.full",
-  "protocolVersion": 9,
-  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_welcome\",\"protocolVersion\":9,\"capabilities\":[\"bulk-post\"],\"cursors\":[{\"sessionId\":\"session-1\",\"seq\":3}]}}"
+  "protocolVersion": 10,
+  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_welcome\",\"protocolVersion\":10,\"protocolRange\":null,\"capabilities\":[\"bulk-post\"],\"cursors\":[{\"sessionId\":\"session-1\",\"seq\":3}]}}"
 }

@@ -30,6 +30,9 @@ export interface FakeAgents {
   readonly started: FakeAgent[];
 }
 
+/** How many turns the fake takes before it says no — the real queue's bound, so a held-turn flush (8) fits. */
+export const FAKE_PROMPT_CAPACITY = 16;
+
 export function fakeAgents(): FakeAgents {
   const started: FakeAgent[] = [];
   const start = (request: AgentProcessRequest): AgentProcess => {
@@ -60,8 +63,12 @@ export function fakeAgents(): FakeAgents {
     return {
       messages: messages(),
       prompt: (text: string) => {
+        if (isClosed) return false;
+        // The real process bounds its pending turns (MAX_PENDING_PROMPTS); the fake bounds at a
+        // number a test can reach, so the registry's refusal path is exercised without a queue.
+        if (prompts.length >= FAKE_PROMPT_CAPACITY) return false;
         prompts.push(text);
-        return !isClosed;
+        return true;
       },
       interrupt: () => {
         record.interrupts += 1;

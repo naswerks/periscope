@@ -66,6 +66,7 @@ import {
   hostConfigureResult,
   sessionListResult,
   workspaceListResult,
+  answerRefused,
   transcriptFailed,
   transcriptListResult,
   transcriptTailResult,
@@ -447,6 +448,19 @@ export interface PeriscopeHostOptions {
    */
   readonly toolFamilies?: ToolFamilies;
   /**
+   * The `extraEnv` keys a controller may not set; a `session_new` naming one refuses
+   * `env-key-refused` before a process exists. Defaults to `EXTRA_ENV_FLOOR` (`PATH`,
+   * `NODE_OPTIONS`, TLS verification, the model endpoint, the credentials); an embedder that trusts
+   * its controller with more passes a shorter list, and the binary never does.
+   */
+  readonly extraEnvFloor?: readonly string[];
+  /**
+   * How many sessions this host holds at once, live and opening together; a `session_new` past it
+   * refuses `session-cap-reached`. Defaults to `DEFAULT_MAX_SESSIONS`. Ignored when a `registry` is
+   * supplied, which carries its own bound.
+   */
+  readonly maxSessions?: number;
+  /**
    * Where sessions run. With a provider the controller's `cwd` is advisory: the provider decides,
    * and the session's `spawning` transition carries the directory it actually got, so the
    * controller learns where its session is rather than assuming.
@@ -679,6 +693,7 @@ export class PeriscopeHost {
         baseEnv: options.baseEnv ?? {},
         homeDir: options.homeDir ?? '',
         ...(options.clock === undefined ? {} : { clock: options.clock }),
+        ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
       });
 
     const handlers: LinkHandlers = {
@@ -981,7 +996,7 @@ export class PeriscopeHost {
     // cannot use is refused while it still owns nothing: provisioning first would take a directory,
     // find the request unusable, and have to hand it back, a claim/release round trip on every
     // malformed frame, in the one path a stranger can drive.
-    const requested = readSessionRequest(opening.request);
+    const requested = readSessionRequest(opening.request, this.#options.extraEnvFloor);
     if (!requested.ok) return this.#refuseOpen(sessionKey, null, requested.refusal);
 
     const provider = this.#workspaces;
@@ -1780,6 +1795,18 @@ export class PeriscopeHost {
     if (sent.refusal.reason === 'queue-overflow-undroppable' && !isDroppable(payload.kind)) {
       this.#holdFrame(sessionKey, payload);
       return;
+    }
+    // An answer the link refused as too large is answered by name (v10): the controller matches
+    // `answer_refused` on the request id instead of waiting for a timeout that names nothing. The
+    // substitute is small by construction, so it cannot meet the same refusal.
+    if (
+      sent.refusal.reason === 'frame-too-large' &&
+      payload.kind !== 'answer_refused' &&
+      'requestId' in payload &&
+      typeof payload.requestId === 'string'
+    ) {
+      const refused = this.#link.send(sessionKey, answerRefused(payload.requestId, sent.refusal));
+      if (!refused.ok) this.#refuse(sessionKey, refused.refusal);
     }
     this.#refuse(sessionKey, sent.refusal);
   }

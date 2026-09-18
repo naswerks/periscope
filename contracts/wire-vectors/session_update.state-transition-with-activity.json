@@ -39,6 +39,6 @@
     }
   },
   "name": "session_update.state-transition-with-activity",
-  "protocolVersion": 9,
+  "protocolVersion": 10,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":2,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"state_transition\",\"transition\":{\"sessionId\":\"agent-session-1\",\"seq\":3,\"at\":\"2000-01-01T00:00:00.000Z\",\"from\":\"ready\",\"to\":\"working\",\"activity\":{\"kind\":\"tool\",\"name\":\"Bash\"},\"entryId\":\"toolu_1\",\"cause\":{\"kind\":\"hook\",\"event\":\"PreToolUse\",\"detail\":\"Bash\"},\"where\":{\"cwd\":\"/work/plain\",\"worktree\":null,\"branch\":null,\"unknownReason\":\"not-a-repository\"},\"correlationId\":null}}}}"
 }

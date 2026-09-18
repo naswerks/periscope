@@ -8,6 +8,27 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-18
+
+Protocol 10; the window is `[9, 10]`, so a version-9 controller is still spoken to.
+
+- A live session queues at most 16 turns the agent has not read; a `session_prompt` past that is
+  refused `prompt-queue-full` and the session is untouched. The queue a controller could grow without
+  bound now has one, as every other buffer here does.
+- `extraEnv` has a floor: `PATH`, `NODE_OPTIONS`, `NODE_TLS_REJECT_UNAUTHORIZED`,
+  `NODE_EXTRA_CA_CERTS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`,
+  `DYLD_LIBRARY_PATH`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`. A
+  `session_new` naming one is refused `env-key-refused` before a process exists;
+  `PeriscopeHostOptions.extraEnvFloor` lets an embedder pass a shorter list.
+- A host holds at most `maxSessions` sessions, live and opening together (`DEFAULT_MAX_SESSIONS`,
+  8); a `session_new` past it is refused `session-cap-reached` before anything is reserved.
+- `answer_refused`: a host-scoped answer the link refused (over the frame cap) is followed by this
+  small kind carrying the request id and the refusal, so a controller learns by name rather than by
+  timeout.
+- `link_welcome` carries the controller's own `protocolRange`; a host reads its absence as null.
+- `git reset --hard` is a boundary shape: classified locally, escalated like a push.
+- The reference and minimal controllers send their range.
+
 ## [1.0.3] - 2026-09-18
 
 - A worktree for a new branch is created with `git worktree add -b`, never `-B`. `-b` refuses when

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 
 import type { AgentProcess, AgentProcessRequest } from '../host/agent-process.js';
 import { fixedClock } from '../core/time.js';
-import { fakeAgents, initMessage } from '../test-support/fake-agent.js';
+import { FAKE_PROMPT_CAPACITY, fakeAgents, initMessage } from '../test-support/fake-agent.js';
 import { SessionRegistry } from './registry.js';
 
 function registryWith(
@@ -345,6 +345,48 @@ test('a turn on an ended session is refused rather than swallowed', async () => 
   assert.equal(after.ok, false);
   assert.equal(after.ok === false && after.refusal.reason, 'session-unknown');
   assert.deepEqual(fake.started[0]?.prompts, ['first'], 'the refused turn must not reach the process');
+});
+
+test('regression: a turn past the live queue bound is refused prompt-queue-full and the session is untouched', async () => {
+  const fake = fakeAgents();
+  const registry = registryWith(fake.start);
+  const opening = registry.open({ cwd: 'C:/work', prompt: 'first' });
+  await waitFor(() => fake.started.length === 1);
+  fake.started[0]?.emit(initMessage('s1'));
+  const opened = await opening;
+  assert.ok(opened.ok);
+
+  const outcomes: boolean[] = [];
+  for (let i = 0; i < FAKE_PROMPT_CAPACITY + 2; i += 1) outcomes.push(opened.value.prompt(`turn ${i}`).ok);
+  const taken = outcomes.filter((ok) => ok).length;
+  assert.equal(taken, FAKE_PROMPT_CAPACITY - 1, 'the opening turn already took one slot');
+  const refused = opened.value.prompt('one more');
+  assert.equal(refused.ok, false);
+  assert.equal(refused.ok === false && refused.refusal.reason, 'prompt-queue-full');
+  assert.equal(opened.value.state, 'live', 'a refused turn must not end or degrade the session');
+});
+
+test('regression: a session past the bound is refused session-cap-reached before anything starts, and room returns when one ends', async () => {
+  const fake = fakeAgents();
+  const registry = new SessionRegistry({
+    baseEnv: {},
+    homeDir: 'C:/nonexistent-home-for-tests',
+    startProcess: fake.start,
+    maxSessions: 2,
+  });
+  const first = registry.create({ cwd: 'C:/work/a' });
+  const second = registry.create({ cwd: 'C:/work/b' });
+  assert.ok(first.ok && second.ok);
+
+  const third = registry.create({ cwd: 'C:/work/c' });
+  assert.equal(third.ok, false);
+  assert.equal(third.ok === false && third.refusal.reason, 'session-cap-reached');
+  assert.equal(fake.started.length, 2, 'the refused session must not start a process');
+
+  first.value.stop('done');
+  await waitFor(() => registry.liveCount + registry.provisioningCount === 1);
+  const again = registry.create({ cwd: 'C:/work/c' });
+  assert.equal(again.ok, true, 'room returns when a session ends');
 });
 
 test('messages fan out to every subscriber, and subscriptions do not outlive the session', async () => {

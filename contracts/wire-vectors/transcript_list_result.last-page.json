@@ -24,6 +24,6 @@
     }
   },
   "name": "transcript_list_result.last-page",
-  "protocolVersion": 9,
+  "protocolVersion": 10,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"transcript_list_result\",\"requestId\":\"request-2\",\"entries\":[{\"projectSlug\":\"C--work-repo\",\"sessionId\":\"agent-session-2\",\"sizeBytes\":12,\"mtimeMs\":1700000000000,\"cwd\":null}],\"totalCount\":1,\"nextIndex\":null}}"
 }

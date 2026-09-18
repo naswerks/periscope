@@ -281,6 +281,13 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     requestId: z.string().min(1),
     refusal: refusalSchema,
   }),
+  // The answer that could not be sent (v10): one kind for every host-scoped ask, matched on the
+  // request id. Always small, so it is the one answer the frame cap cannot refuse.
+  z.looseObject({
+    kind: z.literal('answer_refused'),
+    requestId: z.string().min(1),
+    refusal: refusalSchema,
+  }),
   // The reap (v5; the flags, the path address and the receipt from v7). Host-scoped like the
   // discovery asks; the result's `refusal` is nullable because null is the released answer: one
   // kind for every exit, see `WorkspaceReleaseResult`. Key-or-path is the HOST's screen, not the
@@ -405,6 +412,8 @@ const controlPayloadSchema = z.discriminatedUnion('kind', [
   z.looseObject({
     kind: z.literal('link_welcome'),
     protocolVersion: z.number().int(),
+    // Absent from a version-9 controller; read as null, never refused (v10).
+    protocolRange: protocolRangeSchema.nullable().default(null),
     capabilities: z.array(z.string()),
     cursors: z.array(sessionCursorSchema),
   }),

@@ -87,7 +87,7 @@ an asynchronous local policy would be a second place a decision can hang.
 What refuses locally, and only locally: a path that escapes the session's workspace
 (`path-escapes-root`), a read of the protected set (`credential-path-denied`), and a git invocation
 whose verb is not on the allow-list. A boundary-crossing shell shape (`shell-boundary-command`: a
-push, a force, a remote change, a branch deletion, a merge) is classified locally and then
+push, a force, a remote change, a branch deletion, a hard reset, a merge) is classified locally and then
 escalated like any other call, because a controller may hold it for a person to answer; refusing it
 in-process would make that answer impossible to give. With the controller unreachable it refuses at
 the decision deadline.

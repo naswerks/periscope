@@ -18,6 +18,6 @@
   },
   "frame": null,
   "name": "bulk_failed.unknown-reason",
-  "protocolVersion": 9,
+  "protocolVersion": 10,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"bulk_failed\",\"deliveryId\":\"delivery-1\",\"refusal\":{\"reason\":\"a-reason-from-a-newer-peer\",\"detail\":\"the controller answered 503\"}}}"
 }

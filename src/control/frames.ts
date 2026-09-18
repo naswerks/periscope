@@ -29,15 +29,17 @@ import type { SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
  * `[PROTOCOL_VERSION_MIN, PROTOCOL_VERSION]` beside `protocolVersion`; the controller answers with
  * its choice inside the overlap and the host accepts any version in its own window. The window
- * opens at the first negotiated version; from the next bump on it is one minor wide, the version
- * before the current one staying supported for one release. A hello with no range does not
- * decode, so a version older than the first negotiated one cannot be inside the window.
+ * is one minor wide: the version before the current one stays supported for one release. A hello
+ * with no range does not decode, so a version older than the first negotiated one cannot be inside
+ * the window. Version 10 adds `answer_refused`, the three session refusals
+ * (`session-cap-reached`, `prompt-queue-full`, `env-key-refused`) and the controller's own
+ * range on `link_welcome`; a version-9 controller sees none of them and is still spoken to.
  */
 export const PROTOCOL_VERSION_MIN = 9;
 
@@ -782,6 +784,23 @@ export interface TranscriptFailed {
 }
 
 /**
+ * A host-scoped ask whose answer could not be sent: the answer was composed and refused at the
+ * link (over the frame cap, most often), and instead of the controller learning by timeout it
+ * learns by name, with the request id, in a frame that always fits. One kind for every ask, so a
+ * controller matches it on `requestId` alone and never needs a per-kind refusal shape.
+ */
+export interface AnswerRefused {
+  readonly kind: 'answer_refused';
+  readonly requestId: string;
+  readonly refusal: WireRefusal;
+}
+
+/** Build an `answer_refused`. */
+export function answerRefused(requestId: string, refusal: WireRefusal): AnswerRefused {
+  return { kind: 'answer_refused', requestId, refusal };
+}
+
+/**
  * Ask this host to remove a workspace's directory from disk. Host-scoped, like the discovery
  * asks: the routing key is a channel the controller chose, and no session needs to exist behind it.
  *
@@ -1364,7 +1383,8 @@ export type SessionPayload =
   | RepositoryList
   | RepositoryListResult
   | RepositoryRead
-  | RepositoryReadResult;
+  | RepositoryReadResult
+  | AnswerRefused;
 
 export type SessionPayloadKind = SessionPayload['kind'];
 
@@ -1459,6 +1479,11 @@ export interface LinkHello {
 export interface LinkWelcome {
   readonly kind: 'link_welcome';
   readonly protocolVersion: number;
+  /**
+   * The versions the controller speaks, so the host can report the overlap it was offered. Null
+   * from a controller that predates it; the negotiated `protocolVersion` is the fact either way.
+   */
+  readonly protocolRange: ProtocolRange | null;
   readonly capabilities: readonly string[];
   /** The last `seq` the controller received per session — the host replays past these. */
   readonly cursors: readonly SessionCursor[];

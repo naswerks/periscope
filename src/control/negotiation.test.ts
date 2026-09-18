@@ -53,7 +53,13 @@ class Peer {
     const welcome = encode({
       frame: 'control',
       at: new Date().toISOString(),
-      payload: { kind: 'link_welcome', protocolVersion: this.answer.welcome, capabilities: [], cursors: [] },
+      payload: {
+        kind: 'link_welcome',
+        protocolVersion: this.answer.welcome,
+        protocolRange: null,
+        capabilities: [],
+        cursors: [],
+      },
     });
     if (welcome.ok) socket.send(welcome.value);
   }
@@ -170,4 +176,40 @@ test('control: an ordinary close (1000) is a dropped socket, not a version refus
     link.stop();
     peer.server.close();
   }
+});
+
+test('a welcome carrying the controller range (v10) and one without it (a v9 controller) are both accepted', async () => {
+  // The peer above sends no range: that is the version-9 controller, and it is accepted by every
+  // case in this file. The range-carrying form is decoded to the same shape with the range filled.
+  const withRange = decode(
+    JSON.stringify({
+      frame: 'control',
+      at: '2026-09-18T00:00:00.000Z',
+      payload: {
+        kind: 'link_welcome',
+        protocolVersion: PROTOCOL_VERSION,
+        protocolRange: { min: 9, max: 10 },
+        capabilities: [],
+        cursors: [],
+      },
+    }),
+  );
+  assert.ok(
+    withRange.ok && withRange.value.frame === 'control' && withRange.value.payload.kind === 'link_welcome',
+  );
+  assert.deepEqual(withRange.value.payload.protocolRange, { min: 9, max: 10 });
+
+  const without = decode(
+    JSON.stringify({
+      frame: 'control',
+      at: '2026-09-18T00:00:00.000Z',
+      payload: { kind: 'link_welcome', protocolVersion: 9, capabilities: [], cursors: [] },
+    }),
+  );
+  assert.ok(without.ok && without.value.frame === 'control' && without.value.payload.kind === 'link_welcome');
+  assert.equal(
+    without.value.payload.protocolRange,
+    null,
+    'absent from a version-9 controller reads as null, never refused',
+  );
 });

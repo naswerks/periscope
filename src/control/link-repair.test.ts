@@ -98,6 +98,7 @@ class Peer {
         payload: {
           kind: 'link_welcome',
           protocolVersion: this.welcomeVersion,
+          protocolRange: null,
           capabilities: [],
           cursors: [],
         },

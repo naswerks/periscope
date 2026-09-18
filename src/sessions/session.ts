@@ -225,7 +225,12 @@ export class HostedSession {
     if (this.#state === 'ended') {
       return refuse('session-unknown', `session has ended (${this.#ended?.cause ?? 'unknown'})`);
     }
-    this.#process.prompt(text);
+    if (!this.#process.prompt(text)) {
+      return refuse(
+        'prompt-queue-full',
+        'the session already holds every turn it can queue; this one was not taken',
+      );
+    }
     return ok(undefined);
   }
 

@@ -232,6 +232,11 @@ const sessionPayloadArbs = {
     requestId: nonEmptyString,
     refusal: wireRefusalArb,
   }),
+  answer_refused: fc.record({
+    kind: fc.constant('answer_refused' as const),
+    requestId: nonEmptyString,
+    refusal: wireRefusalArb,
+  }),
   workspace_release: fc.record({
     kind: fc.constant('workspace_release' as const),
     requestId: nonEmptyString,
@@ -365,6 +370,9 @@ const controlPayloadArbs = {
   link_welcome: fc.record({
     kind: fc.constant('link_welcome' as const),
     protocolVersion: fc.constantFrom(PROTOCOL_VERSION, 1, 99),
+    protocolRange: nullable(
+      fc.record({ min: fc.integer({ min: 1, max: 20 }), max: fc.integer({ min: 1, max: 20 }) }),
+    ),
     capabilities: fc.array(fc.string(), { maxLength: 3 }),
     cursors: fc.array(cursorArb, { maxLength: 3 }),
   }),

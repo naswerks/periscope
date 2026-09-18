@@ -470,6 +470,7 @@ export class TestController {
         this.#control({
           kind: 'link_welcome',
           protocolVersion: chosen,
+          protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
           capabilities: ['bulk-post'],
           cursors: this.#cursorList(),
         });

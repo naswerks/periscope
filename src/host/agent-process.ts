@@ -253,6 +253,9 @@ export interface AgentProcessRequest {
  */
 export type AgentSystemPrompt = NonNullable<Options['systemPrompt']>;
 
+/** How many sent turns may wait for the agent to read them. Past it, `prompt()` says no. */
+export const MAX_PENDING_PROMPTS = 16;
+
 /**
  * Every key `Options` is composed from, as data.
  *
@@ -611,7 +614,9 @@ export function messagesOf(source: AsyncGenerator<SDKMessage, void>): AsyncGener
 
 /** Start an agent process. The subprocess exists when this returns. */
 export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
-  const input = new AsyncQueue<SDKUserMessage>();
+  // The live prompt queue's bound. Turns the agent has not consumed wait here; a controller that
+  // sends past it is refused `prompt-queue-full` and the session is untouched.
+  const input = new AsyncQueue<SDKUserMessage>(MAX_PENDING_PROMPTS);
 
   const options: Options = {
     cwd: request.cwd,
@@ -655,8 +660,7 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
         message: { role: 'user', content: [{ type: 'text', text }] },
         parent_tool_use_id: null,
       };
-      input.push(message);
-      return true;
+      return input.push(message);
     },
     async interrupt(): Promise<void> {
       if (closed) return;

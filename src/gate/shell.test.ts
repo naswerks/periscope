@@ -296,3 +296,26 @@ test('a real branch deletion still refuses in every shape', () => {
     assert.match(found!.detail, /branch/i);
   }
 });
+
+test('regression: `git reset --hard` is a boundary, while a soft or mixed reset still flows', () => {
+  for (const command of [
+    'git reset --hard',
+    'git reset --hard origin/main',
+    'git reset --hard HEAD~1',
+    'git   reset   --hard',
+  ]) {
+    const refused = refusalFor(command);
+    assert.equal(refused?.reason, 'shell-boundary-command', `${command} flowed`);
+    assert.match(refused?.detail ?? '', /git-reset-hard/);
+  }
+  for (const command of [
+    'git reset',
+    'git reset --soft HEAD~1',
+    'git reset --mixed HEAD',
+    'git reset HEAD -- file.txt',
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused: a recoverable reset is a local write`);
+  }
+  // Segment-scoped: the flag of another program in the pipe is not borrowed.
+  assert.equal(refusalFor('git reset | grep --hard'), null);
+});

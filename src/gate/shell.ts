@@ -111,6 +111,16 @@ const BOUNDARY_RULES: readonly BoundaryRule[] = [
     segmentScoped: true,
   },
   {
+    name: 'git-reset-hard',
+    // `reset` sits in the safe verbs because a soft or mixed reset moves nothing a commit cannot
+    // recover; `--hard` discards the working tree and the index, and `reset --hard <ref>` moves the
+    // branch as well. Segment-scoped like the branch rule, so a downstream `--hard` in another
+    // program cannot be borrowed.
+    pattern: /\bgit\b[\s\S]*?\breset\b[\s\S]*?\s--hard\b/i,
+    detail: 'discarding uncommitted work and moving the branch is a human decision',
+    segmentScoped: true,
+  },
+  {
     name: 'gh-pr-merge',
     pattern: /\bgh\b[\s\S]*?\bpr\b[\s\S]*?\bmerge\b/i,
     detail: 'merging is a human boundary',

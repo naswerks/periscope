@@ -171,6 +171,14 @@ retried with backoff, forever, and `periscope status` says where it is. In a con
 as root, `exec` the process so it receives SIGTERM, and keep the shebang LF (`SECURITY.md` says why
 each fails confusingly otherwise).
 
+## Bounds
+
+A host holds at most `maxSessions` sessions at once, live and opening together (the binary's
+default is 8; an embedder sets its own): a `session_new` past it is refused `session-cap-reached`
+before anything is reserved, and the remedy is another session ending. Each live session queues at
+most 16 turns the agent has not yet read; a `session_prompt` past that is refused
+`prompt-queue-full` and the session is untouched. Both are wire refusals a controller sees by name.
+
 ## Two constraints, before you deploy
 
 **One controller, one replica.** The sequence and retention model assumes one controller process on

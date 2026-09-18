@@ -71,7 +71,9 @@ The host dials and sends `link_hello`:
 | `pendingRestart`  | the setting keys written over the link that apply only at the host's next start                                                                                                                                                                  |
 
 The controller answers `link_welcome` with `protocolVersion` set to the version it chose inside the
-overlap of the two windows, its own `capabilities`, and its inbound `cursors`. The host accepts any
+overlap of the two windows, its own `protocolRange` (from v10; a host reads its absence as null and
+never refuses it, so a v9 controller is still spoken to), its own `capabilities`, and its inbound
+`cursors`. The host accepts any
 version inside its own window and refuses the rest, naming both windows. A controller that finds no
 overlap sends no welcome and closes the socket with code 1002 and a reason naming both windows,
 which the host reads as the same refusal (`protocol_version_rejected`, a link cause). The window
@@ -79,9 +81,11 @@ opens at `PROTOCOL_VERSION_MIN`; from the next bump on it is one minor wide, the
 current one staying supported for one release, so a controller and a host one release apart connect
 and either can move first.
 
-A welcome does not carry a range. A hello with no range does not decode: `protocolRange` is a
-declared member. A new value in the open `capabilities` list needs no version bump; a new hello
-member does.
+A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
+the open `capabilities` list needs no version bump; a new hello member does. The window today is
+`[9, 10]`: version 10 adds `answer_refused`, the three session refusals `session-cap-reached`,
+`prompt-queue-full` and `env-key-refused`, and the welcome's range; a v9 controller meets none of
+them unless it sends what they refuse.
 
 Two close reasons carry meaning. A close with code 1002 whose reason starts with `seq gap` is a
 replay request: the controller names the position it holds, and the host's next dial replays from
@@ -216,10 +220,15 @@ watched is not something the host can know, so it offers the knob instead of gue
 | kind                | meaning                                                                                                                                                                                                                                                                                                                                        |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `session_new`       | open a session: `cwd` (nullable; the workspace provider decides when null), `workspaceKey` (nullable; the key sessions share a tree under), `correlationId` (opaque, echoed, never interpreted), `gate` (per-session deadlines or null), `request` (the JSON-expressible subset of a session request or null). Every member of `request` is `T | null`. |
-| `session_prompt`    | queue a turn                                                                                                                                                                                                                                                                                                                                   |
+| `session_prompt`    | queue a turn; a session already holding every turn it can queue refuses `prompt-queue-full` and is otherwise untouched                                                                                                                                                                                                                         |
 | `session_cancel`    | interrupt the current turn; never ends the session                                                                                                                                                                                                                                                                                             |
 | `session_configure` | apply the live setters (`model`, `permissionMode`, `thinking`), each null when not asked                                                                                                                                                                                                                                                       |
 | `bulk_request`      | ask for bulk content (below)                                                                                                                                                                                                                                                                                                                   |
+
+A `session_new` past the host's session bound (`PeriscopeHostOptions.maxSessions`) refuses
+`session-cap-reached` before anything is reserved; one naming an `extraEnv` key beneath the host's
+floor (`EXTRA_ENV_FLOOR`: `PATH`, `NODE_OPTIONS`, TLS verification, the model endpoint, the
+credentials) refuses `env-key-refused` before a process exists.
 
 `session_new.request` carries `resume`, `fork`, `settingSources`, `plugins`, `mcpServers`,
 `strictMcpConfig`, `includePartialMessages`, `thinking`, `forwardSubagentText`, `env`, `model`,
@@ -300,7 +309,10 @@ rather than a truncated one when a bound is missed.
 
 On every result kind that carries `refusal`, `refusal: null` is the good answer. `transcript_failed`
 is the one failure kind for the three transcript asks; a reader discriminates on the echoed
-`requestId`, never on the kind. A `transcript_list_result` entry carries the `cwd` the CLI recorded
+`requestId`, never on the kind. An answer of any kind that the host composed and could not send
+(over the frame cap, most often) arrives instead as `answer_refused` — `{ requestId, refusal }`,
+always small — so a controller learns by name rather than by timeout; match it on `requestId`
+like every other answer. A `transcript_list_result` entry carries the `cwd` the CLI recorded
 on the transcript, null when its head carries none.
 
 Bounds: `TRANSCRIPT_PAGE_SIZE` transcripts per page, `WORKSPACE_PAGE_SIZE` worktrees per page,

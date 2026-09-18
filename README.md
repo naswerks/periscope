@@ -48,7 +48,7 @@ PERISCOPE_CONTROLLER_URL and PERISCOPE_DECISION_URL written to the config file -
 The fourth starts the host, in the foreground, until you stop it:
 
 ```
-[host] periscope 1.0.2 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
+[host] periscope 1.1.0 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
 [credential] paired as ph-8cb226ae… - the paired credential is presented on every dial
 [link] idle -> connecting (start_requested)
 [link] connecting -> open (socket_connected)

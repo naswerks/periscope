@@ -66,6 +66,18 @@ export const REFUSAL_REASONS = [
   'session-unknown',
   'session-spawn-failed',
   'workspace-untrusted',
+  //   session-cap-reached   the host's session bound: a session_new past PeriscopeHostOptions.maxSessions
+  //                         is refused before anything is reserved. Not session-spawn-failed: nothing
+  //                         was tried, and retrying after another session ends is the remedy.
+  //   prompt-queue-full     a session_prompt past the live session's pending-turn bound. The turn was
+  //                         not taken; the session is fine. A peer that keeps sending past this is the
+  //                         unbounded buffer this package refuses everywhere else.
+  //   env-key-refused       a session_new whose extraEnv names a key beneath the host's floor (PATH,
+  //                         NODE_OPTIONS and the like): refused before a process exists. The floor is
+  //                         the embedder's to widen; the binary never does.
+  'session-cap-reached',
+  'prompt-queue-full',
+  'env-key-refused',
 
   // The declared state model. A transition that cannot name what caused it is refused rather than
   // recorded, because a state nobody can explain is worse than no state at all: it reads as fact.

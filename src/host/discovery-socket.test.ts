@@ -91,7 +91,13 @@ class Peer {
       const welcome = encode({
         frame: 'control',
         at: new Date().toISOString(),
-        payload: { kind: 'link_welcome', protocolVersion: PROTOCOL_VERSION, capabilities: [], cursors: [] },
+        payload: {
+          kind: 'link_welcome',
+          protocolVersion: PROTOCOL_VERSION,
+          protocolRange: null,
+          capabilities: [],
+          cursors: [],
+        },
       });
       if (welcome.ok) socket.send(welcome.value);
     }

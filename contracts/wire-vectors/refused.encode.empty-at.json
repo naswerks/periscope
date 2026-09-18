@@ -13,6 +13,6 @@
     }
   },
   "name": "refused.encode.empty-at",
-  "protocolVersion": 9,
+  "protocolVersion": 10,
   "wire": null
 }

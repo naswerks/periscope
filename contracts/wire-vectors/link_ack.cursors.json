@@ -20,6 +20,6 @@
     }
   },
   "name": "link_ack.cursors",
-  "protocolVersion": 9,
+  "protocolVersion": 10,
   "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_ack\",\"cursors\":[{\"sessionId\":\"session-1\",\"seq\":4},{\"sessionId\":\"session-2\",\"seq\":0}]}}"
 }

@@ -251,10 +251,15 @@ over the link and without a further credential:
   to the agent as declared; a stdio server declaration (`{ type: 'stdio', command, args }`) is a
   process the CLI spawns as this host's OS user, before the gate sees a single tool call. The host
   screens the shape of the declaration, not what the command does.
-- **Set the agent's environment.** `session_new.request.env.extraEnv` sets any variable in the
-  spawn environment after the allow-list has run, `PATH` and `NODE_OPTIONS` included, and
-  `extraAllowedKeys` re-admits keys of this host's own environment by name (the credential-shaped
-  deny list still wins there); only the host-session markers are stripped after it.
+- **Set the agent's environment, above a floor.** `session_new.request.env.extraEnv` sets
+  variables in the spawn environment after the allow-list has run, and `extraAllowedKeys`
+  re-admits keys of this host's own environment by name (the credential-shaped deny list still
+  wins there); the host-session markers are stripped after it. Beneath the floor it cannot reach:
+  `PATH`, `NODE_OPTIONS`, `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `LD_PRELOAD`,
+  `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `ANTHROPIC_BASE_URL`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` (`EXTRA_ENV_FLOOR`) — a `session_new` naming one
+  refuses `env-key-refused` before a process exists. An embedder may pass a shorter floor; the
+  binary never does.
 - **Remove directories.** `workspace_release` deletes a worktree under the workspace root, and the
   controller can set that root through `host_configure` (a root change is refused only while a
   session is live or opening).

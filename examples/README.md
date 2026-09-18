@@ -39,7 +39,13 @@ pin keeps the two identical):
 // Both transports are required; a host with nowhere to send a decision refuses to start.
 import { createServer } from 'node:http';
 import { WebSocketServer, type RawData } from 'ws';
-import { PROTOCOL_VERSION, decode, encode, type ControlPayload } from '@naswerks/periscope/protocol';
+import {
+  PROTOCOL_VERSION,
+  PROTOCOL_VERSION_MIN,
+  decode,
+  encode,
+  type ControlPayload,
+} from '@naswerks/periscope/protocol';
 
 const text = (data: RawData): string =>
   Buffer.concat(Array.isArray(data) ? data : [Buffer.from(data as ArrayBuffer)]).toString('utf8');
@@ -55,7 +61,13 @@ new WebSocketServer({ port: 8790, path: '/link' }).on('connection', (socket) => 
     if (frame.value.frame === 'session') {
       control({ kind: 'link_ack', cursors: [{ sessionId: frame.value.sessionId, seq: frame.value.seq }] });
     } else if (frame.value.payload.kind === 'link_hello') {
-      control({ kind: 'link_welcome', protocolVersion: PROTOCOL_VERSION, capabilities: [], cursors: [] });
+      control({
+        kind: 'link_welcome',
+        protocolVersion: PROTOCOL_VERSION,
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+        capabilities: [],
+        cursors: [],
+      });
     } else if (frame.value.payload.kind === 'link_ping') {
       control({ kind: 'link_pong', nonce: frame.value.payload.nonce });
     }

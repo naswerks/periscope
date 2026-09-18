@@ -5,6 +5,6 @@
   },
   "frame": null,
   "name": "refused.unknown-frame",
-  "protocolVersion": 9,
+  "protocolVersion": 10,
   "wire": "{\"frame\":\"bulk\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_ping\",\"nonce\":\"n\"}}"
 }

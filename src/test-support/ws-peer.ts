@@ -132,6 +132,7 @@ export class Peer {
         payload: {
           kind: 'link_welcome',
           protocolVersion: this.options.welcomeVersion,
+          protocolRange: null,
           capabilities: [],
           cursors: [],
         },

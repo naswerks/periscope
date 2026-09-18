@@ -72,6 +72,7 @@ class TestController {
           payload: {
             kind: 'link_welcome',
             protocolVersion: PROTOCOL_VERSION,
+            protocolRange: null,
             capabilities: [],
             cursors: this.#cursors.cursors(),
           },

@@ -59,3 +59,31 @@ test('breaking out of a for-await ends the queue rather than leaving it open', a
   }
   assert.equal(queue.ended, true, 'an abandoned consumer must not leave a producer writing forever');
 });
+
+test('regression: a bounded queue refuses the item past its capacity and says so; a waiting consumer is never refused', async () => {
+  const queue = new AsyncQueue<number>(2);
+  assert.equal(queue.push(1), true);
+  assert.equal(queue.push(2), true);
+  assert.equal(
+    queue.push(3),
+    false,
+    'the third item must not be taken: the peer that keeps sending is the unbounded buffer',
+  );
+  assert.equal(queue.depth, 2);
+
+  const iterator = queue[Symbol.asyncIterator]();
+  assert.deepEqual(await iterator.next(), { value: 1, done: false });
+  assert.equal(queue.push(3), true, 'room again once the consumer took one');
+
+  // A consumer already waiting takes the item directly; capacity bounds what waits, not what flows.
+  const empty = new AsyncQueue<number>(0);
+  const pending = empty[Symbol.asyncIterator]().next();
+  assert.equal(empty.push(9), true);
+  assert.deepEqual(await pending, { value: 9, done: false });
+});
+
+test('control: the default queue is unbounded, as every consumer of it before the bound existed assumed', () => {
+  const queue = new AsyncQueue<number>();
+  for (let i = 0; i < 10_000; i += 1) assert.equal(queue.push(i), true);
+  assert.equal(queue.depth, 10_000);
+});

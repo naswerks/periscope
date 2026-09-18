@@ -267,3 +267,36 @@ test('readSessionConfigure narrows the live change: asked members only, unknown 
   assert.equal(badThinking.ok, false);
   assert.equal(badThinking.ok ? '' : badThinking.refusal.reason, 'frame-malformed');
 });
+
+test('regression: an extraEnv key beneath the floor is refused env-key-refused before anything is composed', () => {
+  for (const key of [
+    'PATH',
+    'path',
+    'NODE_OPTIONS',
+    'NODE_TLS_REJECT_UNAUTHORIZED',
+    'ANTHROPIC_BASE_URL',
+    'LD_PRELOAD',
+  ]) {
+    const refused = readSessionRequest(
+      sessionNewRequest({ env: { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv: { [key]: 'x' } } }),
+    );
+    assert.equal(refused.ok, false, `${key} was accepted`);
+    assert.equal(refused.ok ? '' : refused.refusal.reason, 'env-key-refused');
+    assert.match(refused.ok ? '' : refused.refusal.detail, new RegExp(key));
+  }
+});
+
+test('control: a key above the floor composes, and an embedder-shortened floor admits what it names', () => {
+  const above = readSessionRequest(
+    sessionNewRequest({ env: { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv: { NAS_Y: '1' } } }),
+  );
+  assert.equal(above.ok, true);
+
+  const widened = readSessionRequest(
+    sessionNewRequest({
+      env: { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv: { NODE_OPTIONS: '--x' } },
+    }),
+    ['PATH'],
+  );
+  assert.equal(widened.ok, true, "the floor is the embedder's: a shorter list admits NODE_OPTIONS");
+});

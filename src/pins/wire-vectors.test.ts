@@ -44,6 +44,7 @@ import {
   sessionNew,
   sessionNewRequest,
   stateTransitionUpdate,
+  answerRefused,
   transcriptFailed,
   transcriptList,
   transcriptListResult,
@@ -392,6 +393,17 @@ const AUTHORED = {
       ),
     },
   ],
+  answer_refused: [
+    {
+      name: 'answer_refused.frame-too-large',
+      frame: session(
+        answerRefused('request-4', {
+          reason: 'frame-too-large',
+          detail: 'the answer was 70000 bytes, over the 65536 limit',
+        }),
+      ),
+    },
+  ],
   workspace_release: [
     { name: 'workspace_release.request', frame: session(workspaceRelease('request-5', 'workspace-1')) },
     {
@@ -650,6 +662,7 @@ const AUTHORED = {
       frame: control({
         kind: 'link_welcome',
         protocolVersion: PROTOCOL_VERSION,
+        protocolRange: null,
         capabilities: ['bulk-post'],
         cursors: [{ sessionId: 'session-1', seq: 3 }],
       }),
@@ -659,6 +672,7 @@ const AUTHORED = {
       frame: control({
         kind: 'link_welcome',
         protocolVersion: PROTOCOL_VERSION,
+        protocolRange: null,
         capabilities: [],
         cursors: [],
       }),

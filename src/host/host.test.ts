@@ -42,6 +42,7 @@ import {
   sessionListResult,
   sessionNew,
   sessionNewRequest,
+  answerRefused,
   transcriptFailed,
   transcriptList,
   transcriptListResult,
@@ -1494,6 +1495,7 @@ const EVERY_PAYLOAD_KIND: { [K in SessionPayloadKind]: 'command' | 'refused' } =
   transcript_list_result: 'refused',
   transcript_tail_result: 'refused',
   transcript_failed: 'refused',
+  answer_refused: 'refused',
   workspace_release_result: 'refused',
   workspace_release_bulk_result: 'refused',
   host_configure_result: 'refused',
@@ -1524,6 +1526,7 @@ const PAYLOAD_SAMPLES: { [K in SessionPayloadKind]: Extract<SessionPayload, { ki
   transcript_list_result: transcriptListResult('r', [], { totalCount: 0 }),
   transcript_tail_result: transcriptTailResult('r', { found: false, absent: true, newOffset: 0 }),
   transcript_failed: transcriptFailed('r', { reason: 'transcript-path-escape', detail: 'x' }),
+  answer_refused: answerRefused('r', { reason: 'frame-too-large', detail: 'x' }),
   workspace_release: workspaceRelease('r', 'w1'),
   workspace_release_result: workspaceReleaseResult('r'),
   workspace_release_bulk: workspaceReleaseBulk('r', [
@@ -2721,5 +2724,35 @@ test("host_configure_result carries the seam's pendingRestart, and a refusal kee
       ['c2', ['PERISCOPE_DECISION_URL'], false],
     ],
     'the applied answer names the pending key; a later refusal changes nothing and still names it',
+  );
+});
+
+// --- answer_refused (v10) ---------------------------------------------------------------------
+
+test('regression: an answer the link refuses as too large is followed by answer_refused with the same request id, once', async () => {
+  const { link } = hostOver();
+  // The link refuses the first oversized-looking answer exactly as the real one does, and takes the
+  // substitute: the controller then learns by name rather than by timeout.
+  const refusedOnce: string[] = [];
+  const realSend = link.send.bind(link);
+  link.send = (sessionId: string, payload: SessionPayload): Result<void> => {
+    if (payload.kind === 'repository_read_result' && refusedOnce.length === 0) {
+      refusedOnce.push(payload.requestId);
+      return refuse('frame-too-large', 'frame is 70000 bytes, over the 65536 limit');
+    }
+    return realSend(sessionId, payload);
+  };
+
+  link.deliver('discovery-channel', repositoryRead('rr-big', 'README.md', 100));
+  await answered(link, 'answer_refused', 'the refused answer');
+
+  const substitute = link.sent.find((entry) => entry.payload.kind === 'answer_refused')?.payload;
+  assert.ok(substitute !== undefined && substitute.kind === 'answer_refused');
+  assert.equal(substitute.requestId, 'rr-big', 'the substitute names the ask it answers');
+  assert.equal(substitute.refusal.reason, 'frame-too-large');
+  assert.equal(
+    link.sent.filter((entry) => entry.payload.kind === 'answer_refused').length,
+    1,
+    'one substitute per refused answer, never a loop of substitutes',
   );
 });

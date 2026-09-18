@@ -36,6 +36,41 @@
 /** Any environment-shaped map. Deliberately not `NodeJS.ProcessEnv` — nothing here needs a runtime. */
 export type EnvSource = Readonly<Record<string, string | undefined>>;
 
+/**
+ * The keys a controller may not set through `extraEnv`, however it is trusted: each of them changes
+ * what the agent process IS rather than what it sees — where its binaries come from, what Node loads
+ * before any code runs, whether TLS is verified, which server the model call goes to. The allow-list
+ * screens what a session inherits by accident; this screens what a peer can set on purpose. An
+ * embedder that wants a different floor passes one (`PeriscopeHostOptions.extraEnvFloor`); the
+ * binary never widens it. Matched by upper-cased name, as Windows matches.
+ */
+export const EXTRA_ENV_FLOOR: readonly string[] = [
+  'PATH',
+  'NODE_OPTIONS',
+  'NODE_TLS_REJECT_UNAUTHORIZED',
+  'NODE_EXTRA_CA_CERTS',
+  'LD_PRELOAD',
+  'LD_LIBRARY_PATH',
+  'DYLD_INSERT_LIBRARIES',
+  'DYLD_LIBRARY_PATH',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'ANTHROPIC_API_KEY',
+];
+
+/** The first `extraEnv` key at or beneath the floor, or null when every key is above it. */
+export function extraEnvKeyBeneathFloor(
+  extraEnv: Readonly<Record<string, string>> | undefined,
+  floor: readonly string[] = EXTRA_ENV_FLOOR,
+): string | null {
+  if (extraEnv === undefined) return null;
+  const banned = new Set(floor.map((key) => key.toUpperCase()));
+  for (const key of Object.keys(extraEnv)) {
+    if (banned.has(key.toUpperCase())) return key;
+  }
+  return null;
+}
+
 export interface SpawnEnvPolicy {
   /**
    * Keys the embedder declares for its own deployment, on top of the general set.
