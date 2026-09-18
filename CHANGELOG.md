@@ -8,6 +8,13 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-09-18
+
+- A worktree for a new branch is created with `git worktree add -b`, never `-B`. `-b` refuses when
+  the branch exists, so a branch probe that failed for any reason other than the branch being absent
+  now refuses the provision by name instead of hard-resetting the branch and discarding its commits.
+  No wire or API change.
+
 ## [1.0.2] - 2026-09-18
 
 - `SECURITY.md` states the permission mode as it is: the controller's to set per session, in the

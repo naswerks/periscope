@@ -1,7 +1,7 @@
 /**
  * The worktree provider, and the one rule that destroyed committed work.
  *
- * The `-B` matrix is the point of this file. `worktreeAddArgs` is pure, so the rule "never
+ * The create-form matrix is the point of this file. `worktreeAddArgs` is pure, so the rule "never
  * hard-reset a branch that already exists" is checked directly rather than through a repository
  * somebody would have to create — and the failure it guards against is one where nothing errors and
  * the only evidence is commits that are no longer reachable.
@@ -32,15 +32,26 @@ test('regression: an existing branch is attached to, and the argv carries no -B 
   );
 });
 
-test('a new branch takes the -B create form, off the base ref', () => {
+test('a new branch takes the -b create form, off the base ref — and never -B, which is create-or-reset', () => {
   assert.deepEqual(worktreeAddArgs('/w/s2', 'periscope/s2', 'main', false), [
     'worktree',
     'add',
-    '-B',
+    '-b',
     'periscope/s2',
     '/w/s2',
     'main',
   ]);
+});
+
+test('regression: no answer of the probe reaches -B: a wrong "new" answer refuses rather than resets', () => {
+  for (const branchExists of [true, false]) {
+    const args = worktreeAddArgs('/w/s', 'b', 'main', branchExists);
+    assert.equal(
+      args.includes('-B'),
+      false,
+      `branchExists=${branchExists} produced -B, the create-or-reset form`,
+    );
+  }
 });
 
 test('regression: the two forms differ in the operation, not only in argument order', () => {
@@ -63,7 +74,7 @@ test('the rule is total over every branchExists value, with no third path', () =
     const args = worktreeAddArgs('/w/x', 'br', 'base', exists);
     assert.equal(args[0], 'worktree');
     assert.equal(args[1], 'add');
-    assert.equal(args.includes('-B'), !exists, `-B presence must follow branchExists (${exists})`);
+    assert.equal(args.includes('-b'), !exists, `-b presence must follow branchExists (${exists})`);
   }
 });
 
@@ -133,7 +144,7 @@ test('a first provision creates the branch off the base ref', async () => {
   assert.equal(result.ok && result.value.meta['attached'], 'created');
 
   const add = recorded.calls.find((call) => call[1] === 'worktree' && call[2] === 'add');
-  assert.deepEqual(add, ['git', 'worktree', 'add', '-B', 'periscope/s1', '/work/s1', 'main']);
+  assert.deepEqual(add, ['git', 'worktree', 'add', '-b', 'periscope/s1', '/work/s1', 'main']);
 });
 
 // The regression this file exists for. The directory was lost; the branch was not. Re-provisioning

@@ -9,7 +9,10 @@
  * point at.
  *
  * The rule: if the branch exists, attach to it and let it keep its own tip. Only a branch being
- * created for the first time takes the `-B` form.
+ * created for the first time takes the create form — and that form is `-b`, never `-B`. `-b`
+ * creates only and fails when the branch exists, so a wrong "new" answer (a probe that failed for
+ * a reason other than the branch being absent) is a refused provision rather than a reset. The
+ * probe chooses the faster path; it is not what keeps the commits.
  *
  * That rule is a pure function here, and that is the point of the file's shape. `worktreeAddArgs`
  * takes four values and returns an argv; the invariant is a unit test with no git, no disk and no
@@ -41,9 +44,10 @@ import { parseBranchList, parseBranchTips, parseWorktreePorcelain } from './work
  *
  * `branchExists` decides between two different commands, not between two spellings of one.
  *   exists  gives `worktree add <path> <branch>`               attach: the branch keeps its own tip.
- *   new     gives `worktree add -B <branch> <path> <baseRef>`  create, off the base ref.
- * Passing `-B` in the first case hard-resets the branch and discards its commits. See this file's
- * header — that is not a hypothetical.
+ *   new     gives `worktree add -b <branch> <path> <baseRef>`  create, off the base ref.
+ * `-B` in the second case would hard-reset an existing branch and discard its commits; `-b`
+ * refuses instead, so the create form cannot destroy work whatever the probe answered. See this
+ * file's header — the loss is not a hypothetical.
  *
  * Pure and total: no filesystem, no git, no I/O. Exported so the rule is testable directly rather
  * than only through a provider that would need a repository to exercise.
@@ -55,7 +59,7 @@ export function worktreeAddArgs(
   branchExists: boolean,
 ): readonly string[] {
   if (branchExists) return ['worktree', 'add', path, branch];
-  return ['worktree', 'add', '-B', branch, path, baseRef];
+  return ['worktree', 'add', '-b', branch, path, baseRef];
 }
 
 export interface GitWorktreeProviderOptions {
@@ -381,11 +385,9 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       await this.#commands.run('git', ['rev-parse', '--verify', branch], this.#repositoryRoot);
       return true;
     } catch {
-      // A failing probe means "treat it as new", which takes the `-B` form — so a probe that fails
-      // for a reason other than the branch being absent (a broken git, a bad repository path) would
-      // hard-reset an existing branch. That is why `provision` runs the probe inside its own
-      // try/catch: the `add` that follows fails too, and the refusal names the whole operation
-      // rather than silently taking the destructive path.
+      // A failing probe means "treat it as new", which takes the `-b` form: if the branch does
+      // exist after all, `add -b` refuses by name and the provision fails whole, naming the
+      // operation. No answer from this probe can reach the destructive path.
       return false;
     }
   }
