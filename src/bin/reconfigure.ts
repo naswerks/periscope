@@ -16,6 +16,8 @@
  */
 import type { HostConfigureEntry } from '../control/frames.js';
 import { isAbsolutePath, normalizePath } from '../core/paths.js';
+import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
+import { MAX_PLUGIN_DIRS } from '../control/frames.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import {
@@ -48,6 +50,7 @@ interface EffectivePosture {
   readonly agentHome: string | null;
   readonly controllerUrl: string | null;
   readonly decisionUrl: string | null;
+  readonly pluginDirs: string | null;
 }
 
 /**
@@ -72,6 +75,7 @@ function postureOf(merged: NodeJS.ProcessEnv): EffectivePosture {
     agentHome: setOrNull(merged['PERISCOPE_AGENT_HOME']),
     controllerUrl: setOrNull(merged['PERISCOPE_CONTROLLER_URL']),
     decisionUrl: setOrNull(merged['PERISCOPE_DECISION_URL']),
+    pluginDirs: setOrNull(merged['PERISCOPE_PLUGIN_DIRS']),
   };
 }
 
@@ -148,6 +152,12 @@ export function candidateProblem(posture: EffectivePosture): string | null {
   if (posture.branchScheme !== null && !posture.branchScheme.includes('{key}')) {
     return `PERISCOPE_BRANCH_SCHEME '${posture.branchScheme}' has no {key} placeholder — every workspace would render the same branch`;
   }
+  const pluginDirs = parsePluginDirs(posture.pluginDirs);
+  if (pluginDirs.length > MAX_PLUGIN_DIRS) {
+    return `PERISCOPE_PLUGIN_DIRS names ${pluginDirs.length} directories; at most ${MAX_PLUGIN_DIRS}`;
+  }
+  const pluginProblem = pluginDirsProblem(pluginDirs);
+  if (pluginProblem !== null) return `PERISCOPE_PLUGIN_DIRS: ${pluginProblem}`;
   const controller = addressProblem('PERISCOPE_CONTROLLER_URL', posture.controllerUrl, ['ws:', 'wss:']);
   if (controller !== null) return controller;
   const decision = addressProblem('PERISCOPE_DECISION_URL', posture.decisionUrl, ['http:', 'https:']);
@@ -238,6 +248,7 @@ export function reconfigureHost(
   };
   const agentHome = after.agentHome ?? defaultAgentHome(raw);
   const transcriptsRoot = agentHome === null ? null : transcriptsRootUnder(agentHome);
+  const pluginDirs = parsePluginDirs(after.pluginDirs);
   // The addresses in effect are what the host dialled at start; absent a caller's word, the merged
   // view before this ask is the closest thing to it. A key whose file value differs is pending.
   const dialled: LiveAddresses = live ?? {
@@ -259,7 +270,9 @@ export function reconfigureHost(
       controllerUrl: after.controllerUrl,
       decisionUrl: after.decisionUrl,
       agentHome,
+      plugins: readPluginManifests(pluginDirs),
     }),
+    pluginDirs,
     overriddenByEnvironment: overriddenByEnvironment(raw),
     pendingRestart,
   });

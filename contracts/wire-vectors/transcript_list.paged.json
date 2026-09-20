@@ -14,6 +14,6 @@
     }
   },
   "name": "transcript_list.paged",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"transcript_list\",\"requestId\":\"request-2\",\"fromIndex\":100}}"
 }

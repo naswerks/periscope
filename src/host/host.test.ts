@@ -2234,6 +2234,7 @@ test('a reconfigure that applies swaps the transcripts root live, reports the ne
           bulk: undefined,
           linkCapabilities: ['workspace:none'],
           configuration,
+          pluginDirs: [],
           overriddenByEnvironment: ['PERISCOPE_REPOSITORY_ROOT'],
           pendingRestart: [],
         });
@@ -2698,6 +2699,7 @@ test("host_configure_result carries the seam's pendingRestart, and a refusal kee
             bulk: undefined,
             linkCapabilities: ['workspace:none'],
             configuration: { ...unsetHostConfiguration(), decisionUrl: 'https://next.example/decision' },
+            pluginDirs: [],
             overriddenByEnvironment: [],
             pendingRestart: ['PERISCOPE_DECISION_URL'],
           })

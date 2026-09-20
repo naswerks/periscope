@@ -17,7 +17,8 @@
         "transcriptsRoot": null,
         "controllerUrl": null,
         "decisionUrl": null,
-        "agentHome": null
+        "agentHome": null,
+        "plugins": []
       },
       "overriddenByEnvironment": [],
       "pendingRestart": [],
@@ -28,6 +29,6 @@
     }
   },
   "name": "host_configure_result.refused",
-  "protocolVersion": 10,
-  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"host_configure_result\",\"requestId\":\"request-6\",\"configuration\":{\"repositoryRoot\":null,\"workspaceRoot\":null,\"branchScheme\":null,\"transcriptsRoot\":null,\"controllerUrl\":null,\"decisionUrl\":null,\"agentHome\":null},\"overriddenByEnvironment\":[],\"pendingRestart\":[],\"refusal\":{\"reason\":\"config-key-unknown\",\"detail\":\"PERISCOPE_HOST_ID is not a key this host takes over the wire\"}}}"
+  "protocolVersion": 11,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"host_configure_result\",\"requestId\":\"request-6\",\"configuration\":{\"repositoryRoot\":null,\"workspaceRoot\":null,\"branchScheme\":null,\"transcriptsRoot\":null,\"controllerUrl\":null,\"decisionUrl\":null,\"agentHome\":null,\"plugins\":[]},\"overriddenByEnvironment\":[],\"pendingRestart\":[],\"refusal\":{\"reason\":\"config-key-unknown\",\"detail\":\"PERISCOPE_HOST_ID is not a key this host takes over the wire\"}}}"
 }

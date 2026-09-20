@@ -67,6 +67,6 @@
     }
   },
   "name": "session_new.full",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_new\",\"cwd\":\"/work/repo\",\"workspaceKey\":\"workspace-1\",\"correlationId\":\"correlation-1\",\"request\":{\"resume\":\"agent-session-0\",\"fork\":true,\"settingSources\":[\"project\"],\"plugins\":[{\"type\":\"local\",\"path\":\"/plugins/one\",\"skipMcpDiscovery\":false}],\"mcpServers\":{\"docs\":{\"type\":\"stdio\",\"command\":\"docs-server\",\"args\":[]}},\"strictMcpConfig\":true,\"includePartialMessages\":false,\"thinking\":{\"type\":\"enabled\",\"budgetTokens\":2048},\"forwardSubagentText\":true,\"env\":{\"extraAllowedKeys\":[\"CI\"],\"extraDeniedKeys\":[\"SECRET\"],\"extraEnv\":{\"FLAG\":\"1\"}},\"model\":\"model-id\",\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"claude_code\",\"append\":\"Answer briefly.\"},\"effort\":\"high\",\"permissionMode\":\"default\"},\"gate\":{\"decisionTimeoutMs\":30000,\"holdAfterMs\":5000,\"matcherTimeoutSeconds\":60}}}"
 }

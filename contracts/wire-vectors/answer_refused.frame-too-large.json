@@ -17,6 +17,6 @@
     }
   },
   "name": "answer_refused.frame-too-large",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"answer_refused\",\"requestId\":\"request-4\",\"refusal\":{\"reason\":\"frame-too-large\",\"detail\":\"the answer was 70000 bytes, over the 65536 limit\"}}}"
 }

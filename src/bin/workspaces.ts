@@ -6,7 +6,7 @@
  * configuration as arguments, which is what makes the rest of the package testable without a
  * process. The selector is pure and lives where it can be called on its own.
  */
-import type { HostConfiguration } from '../control/frames.js';
+import type { HostConfiguration, HostPlugin } from '../control/frames.js';
 import {
   GitWorktreeProvider,
   keyPreview,
@@ -250,6 +250,8 @@ export interface HostConfigurationExtras {
   readonly controllerUrl: string | null;
   readonly decisionUrl: string | null;
   readonly agentHome: string | null;
+  /** The plugins the configured directories carry, as their manifests name them. */
+  readonly plugins: readonly HostPlugin[];
 }
 
 /**
@@ -276,5 +278,6 @@ export function hostConfigurationOf(
     controllerUrl: setOrNull(extras.controllerUrl),
     decisionUrl: setOrNull(extras.decisionUrl),
     agentHome: setOrNull(extras.agentHome),
+    plugins: extras.plugins,
   };
 }

@@ -18,6 +18,7 @@ import {
   MAX_CONFIGURATION_VALUE_LENGTH,
   MAX_CONFIGURE_ENTRIES,
   MAX_FRAME_BYTES,
+  MAX_PLUGIN_DIRS,
   MAX_REPOSITORY_ENTRIES,
   MAX_REPOSITORY_READ_BYTES,
 } from './frames.js';
@@ -80,6 +81,12 @@ const sessionCursorSchema = z.looseObject({
 // so the cap is enforced at the wire edge rather than left to the reader.
 const configurationValueSchema = z.string().max(MAX_CONFIGURATION_VALUE_LENGTH).nullable();
 
+const hostPluginSchema = z.looseObject({
+  name: z.string().min(1).max(200),
+  version: z.string().max(64).nullable(),
+  path: z.string().min(1).max(MAX_CONFIGURATION_VALUE_LENGTH),
+});
+
 const hostConfigurationSchema = z.looseObject({
   repositoryRoot: configurationValueSchema,
   workspaceRoot: configurationValueSchema,
@@ -88,6 +95,7 @@ const hostConfigurationSchema = z.looseObject({
   controllerUrl: configurationValueSchema,
   decisionUrl: configurationValueSchema,
   agentHome: configurationValueSchema,
+  plugins: z.array(hostPluginSchema).max(MAX_PLUGIN_DIRS),
 });
 
 /** The key names a hello or a configure result lists as pending: config keys, so short and few. */

@@ -36,6 +36,6 @@
     }
   },
   "name": "session_update.state-transition",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"state_transition\",\"transition\":{\"sessionId\":\"agent-session-1\",\"seq\":2,\"at\":\"2000-01-01T00:00:00.000Z\",\"from\":\"spawning\",\"to\":\"ready\",\"activity\":null,\"entryId\":null,\"cause\":{\"kind\":\"sdk-message\",\"event\":\"system/init\",\"detail\":\"the agent reported itself\"},\"where\":{\"cwd\":\"/work/repo\",\"worktree\":\"/work/repo\",\"branch\":\"main\",\"unknownReason\":null},\"correlationId\":\"correlation-1\"}}}}"
 }

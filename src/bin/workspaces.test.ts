@@ -283,6 +283,7 @@ test('hostConfigurationOf reports the values the selector read, null where the s
     controllerUrl: 'wss://c.example/link',
     decisionUrl: 'https://c.example/decision',
     agentHome: '/home/agent/.claude',
+    plugins: [],
   };
 
   assert.deepEqual(hostConfigurationOf(config(), extras), {
@@ -293,6 +294,7 @@ test('hostConfigurationOf reports the values the selector read, null where the s
     controllerUrl: 'wss://c.example/link',
     decisionUrl: 'https://c.example/decision',
     agentHome: '/home/agent/.claude',
+    plugins: [],
   });
   assert.deepEqual(
     hostConfigurationOf(
@@ -307,6 +309,7 @@ test('hostConfigurationOf reports the values the selector read, null where the s
       controllerUrl: 'wss://c.example/link',
       decisionUrl: 'https://c.example/decision',
       agentHome: '/home/agent/.claude',
+      plugins: [],
     },
   );
   // Git mode with no scheme configured reports the EFFECTIVE scheme — what a provision renders —
@@ -324,6 +327,7 @@ test('hostConfigurationOf reports the values the selector read, null where the s
       controllerUrl: null,
       decisionUrl: '',
       agentHome: '',
+      plugins: [],
     }),
     {
       repositoryRoot: null,
@@ -333,12 +337,19 @@ test('hostConfigurationOf reports the values the selector read, null where the s
       controllerUrl: null,
       decisionUrl: null,
       agentHome: null,
+      plugins: [],
     },
   );
 });
 
 test('control: the reported values and the mode marker agree for every posture', () => {
-  const extras = { transcriptsRoot: null, controllerUrl: null, decisionUrl: null, agentHome: null };
+  const extras = {
+    transcriptsRoot: null,
+    controllerUrl: null,
+    decisionUrl: null,
+    agentHome: null,
+    plugins: [],
+  };
   const postures: readonly WorkspaceConfig[] = [
     config(),
     config({ workspaceRoot: '/srv/ws' }),

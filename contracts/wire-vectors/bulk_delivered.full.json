@@ -16,6 +16,6 @@
     }
   },
   "name": "bulk_delivered.full",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"bulk_delivered\",\"deliveryId\":\"delivery-1\",\"byteCount\":512,\"sizeBytes\":4608,\"mtimeMs\":1700000000000}}"
 }

@@ -107,6 +107,7 @@ import { listTranscripts, tailTranscript } from './claude-transcripts.js';
 import { listRepositoryDirectory, readRepositoryFile } from './repository-read.js';
 import { nodePathResolver } from './paths.js';
 import { isBypassMode, mergeMcpServers, readSessionConfigure, readSessionRequest } from './wire-request.js';
+import { mergePlugins, pluginDirsProblem } from './plugin-dirs.js';
 import { isDroppable } from '../control/frames.js';
 
 // ---------------------------------------------------------------------------
@@ -394,6 +395,8 @@ export interface HostReconfigured {
   readonly bulk: BulkResolver | undefined;
   readonly linkCapabilities: readonly string[];
   readonly configuration: HostConfiguration;
+  /** The plugin directories every open loads from now on; the manifests ride `configuration`. */
+  readonly pluginDirs: readonly string[];
   readonly overriddenByEnvironment: readonly string[];
   /** The keys written but not in effect until the next start. */
   readonly pendingRestart: readonly string[];
@@ -517,6 +520,12 @@ export interface PeriscopeHostOptions {
    * value as null.
    */
   readonly configuration?: HostConfiguration;
+  /**
+   * The plugin directories every session on this host loads, checked at each open: a directory
+   * that is gone refuses the open by name rather than letting the agent SDK skip it silently. The
+   * controller's own `session_new.request.plugins` are added after these; see `mergePlugins`.
+   */
+  readonly pluginDirs?: readonly string[];
   /** The wire-settable keys the environment sets, reported on a configure answer. */
   readonly overriddenByEnvironment?: readonly string[];
   /** The keys the file names differently from what this process dialled; empty at a fresh start. */
@@ -668,6 +677,7 @@ export class PeriscopeHost {
   #bulk: BulkResolver | undefined;
   #linkCapabilities: readonly string[];
   #configuration: HostConfiguration;
+  #pluginDirs: readonly string[];
   #overriddenByEnvironment: readonly string[];
   #pendingRestart: readonly string[];
 
@@ -678,6 +688,7 @@ export class PeriscopeHost {
     this.#bulk = options.bulk;
     this.#linkCapabilities = options.linkCapabilities ?? [];
     this.#configuration = options.configuration ?? unsetHostConfiguration();
+    this.#pluginDirs = options.pluginDirs ?? [];
     this.#overriddenByEnvironment = options.overriddenByEnvironment ?? [];
     this.#pendingRestart = options.pendingRestart ?? [];
     if (options.registry !== undefined && (options.baseEnv !== undefined || options.homeDir !== undefined)) {
@@ -1135,6 +1146,17 @@ export class PeriscopeHost {
     const servers = mergeMcpServers(requested.value.mcpServers, tools.value);
     if (!servers.ok) return giveBack(servers.refusal);
 
+    // The host's plugin directories, checked now: one that vanished since it was configured refuses
+    // this open by name, because the agent SDK skips a missing plugin path without a word and the
+    // session would run with nothing to invoke.
+    const pluginProblem = pluginDirsProblem(this.#pluginDirs);
+    if (pluginProblem !== null) {
+      return giveBack(
+        refusal('session-spawn-failed', `a configured plugin directory cannot be loaded: ${pluginProblem}`),
+      );
+    }
+    const plugins = mergePlugins(this.#pluginDirs, requested.value.plugins);
+
     const composed = composeSession({
       registry: this.#registry,
       sessionKey,
@@ -1168,7 +1190,11 @@ export class PeriscopeHost {
       // party that knows. `grantOnAllow` is deliberately not reachable from the wire and so cannot be
       // overridden by the last spread; see `SessionNewGate`.
       gate: { grantOnAllow: true, ...(this.#options.gate ?? {}), ...readGateTimings(opening.gate) },
-      request: { ...requested.value, ...(servers.value === null ? {} : { mcpServers: servers.value }) },
+      request: {
+        ...requested.value,
+        ...(servers.value === null ? {} : { mcpServers: servers.value }),
+        ...(plugins === undefined ? {} : { plugins }),
+      },
       ...(this.#options.clock === undefined ? {} : { clock: this.#options.clock }),
       ...(this.#options.ticker === undefined ? {} : { ticker: this.#options.ticker }),
       onRefusal: (refused) => this.#refuse(sessionKey, refused),
@@ -1690,6 +1716,7 @@ export class PeriscopeHost {
     this.#bulk = rebuilt.bulk;
     this.#linkCapabilities = rebuilt.linkCapabilities;
     this.#configuration = rebuilt.configuration;
+    this.#pluginDirs = rebuilt.pluginDirs;
     this.#overriddenByEnvironment = rebuilt.overriddenByEnvironment;
     // The control-plane addresses are never applied to the live link: the host keeps dialling what it
     // dialled, names the keys as pending, and the next start reads the file.

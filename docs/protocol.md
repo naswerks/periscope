@@ -94,7 +94,11 @@ it (link cause `replay_requested`). Any other 1002 close is read as the version 
 `configuration` is a `HostConfiguration`: seven strings, each `T | null`, in this order:
 `repositoryRoot`, `workspaceRoot`, `branchScheme` (the effective scheme, `{repo}/{key}` when none is
 configured), `transcriptsRoot` (derived from the agent home; reported, never settable on its own),
-`controllerUrl`, `decisionUrl`, `agentHome`. Each value is at most `MAX_CONFIGURATION_VALUE_LENGTH`.
+`controllerUrl`, `decisionUrl`, `agentHome` — each at most `MAX_CONFIGURATION_VALUE_LENGTH` — and,
+from v11, `plugins`: the plugin directories the host loads into every session, each as
+`{ name, version, path }` from its manifest (`version` null when the manifest declares none), at
+most `MAX_PLUGIN_DIRS` entries. A controller that wants a session to have a plugin reads this list
+before it opens one; a host with none configured reports an empty list.
 
 ## The credential on the three transports
 

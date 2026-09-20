@@ -17,6 +17,6 @@
     }
   },
   "name": "workspace_release.request",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"workspace_release\",\"requestId\":\"request-5\",\"workspaceKey\":\"workspace-1\",\"path\":null,\"deleteBranch\":false,\"force\":false}}"
 }

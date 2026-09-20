@@ -8,6 +8,18 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.2.0] - unreleased
+
+Protocol 11; the window is `[10, 11]`, so a version-10 controller is still spoken to.
+
+- `PERISCOPE_PLUGIN_DIRS`: plugin directories the host loads into every session, a path list of
+  plugin roots (each carrying `.claude-plugin/plugin.json`). Settable over the link; refused by name
+  at start, at configure and at every open when a directory is absent or its manifest unreadable,
+  because the agent SDK skips a missing plugin path without a word. A controller's own
+  `session_new.request.plugins` are added after the host's.
+- The hello's `configuration` gains `plugins`: each configured directory's manifest name, version
+  and path, so a controller knows what a session on this host can invoke before it opens one.
+
 ## [1.1.0] - 2026-09-18
 
 Protocol 10; the window is `[9, 10]`, so a version-9 controller is still spoken to.

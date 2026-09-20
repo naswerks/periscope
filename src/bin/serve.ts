@@ -38,6 +38,8 @@ import type { TokenRefresher } from '../identity/index.js';
 import { PairedHostCredential, TokenCredential, identityPosture } from '../identity/index.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { readConfigFile } from '../host/config-file.js';
+import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
+import { MAX_PLUGIN_DIRS } from '../control/frames.js';
 import { writeLinkState } from '../host/link-state-file.js';
 import { describePosture, postureLine } from './posture.js';
 import { isAbsolutePath } from '../core/paths.js';
@@ -114,6 +116,8 @@ interface Config {
    * it. Null = the CLI's own default under the home directory (`defaultAgentHome`).
    */
   readonly agentHome: string | null;
+  /** The plugin directories every session loads, as configured (a path list). Null = none. */
+  readonly pluginDirs: string | null;
 }
 
 function readConfig(env: NodeJS.ProcessEnv): Config | string {
@@ -161,6 +165,7 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     branchScheme: env['PERISCOPE_BRANCH_SCHEME'] ?? null,
     workspaceKey: env['PERISCOPE_WORKSPACE_KEY'] ?? null,
     agentHome: env['PERISCOPE_AGENT_HOME'] ?? null,
+    pluginDirs: env['PERISCOPE_PLUGIN_DIRS'] ?? null,
   };
 }
 
@@ -325,6 +330,14 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
   if (config.agentHome !== null && config.agentHome !== '' && !isAbsolutePath(config.agentHome)) {
     return refuse(`PERISCOPE_AGENT_HOME must be an absolute path — got '${config.agentHome}'`);
   }
+  // A plugin directory is loaded into every session; one that is absent or carries no manifest is
+  // refused at start-up by name, because the agent SDK skips a missing plugin path without a word.
+  const pluginDirs = parsePluginDirs(config.pluginDirs);
+  const pluginProblem =
+    pluginDirs.length > MAX_PLUGIN_DIRS
+      ? `PERISCOPE_PLUGIN_DIRS names ${pluginDirs.length} directories; at most ${MAX_PLUGIN_DIRS}`
+      : pluginDirsProblem(pluginDirs);
+  if (pluginProblem !== null) return refuse(`PERISCOPE_PLUGIN_DIRS: ${pluginProblem}`);
 
   const raw = views.raw;
   // The posture line leads the output and the credential lines follow it: the one-line summary
@@ -521,7 +534,10 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       controllerUrl: config.controllerUrl,
       decisionUrl: config.decisionUrl,
       agentHome,
+      plugins: readPluginManifests(pluginDirs),
     }),
+    // The directories themselves, for every open; the manifests above are what the hello says.
+    pluginDirs,
     overriddenByEnvironment: overriddenByEnvironment(raw),
     // The configure seam: validates, writes the config file, rebuilds the provider. It reads
     // the raw environment because the file fills absences in it, and only this file may read that.

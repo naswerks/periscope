@@ -15,6 +15,6 @@
   },
   "frame": null,
   "name": "session_prompt.unknown-payload-key",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_prompt\",\"text\":\"hello\",\"futureField\":\"from a newer peer\"}}"
 }

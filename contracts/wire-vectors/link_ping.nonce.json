@@ -11,6 +11,6 @@
     }
   },
   "name": "link_ping.nonce",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_ping\",\"nonce\":\"nonce-1\"}}"
 }

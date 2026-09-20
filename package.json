@@ -1,6 +1,6 @@
 {
   "name": "@naswerks/periscope",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "license": "MIT",
   "description": "Self-hosted runner for agent sessions: dials out to your controller, then spawns, gates, observes, prompts and streams.",
   "keywords": [

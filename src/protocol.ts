@@ -20,6 +20,7 @@ export type {
   ControlPayloadKind,
   Frame,
   HostConfiguration,
+  HostPlugin,
   HostConfigure,
   HostConfigureEntry,
   HostConfigureResult,
@@ -111,6 +112,7 @@ export {
 export {
   DROPPABLE_KINDS,
   MAX_CONFIGURATION_VALUE_LENGTH,
+  MAX_PLUGIN_DIRS,
   MAX_BULK_RELEASES,
   MAX_CONFIGURE_ENTRIES,
   MAX_FRAME_BYTES,

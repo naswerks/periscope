@@ -70,6 +70,7 @@ test('regression: a posture the start-up screen would refuse is refused config-v
       controllerUrl: null,
       decisionUrl: null,
       agentHome: null,
+      pluginDirs: null,
     });
     assert.match(problem ?? '', /\{key\}/);
 
@@ -84,6 +85,7 @@ test('regression: a posture the start-up screen would refuse is refused config-v
         controllerUrl: null,
         decisionUrl: null,
         agentHome: null,
+        pluginDirs: null,
       }),
       null,
     );

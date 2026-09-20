@@ -29,7 +29,7 @@ import type { SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -37,11 +37,11 @@ export const PROTOCOL_VERSION = 10;
  * its choice inside the overlap and the host accepts any version in its own window. The window
  * is one minor wide: the version before the current one stays supported for one release. A hello
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
- * the window. Version 10 adds `answer_refused`, the three session refusals
- * (`session-cap-reached`, `prompt-queue-full`, `env-key-refused`) and the controller's own
- * range on `link_welcome`; a version-9 controller sees none of them and is still spoken to.
+ * the window. Version 11 adds `plugins` to the hello's `configuration`: the plugin directories
+ * this host loads into every session, each with its manifest's name and version. A version-10
+ * controller does not read the member and is still spoken to.
  */
-export const PROTOCOL_VERSION_MIN = 9;
+export const PROTOCOL_VERSION_MIN = 10;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {
@@ -1410,6 +1410,20 @@ export function isDroppable(kind: SessionPayloadKind): boolean {
  */
 export const MAX_CONFIGURATION_VALUE_LENGTH = 1000;
 
+/** The most plugin directories a configuration names: a list, not a catalogue. */
+export const MAX_PLUGIN_DIRS = 8;
+
+/**
+ * One plugin this host loads into every session: its manifest's name (the namespace its skills
+ * carry), its version when the manifest declares one, and the directory as configured. Reported in
+ * the hello so a controller knows what a session on this host can invoke before it opens one.
+ */
+export interface HostPlugin {
+  readonly name: string;
+  readonly version: string | null;
+  readonly path: string;
+}
+
 /**
  * How this host is configured, as values: the read half of `periscope config`.
  *
@@ -1434,6 +1448,11 @@ export interface HostConfiguration {
   readonly decisionUrl: string | null;
   /** Where the agent CLI keeps its state. Settable over the link; the transcripts root derives from it. */
   readonly agentHome: string | null;
+  /**
+   * The plugins every session on this host loads, from `PERISCOPE_PLUGIN_DIRS`. Settable over the
+   * link and applied to the next open; empty when none are configured.
+   */
+  readonly plugins: readonly HostPlugin[];
 }
 
 /** A `HostConfiguration` with nothing set: what a host composed without one reports. */
@@ -1446,6 +1465,7 @@ export function unsetHostConfiguration(): HostConfiguration {
     controllerUrl: null,
     decisionUrl: null,
     agentHome: null,
+    plugins: [],
   };
 }
 

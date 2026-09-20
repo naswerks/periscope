@@ -36,6 +36,6 @@
     }
   },
   "name": "session_new.request-all-null",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_new\",\"cwd\":\"/work/repo\",\"workspaceKey\":null,\"correlationId\":null,\"request\":{\"resume\":null,\"fork\":null,\"settingSources\":null,\"plugins\":null,\"mcpServers\":null,\"strictMcpConfig\":null,\"includePartialMessages\":null,\"thinking\":null,\"forwardSubagentText\":null,\"env\":null,\"model\":null,\"systemPrompt\":null,\"effort\":null,\"permissionMode\":null},\"gate\":{\"decisionTimeoutMs\":null,\"holdAfterMs\":null,\"matcherTimeoutSeconds\":null}}}"
 }

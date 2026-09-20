@@ -29,6 +29,6 @@
     }
   },
   "name": "refused.encode.undeclared-configure-refusal",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": null
 }

@@ -17,6 +17,6 @@
     }
   },
   "name": "refused.encode.missing-member",
-  "protocolVersion": 10,
+  "protocolVersion": 11,
   "wire": null
 }

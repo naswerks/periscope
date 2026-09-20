@@ -7,7 +7,7 @@
     "at": "2000-01-01T00:00:00.000Z",
     "payload": {
       "kind": "link_hello",
-      "protocolVersion": 10,
+      "protocolVersion": 11,
       "hostId": "host-1",
       "capabilities": [],
       "cursors": [],
@@ -18,16 +18,17 @@
         "transcriptsRoot": null,
         "controllerUrl": null,
         "decisionUrl": null,
-        "agentHome": null
+        "agentHome": null,
+        "plugins": []
       },
       "pendingRestart": [],
       "protocolRange": {
-        "min": 9,
-        "max": 10
+        "min": 10,
+        "max": 11
       }
     }
   },
   "name": "link_hello.empty",
-  "protocolVersion": 10,
-  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_hello\",\"protocolVersion\":10,\"hostId\":\"host-1\",\"capabilities\":[],\"cursors\":[],\"configuration\":{\"repositoryRoot\":null,\"workspaceRoot\":null,\"branchScheme\":null,\"transcriptsRoot\":null,\"controllerUrl\":null,\"decisionUrl\":null,\"agentHome\":null},\"pendingRestart\":[],\"protocolRange\":{\"min\":9,\"max\":10}}}"
+  "protocolVersion": 11,
+  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_hello\",\"protocolVersion\":11,\"hostId\":\"host-1\",\"capabilities\":[],\"cursors\":[],\"configuration\":{\"repositoryRoot\":null,\"workspaceRoot\":null,\"branchScheme\":null,\"transcriptsRoot\":null,\"controllerUrl\":null,\"decisionUrl\":null,\"agentHome\":null,\"plugins\":[]},\"pendingRestart\":[],\"protocolRange\":{\"min\":10,\"max\":11}}}"
 }

@@ -279,6 +279,14 @@ const sessionPayloadArbs = {
       controllerUrl: nullable(fc.string({ maxLength: 40 })),
       decisionUrl: nullable(fc.string({ maxLength: 40 })),
       agentHome: nullable(fc.string({ maxLength: 40 })),
+      plugins: fc.array(
+        fc.record({
+          name: nonEmptyString,
+          version: nullable(fc.string({ maxLength: 16 })),
+          path: nonEmptyString,
+        }),
+        { maxLength: 3 },
+      ),
     }),
     overriddenByEnvironment: fc.array(fc.string({ maxLength: 32 }), { maxLength: 4 }),
     pendingRestart: fc.array(nonEmptyString, { maxLength: 2 }),
@@ -363,6 +371,14 @@ const controlPayloadArbs = {
       controllerUrl: nullable(fc.string({ maxLength: 40 })),
       decisionUrl: nullable(fc.string({ maxLength: 40 })),
       agentHome: nullable(fc.string({ maxLength: 40 })),
+      plugins: fc.array(
+        fc.record({
+          name: nonEmptyString,
+          version: nullable(fc.string({ maxLength: 16 })),
+          path: nonEmptyString,
+        }),
+        { maxLength: 3 },
+      ),
     }),
     pendingRestart: fc.array(nonEmptyString, { maxLength: 2 }),
     protocolRange: fc.record({ min: fc.integer({ min: 1, max: 20 }), max: fc.integer({ min: 1, max: 20 }) }),
