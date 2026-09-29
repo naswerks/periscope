@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { SDKMessage } from './agent-process.js';
+import type { AgentProcessRequest, SDKMessage } from './agent-process.js';
 import {
   AGENT_PROCESS_REQUEST_KEYS,
   AGENT_SELECTION_OPTION_KEYS,
@@ -19,6 +19,7 @@ import {
   SHADOWING_LANES,
   STREAMING_OPTION_KEYS,
   TOOL_SURFACE_OPTION_KEYS,
+  composeOptions,
   messagesOf,
 } from './agent-process.js';
 
@@ -366,3 +367,49 @@ const ORIGINAL_NINE = [
   'onStderr',
   'spawn',
 ];
+
+// ---------------------------------------------------------------------------
+// composeOptions: what a session is started with, checked without starting one
+// ---------------------------------------------------------------------------
+
+/** A request with every key at the value that composes nothing optional. */
+const request = (over: Partial<AgentProcessRequest> = {}): AgentProcessRequest => ({
+  cwd: 'C:/work',
+  env: { PATH: 'p' },
+  settingSources: [],
+  plugins: null,
+  hooks: null,
+  resume: null,
+  fork: false,
+  includePartialMessages: true,
+  thinking: null,
+  forwardSubagentText: false,
+  onStderr: null,
+  mcpServers: null,
+  strictMcpConfig: null,
+  sessionStore: null,
+  sessionStoreFlush: null,
+  spawn: null,
+  model: null,
+  systemPrompt: null,
+  effort: null,
+  permissionMode: null,
+  ...over,
+});
+
+test('plugins travel over stdin: pluginDelivery rides with a plugin list and never without one', () => {
+  // One `--plugin-dir` flag per plugin can push a Windows command line past 32,767 characters, so
+  // the list goes over stdin; but that needs a CLI of 2.1.261 or later, so nothing asks for it
+  // unless there is a list to send.
+  const withPlugins = composeOptions(request({ plugins: [{ type: 'local', path: 'C:/plugins/one' }] }));
+  assert.equal(withPlugins.pluginDelivery, 'initialize');
+  assert.deepEqual(withPlugins.plugins, [{ type: 'local', path: 'C:/plugins/one' }]);
+
+  const emptyList = composeOptions(request({ plugins: [] }));
+  assert.deepEqual(emptyList.plugins, []);
+  assert.equal('pluginDelivery' in emptyList, false, 'asked for stdin delivery with nothing to deliver');
+
+  const none = composeOptions(request());
+  assert.equal('plugins' in none, false);
+  assert.equal('pluginDelivery' in none, false);
+});

@@ -7,7 +7,9 @@
  *
  * A directory is checked twice: when the value is written (over the wire or at start), and again
  * at every open, because a directory that existed when it was configured can be gone by the time a
- * session needs it. The agent SDK skips a missing plugin path silently, so the open refuses instead.
+ * session needs it. The agent does report a directory that did not load, by its path, in its init
+ * message's `plugin_errors`, but only once the session is running and its first turn has been
+ * queued; the open refuses before any process exists instead.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { delimiter, isAbsolute, join, resolve } from 'node:path';

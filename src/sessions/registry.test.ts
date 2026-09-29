@@ -601,3 +601,41 @@ test('every streaming option a caller asks for is what is passed — none is dec
   assert.deepEqual(fake.started[0]?.request.thinking, { type: 'adaptive', display: 'summarized' });
   assert.equal(fake.started[0]?.request.forwardSubagentText, true);
 });
+
+test("the agent's plugin answer rides the facts when it lands before the init message", async () => {
+  const fake = fakeAgents();
+  const registry = registryWith(fake.start);
+  const created = registry.create({ cwd: 'C:/work' });
+  assert.ok(created.ok);
+  const process = fake.started[0];
+  assert.ok(process);
+  process.pluginsApplied = true;
+
+  // The initialize answer lands on a later turn of the loop; the init message only after a turn.
+  await settle();
+  created.value.prompt('go');
+  process.emit(initMessage('s-plugins-first'));
+  const live = await created.value.whenLive(2_000);
+
+  assert.ok(live.ok);
+  assert.equal(live.value.pluginsApplied, true);
+});
+
+test("the agent's plugin answer still reaches the facts when the init message lands first", async () => {
+  const fake = fakeAgents();
+  const registry = registryWith(fake.start);
+  const created = registry.create({ cwd: 'C:/work' });
+  assert.ok(created.ok);
+  const process = fake.started[0];
+  assert.ok(process);
+  process.pluginsApplied = false;
+
+  created.value.prompt('go');
+  process.emit(initMessage('s-init-first'));
+  const live = await created.value.whenLive(2_000);
+  assert.ok(live.ok);
+  assert.equal(live.value.pluginsApplied, null, 'no answer yet when the facts were first made');
+
+  await settle();
+  assert.equal(created.value.facts?.pluginsApplied, false, 'the later answer was dropped');
+});

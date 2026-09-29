@@ -17,6 +17,8 @@ export interface FakeAgent {
   readonly configured: { readonly setter: string; readonly value: unknown }[];
   /** Make the next live setter the session calls reject with `error`, as the agent refusing it would. */
   refuseNextSetter(error: Error): void;
+  /** What the process answers when asked whether its plugins loaded. Null until a test sets it. */
+  pluginsApplied: boolean | null;
   /** Push a message onto the process's output stream. */
   emit(message: SDKMessage): void;
   /** End the stream by throwing `error` from the generator, as a process death would. */
@@ -68,6 +70,7 @@ export function fakeAgents(): FakeAgents {
       refuseNextSetter: (error) => {
         setterRefusal = error;
       },
+      pluginsApplied: null,
       emit: (message) => queue.push(message),
       fail: (error) => {
         failure = error;
@@ -95,6 +98,10 @@ export function fakeAgents(): FakeAgents {
       setModel: (model) => setter('setModel', model),
       setPermissionMode: (mode) => setter('setPermissionMode', mode),
       setThinking: (thinking) => setter('setThinking', thinking),
+      // Answered on a later turn of the loop, as the real initialize answer is, so a test can set the
+      // field just after the session starts and the session still asks before it is known.
+      pluginsApplied: () =>
+        new Promise<boolean | null>((resolve) => setImmediate(() => resolve(record.pluginsApplied))),
       close: () => {
         isClosed = true;
         queue.end();

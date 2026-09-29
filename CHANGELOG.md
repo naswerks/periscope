@@ -45,6 +45,13 @@ removed export. The package version and the wire protocol version are separate n
 - A message whose discriminator the routing table does not know, such as a subtype the CLI emits
   before the SDK's types declare it, rides `update`, the table's stated default. The lookup used to
   throw inside the forwarder, and the message was lost behind a `subscriber_failed` degrade.
+- Plugins reach the agent over stdin (`pluginDelivery: 'initialize'`) rather than as one
+  `--plugin-dir` flag each, so a host with several plugin directories stays clear of the Windows
+  command-line limit. A custom `spawn` that loads plugins must run a CLI of 2.1.261 or later.
+  `HostedSessionFacts.pluginsApplied` carries the agent's own answer to whether every plugin loaded.
+  The agent now names a plugin directory that did not load, with its path, in its init message's
+  `plugin_errors`, which reaches the controller forwarded. The host still refuses a missing
+  configured directory itself, before a process exists.
 
 ## [1.2.0] - unreleased
 

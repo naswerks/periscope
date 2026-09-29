@@ -331,7 +331,8 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     return refuse(`PERISCOPE_AGENT_HOME must be an absolute path — got '${config.agentHome}'`);
   }
   // A plugin directory is loaded into every session; one that is absent or carries no manifest is
-  // refused at start-up by name, because the agent SDK skips a missing plugin path without a word.
+  // refused at start-up by name. The agent would name it too, in a session's `plugin_errors`, but
+  // only once that session was running; a host that will fail every session says so when it boots.
   const pluginDirs = parsePluginDirs(config.pluginDirs);
   const pluginProblem =
     pluginDirs.length > MAX_PLUGIN_DIRS

@@ -524,8 +524,9 @@ export interface PeriscopeHostOptions {
   readonly configuration?: HostConfiguration;
   /**
    * The plugin directories every session on this host loads, checked at each open: a directory
-   * that is gone refuses the open by name rather than letting the agent SDK skip it silently. The
-   * controller's own `session_new.request.plugins` are added after these; see `mergePlugins`.
+   * that is gone refuses the open by name, before a process exists, rather than leaving the agent to
+   * report it in a running session's `plugin_errors`. The controller's own
+   * `session_new.request.plugins` are added after these; see `mergePlugins`.
    */
   readonly pluginDirs?: readonly string[];
   /** The wire-settable keys the environment sets, reported on a configure answer. */
@@ -1152,8 +1153,8 @@ export class PeriscopeHost {
     if (!servers.ok) return giveBack(servers.refusal);
 
     // The host's plugin directories, checked now: one that vanished since it was configured refuses
-    // this open by name, because the agent SDK skips a missing plugin path without a word and the
-    // session would run with nothing to invoke.
+    // this open by name. The agent would report it in its init message's `plugin_errors`, but only
+    // once the session was running, with nothing to invoke.
     const pluginProblem = pluginDirsProblem(this.#pluginDirs);
     if (pluginProblem !== null) {
       return giveBack(

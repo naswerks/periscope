@@ -211,6 +211,9 @@ export interface AgentProcessRequest {
    * 2. stderr. `SpawnedProcess` carries only stdin and stdout, so a custom spawn that does not
    *    route the child's stderr somewhere loses `onStderr` entirely, and the untrusted-workspace
    *    condition is reported only there.
+   *
+   * And one it must match: with plugins, the list travels over stdin (`composeOptions`), which a CLI
+   * older than 2.1.261 refuses at startup, so the CLI a custom spawn runs must be that new.
    */
   readonly spawn: SpawnAgentProcess | null;
   /**
@@ -495,6 +498,12 @@ export interface AgentProcess {
   setModel(model: string | null): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   setThinking(thinking: ThinkingConfig): Promise<void>;
+  /**
+   * Whether every plugin the process was started with loaded, as the agent's initialize answer
+   * says. Null when none were listed, when there was no answer, or when the CLI predates the field.
+   * A read, not a control, so it sits here without widening what the handle can change.
+   */
+  pluginsApplied(): Promise<boolean | null>;
   /** End the process and release everything it holds. Idempotent. */
   close(): void;
 }
@@ -614,13 +623,14 @@ export function messagesOf(source: AsyncGenerator<SDKMessage, void>): AsyncGener
   } as AsyncGenerator<SDKMessage, void>;
 }
 
-/** Start an agent process. The subprocess exists when this returns. */
-export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
-  // The live prompt queue's bound. Turns the agent has not consumed wait here; a controller that
-  // sends past it is refused `prompt-queue-full` and the session is untouched.
-  const input = new AsyncQueue<SDKUserMessage>(MAX_PENDING_PROMPTS);
-
-  const options: Options = {
+/**
+ * The SDK's `Options` for one request, and nothing else.
+ *
+ * Pure, so what a session starts with can be checked without starting one. Exported for that;
+ * `startAgentProcess` is its only caller, and it is not part of the package's public surface.
+ */
+export function composeOptions(request: AgentProcessRequest): Options {
+  return {
     cwd: request.cwd,
     env: request.env,
     settingSources: [...request.settingSources],
@@ -634,7 +644,15 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
     // what makes that combination unbuildable here rather than merely undocumented.
     ...(request.sessionStore === null ? {} : { sessionStore: request.sessionStore }),
     ...(request.sessionStoreFlush === null ? {} : { sessionStoreFlush: request.sessionStoreFlush }),
-    ...(request.plugins === null ? {} : { plugins: [...request.plugins] }),
+    // The plugin list travels over stdin, not as one `--plugin-dir` flag per plugin: Windows refuses
+    // a command line over 32,767 characters, and a host with several plugin directories reaches it.
+    // Asked for only when there are plugins, because it needs a CLI of 2.1.261 or later, which the
+    // bundled one is and a custom `spawn` may not run.
+    ...(request.plugins === null
+      ? {}
+      : request.plugins.length === 0
+        ? { plugins: [] }
+        : { plugins: [...request.plugins], pluginDelivery: 'initialize' as const }),
     ...(request.hooks === null ? {} : { hooks: request.hooks }),
     ...(request.resume === null ? {} : { resume: request.resume, forkSession: request.fork }),
     ...(request.onStderr === null ? {} : { stderr: request.onStderr }),
@@ -646,8 +664,15 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
     ...(request.effort === null ? {} : { effort: request.effort }),
     ...(request.permissionMode === null ? {} : { permissionMode: request.permissionMode }),
   };
+}
 
-  const running: Query = query({ prompt: input, options });
+/** Start an agent process. The subprocess exists when this returns. */
+export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
+  // The live prompt queue's bound. Turns the agent has not consumed wait here; a controller that
+  // sends past it is refused `prompt-queue-full` and the session is untouched.
+  const input = new AsyncQueue<SDKUserMessage>(MAX_PENDING_PROMPTS);
+
+  const running: Query = query({ prompt: input, options: composeOptions(request) });
   let closed = false;
 
   return {
@@ -690,6 +715,15 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
       const cap = thinking.type === 'disabled' ? 0 : null;
       const display = thinking.type === 'disabled' ? undefined : thinking.display;
       await running.setMaxThinkingTokens(cap, display);
+    },
+    async pluginsApplied(): Promise<boolean | null> {
+      // The agent's own answer to its initialize request, cached by the SDK. Never a throw: a
+      // process that did not initialize has no answer to give, and null says exactly that.
+      try {
+        return (await running.initializationResult()).plugins_applied ?? null;
+      } catch {
+        return null;
+      }
     },
     close(): void {
       if (closed) return;

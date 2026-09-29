@@ -128,6 +128,13 @@ export interface HostedSessionFacts {
     readonly path: string;
     readonly version: string | null;
   }[];
+  /**
+   * Whether every plugin the session was started with loaded, from the agent's initialize answer.
+   * Null when none were listed, when the answer has not come (it can land after the facts do), or
+   * when the CLI predates it. `plugins` says which loaded; a failure names its path in the init
+   * message's `plugin_errors`, which reaches the controller forwarded.
+   */
+  readonly pluginsApplied: boolean | null;
   readonly capabilities: readonly string[];
   /**
    * The MCP servers the agent connected to, by name and status, as the agent reported them.
@@ -159,6 +166,8 @@ export class HostedSession {
   #state: SessionLifecycle = 'provisioning';
   #facts: HostedSessionFacts | null = null;
   #ended: SessionEnded | null = null;
+  /** The agent's plugin answer, held until the facts exist to carry it. */
+  #pluginsApplied: boolean | null = null;
 
   /**
    * Constructed by `SessionRegistry` only. Internal: an embedder borrows a handle from the registry
@@ -182,6 +191,12 @@ export class HostedSession {
     // Reading starts immediately. The agent will say nothing until a turn is queued, but a consumer
     // attached later would miss whatever came before it.
     void this.#pump();
+    // The initialize answer arrives before any turn; the init message only after the first one. Held
+    // here and folded into the facts whichever comes first.
+    void this.#process.pluginsApplied().then(
+      (applied) => this.#notePluginsApplied(applied),
+      () => undefined,
+    );
   }
 
   get state(): SessionLifecycle {
@@ -404,6 +419,7 @@ export class HostedSession {
       tools: facts.tools,
       skills: facts.skills,
       plugins: facts.plugins,
+      pluginsApplied: this.#pluginsApplied,
       capabilities: facts.capabilities,
       mcpServers: facts.mcpServers,
       workspaceTrust: this.#trust,
@@ -412,6 +428,11 @@ export class HostedSession {
     // Keyed by the agent's own id only now, because only now is there one.
     this.#onLive(this);
     while (this.#liveWaiters.length > 0) this.#liveWaiters.shift()?.(ok(this.#facts));
+  }
+
+  #notePluginsApplied(applied: boolean | null): void {
+    this.#pluginsApplied = applied;
+    if (this.#facts !== null) this.#facts = { ...this.#facts, pluginsApplied: applied };
   }
 
   #finish(cause: SessionEndCause, detail: string): void {

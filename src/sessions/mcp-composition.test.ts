@@ -23,6 +23,7 @@ function capture(): { requests: AgentProcessRequest[]; registry: SessionRegistry
         setModel: () => Promise.resolve(),
         setPermissionMode: () => Promise.resolve(),
         setThinking: () => Promise.resolve(),
+        pluginsApplied: () => Promise.resolve(null),
         close: () => undefined,
       };
     },
