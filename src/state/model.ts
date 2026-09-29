@@ -198,6 +198,7 @@ export const MESSAGE_EVENTS = [
   'system/permission_denied',
   'system/elicitation_complete',
   'system/worker_shutting_down',
+  'system/model_refusal_no_fallback',
   'assistant',
   'result',
 ] as const;

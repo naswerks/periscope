@@ -341,6 +341,33 @@ test('a model switch is recorded once, as it happened, with what it cost the pro
   assert.equal(machine.rejectedCount, 0, 'PostModelSwitch is a declared cause event');
 });
 
+test('regression: a refusal with no fallback is recorded, not refused as an unnamed cause', () => {
+  // The observer always recorded it, but the event was missing from the declared vocabulary, so the
+  // machine refused every such transition as `transition-cause-unnamed` and the trace never had it.
+  const { observer: o, machine, store } = observer();
+  o.observeHook(hook({ hook_event_name: 'UserPromptSubmit' }));
+  const before = store.all().length;
+
+  const recorded = o.observeMessage(
+    message({
+      type: 'system',
+      subtype: 'model_refusal_no_fallback',
+      original_model: 'model-a',
+      api_refusal_category: 'cyber',
+      request_id: null,
+      content: '',
+    }),
+  );
+
+  assert.equal(machine.rejectedCount, 0, 'the refusal was rejected as an unnamed cause');
+  assert.ok(recorded.every((result) => result.ok));
+  assert.equal(store.all().length - before, 1);
+  const record = store.all().at(-1);
+  assert.equal(record?.cause.kind, 'sdk-message');
+  assert.equal(record?.cause.event, 'system/model_refusal_no_fallback');
+  assert.match(record?.cause.detail ?? '', /model-a, category cyber/);
+});
+
 test('the ask before a model switch records nothing; a deny or an unconfirmed id would cancel it', () => {
   const { observer: o, store } = observer();
   o.observeHook(hook({ hook_event_name: 'PreModelSwitch', from_model: 'model-a', to_model: 'model-b' }));

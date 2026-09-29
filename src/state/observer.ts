@@ -15,9 +15,8 @@
  * the decision path is a separate handler on the same event, and the SDK runs both.
  */
 import type { HookInput, SDKMessage } from '../host/agent-process.js';
-import { discriminatorOf } from '../host/agent-process.js';
 import type { Result } from '../core/result.js';
-import type { SessionTransition, TransitionCause, TransitionWhere } from './model.js';
+import type { MessageEventName, SessionTransition, TransitionCause, TransitionWhere } from './model.js';
 import type { EntryOp, SessionStateMachine, TransitionRequest } from './machine.js';
 
 /**
@@ -113,10 +112,12 @@ export class SessionObserver {
   }
 
   #requestsFor(message: SDKMessage): TransitionRequest[] {
-    const event = discriminatorOf(message);
-    const cause = (detail: string): TransitionCause => ({
+    // Each branch names its own event, typed against the declared vocabulary, so a message this
+    // file records under an event nobody declared fails to compile instead of being refused at run
+    // time as unnamed.
+    const cause = (event: MessageEventName, detail: string): TransitionCause => ({
       kind: 'sdk-message',
-      event: event as TransitionCause['event'],
+      event,
       detail,
     });
 
@@ -125,13 +126,16 @@ export class SessionObserver {
         {
           to: 'ready',
           sessionId: message.session_id,
-          cause: cause(`the agent reported itself: ${message.model} on CLI ${message.claude_code_version}`),
+          cause: cause(
+            'system/init',
+            `the agent reported itself: ${message.model} on CLI ${message.claude_code_version}`,
+          ),
         },
       ];
     }
 
     if (message.type === 'system' && message.subtype === 'status') {
-      return statusRequests(message.status, cause);
+      return statusRequests(message.status, (detail) => cause('system/status', detail));
     }
 
     if (message.type === 'system' && message.subtype === 'session_state_changed') {
@@ -139,7 +143,12 @@ export class SessionObserver {
       // already carried by the open permission or elicitation entry, and a second representation
       // of one fact is how two vocabularies start.
       const to = message.state === 'idle' ? 'idle' : 'working';
-      return [{ to, cause: cause(`the agent reported session state ${message.state}`) }];
+      return [
+        {
+          to,
+          cause: cause('system/session_state_changed', `the agent reported session state ${message.state}`),
+        },
+      ];
     }
 
     if (message.type === 'system' && message.subtype === 'compact_boundary') {
@@ -147,7 +156,10 @@ export class SessionObserver {
         {
           to: this.#machine.state,
           entry: { op: 'close', entryId: COMPACTION_ENTRY },
-          cause: cause(`compaction completed (${message.compact_metadata.trigger})`),
+          cause: cause(
+            'system/compact_boundary',
+            `compaction completed (${message.compact_metadata.trigger})`,
+          ),
         },
       ];
     }
@@ -161,7 +173,9 @@ export class SessionObserver {
     }
 
     if (message.type === 'system' && message.subtype === 'task_updated') {
-      return this.#taskUpdateRequests(message.task_id, message.patch, cause);
+      return this.#taskUpdateRequests(message.task_id, message.patch, (detail) =>
+        cause('system/task_updated', detail),
+      );
     }
 
     if (message.type === 'system' && message.subtype === 'task_notification') {
@@ -172,20 +186,30 @@ export class SessionObserver {
         {
           to: this.#machine.state,
           entry: { op: 'close', entryId },
-          cause: cause(`background task ${message.task_id} ${message.status}`),
+          cause: cause('system/task_notification', `background task ${message.task_id} ${message.status}`),
         },
       ];
     }
 
     if (message.type === 'system' && message.subtype === 'worker_shutting_down') {
-      return [{ to: this.#machine.state, cause: cause(`the worker is shutting down: ${message.reason}`) }];
-    }
-
-    if (message.type === 'system' && message.subtype === 'model_refusal_no_fallback') {
       return [
         {
           to: this.#machine.state,
-          cause: cause(`the model refused and no fallback ran (${message.original_model})`),
+          cause: cause('system/worker_shutting_down', `the worker is shutting down: ${message.reason}`),
+        },
+      ];
+    }
+
+    if (message.type === 'system' && message.subtype === 'model_refusal_no_fallback') {
+      const category =
+        typeof message.api_refusal_category === 'string' ? `, category ${message.api_refusal_category}` : '';
+      return [
+        {
+          to: this.#machine.state,
+          cause: cause(
+            'system/model_refusal_no_fallback',
+            `the model refused and no fallback ran (${message.original_model}${category})`,
+          ),
         },
       ];
     }
@@ -195,7 +219,7 @@ export class SessionObserver {
       const why = clean
         ? `the turn completed in ${message.duration_ms}ms`
         : `the turn ended ${message.subtype}${'terminal_reason' in message && message.terminal_reason !== undefined ? ` (${message.terminal_reason})` : ''}`;
-      return [{ to: clean ? 'idle' : 'errored', cause: cause(why) }];
+      return [{ to: clean ? 'idle' : 'errored', cause: cause('result', why) }];
     }
 
     return [];

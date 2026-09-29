@@ -26,6 +26,10 @@ removed export. The package version and the wire protocol version are separate n
   so code that builds a `ModelSpend` still compiles.
 - `readTaskSpend` is deprecated and returns null: no agent SDK declares the fields it read, and a
   subagent's cost is already inside the parent's results.
+- A refusal with no fallback reaches the trace: `system/model_refusal_no_fallback` is a declared
+  cause event. The observer recorded it before, but the machine refused every such transition as
+  `transition-cause-unnamed`, so only the forwarded message said the model refused. The detail names
+  the model and, when the agent reports one, the refusal category.
 
 ## [1.2.0] - unreleased
 
