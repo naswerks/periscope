@@ -16,6 +16,16 @@ removed export. The package version and the wire protocol version are separate n
   re-caching the context. `PreModelSwitch` is answered, not recorded: `modelSwitchHooks` allows every
   switch, so a switch a controller asks for is never left to the interactive cache-miss confirm, which
   a session with nobody at a keyboard cannot answer. `composeSession` registers it.
+- `deltaSpend(previous, next)`: a result's spend is a running total (it accumulates across a
+  session's turns, continues across a resume or a fork, and resets at `/clear`), so one turn's spend
+  is the difference of two results; a drop in any counter starts a new series. Seed a resumed or
+  forked session's first result with its parent's last one, or the parent's spend counts twice.
+  `foldSpend` folds deltas.
+- `ModelSpend` gains `thinkingTokens` and `costBasis` (`list`, `managed` or `unknown`, the last
+  meaning the cost is a guess), null when the agent did not report them and optional in the type,
+  so code that builds a `ModelSpend` still compiles.
+- `readTaskSpend` is deprecated and returns null: no agent SDK declares the fields it read, and a
+  subagent's cost is already inside the parent's results.
 
 ## [1.2.0] - unreleased
 

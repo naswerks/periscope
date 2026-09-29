@@ -144,7 +144,10 @@ test('an ordinary message is not a rate-limit event', () => {
 // subagent spend
 // ---------------------------------------------------------------------------
 
-test("regression: a subagent's spend is attributable to its agent id", () => {
+test('regression: readTaskSpend is null even for the shape it once read; no agent SDK declares those fields', () => {
+  // `agent_id`, `total_cost_usd` and `model_usage` on a task notification were never in any SDK's
+  // types, and a subagent's cost already rides the parent's results. Reading them would count a
+  // subagent twice, so the deprecated export reads nothing.
   const taskSpend = readTaskSpend({
     type: 'system',
     subtype: 'task_notification',
@@ -153,9 +156,21 @@ test("regression: a subagent's spend is attributable to its agent id", () => {
     model_usage: { 'claude-opus-5': usage({ costUSD: 0.31 }) },
   } as unknown as SDKMessage);
 
-  assert.equal(taskSpend?.agentId, 'agent-7');
-  assert.equal(taskSpend?.spend.totalCostUsd, 0.31);
-  assert.equal(taskSpend?.spend.byModel[0]?.costUsd, 0.31);
+  assert.equal(taskSpend, null);
+});
+
+test('the thinking tokens and the price basis are carried off each model', () => {
+  const spend = readTurnSpend(
+    result({ modelUsage: { m: usage({ thinkingTokens: 40, costBasis: 'unknown' }) } }),
+  );
+  assert.equal(spend?.byModel[0]?.thinkingTokens, 40);
+  assert.equal(spend?.byModel[0]?.costBasis, 'unknown', 'an unknown basis means the cost is a guess');
+});
+
+test('regression: unreported thinking tokens and price basis are null, never zero or a guessed basis', () => {
+  const spend = readTurnSpend(result({ modelUsage: { m: usage() } }));
+  assert.equal(spend?.byModel[0]?.thinkingTokens, null);
+  assert.equal(spend?.byModel[0]?.costBasis, null);
 });
 
 test('a task notification carrying no usage reads as no spend rather than as zero spend', () => {

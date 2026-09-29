@@ -17,7 +17,11 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ModelSpend, RateLimitStanding, TurnSpend } from '../telemetry/usage.js';
 
 /**
- * A turn's spend, or null for every message that is not a result.
+ * A result's spend, or null for every message that is not a result.
+ *
+ * The figures are the agent's running totals as of this result, not the turn's own cost: they
+ * accumulate across a session's turns, continue across a resume or a fork, and reset at `/clear`.
+ * `deltaSpend` reads one turn's spend from two of them.
  *
  * Every figure is copied, none computed. No token count is multiplied by anything here; the
  * agent priced the turn and this carries what it said. That is what makes a mixed-model turn correct
@@ -33,7 +37,9 @@ export function readTurnSpend(message: SDKMessage): TurnSpend | null {
     outputTokens: usage.outputTokens,
     cacheReadInputTokens: usage.cacheReadInputTokens,
     cacheCreationInputTokens: usage.cacheCreationInputTokens,
-    // Absent is null rather than zero: a zero window reads as a real, tiny limit.
+    // Absent is null rather than zero: a zero reads as a real count, a zero window as a real limit.
+    thinkingTokens: usage.thinkingTokens ?? null,
+    costBasis: usage.costBasis ?? null,
     contextWindow: usage.contextWindow ?? null,
     canonicalModel: usage.canonicalModel ?? null,
     provider: usage.provider ?? null,
@@ -60,46 +66,17 @@ export function readRateLimit(message: SDKMessage): RateLimitStanding | null {
 }
 
 /**
- * A subagent's own usage, off the task notification that reports it.
+ * Always null.
  *
- * This is what makes a subagent's cost attributable: the agent reports per-task usage, and hooks
- * carry an agent id, so spend has an owner without anything being inferred.
+ * It read `agent_id`, `total_cost_usd` and `model_usage` off a task notification, and no agent SDK
+ * version declares any of them: a task's usage is `{ total_tokens, tool_uses, duration_ms }`. A
+ * subagent's cost is already inside the parent's results, whose running totals include every model
+ * the session's subagents ran, so a second reading here would count it twice.
+ *
+ * @deprecated Read a session's spend from its results, with `readTurnSpend` and `deltaSpend`. Kept so
+ * an import still resolves; it goes at the next major version.
  */
 export function readTaskSpend(message: SDKMessage): { agentId: string; spend: TurnSpend } | null {
-  if (message.type !== 'system' || message.subtype !== 'task_notification') return null;
-
-  const usage = (message as unknown as { model_usage?: Record<string, ModelUsageShape> }).model_usage;
-  const totalCost = (message as unknown as { total_cost_usd?: number }).total_cost_usd;
-  const agentId = (message as unknown as { agent_id?: string }).agent_id;
-  if (usage === undefined || totalCost === undefined || agentId === undefined) return null;
-
-  return {
-    agentId,
-    spend: {
-      totalCostUsd: totalCost,
-      byModel: Object.entries(usage).map(([model, one]) => ({
-        model,
-        costUsd: one.costUSD,
-        inputTokens: one.inputTokens,
-        outputTokens: one.outputTokens,
-        cacheReadInputTokens: one.cacheReadInputTokens,
-        cacheCreationInputTokens: one.cacheCreationInputTokens,
-        contextWindow: one.contextWindow ?? null,
-        canonicalModel: one.canonicalModel ?? null,
-        provider: one.provider ?? null,
-      })),
-    },
-  };
-}
-
-/** The per-model shape a task notification carries, named so the read above stays readable. */
-interface ModelUsageShape {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly cacheReadInputTokens: number;
-  readonly cacheCreationInputTokens: number;
-  readonly costUSD: number;
-  readonly contextWindow?: number;
-  readonly canonicalModel?: string;
-  readonly provider?: string;
+  void message;
+  return null;
 }

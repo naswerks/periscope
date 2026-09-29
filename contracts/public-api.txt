@@ -301,6 +301,7 @@ index: function decodeEntry(line: string): Result<TranscriptEntry>
 index: function decodeTranscript(text: string): Result<TranscriptEntry[]>
 index: function decodeTransition(entry: TranscriptEntry): Result<SessionTransition>
 index: function dedupeBatch(knownUuids: ReadonlySet<string>, batch: readonly TranscriptEntry[]): DedupedBatch
+index: function deltaSpend(previous: TurnSpend | null, next: TurnSpend): TurnSpend
 index: function describeMirrorDrop(drop: MirrorDrop): string
 index: function describeRaw(raw: unknown): string
 index: function deviceAuthorizationBody(config: IdentityConfig): string
@@ -504,7 +505,7 @@ index: interface LoopbackListener { close: () => void; readonly callback: Promis
 index: interface MachineFacts { readonly homeDir: string; readonly hostname: string; readonly platform: NodeJS.Platform; readonly release: string; readonly tempDir: string }
 index: interface McpServerOptions { readonly descriptors: readonly ToolDescriptor[]; readonly identity: () => ToolCallIdentity; readonly invoke: ToolInvoker; readonly name: string; readonly version?: string }
 index: interface MirrorDrop { readonly attempts: number; readonly entryUuids: readonly string[]; readonly error: string; readonly key: TranscriptKey; readonly kind: MirrorFailureKind }
-index: interface ModelSpend { readonly cacheCreationInputTokens: number; readonly cacheReadInputTokens: number; readonly canonicalModel: string; readonly contextWindow: number; readonly costUsd: number; readonly inputTokens: number; readonly model: string; readonly outputTokens: number; readonly provider: string }
+index: interface ModelSpend { readonly cacheCreationInputTokens: number; readonly cacheReadInputTokens: number; readonly canonicalModel: string; readonly contextWindow: number; readonly costBasis?: "unknown" | "list" | "managed"; readonly costUsd: number; readonly inputTokens: number; readonly model: string; readonly outputTokens: number; readonly provider: string; readonly thinkingTokens?: number }
 index: interface ObservationHookOptions { readonly observer: SessionObserver; readonly onHandlerFailure?: HookFailureListener }
 index: interface OpenEntry { readonly abandonReason: string; readonly abandonedAt: string; readonly activity: SessionActivity; readonly agentId: string; readonly backgroundedAt: string; readonly cause: TransitionCause; readonly entryId: string; readonly lane: EntryLane; readonly openedAt: string }
 index: interface PairedCredentialFile { readonly credential: string; readonly hostId: string }
@@ -954,9 +955,10 @@ state: type SessionState = "idle" | "spawning" | "ready" | "working" | "errored"
 state: type TimeoutEventName = "start_timed_out" | "hook_timed_out"
 state: type TransitionListener = { (transition: SessionTransition): void }
 telemetry: const NO_SPEND: SpendTotal
+telemetry: function deltaSpend(previous: TurnSpend | null, next: TurnSpend): TurnSpend
 telemetry: function foldSpend(prev: SpendTotal, turn: TurnSpend): SpendTotal
 telemetry: function spendReconciles(turn: TurnSpend, toleranceUsd?: number): boolean
-telemetry: interface ModelSpend { readonly cacheCreationInputTokens: number; readonly cacheReadInputTokens: number; readonly canonicalModel: string; readonly contextWindow: number; readonly costUsd: number; readonly inputTokens: number; readonly model: string; readonly outputTokens: number; readonly provider: string }
+telemetry: interface ModelSpend { readonly cacheCreationInputTokens: number; readonly cacheReadInputTokens: number; readonly canonicalModel: string; readonly contextWindow: number; readonly costBasis?: "unknown" | "list" | "managed"; readonly costUsd: number; readonly inputTokens: number; readonly model: string; readonly outputTokens: number; readonly provider: string; readonly thinkingTokens?: number }
 telemetry: interface RateLimitStanding { readonly limitType: string; readonly resetsAt: number; readonly status: "rejected" | "allowed" | "allowed_warning"; readonly utilization: number }
 telemetry: interface SpendTotal { readonly byModel: readonly ModelSpend[]; readonly totalCostUsd: number; readonly turnCount: number }
 telemetry: interface TurnSpend { readonly byModel: readonly ModelSpend[]; readonly totalCostUsd: number }
