@@ -7,4 +7,4 @@
  * price moves, and blind to a turn that used more than one model.
  */
 export type { ModelSpend, RateLimitStanding, SpendTotal, TurnSpend } from './usage.js';
-export { NO_SPEND, foldSpend, spendReconciles } from './usage.js';
+export { NO_SPEND, deltaSpend, foldSpend, spendReconciles } from './usage.js';

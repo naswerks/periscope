@@ -6,6 +6,7 @@
  * answer instead of one per module. `main` itself takes the environment and the process edges as
  * arguments for the same reason; `bin/periscope.ts` is the one line that hands it the real ones.
  */
+import { readAgentCatalog } from '../host/agent-process.js';
 import { readConfigFile, withConfigFallback } from '../host/config-file.js';
 import { packageVersion } from '../host/package-facts.js';
 import { USAGE, readCommand } from './command.js';
@@ -200,5 +201,6 @@ function processServeDeps(io: Io): Parameters<typeof runServe>[1] {
     onSignal: (signal, handler) => {
       process.on(signal, handler);
     },
+    readAgentCatalog,
   };
 }

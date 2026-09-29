@@ -14,7 +14,7 @@ import type { TransitionWhere } from '../state/model.js';
 import { HOOK_EVENTS } from '../state/model.js';
 import { SessionObserver } from '../state/observer.js';
 import type { HookCallbackMatcher, HookInput, HookRegistrations } from './agent-process.js';
-import { mergeHooks, observationHooks, wiredHookEvents } from './hooks.js';
+import { mergeHooks, modelSwitchHooks, observationHooks, wiredHookEvents } from './hooks.js';
 
 const WHERE: TransitionWhere = {
   cwd: '/tmp/work',
@@ -250,4 +250,45 @@ test('regression: every wired event gets its own matcher object, so a field set 
   assert.equal(new Set(matchers).size, matchers.length, 'two events share one matcher instance');
   (matchers[0] as HookCallbackMatcher & { timeout?: number }).timeout = 1;
   assert.equal((matchers[1] as HookCallbackMatcher & { timeout?: number }).timeout, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// the model-switch answer
+// ---------------------------------------------------------------------------
+
+const preModelSwitch = {
+  hook_event_name: 'PreModelSwitch',
+  from_model: 'model-a',
+  to_model: 'model-b',
+  requested_model: 'model-b',
+  source: 'sdk',
+  context_tokens: 12_000,
+  prompt_cache_warm: true,
+  cache_ttl: '1h',
+  estimated_cache_write_usd: 0.1,
+  pricing: 'catalog',
+  session_id: 'agent-1',
+  cwd: '/tmp/work',
+} as unknown as HookInput;
+
+test('the model-switch answer registers on PreModelSwitch alone and allows the switch', async () => {
+  const registrations = modelSwitchHooks();
+  assert.deepEqual(Object.keys(registrations), ['PreModelSwitch']);
+
+  const outputs = await dispatch(registrations.PreModelSwitch ?? [], preModelSwitch);
+  assert.equal(outputs.length, 1, 'exactly one answer');
+  const answer = outputs[0] as {
+    hookSpecificOutput?: { hookEventName?: string; permissionDecision?: string };
+  };
+  assert.equal(answer.hookSpecificOutput?.hookEventName, 'PreModelSwitch');
+  assert.equal(answer.hookSpecificOutput?.permissionDecision, 'allow');
+});
+
+test('control: observation declines PreModelSwitch, so the answer above is the only handler it meets', () => {
+  // The coverage table declines the ask and records the switch at PostModelSwitch instead. If this
+  // ever flipped, the ask would be recorded too and a switch could appear in the trace twice, or
+  // appear when a deny cancelled it.
+  const hooks = observationHooks({ observer: new SessionObserver(machine()) });
+  assert.equal(hooks.PreModelSwitch, undefined);
+  assert.equal(hooks.PostModelSwitch?.length, 1, 'the switch that happened is observed');
 });

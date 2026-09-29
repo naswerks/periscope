@@ -19,7 +19,8 @@
         "controllerUrl": null,
         "decisionUrl": null,
         "agentHome": null,
-        "plugins": []
+        "plugins": [],
+        "agent": null
       },
       "pendingRestart": [],
       "protocolRange": {
@@ -28,7 +29,7 @@
       }
     }
   },
-  "name": "link_hello.empty",
+  "name": "link_hello.agent-unread",
   "protocolVersion": 12,
-  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_hello\",\"protocolVersion\":12,\"hostId\":\"host-1\",\"capabilities\":[],\"cursors\":[],\"configuration\":{\"repositoryRoot\":null,\"workspaceRoot\":null,\"branchScheme\":null,\"transcriptsRoot\":null,\"controllerUrl\":null,\"decisionUrl\":null,\"agentHome\":null,\"plugins\":[]},\"pendingRestart\":[],\"protocolRange\":{\"min\":11,\"max\":12}}}"
+  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_hello\",\"protocolVersion\":12,\"hostId\":\"host-1\",\"capabilities\":[],\"cursors\":[],\"configuration\":{\"repositoryRoot\":null,\"workspaceRoot\":null,\"branchScheme\":null,\"transcriptsRoot\":null,\"controllerUrl\":null,\"decisionUrl\":null,\"agentHome\":null,\"plugins\":[],\"agent\":null},\"pendingRestart\":[],\"protocolRange\":{\"min\":11,\"max\":12}}}"
 }

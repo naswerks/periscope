@@ -19,7 +19,9 @@ export type {
   ControlPayload,
   ControlPayloadKind,
   Frame,
+  HostAgent,
   HostConfiguration,
+  HostModel,
   HostPlugin,
   HostConfigure,
   HostConfigureEntry,
@@ -111,6 +113,8 @@ export {
 
 export {
   DROPPABLE_KINDS,
+  MAX_AGENT_CATALOG_BYTES,
+  MAX_AGENT_MODELS,
   MAX_CONFIGURATION_VALUE_LENGTH,
   MAX_PLUGIN_DIRS,
   MAX_BULK_RELEASES,
@@ -133,6 +137,7 @@ export {
   isDroppable,
   isSessionFrame,
   readAgentMessage,
+  readObservedAt,
   readRefusal,
   readStateTransition,
   readWireRefusal,

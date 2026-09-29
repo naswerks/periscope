@@ -119,7 +119,12 @@ export interface HostedSessionFacts {
   readonly cliVersion: string;
   readonly model: string;
   readonly permissionMode: string;
-  /** Where the agent found credentials. `'oauth'` means the ambient credentials file resolved. */
+  /**
+   * Where the agent's API key came from: `ANTHROPIC_API_KEY`, `apiKeyHelper`, `/login managed key`, or
+   * `none`, which is what a claude.ai sign-in, a bearer token or a third-party provider reads (`oauth`
+   * is a legacy value current CLIs never send). Provenance, never proof of sign-in: a fully
+   * authenticated session reads `none`.
+   */
   readonly apiKeySource: string;
   readonly tools: readonly string[];
   readonly skills: readonly string[];
@@ -128,6 +133,14 @@ export interface HostedSessionFacts {
     readonly path: string;
     readonly version: string | null;
   }[];
+  /**
+   * The agent's initialize answer to whether every plugin the session was started with loaded. Null
+   * when none were listed, when the answer has not come (it can land after the facts do), or when the
+   * CLI predates it. Claude Code 2.1.284 answered true with a missing directory in the list, so read
+   * it as the agent's word: `plugins` says which loaded, and a failure names its path in the init
+   * message's `plugin_errors`, which reaches the controller forwarded.
+   */
+  readonly pluginsApplied: boolean | null;
   readonly capabilities: readonly string[];
   /**
    * The MCP servers the agent connected to, by name and status, as the agent reported them.
@@ -159,6 +172,8 @@ export class HostedSession {
   #state: SessionLifecycle = 'provisioning';
   #facts: HostedSessionFacts | null = null;
   #ended: SessionEnded | null = null;
+  /** The agent's plugin answer, held until the facts exist to carry it. */
+  #pluginsApplied: boolean | null = null;
 
   /**
    * Constructed by `SessionRegistry` only. Internal: an embedder borrows a handle from the registry
@@ -182,6 +197,12 @@ export class HostedSession {
     // Reading starts immediately. The agent will say nothing until a turn is queued, but a consumer
     // attached later would miss whatever came before it.
     void this.#pump();
+    // The initialize answer arrives before any turn; the init message only after the first one. Held
+    // here and folded into the facts whichever comes first.
+    void this.#process.pluginsApplied().then(
+      (applied) => this.#notePluginsApplied(applied),
+      () => undefined,
+    );
   }
 
   get state(): SessionLifecycle {
@@ -240,12 +261,26 @@ export class HostedSession {
     return this.#process.interrupt();
   }
 
-  /** Apply a `session_configure` — the asked members, in order, through the SDK's live setters. */
+  /**
+   * Apply a `session_configure` — the asked members, in order (model, permission mode, thinking,
+   * effort), through the SDK's live controls.
+   *
+   * The first setter that fails stops the rest, and its error names the member, so a caller knows
+   * what changed: every member before it was applied, none after it. Effort comes after the model
+   * because the levels a session can take are the model's.
+   */
   async configure(change: SessionConfigureChange): Promise<void> {
     if (this.#state === 'ended') return;
-    if (change.model !== undefined) await this.#process.setModel(change.model);
-    if (change.permissionMode !== undefined) await this.#process.setPermissionMode(change.permissionMode);
-    if (change.thinking !== undefined) await this.#process.setThinking(change.thinking);
+    const model = change.model;
+    const permissionMode = change.permissionMode;
+    const thinking = change.thinking;
+    const effort = change.effort;
+    if (model !== undefined) await applying('model', () => this.#process.setModel(model));
+    if (permissionMode !== undefined) {
+      await applying('permissionMode', () => this.#process.setPermissionMode(permissionMode));
+    }
+    if (thinking !== undefined) await applying('thinking', () => this.#process.setThinking(thinking));
+    if (effort !== undefined) await applying('effort', () => this.#process.setEffort(effort));
   }
 
   /** End the session and release it from its registry. Idempotent. `#finish` closes the process. */
@@ -356,6 +391,7 @@ export class HostedSession {
       for await (const message of this.#process.messages) {
         const facts = readInitFacts(message);
         if (facts !== null && this.#facts === null) this.#adopt(facts);
+        else if (facts !== null) this.#refresh(facts);
         for (const listener of this.#messageListeners) {
           try {
             listener(message);
@@ -394,6 +430,7 @@ export class HostedSession {
       tools: facts.tools,
       skills: facts.skills,
       plugins: facts.plugins,
+      pluginsApplied: this.#pluginsApplied,
       capabilities: facts.capabilities,
       mcpServers: facts.mcpServers,
       workspaceTrust: this.#trust,
@@ -402,6 +439,32 @@ export class HostedSession {
     // Keyed by the agent's own id only now, because only now is there one.
     this.#onLive(this);
     while (this.#liveWaiters.length > 0) this.#liveWaiters.shift()?.(ok(this.#facts));
+  }
+
+  /**
+   * A later init message: the CLI re-sends one at every turn with the current values. The model, the
+   * permission mode and the inventories are taken from it, because a switch mid-session is reported
+   * nowhere else in the facts; what identifies the session (its id, its cwd, when it started) stays
+   * as the first init stated it, since the registry keys on the id.
+   */
+  #refresh(facts: AgentInitFacts): void {
+    const current = this.#facts;
+    if (current === null) return;
+    this.#facts = {
+      ...current,
+      model: facts.model,
+      permissionMode: facts.permissionMode,
+      tools: facts.tools,
+      skills: facts.skills,
+      plugins: facts.plugins,
+      capabilities: facts.capabilities,
+      mcpServers: facts.mcpServers,
+    };
+  }
+
+  #notePluginsApplied(applied: boolean | null): void {
+    this.#pluginsApplied = applied;
+    if (this.#facts !== null) this.#facts = { ...this.#facts, pluginsApplied: applied };
   }
 
   #finish(cause: SessionEndCause, detail: string): void {
@@ -442,4 +505,13 @@ export class HostedSession {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** One live setter, its failure named by the member it was setting and carrying the agent's text. */
+async function applying(member: string, apply: () => Promise<void>): Promise<void> {
+  try {
+    await apply();
+  } catch (error) {
+    throw new Error(`setting ${member} failed: ${describe(error)}`, { cause: error });
+  }
 }

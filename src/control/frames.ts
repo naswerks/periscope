@@ -7,7 +7,11 @@
  *
  * Two conventions this file holds to, both of which bite later if broken:
  *   - Absent is `null`, never `undefined`. JSON has no `undefined`, so an optional property makes
- *     "field omitted" and "field present and unset" indistinguishable across a round trip.
+ *     "field omitted" and "field present and unset" indistinguishable across a round trip. The one
+ *     exception is a member added inside the protocol window: it is optional (`?:`), because a peer
+ *     one release behind omits it, and because a controller written in TypeScript that builds the
+ *     frame would otherwise stop compiling at a minor release. Its absence reads as "not stated".
+ *     Outside the window, absent is null.
  *   - Every discriminator begins with a noun from core/vocab.ts.
  */
 import type { Refusal } from '../core/refusal.js';
@@ -23,13 +27,15 @@ import type { SessionTransition } from '../state/model.js';
  * a difference happened to be survivable: every declared member is required on the wire, so a
  * peer one version behind refuses the whole frame, and because refusals are not acknowledged that
  * refusal would be a permanent silent wedge on the session lane. The handshake refuses by version
- * instead, by name, once. A new value in the open `capabilities` list is not a bump; a new
- * `RefusalReason` is one, because a strict encoder on the other side must learn it first.
+ * instead, by name, once. A member added inside the window is the exception: it is optional (see
+ * this file's header), so a frame from a peer one version behind still decodes. A new value in the
+ * open `capabilities` list is not a bump; a new `RefusalReason` is one, because a strict encoder on
+ * the other side must learn it first.
  *
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -37,11 +43,15 @@ export const PROTOCOL_VERSION = 11;
  * its choice inside the overlap and the host accepts any version in its own window. The window
  * is one minor wide: the version before the current one stays supported for one release. A hello
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
- * the window. Version 11 adds `plugins` to the hello's `configuration`: the plugin directories
- * this host loads into every session, each with its manifest's name and version. A version-10
- * controller does not read the member and is still spoken to.
+ * the window.
+ *
+ * Version 12 adds the agent's model catalog to the hello's `configuration` (`agent`), an `effort`
+ * on `session_configure`, the instant a forwarded message was seen (`observedAt`), the refusal
+ * `session-configure-failed`, and three cause events (`PreModelSwitch`, `PostModelSwitch`,
+ * `system/model_refusal_no_fallback`). Every new member is optional, so a version-11 controller,
+ * which reads none of them, is still spoken to, and its frames, which carry none, still decode.
  */
-export const PROTOCOL_VERSION_MIN = 10;
+export const PROTOCOL_VERSION_MIN = 11;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {
@@ -101,6 +111,12 @@ export interface AgentMessageUpdate {
   readonly update: 'agent_message';
   /** The SDK message as it arrived. Opaque to this layer; `message.type` is the discriminator. */
   readonly message: JsonObject;
+  /**
+   * When this host took the message off the agent's stream, ISO-8601 in UTC (protocol 12). A
+   * consumer that used its own receipt time instead would run late after a reconnect replays what it
+   * missed. Absent from a host one release behind; read it with `readObservedAt`.
+   */
+  readonly observedAt?: string | null;
 }
 
 /**
@@ -140,10 +156,25 @@ export function readStateTransition(body: JsonObject): SessionTransition | null 
   return transition as SessionTransition;
 }
 
-/** Build the update carrying an agent message. The only supported way to put one on the wire. */
-export function agentMessageUpdate(message: JsonObject): SessionUpdate {
-  const body: AgentMessageUpdate = { update: 'agent_message', message };
+/**
+ * Build the update carrying an agent message. The only supported way to put one on the wire.
+ *
+ * `observedAt` is omitted when not given, so a caller that has no instant to state writes the same
+ * body a host one release behind does.
+ */
+export function agentMessageUpdate(message: JsonObject, observedAt?: string | null): SessionUpdate {
+  const body: AgentMessageUpdate = {
+    update: 'agent_message',
+    message,
+    ...(observedAt === undefined ? {} : { observedAt }),
+  };
   return { kind: 'session_update', body: body as unknown as JsonObject };
+}
+
+/** When the host saw a forwarded message, or null: a host one release behind does not say. */
+export function readObservedAt(body: JsonObject): string | null {
+  const observed = (body as { observedAt?: unknown }).observedAt;
+  return typeof observed === 'string' && observed !== '' ? observed : null;
 }
 
 /** Read a forwarded message back out, or null when the body is some other kind of update. */
@@ -243,8 +274,12 @@ export interface SessionDelta {
  * that had to parse two shapes for one idea would have been handed the drift this package's
  * vocabulary rules exist to prevent.
  */
-export function agentMessageDelta(message: JsonObject): SessionDelta {
-  const body: AgentMessageUpdate = { update: 'agent_message', message };
+export function agentMessageDelta(message: JsonObject, observedAt?: string | null): SessionDelta {
+  const body: AgentMessageUpdate = {
+    update: 'agent_message',
+    message,
+    ...(observedAt === undefined ? {} : { observedAt }),
+  };
   return { kind: 'session_delta', body: body as unknown as JsonObject };
 }
 
@@ -379,7 +414,11 @@ export interface SessionNewRequest {
   readonly strictMcpConfig: boolean | null;
   /** Stream turns as they compose. Null leaves the host's default, which is ON. */
   readonly includePartialMessages: boolean | null;
-  /** How much reasoning this session emits. Null leaves the SDK's own default. Opaque here. */
+  /**
+   * How much reasoning this session emits. Null leaves the SDK's own default. Opaque here; the host
+   * passes `adaptive` (with an optional `display`) and `disabled` on and refuses a fixed budget
+   * (`enabled`) by name, because the current models reject it with a 400.
+   */
   readonly thinking: JsonObject | null;
   /**
    * The effort level (`low` · `medium` · `high` · `xhigh` · `max`). Null leaves the SDK's own default.
@@ -393,8 +432,8 @@ export interface SessionNewRequest {
    * which the SDK fires under every mode, so the boundary set (push · remote surgery · branch
    * delete · `gh pr merge`) is still held for a decision under bypass. What stays closed:
    * `settings`, `managedSettings`, `allowedTools`, `disallowedTools`, `canUseTool`, `permissions`,
-   * `toolAliases`, `permissionPromptToolName`. A mode is a posture the operator chooses in the open;
-   * those are rule files and pre-answers nobody can see.
+   * `toolAliases`, `permissionPromptToolName`, `permissionPrompts`. A mode is a posture the operator
+   * chooses in the open; those are rule files and pre-answers nobody can see.
    */
   readonly permissionMode: string | null;
   /** Forward a subagent's whole conversation rather than only its tool calls. Null means OFF. */
@@ -430,7 +469,7 @@ export interface SessionNewRequest {
    * Which model runs. Null leaves the CLI's default.
    *
    * This and `systemPrompt` select what the process emits; neither can answer a permission, so
-   * carrying them does not widen a security narrowing. The eight `SHADOWING_LANES` that can answer
+   * carrying them does not widen a security narrowing. The nine `SHADOWING_LANES` that can answer
    * a permission before the gate does are a deliberate narrowing and they stay closed. Two different
    * facts; see `AGENT_SELECTION_OPTION_KEYS` in host/agent-process.ts for the checked version of
    * this sentence.
@@ -586,9 +625,10 @@ export interface SessionCancel {
 }
 
 /**
- * Change a running session's model, permission mode or thinking: the SDK's streaming-input setters
- * (`setModel` · `setPermissionMode` · `setMaxThinkingTokens`), reached over the wire. Each member
- * is "not asked" when null; the host applies the asked ones in order and reports a failure by name.
+ * Change a running session's model, permission mode, thinking or effort: the SDK's streaming-input
+ * setters (`setModel` · `setPermissionMode` · `setMaxThinkingTokens`) and its flag settings for
+ * effort, reached over the wire. Each member is "not asked" when null; the host applies the asked
+ * ones in that order and reports a failure by name.
  */
 export interface SessionConfigure {
   readonly kind: 'session_configure';
@@ -596,8 +636,17 @@ export interface SessionConfigure {
   readonly model: string | null;
   /** The permission mode to switch to — the same vocabulary as `SessionNewRequest.permissionMode`. */
   readonly permissionMode: string | null;
-  /** `{type:'adaptive'}` · `{type:'disabled'}` · `{type:'enabled', budgetTokens}` — the SDK's own shapes. */
+  /**
+   * `{type:'adaptive'}`, optionally with `display` (`summarized` or `omitted`), or `{type:'disabled'}`.
+   * The SDK also declares a fixed budget, `{type:'enabled', budgetTokens}`; the host refuses it by
+   * name, because the current models reject it with a 400.
+   */
   readonly thinking: JsonObject | null;
+  /**
+   * The effort level to switch to (protocol 12), the same vocabulary as `SessionNewRequest.effort`.
+   * Null or absent = not asked; a controller one release behind never sends it.
+   */
+  readonly effort?: string | null;
 }
 
 /**
@@ -1424,14 +1473,54 @@ export interface HostPlugin {
   readonly path: string;
 }
 
+/** The most models a catalog lists. The agent offers a handful; a hello is not a registry. */
+export const MAX_AGENT_MODELS = 32;
+
+/**
+ * The most bytes the catalog may take on the hello, as JSON. Each member is bounded on its own, but
+ * a hello past `MAX_FRAME_BYTES` is never sent at all, so the whole is bounded too: a host whose
+ * catalog is past this sends `agent: null` rather than a hello it cannot encode.
+ */
+export const MAX_AGENT_CATALOG_BYTES = 16 * 1024;
+
+/**
+ * One model the agent offers, as its answer to the SDK's initialize request lists it. `value` is
+ * what `session_new` and `session_configure` take as `model`; `resolvedModel` is the model id an
+ * alias stands for, so a controller holding an explicit id can find the alias that covers it. The
+ * `supports*` members are null when the agent did not say.
+ */
+export interface HostModel {
+  readonly value: string;
+  readonly resolvedModel: string | null;
+  readonly displayName: string;
+  readonly description: string | null;
+  /** The effort levels this model takes; empty when it takes none. */
+  readonly supportedEffortLevels: readonly string[];
+  readonly supportsFastMode: boolean | null;
+  readonly supportsAutoMode: boolean | null;
+  readonly supportsAdaptiveThinking: boolean | null;
+}
+
+/**
+ * The agent this host runs sessions on: the Claude Code version the installed agent SDK bundles,
+ * that SDK's version, and the models the agent offers. Read once at start, by asking the agent
+ * without sending it a prompt, so no model is called.
+ */
+export interface HostAgent {
+  readonly claudeCodeVersion: string;
+  readonly sdkVersion: string;
+  readonly models: readonly HostModel[];
+}
+
 /**
  * How this host is configured, as values: the read half of `periscope config`.
  *
  * The `workspace:*` capability markers say which mode a host is in; these say what it is pointed
- * at. Every member is `T | null` (absent is null, never undefined), and null means the setting is
- * not set on the host, not that the host declined to say. `controllerUrl` is what the host dialled
- * to deliver this frame, reported so a controller can show it beside the rest; nothing here is an
- * ask, so nothing here can be refused.
+ * at. Every member but `agent` is `T | null` (absent is null, never undefined), and null means the
+ * setting is not set on the host, not that the host declined to say. `agent` was added inside the
+ * protocol window and is optional (see this file's header). `controllerUrl` is what the host
+ * dialled to deliver this frame, reported so a controller can show it beside the rest; nothing here
+ * is an ask, so nothing here can be refused.
  */
 export interface HostConfiguration {
   readonly repositoryRoot: string | null;
@@ -1453,6 +1542,12 @@ export interface HostConfiguration {
    * link and applied to the next open; empty when none are configured.
    */
   readonly plugins: readonly HostPlugin[];
+  /**
+   * The agent's versions and model catalog (protocol 12). Null when the host asked and got no
+   * usable answer; absent when the host was composed without a catalog read, and from a host one
+   * release behind. Never settable.
+   */
+  readonly agent?: HostAgent | null;
 }
 
 /** A `HostConfiguration` with nothing set: what a host composed without one reports. */

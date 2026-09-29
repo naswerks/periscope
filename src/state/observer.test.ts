@@ -306,3 +306,87 @@ test('a session that dies mid-tool keeps the entry, marked, with its age', () =>
   assert.notEqual(stranded?.abandonedAt, null, 'marked');
   assert.match(stranded?.abandonReason ?? '', /still open/);
 });
+
+test('a model switch is recorded once, as it happened, with what it cost the prompt cache', () => {
+  const { observer: o, machine, store } = observer();
+  o.observeHook(hook({ hook_event_name: 'UserPromptSubmit' }));
+  const before = store.all().length;
+
+  o.observeHook(
+    hook({
+      hook_event_name: 'PostModelSwitch',
+      from_model: 'model-a',
+      to_model: 'model-b',
+      requested_model: 'model-b',
+      source: 'sdk',
+      context_tokens: 41_000,
+      prompt_cache_warm: true,
+      cache_ttl: '1h',
+      estimated_cache_write_usd: 0.33,
+      pricing: 'catalog',
+    }),
+  );
+
+  assert.equal(store.all().length - before, 1, 'one switch, one record');
+  const record = store.all().at(-1);
+  assert.equal(record?.cause.kind, 'hook');
+  assert.equal(record?.cause.event, 'PostModelSwitch');
+  assert.equal(record?.to, 'working', 'a switch changes no state');
+  for (const fact of ['model-a', 'model-b', '(sdk)', 'warm', '1h', '41000', '$0.33', 'catalog']) {
+    assert.ok(
+      (record?.cause.detail ?? '').includes(fact),
+      `the detail lost "${fact}": ${record?.cause.detail}`,
+    );
+  }
+  assert.equal(machine.rejectedCount, 0, 'PostModelSwitch is a declared cause event');
+});
+
+test('regression: only the first init reports readiness; a later one arrives mid-turn and records nothing', () => {
+  // The CLI re-sends its init with current values at every later turn. Recording `ready` for each
+  // one moved a working session backwards in the middle of its turn.
+  const { observer: o, machine, store } = observer();
+  o.observeMessage(message({ type: 'system', subtype: 'init', session_id: 'sess-1', model: 'model-a' }));
+  o.observeHook(hook({ hook_event_name: 'UserPromptSubmit' }));
+  assert.equal(machine.state, 'working');
+
+  const later = o.observeMessage(
+    message({ type: 'system', subtype: 'init', session_id: 'sess-1', model: 'model-b' }),
+  );
+
+  assert.deepEqual(later, [], 'a later init recorded a transition');
+  assert.equal(machine.state, 'working', 'the session moved backwards mid-turn');
+  assert.equal(store.all().filter((transition) => transition.to === 'ready').length, 1);
+});
+
+test('regression: a refusal with no fallback is recorded, not refused as an unnamed cause', () => {
+  // The observer always recorded it, but the event was missing from the declared vocabulary, so the
+  // machine refused every such transition as `transition-cause-unnamed` and the trace never had it.
+  const { observer: o, machine, store } = observer();
+  o.observeHook(hook({ hook_event_name: 'UserPromptSubmit' }));
+  const before = store.all().length;
+
+  const recorded = o.observeMessage(
+    message({
+      type: 'system',
+      subtype: 'model_refusal_no_fallback',
+      original_model: 'model-a',
+      api_refusal_category: 'cyber',
+      request_id: null,
+      content: '',
+    }),
+  );
+
+  assert.equal(machine.rejectedCount, 0, 'the refusal was rejected as an unnamed cause');
+  assert.ok(recorded.every((result) => result.ok));
+  assert.equal(store.all().length - before, 1);
+  const record = store.all().at(-1);
+  assert.equal(record?.cause.kind, 'sdk-message');
+  assert.equal(record?.cause.event, 'system/model_refusal_no_fallback');
+  assert.match(record?.cause.detail ?? '', /model-a, category cyber/);
+});
+
+test('the ask before a model switch records nothing; a deny or an unconfirmed id would cancel it', () => {
+  const { observer: o, store } = observer();
+  o.observeHook(hook({ hook_event_name: 'PreModelSwitch', from_model: 'model-a', to_model: 'model-b' }));
+  assert.equal(store.all().length, 0);
+});

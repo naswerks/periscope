@@ -63,6 +63,20 @@ everything as arguments, so it is checkable without a socket or a process, and r
   be ignored in silence.
 - `linkTimings` (`heartbeatIntervalMs`, `heartbeatTimeoutMs`, `connectTimeoutMs`) and `backoff`
   reach the default link; `link` replaces the link wholesale.
+- With `agentCatalog`, `start()` reads the agent's versions and models first and dials once the
+  read settles, because the hello is where a controller reads them.
+  - `readAgentCatalog` is the real read. It starts the agent with a prompt stream that never
+    yields, loads no settings and no MCP server, persists no transcript, reads only the answer to
+    the SDK's initialize request, and closes the agent on every path.
+  - A failed read, or a catalog past the hello's bounds, rides as `agent: null`, reported as an
+    `agent-catalog` event. It never fails a start.
+  - A `stop()` before the read settles means the link never dials.
+  - Every configure answer and later hello keep the catalog, though the file they are rebuilt from
+    has none.
+- Each session's hooks are the observation hooks, the gate, then `modelSwitchHooks`, which answers
+  every `PreModelSwitch` with allow. Claude Code 2.1.284 lets a headless `setModel` through with no
+  answer at all. The allow keeps a controller's switch from ever meeting the interactive cache-miss
+  confirm, which a session with nobody at a keyboard cannot answer.
 
 A session refused at its open answers on the wire ([protocol.md](protocol.md), the refused open).
 
@@ -77,15 +91,16 @@ something is about the daemon; the other verbs are where interactive work lives.
   agent as root has the whole machine on every tool call; refused by policy, before anything else is
   read) and refuses to start without `PERISCOPE_DECISION_URL` (a host that cannot ask is an open door or a
   session where nothing runs). It never signs anyone in: it presents credentials that are already
-  there and refuses by name when they are not. It prints one `[host]` posture line before dialling
-  and writes the link's state to `link-state.json` beside the credentials on every transition.
+  there and refuses by name when they are not. It prints one `[host]` posture line, reads the agent's
+  model catalog (bounded at 20 seconds, one `[agent]` line saying what the hello carries), then
+  dials, and writes the link's state to `link-state.json` beside the credentials on every transition.
 - `login` runs the sign-in and writes the token cache. `pair <code>`, with `--controller <origin>`
   and `--label <name>`, redeems a controller-minted code for a paired credential and writes the
   controller's addresses to the config file. `config` shows or edits `config.json`. `status` prints
   the whole posture from the link record, the credentials and the settings, and never dials.
 - `config.json` lives beside the credentials under a closed key allowlist (`CONFIG_KEYS`: the two
-  control-plane URLs, the host id, both roots, the branch scheme, the workspace key, the agent home;
-  `PERISCOPE_CONFIG_DIR` is excluded, a file cannot move itself). `serve`, `login`, `pair` and
+  control-plane URLs, the host id, both roots, the branch scheme, the workspace key, the agent home,
+  the plugin directories; `PERISCOPE_CONFIG_DIR` is excluded, a file cannot move itself). `serve`, `login`, `pair` and
   `status` read the environment with the file filling its absences; the environment always wins. A
   corrupt file is fatal by name for all four. `config` itself reads the raw environment so it can
   still name a broken file.
@@ -113,6 +128,11 @@ see each other's sessions; everyone else borrows a `HostedSession` handle.
   becomes a `subscriber_failed` degrade and cannot kill the pump.
 - The CLI version is a per-spawn fact on `system/init`. `apiKeySource` is provenance, never an
   "is this authenticated" predicate: it reads `none` on a session that billed.
+- `system/init` arrives on every turn, not once. The first one makes the session `ready`. A later
+  one refreshes the handle's facts (model, permission mode, inventories) and keeps the id.
+- `perTaskStopAffordance` is deliberately left unset. Unset, an interrupt (`session_cancel`) also
+  stops the session's background agents and workflows, which is the fail-closed choice when nobody
+  is watching. Declaring it would promise a per-task stop control this package does not offer.
 
 A `session_prompt` arriving while its session is still opening is held, not refused. `session_new`
 awaits the workspace provider, and a git worktree takes seconds; the host acknowledges no controller
@@ -222,6 +242,10 @@ paired machine credential is the alternative for a host meant to stay up.
   excluded as candidates.
 - The transition log is append-only, and that is load-bearing ([state-machine.md](state-machine.md)).
 - Spend is consumed as the agent reports it, per model. Nothing multiplies tokens by a rate.
+- A result's spend is a running total. It accumulates across a session's turns, continues across
+  a resume or a fork, and resets at `/clear`, so one turn's spend is `deltaSpend(previous, next)`.
+- Seed a resumed or forked session's first result with its parent's last one, or the parent's
+  spend counts twice. `costBasis` says whether a cost is list price, managed pricing, or a guess.
 
 ## What ships
 

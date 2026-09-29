@@ -12,8 +12,10 @@ import { z } from 'zod';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import { isRefusalReason } from '../core/refusal.js';
-import type { Frame, JsonValue, WireRefusal } from './frames.js';
+import type { Frame, HostAgent, JsonValue, WireRefusal } from './frames.js';
 import {
+  MAX_AGENT_CATALOG_BYTES,
+  MAX_AGENT_MODELS,
   MAX_BULK_RELEASES,
   MAX_CONFIGURATION_VALUE_LENGTH,
   MAX_CONFIGURE_ENTRIES,
@@ -87,6 +89,26 @@ const hostPluginSchema = z.looseObject({
   path: z.string().min(1).max(MAX_CONFIGURATION_VALUE_LENGTH),
 });
 
+// The catalog is the agent's text, relayed: bounded here like every other value on the hello.
+const agentModelTextSchema = z.string().min(1).max(200);
+
+const hostModelSchema = z.looseObject({
+  value: agentModelTextSchema,
+  resolvedModel: agentModelTextSchema.nullable(),
+  displayName: z.string().max(200),
+  description: z.string().max(MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
+  supportedEffortLevels: z.array(z.string().min(1).max(32)).max(16),
+  supportsFastMode: z.boolean().nullable(),
+  supportsAutoMode: z.boolean().nullable(),
+  supportsAdaptiveThinking: z.boolean().nullable(),
+});
+
+const hostAgentSchema = z.looseObject({
+  claudeCodeVersion: z.string().min(1).max(64),
+  sdkVersion: z.string().min(1).max(64),
+  models: z.array(hostModelSchema).max(MAX_AGENT_MODELS),
+});
+
 const hostConfigurationSchema = z.looseObject({
   repositoryRoot: configurationValueSchema,
   workspaceRoot: configurationValueSchema,
@@ -96,6 +118,8 @@ const hostConfigurationSchema = z.looseObject({
   decisionUrl: configurationValueSchema,
   agentHome: configurationValueSchema,
   plugins: z.array(hostPluginSchema).max(MAX_PLUGIN_DIRS),
+  // Protocol 12, and optional: a host one release behind omits it (see frames.ts's header).
+  agent: hostAgentSchema.nullable().optional(),
 });
 
 /** The key names a hello or a configure result lists as pending: config keys, so short and few. */
@@ -203,6 +227,8 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     model: z.string().min(1).nullable(),
     permissionMode: z.string().min(1).nullable(),
     thinking: jsonObjectSchema.nullable(),
+    // Protocol 12, and optional: a controller one release behind omits it.
+    effort: z.string().min(1).nullable().optional(),
   }),
   z.looseObject({
     kind: z.literal('bulk_request'),
@@ -522,6 +548,21 @@ export function decode(raw: string): Result<Frame> {
   }
 
   return ok(result.data as Frame);
+}
+
+/**
+ * Why a catalog cannot ride the hello, or null when it can: first the schema a controller decodes
+ * it with, then the byte budget that keeps the hello under the frame cap. A host runs this before it
+ * puts a catalog in its configuration, so what it sends and what a controller accepts cannot differ.
+ */
+export function hostAgentProblem(agent: HostAgent): string | null {
+  const shape = hostAgentSchema.safeParse(agent);
+  if (!shape.success) return shape.error.issues.map(describeIssue).join('; ');
+  const byteCount = utf8ByteLength(JSON.stringify(agent));
+  if (byteCount > MAX_AGENT_CATALOG_BYTES) {
+    return `the catalog is ${byteCount} bytes as JSON, over the ${MAX_AGENT_CATALOG_BYTES} a hello gives it`;
+  }
+  return null;
 }
 
 /**

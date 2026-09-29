@@ -2,15 +2,16 @@
  * The narrowing wrapper around the SDK's query object.
  *
  * `query()` returns something that IS an async generator AND carries `setPermissionMode`,
- * `applyFlagSettings`, `setMcpServers` and `setMcpPermissionModeOverride` — four calls that change
- * permission outcomes mid-session. The handle hands out a wrapper instead, so those are unreachable
+ * `applyFlagSettings`, `setMcpServers`, `setMcpPermissionModeOverride` and `updateSettings` — five
+ * calls that change permission outcomes mid-session, or the settings files permission rules are read
+ * from. The handle hands out a wrapper instead, so those are unreachable
  * rather than merely un-annotated. This file pins the two halves of that: the controls are gone, and
  * the wrapper still behaves like the iterator it replaced.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { SDKMessage } from './agent-process.js';
+import type { AgentProcessRequest, SDKMessage } from './agent-process.js';
 import {
   AGENT_PROCESS_REQUEST_KEYS,
   AGENT_SELECTION_OPTION_KEYS,
@@ -18,8 +19,11 @@ import {
   PERSISTENCE_OPTION_KEYS,
   SHADOWING_LANES,
   STREAMING_OPTION_KEYS,
+  THINKING_ON_CAP,
   TOOL_SURFACE_OPTION_KEYS,
+  composeOptions,
   messagesOf,
+  thinkingControl,
 } from './agent-process.js';
 
 const message = (id: string): SDKMessage => ({ type: 'user', session_id: id }) as unknown as SDKMessage;
@@ -35,6 +39,7 @@ function fakeQuery(
     setMcpServers: () => undefined,
     applyFlagSettings: () => undefined,
     setMcpPermissionModeOverride: () => undefined,
+    updateSettings: () => undefined,
     async next(): Promise<IteratorResult<SDKMessage, void>> {
       if (index >= count) return { done: true, value: undefined };
       index += 1;
@@ -86,9 +91,10 @@ test('throw() is delegated rather than dropped', async () => {
   await assert.rejects(() => wrapped.throw(new Error('injected')), /injected/);
 });
 
-// The point of the wrapper: four mid-session calls change permission outcomes after any
-// construction-time check has run; hiding them behind an annotation leaves them one cast away.
-test("regression: the four permission mutators are not reachable through the handle's message stream", () => {
+// The point of the wrapper: five mid-session calls change permission outcomes, or the settings files
+// they are read from, after any construction-time check has run; hiding them behind an annotation
+// leaves them one cast away.
+test("regression: the five permission mutators are not reachable through the handle's message stream", () => {
   const source = fakeQuery(1);
   assert.equal(
     typeof source.setPermissionMode,
@@ -102,6 +108,7 @@ test("regression: the four permission mutators are not reachable through the han
     'setMcpServers',
     'applyFlagSettings',
     'setMcpPermissionModeOverride',
+    'updateSettings',
     'interrupt',
     'reinitialize',
   ]) {
@@ -135,7 +142,7 @@ test("regression: the four permission mutators are not reachable through the han
 // that can be checked.
 //
 // `model` and `systemPrompt` were absent, not narrowed. They were never composable, so opening
-// them fills a gap rather than re-opening a lane somebody closed. The eight lanes in
+// them fills a gap rather than re-opening a lane somebody closed. The nine lanes in
 // `SHADOWING_LANES` were each considered and closed, and they stay closed, asserted by name.
 test('regression: the composable option set is exactly twenty keys; permissionMode is among them deliberately, and nothing else that answers a permission is', () => {
   assert.deepEqual(Object.keys(AGENT_PROCESS_REQUEST_KEYS).sort(), [
@@ -172,7 +179,7 @@ test('regression: the composable option set is exactly twenty keys; permissionMo
 
 // The CLI-parity list is the one that re-opens a closed lane on purpose. `effort` fills a gap;
 // `permissionMode` leaves the shadowing list by name. The gate's authority is the `PreToolUse`
-// hook, which fires under every mode, so the eight lanes that remain closed are the rule files and
+// hook, which fires under every mode, so the nine lanes that remain closed are the rule files and
 // pre-answers, never a posture the operator chooses in the open.
 test('regression: the CLI-parity keys are composable; permissionMode left the shadowing list deliberately and effort was never on it', () => {
   assert.deepEqual([...CLI_PARITY_OPTION_KEYS], ['effort', 'permissionMode']);
@@ -199,8 +206,9 @@ test('regression: the CLI-parity keys are composable; permissionMode left the sh
       'disallowedTools',
       'canUseTool',
       'permissions',
+      'permissionPrompts',
     ],
-    'the eight lanes that stay closed, by name; a ninth leaving would be a second decision',
+    'the nine lanes that stay closed, by name; a tenth leaving would be a second decision',
   );
 });
 
@@ -366,3 +374,80 @@ const ORIGINAL_NINE = [
   'onStderr',
   'spawn',
 ];
+
+// ---------------------------------------------------------------------------
+// composeOptions: what a session is started with, checked without starting one
+// ---------------------------------------------------------------------------
+
+/** A request with every key at the value that composes nothing optional. */
+const request = (over: Partial<AgentProcessRequest> = {}): AgentProcessRequest => ({
+  cwd: 'C:/work',
+  env: { PATH: 'p' },
+  settingSources: [],
+  plugins: null,
+  hooks: null,
+  resume: null,
+  fork: false,
+  includePartialMessages: true,
+  thinking: null,
+  forwardSubagentText: false,
+  onStderr: null,
+  mcpServers: null,
+  strictMcpConfig: null,
+  sessionStore: null,
+  sessionStoreFlush: null,
+  spawn: null,
+  model: null,
+  systemPrompt: null,
+  effort: null,
+  permissionMode: null,
+  ...over,
+});
+
+test('plugins travel over stdin: pluginDelivery rides with a plugin list and never without one', () => {
+  // One `--plugin-dir` flag per plugin can push a Windows command line past 32,767 characters, so
+  // the list goes over stdin; but that needs a CLI of 2.1.261 or later, so nothing asks for it
+  // unless there is a list to send.
+  const withPlugins = composeOptions(request({ plugins: [{ type: 'local', path: 'C:/plugins/one' }] }));
+  assert.equal(withPlugins.pluginDelivery, 'initialize');
+  assert.deepEqual(withPlugins.plugins, [{ type: 'local', path: 'C:/plugins/one' }]);
+
+  const emptyList = composeOptions(request({ plugins: [] }));
+  assert.deepEqual(emptyList.plugins, []);
+  assert.equal('pluginDelivery' in emptyList, false, 'asked for stdin delivery with nothing to deliver');
+
+  const none = composeOptions(request());
+  assert.equal('plugins' in none, false);
+  assert.equal('pluginDelivery' in none, false);
+});
+
+test('regression: allowDangerouslySkipPermissions rides exactly with a bypass request, and with no other mode', () => {
+  // The SDK enters bypass only with the flag set, and the controller's default mode is bypass, so a
+  // start without it is a session that cannot take the mode it was asked for. Set for any other
+  // mode, it would permit a posture nobody asked for.
+  const bypass = composeOptions(request({ permissionMode: 'bypassPermissions' }));
+  assert.equal(bypass.permissionMode, 'bypassPermissions');
+  assert.equal(bypass.allowDangerouslySkipPermissions, true);
+
+  for (const mode of ['default', 'acceptEdits', 'plan', 'dontAsk', 'auto'] as const) {
+    const other = composeOptions(request({ permissionMode: mode }));
+    assert.equal('allowDangerouslySkipPermissions' in other, false, `the flag rode with ${mode}`);
+  }
+  assert.equal(
+    'allowDangerouslySkipPermissions' in composeOptions(request()),
+    false,
+    'the flag rode with no mode',
+  );
+});
+
+// A cleared limit is not a way back: after a disabled start the current models came back to
+// thinking prose on a positive cap and never on null, so turning thinking on sends a positive cap.
+test('regression: turning thinking on sends a positive cap, never null; turning it off sends 0', () => {
+  assert.ok(THINKING_ON_CAP > 0);
+  assert.deepEqual(thinkingControl({ type: 'adaptive', display: 'summarized' }), {
+    cap: THINKING_ON_CAP,
+    display: 'summarized',
+  });
+  assert.deepEqual(thinkingControl({ type: 'adaptive' }), { cap: THINKING_ON_CAP, display: undefined });
+  assert.deepEqual(thinkingControl({ type: 'disabled' }), { cap: 0, display: undefined });
+});

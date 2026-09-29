@@ -1,6 +1,6 @@
 /**
- * The SDK baseline pin: the installed `sdk.d.ts` hashes to `contracts/sdk.sha256`, and no copy of
- * it lives in this package.
+ * The SDK baseline pin: the installed `sdk.d.ts` hashes to `contracts/sdk.sha256`, the two version
+ * files name what is installed, and no copy of the types lives in this package.
  *
  * The SDK's type definitions are Anthropic's, all rights reserved, so this package keeps a hash of
  * them and never the text. `scripts/check-drift.mjs` compares the same hash; this pin recomputes it
@@ -19,6 +19,7 @@ const INSTALLED_TYPES = at('../../node_modules/@anthropic-ai/claude-agent-sdk/sd
 const INSTALLED_MANIFEST = at('../../node_modules/@anthropic-ai/claude-agent-sdk/package.json');
 const BASELINE = at('../../contracts/sdk.sha256');
 const BASELINE_VERSION = at('../../contracts/sdk-version.txt');
+const CLI_VERSION = at('../../contracts/cli-version.txt');
 const CONTRACTS_DIR = at('../../contracts');
 
 const normalise = (text: string): string => text.replace(/\r\n/g, '\n');
@@ -70,6 +71,25 @@ test('the baseline names the installed SDK version', () => {
   const recorded = readFileSync(BASELINE_VERSION, 'utf8').trim();
   const { version } = JSON.parse(readFileSync(INSTALLED_MANIFEST, 'utf8')) as { version: string };
   assert.equal(recorded, version, 'contracts/sdk-version.txt must name the version the hash was taken from');
+});
+
+test('the tested CLI version is the one the installed SDK bundles', () => {
+  // Nothing writes contracts/cli-version.txt, and the README and the publish gate both read it, so a
+  // bump that leaves it behind would publish a claim about a CLI nobody tested. Derived here from
+  // the SDK's own manifest instead of remembered.
+  const manifest = JSON.parse(readFileSync(INSTALLED_MANIFEST, 'utf8')) as { claudeCodeVersion?: unknown };
+  // Positive control: the field is present and reads as a version, so a manifest that renamed or
+  // dropped it fails here rather than comparing the file against undefined.
+  const bundled = manifest.claudeCodeVersion;
+  assert.ok(
+    typeof bundled === 'string' && /^\d+\.\d+\.\d+$/.test(bundled),
+    `the installed SDK manifest names no claudeCodeVersion: ${String(bundled)}`,
+  );
+  assert.equal(
+    readFileSync(CLI_VERSION, 'utf8').trim(),
+    bundled,
+    'contracts/cli-version.txt must name the CLI the installed SDK bundles',
+  );
 });
 
 test('deliberate: no type-definition file lives under contracts/, only the hash', () => {

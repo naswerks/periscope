@@ -2,7 +2,7 @@
  * THE CONFIG PIN: no module in this package sets an option that alters permission outcomes.
  *
  * The gate is `PreToolUse`, and it is only THE permission mechanism while nothing else in the
- * composed options can quietly answer first. Nine lanes can:
+ * composed options can quietly answer first. Ten lanes can:
  *
  *   permissionMode            'acceptEdits' and 'auto' auto-approve classes of call; 'bypassPermissions'
  *                             skips the remaining checks entirely
@@ -13,10 +13,11 @@
  *   permissionPromptToolName  reroutes prompts to an MCP tool
  *   allowedTools / disallowedTools   pre-answer by name
  *   canUseTool                a second decider, which the SDK then SHADOWS under several configs
+ *   permissionPrompts         'none' denies every call that would have prompted, before anyone is asked
  *
  * This is the second of two checks, and the weaker one. The strong check is structural:
  * `AGENT_PROCESS_REQUEST_KEYS` is declared `satisfies Record<keyof AgentProcessRequest, true>`, so
- * making any of the nine composable breaks the build (pinned in `host/agent-process.test.ts`). This
+ * making any of the ten composable breaks the build (pinned in `host/agent-process.test.ts`). This
  * scan exists because the two fail for different reasons: a type cannot see a module that reaches
  * past the composer, and a scan cannot see a type. Two mechanisms, one invariant.
  *
@@ -25,7 +26,7 @@
  * carries it on the handle, so `permissionMode: facts.permissionMode` is evidence being recorded,
  * not configuration being set, and no pattern distinguishes that from setting an option without
  * knowing which object it lands in. Rather than widen the pattern until it stops firing (which
- * would quietly stop covering the other eight), the word gets its own assertion: it may appear only
+ * would quietly stop covering the other nine), the word gets its own assertion: it may appear only
  * in the modules that carry it.
  */
 import test from 'node:test';
@@ -38,7 +39,7 @@ import { sourceFiles } from './walk.js';
 import { SHADOWING_LANES } from '../host/agent-process.js';
 
 /**
- * The eight that have no legitimate appearance anywhere in this package.
+ * The nine that have no legitimate appearance anywhere in this package.
  *
  * Derived from the compile pin's list rather than written twice: a hand-copied list once named an
  * option the SDK does not have (`permissionPrompt`) while missing one it does (`permissions`, a
@@ -66,7 +67,7 @@ const SETS = new RegExp(String.raw`(?:^|[\s{,(.])(${SHADOWING_OPTIONS.join('|')}
  * decision out of this host. What this pin holds: the mode reaches the SDK through exactly these
  * modules (the wire types, the codec, the narrowing reader, which refuses an unknown mode by name,
  * the process that hands it to `query()`/`setPermissionMode`, the session handle, the registry and
- * the host's dispatch) and never from a settings file or a rule list (those eight lanes stay
+ * the host's dispatch) and never from a settings file or a rule list (those nine lanes stay
  * closed, above).
  */
 const MODE_MODULES = [
@@ -121,13 +122,24 @@ test('regression: permissionMode travels only through the wire, reader and proce
   assert.deepEqual(choosers, [], `a module names a permission mode as a value: ${choosers.join(', ')}`);
 });
 
-test('the three mid-session permission mutators are never called; setPermissionMode is called in ONE place, by the wire', () => {
+/**
+ * The one call the flag-settings mutator may take: `setEffort`'s, on the process handle, with an
+ * object literal whose only key is `effortLevel`. That call also takes permission rules and a mode
+ * among its keys, so the allowance is the literal's shape, not the method's name: a second key, a
+ * spread, an object built elsewhere or a second call site is a violation like any other.
+ */
+const EFFORT_ONLY = /\brunning\.applyFlagSettings\(\{ effortLevel: [A-Za-z_$][\w$]* \}\)/;
+const EFFORT_MODULE = 'host/agent-process.ts';
+
+test('the four mid-session permission mutators are never called but for effort alone; setPermissionMode is called in ONE place, by the wire', () => {
   // These act after any construction-time check, so no inspection of the composed options could
   // catch them. They are unreachable by construction (the handle wraps the query object rather
   // than handing it out) and this asserts the absence directly rather than trusting that.
   // `setPermissionMode` is not on the list: it is the `session_configure` frame's own path and may
-  // be called from exactly one module.
-  const mutators = ['applyFlagSettings', 'setMcpServers', 'setMcpPermissionModeOverride'];
+  // be called from exactly one module. `updateSettings` writes the settings files permission rules
+  // are read from, which is the same reach by a slower road. `applyFlagSettings` is reached once,
+  // for effort, in the shape `EFFORT_ONLY` states.
+  const mutators = ['applyFlagSettings', 'setMcpServers', 'setMcpPermissionModeOverride', 'updateSettings'];
   const modeSetters = sourceFiles()
     .filter((file) => file.text.includes('running.setPermissionMode('))
     .map((file) => file.path);
@@ -137,11 +149,17 @@ test('the three mid-session permission mutators are never called; setPermissionM
     'setPermissionMode reaches the SDK from one module only',
   );
   const violations: string[] = [];
+  const effortCalls: string[] = [];
 
   for (const file of sourceFiles()) {
     file.text.split('\n').forEach((line, index) => {
       for (const mutator of mutators) {
-        if (line.includes(`${mutator}(`)) violations.push(`${file.path}:${index + 1} calls ${mutator}`);
+        if (!line.includes(`${mutator}(`)) continue;
+        if (mutator === 'applyFlagSettings' && file.path === EFFORT_MODULE && EFFORT_ONLY.test(line)) {
+          effortCalls.push(`${file.path}:${index + 1}`);
+          continue;
+        }
+        violations.push(`${file.path}:${index + 1} calls ${mutator}`);
       }
     });
   }
@@ -151,6 +169,28 @@ test('the three mid-session permission mutators are never called; setPermissionM
     [],
     `a mid-session permission mutator is called:\n  ${violations.join('\n  ')}`,
   );
+  assert.equal(
+    effortCalls.length,
+    1,
+    `the effort call is allowed at exactly one site; found ${effortCalls.length}: ${effortCalls.join(', ')}`,
+  );
+});
+
+test('control: the effort allowance matches its one shape and nothing wider', () => {
+  assert.equal(
+    EFFORT_ONLY.test('    await running.applyFlagSettings({ effortLevel: level });'),
+    true,
+    'the call',
+  );
+  for (const [wider, line] of [
+    ['a second key', 'await running.applyFlagSettings({ effortLevel: level, permissions: rules });'],
+    ['a spread', 'await running.applyFlagSettings({ ...settings });'],
+    ['a spread beside the key', 'await running.applyFlagSettings({ ...settings, effortLevel: level });'],
+    ['an object built elsewhere', 'await running.applyFlagSettings(settings);'],
+    ['a key before it', 'await running.applyFlagSettings({ model: m, effortLevel: level });'],
+  ] as const) {
+    assert.equal(EFFORT_ONLY.test(line), false, `${wider} passed as the effort call`);
+  }
 });
 
 /**
@@ -186,12 +226,12 @@ test('the scan pin and the compile pin guard the SAME set, minus the one with a 
       .sort(),
   );
   // `permissionMode` is composable (CLI parity), so the scan set and the compile set are the same
-  // eight names with nothing left to subtract.
-  assert.equal(SHADOWING_LANES.length, 8, 'the eight lanes are eight');
+  // nine names with nothing left to subtract.
+  assert.equal(SHADOWING_LANES.length, 9, 'the nine lanes are nine');
   assert.equal(
     SHADOWING_OPTIONS.length,
-    8,
-    'the scan set is the eight; permissionMode is not among them to subtract',
+    9,
+    'the scan set is the nine; permissionMode is not among them to subtract',
   );
 });
 
@@ -206,6 +246,7 @@ test('control: the shadowing-option pattern actually matches a shadowing option'
     '  managedSettings: policy,',
     '  permissionPromptToolName: "mcp__ui__ask",',
     '  disallowedTools: [],',
+    "  permissionPrompts: 'none',",
   ]) {
     assert.match(offender, SETS, `the pattern missed: ${offender}`);
   }

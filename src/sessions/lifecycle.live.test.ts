@@ -89,18 +89,22 @@ test(
   { skip, timeout: 300_000 },
   async () => {
     const sentinel = 'PERISCOPE_SENTINEL_DO_NOT_INHERIT';
+    // The two host-session markers are planted, not inherited: a plain terminal carries neither, and
+    // the property is that a marker in the parent never reaches the child, wherever the probe runs.
     const parentEnv = {
       ...process.env,
       [sentinel]: 'if-you-can-read-this-the-allow-list-failed',
+      CLAUDE_CODE_CHILD_SESSION: '1',
+      CLAUDE_EFFORT: 'high',
     };
 
     // Positive control on the fixture: the hazard has to be in the parent environment, or the
     // absence proven below is the absence of something that was never there.
     assert.equal(sentinel in parentEnv, true, 'the sentinel must be in the parent env');
     assert.equal(
-      'CLAUDE_CODE_CHILD_SESSION' in parentEnv || 'CLAUDE_EFFORT' in parentEnv,
+      'CLAUDE_CODE_CHILD_SESSION' in parentEnv && 'CLAUDE_EFFORT' in parentEnv,
       true,
-      'this probe is only meaningful where at least one recorded hazard is genuinely live',
+      'both recorded hazards must be in the parent env',
     );
 
     let observed: Record<string, string | undefined> | null = null;

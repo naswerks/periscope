@@ -27,6 +27,11 @@ Optionality on the wire is `T | null`, never an absent key: JSON has no `undefin
 member cannot be told from a member set to nothing after a round trip. Every member a kind declares
 is required; a frame missing one is refused `frame-malformed` by whichever side sees it first.
 
+The one exception is a member added inside the protocol window. It is optional (`?:` in
+`src/control/frames.ts`), for two reasons: a peer one release behind omits it, and a controller
+written in TypeScript that builds the frame would otherwise stop compiling at a minor release. Its
+absence reads as "not stated". Outside the window the rule above holds, and absent is refused.
+
 `encode` and `decode` validate the same shapes. A frame that would not decode does not encode
 either, so a malformed frame is refused at its author and never occupies a sequence number.
 
@@ -83,9 +88,19 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[9, 10]`: version 10 adds `answer_refused`, the three session refusals `session-cap-reached`,
-`prompt-queue-full` and `env-key-refused`, and the welcome's range; a v9 controller meets none of
-them unless it sends what they refuse.
+`[11, 12]`. Version 12 adds:
+
+- the hello's `configuration.agent` (below);
+- `effort` on `session_configure`;
+- `observedAt` on a forwarded message's body;
+- the refusal `session-configure-failed`;
+- three cause events: `PreModelSwitch`, `PostModelSwitch` and `system/model_refusal_no_fallback`.
+
+The host sends these whichever version was chosen. A version-11 controller decodes them as keys it
+does not know and words it has not met, which its codec carries through. A version-11 controller's
+own frames carry none of them and decode here unchanged. `src/host/protocol-window.test.ts` holds
+both directions over a real link: every frame this host sends decodes with the protocol-11 decoder
+v1.2.0 shipped, and a version-11 controller's `session_configure` decodes here and applies.
 
 Two close reasons carry meaning. A close with code 1002 whose reason starts with `seq gap` is a
 replay request: the controller names the position it holds, and the host's next dial replays from
@@ -99,6 +114,27 @@ from v11, `plugins`: the plugin directories the host loads into every session, e
 `{ name, version, path }` from its manifest (`version` null when the manifest declares none), at
 most `MAX_PLUGIN_DIRS` entries. A controller that wants a session to have a plugin reads this list
 before it opens one; a host with none configured reports an empty list.
+
+From v12, `configuration.agent` carries the agent this host runs sessions on, and is optional:
+
+- `claudeCodeVersion` and `sdkVersion`: the Claude Code version the installed agent SDK bundles, and
+  that SDK's version.
+- `models`: the models the agent offers, each `{ value, resolvedModel, displayName, description,
+supportedEffortLevels, supportsFastMode, supportsAutoMode, supportsAdaptiveThinking }`.
+  - `value` is what `session_new` and `session_configure` take as `model`.
+  - `resolvedModel` is the model id an alias stands for, so a stored explicit id can be matched to
+    the alias that covers it.
+  - The three `supports*` members are null when the agent did not say.
+
+The host reads the catalog once at start, by starting the agent with a prompt stream that never
+yields and reading its answer to the SDK's initialize request, so no model is called. Its bounds
+are `MAX_AGENT_MODELS` entries and `MAX_AGENT_CATALOG_BYTES` of JSON. A hello past
+`MAX_FRAME_BYTES` would not be sent at all, so a catalog past either bound rides as `agent: null`.
+
+- **null:** the host asked and got nothing it can carry. It names the reason on its own trace.
+- **Absent:** the host was composed without a catalog read, or runs one release behind.
+
+A `host_configure_result` carries the same `agent`.
 
 ## The credential on the three transports
 
@@ -192,6 +228,11 @@ receiver will accept next on the refused party's own outbound lane). `wire_refus
 member, not a payload kind, so a refusal rides the same fact lane it refuses. A controller carries
 unknown keys through and must not narrow the body.
 
+A forwarded message's body, on either lane, carries `observedAt` (v12): the instant, ISO-8601 in
+UTC, this host took the message off the agent's stream. Date a message by it rather than by its
+arrival: a message replayed after a reconnect arrives late, and a clock started at arrival runs
+late with it. `readObservedAt` returns null for a host one release behind.
+
 A consumer folding deltas into rendered state must return a new top-level reference for every real
 change and the same reference for a true no-op. Hosts bind rendered state through a default
 reference-equality check, so a fold that mutates in place and returns the object it was given
@@ -226,7 +267,7 @@ watched is not something the host can know, so it offers the knob instead of gue
 | `session_new`       | open a session: `cwd` (nullable; the workspace provider decides when null), `workspaceKey` (nullable; the key sessions share a tree under), `correlationId` (opaque, echoed, never interpreted), `gate` (per-session deadlines or null), `request` (the JSON-expressible subset of a session request or null). Every member of `request` is `T | null`. |
 | `session_prompt`    | queue a turn; a session already holding every turn it can queue refuses `prompt-queue-full` and is otherwise untouched                                                                                                                                                                                                                         |
 | `session_cancel`    | interrupt the current turn; never ends the session                                                                                                                                                                                                                                                                                             |
-| `session_configure` | apply the live setters (`model`, `permissionMode`, `thinking`), each null when not asked                                                                                                                                                                                                                                                       |
+| `session_configure` | apply the live controls in this order: `model`, `permissionMode`, `thinking`, and from v12 `effort`. Each is null when not asked, and `effort` may also be absent                                                                                                                                                                              |
 | `bulk_request`      | ask for bulk content (below)                                                                                                                                                                                                                                                                                                                   |
 
 A `session_new` past the host's session bound (`PeriscopeHostOptions.maxSessions`) refuses
@@ -283,6 +324,19 @@ path rides it (`permission-grant-shadows-settings`, `workspace-provision-failed`
 show the cause. A `session_prompt` that arrives while its session is still opening is held, then delivered,
 refused or withdrawn; it is never dropped.
 
+A `session_configure` that fails answers on the session's own state lane, as a transition from its
+state to the same state with cause kind `refusal`. There are two reasons:
+
+- **`session-configure-failed`:** the agent refused a control. The detail names the member and
+  carries the agent's text; the members before it were applied, and the ones after it were not.
+  The CLI refuses a switch into `bypassPermissions` for a session that was not started in it, and
+  that refusal arrives this way ([gate.md](gate.md)).
+- **`frame-malformed`:** the host refused a value, such as an unknown mode or effort level, or a
+  fixed thinking budget.
+
+A configure for a handle this host does not hold, or for a session still opening, is reported on the
+host's own trace only.
+
 ## Host-scoped asks
 
 These address the host, not a session. Their `sessionId` is a channel the controller mints, and the
@@ -327,11 +381,11 @@ on a character boundary with the file's whole size in the answer.
 `workspace_release` names exactly one of `workspaceKey` or `path`, with `deleteBranch` and `force`;
 the receipt states `directoryRemoved` and `branchDeleted` separately, and released or already
 absent is the same answer. `host_configure` accepts the keys in `WIRE_CONFIGURABLE_KEYS`, exactly
-these six: `PERISCOPE_WORKSPACE_ROOT`, `PERISCOPE_REPOSITORY_ROOT`, `PERISCOPE_BRANCH_SCHEME`,
-`PERISCOPE_AGENT_HOME`, `PERISCOPE_CONTROLLER_URL`, `PERISCOPE_DECISION_URL`. It writes them to the
-host's config file, rebuilds the workspace provider, and answers with the effective values, the
-keys the environment shadows (`overriddenByEnvironment`), and the keys that apply only at the next
-start.
+these seven: `PERISCOPE_WORKSPACE_ROOT`, `PERISCOPE_REPOSITORY_ROOT`, `PERISCOPE_BRANCH_SCHEME`,
+`PERISCOPE_AGENT_HOME`, `PERISCOPE_PLUGIN_DIRS`, `PERISCOPE_CONTROLLER_URL`,
+`PERISCOPE_DECISION_URL`. It writes them to the host's config file, rebuilds the workspace
+provider, and answers with the effective values, the keys the environment shadows
+(`overriddenByEnvironment`), and the keys that apply only at the next start.
 The two URLs are written but never applied to the live link. A root cannot change while a session
 is open or opening (`config-host-busy`).
 
@@ -420,19 +474,20 @@ learn it before it can answer with it. Count the entries in the file; never carr
 
 The reasons a controller meets most, and what each is not:
 
-| reason                                                                                  | names                                                                                                                                                                                 |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frame-not-json`, `frame-malformed`, `frame-too-large`                                  | the codec's three; the last names the bulk lane                                                                                                                                       |
-| `seq-gap`, `seq-regressed`                                                              | the receiver's inbound lane; the refusal's `expected` is where to resume                                                                                                              |
-| `link-unauthorized`                                                                     | the peer refused this host's identity at the door; terminal, never retried. Not `link-send-failed`, which names a transport that faltered                                             |
-| `session-unknown`                                                                       | a handle that does not and never will exist, or a held turn over the bound                                                                                                            |
-| `permission-decision-unavailable`, `permission-decision-unrecognised`                   | an outage, and a decision this build does not know; neither is an allow                                                                                                               |
-| `transcript-path-escape`                                                                | a caller-supplied name that failed one of the discovery jail's three layers; the refusal names the layer                                                                              |
-| `bulk-target-not-controller`, `bulk-target-invalid`                                     | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                       |
-| `resume-cwd-not-honoured`                                                               | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                      |
-| `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed` | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                 |
-| `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force` |
-| `repository-path-escape`, `repository-read-failed`                                      | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                  |
+| reason                                                                                  | names                                                                                                                                                                                     |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frame-not-json`, `frame-malformed`, `frame-too-large`                                  | the codec's three; the last names the bulk lane                                                                                                                                           |
+| `seq-gap`, `seq-regressed`                                                              | the receiver's inbound lane; the refusal's `expected` is where to resume                                                                                                                  |
+| `link-unauthorized`                                                                     | the peer refused this host's identity at the door; terminal, never retried. Not `link-send-failed`, which names a transport that faltered                                                 |
+| `session-unknown`                                                                       | a handle that does not and never will exist, or a held turn over the bound                                                                                                                |
+| `session-configure-failed`                                                              | the agent refused one of a `session_configure`'s controls; the detail names the member, and the members before it were applied. Not `frame-malformed`, which is the host refusing a value |
+| `permission-decision-unavailable`, `permission-decision-unrecognised`                   | an outage, and a decision this build does not know; neither is an allow                                                                                                                   |
+| `transcript-path-escape`                                                                | a caller-supplied name that failed one of the discovery jail's three layers; the refusal names the layer                                                                                  |
+| `bulk-target-not-controller`, `bulk-target-invalid`                                     | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                           |
+| `resume-cwd-not-honoured`                                                               | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                          |
+| `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed` | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                     |
+| `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force`     |
+| `repository-path-escape`, `repository-read-failed`                                      | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                      |
 
 `protocol_version_rejected` is not a refusal reason but a link cause: the windows did not overlap,
 and the link's state reports it.
@@ -514,4 +569,5 @@ Over the link:
 | `src/host/wire-request.ts`                                           | The single narrowing from `session_new.request` and `session_configure` to local requests                                                                                             |
 | `contracts/wire-vectors/`                                            | The byte-level contract                                                                                                                                                               |
 | `src/pins/wire-vectors.test.ts`, `src/pins/protocol-closure.test.ts` | The corpus check; the proof that the subpath reaches no `host/` file and no `node:` builtin                                                                                           |
+| `src/host/protocol-window.test.ts`                                   | The window's two directions over a real link: this host's frames through the protocol-11 decoder v1.2.0 shipped, and a version-11 controller's frames through this build              |
 | `examples/minimal-controller/`, `examples/test-controller/`          | The smallest controller that accepts a host, and the reference controller that drives every ask                                                                                       |

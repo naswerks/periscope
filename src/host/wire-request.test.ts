@@ -17,6 +17,7 @@ import {
   EFFORT_LEVELS,
   PERMISSION_MODES,
   SETTING_SOURCES,
+  THINKING_DISPLAYS,
   THINKING_TYPES,
   mergeMcpServers,
   readSessionConfigure,
@@ -240,13 +241,13 @@ test('readSessionConfigure narrows the live change: asked members only, unknown 
     kind: 'session_configure',
     model: 'claude-opus-5',
     permissionMode: 'plan',
-    thinking: { type: 'enabled', budgetTokens: 128000 },
+    thinking: { type: 'adaptive', display: 'summarized' },
   });
   assert.equal(all.ok, true);
   assert.deepEqual(all.ok ? all.value : null, {
     model: 'claude-opus-5',
     permissionMode: 'plan',
-    thinking: { type: 'enabled', budgetTokens: 128000 },
+    thinking: { type: 'adaptive', display: 'summarized' },
   });
 
   const badMode = readSessionConfigure({
@@ -266,6 +267,60 @@ test('readSessionConfigure narrows the live change: asked members only, unknown 
   });
   assert.equal(badThinking.ok, false);
   assert.equal(badThinking.ok ? '' : badThinking.refusal.reason, 'frame-malformed');
+});
+
+test('regression: a fixed thinking budget is refused by name at both doors, and the refusal names the fix', () => {
+  // `enabled` with a budget is the SDK's own shape, and the current models answer it with a 400, so a
+  // session that took it would open and then fail its first turn. Refused before anything starts.
+  const fixed = { type: 'enabled', budgetTokens: 2048 };
+  const opened = readSessionRequest(sessionNewRequest({ thinking: fixed }));
+  const configured = readSessionConfigure({
+    kind: 'session_configure',
+    model: null,
+    permissionMode: null,
+    thinking: fixed,
+  });
+  for (const read of [opened, configured]) {
+    assert.equal(read.ok, false, 'a fixed budget was accepted');
+    assert.equal(read.ok ? '' : read.refusal.reason, 'frame-malformed');
+    assert.match(read.ok ? '' : read.refusal.detail, /fixed token budget/);
+    assert.match(read.ok ? '' : read.refusal.detail, /"adaptive"/, 'the refusal says what to ask for');
+  }
+});
+
+test('adaptive thinking takes display summarized or omitted, and nothing else; absent or null is the default', () => {
+  for (const thinking of [
+    { type: 'adaptive' },
+    { type: 'adaptive', display: 'summarized' },
+    { type: 'adaptive', display: 'omitted' },
+    { type: 'adaptive', display: null },
+    { type: 'disabled' },
+  ]) {
+    const read = readSessionRequest(sessionNewRequest({ thinking }));
+    assert.equal(read.ok, true, `${JSON.stringify(thinking)} was refused`);
+  }
+  const unknown = readSessionRequest(
+    sessionNewRequest({ thinking: { type: 'adaptive', display: 'highlights' } }),
+  );
+  assert.equal(unknown.ok, false);
+  assert.match(unknown.ok ? '' : unknown.refusal.detail, /highlights/);
+});
+
+test('every display this file lists is one the SDK declares for adaptive thinking', () => {
+  const types = readFileSync(
+    fileURLToPath(new URL('../../node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts', import.meta.url)),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+  const adaptive = /export declare type ThinkingAdaptive = \{([^}]*)\}/.exec(types)?.[1] ?? '';
+  // Positive control: the declaration was found and it is the one carrying `display`.
+  assert.match(adaptive, /type: 'adaptive'/, 'ThinkingAdaptive was not found in sdk.d.ts');
+  for (const display of THINKING_DISPLAYS) {
+    assert.match(
+      adaptive,
+      new RegExp(`'${display}'`),
+      `${display} is not a display ThinkingAdaptive declares`,
+    );
+  }
 });
 
 test('regression: an extraEnv key beneath the floor is refused env-key-refused before anything is composed', () => {

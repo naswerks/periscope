@@ -44,6 +44,8 @@ function capturing(): {
         setModel: () => Promise.resolve(),
         setPermissionMode: () => Promise.resolve(),
         setThinking: () => Promise.resolve(),
+        setEffort: () => Promise.resolve(),
+        pluginsApplied: () => Promise.resolve(null),
         close: () => queue.end(),
       };
     },

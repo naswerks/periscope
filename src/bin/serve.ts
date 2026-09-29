@@ -31,12 +31,18 @@ import {
   resolveEndpoints,
   tokenCachePath,
 } from '../host/index.js';
-import type { AgentProcess, AgentProcessRequest } from '../host/agent-process.js';
+import type {
+  AgentCatalog,
+  AgentCatalogOptions,
+  AgentProcess,
+  AgentProcessRequest,
+} from '../host/agent-process.js';
 import type { EscalationTransport } from '../gate/escalate.js';
 import { escalatingDecider } from '../gate/escalate.js';
 import type { TokenRefresher } from '../identity/index.js';
 import { PairedHostCredential, TokenCredential, identityPosture } from '../identity/index.js';
 import { SessionRegistry } from '../sessions/registry.js';
+import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import { readConfigFile } from '../host/config-file.js';
 import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
 import { MAX_PLUGIN_DIRS } from '../control/frames.js';
@@ -60,6 +66,13 @@ import {
  * is already stopped by the time this runs.
  */
 export const FATAL_EXIT_FLUSH_MS = 50;
+
+/**
+ * How long the agent has to answer the catalog read at start. It spawns the CLI and waits for its
+ * initialize answer, which takes seconds; past this the hello goes out with `agent: null` rather
+ * than holding the dial.
+ */
+export const AGENT_CATALOG_TIMEOUT_MS = 20_000;
 
 /** The two environments the daemon reads. See the module header for which reads which. */
 export interface ServeViews {
@@ -90,6 +103,11 @@ export interface ServeDeps {
   readonly getuid?: (() => number) | null;
   /** How an agent process is started. Defaults to the real one. */
   readonly startProcess?: (request: AgentProcessRequest) => AgentProcess;
+  /**
+   * Reads the agent's model catalog for the hello. `main.ts` supplies the real one; with none, the
+   * hello carries no catalog and no agent is started to read one.
+   */
+  readonly readAgentCatalog?: (options: AgentCatalogOptions) => Promise<AgentCatalog>;
 }
 
 export type ServeOutcome =
@@ -331,7 +349,8 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     return refuse(`PERISCOPE_AGENT_HOME must be an absolute path — got '${config.agentHome}'`);
   }
   // A plugin directory is loaded into every session; one that is absent or carries no manifest is
-  // refused at start-up by name, because the agent SDK skips a missing plugin path without a word.
+  // refused at start-up by name. The agent would name it too, in a session's `plugin_errors`, but
+  // only once that session was running; a host that will fail every session says so when it boots.
   const pluginDirs = parsePluginDirs(config.pluginDirs);
   const pluginProblem =
     pluginDirs.length > MAX_PLUGIN_DIRS
@@ -431,6 +450,14 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
    * code is what a supervisor branches on; the line is what the person at the machine acts on. A
    * non-zero exit whose reason appears only in the stdout trace still leaves somebody reading logs.
    */
+  // The catalog read starts the agent the way a session does: the same filtered environment, so the
+  // same sign-in and the same models. It starts in the home directory and loads no settings there.
+  const readCatalog = deps.readAgentCatalog;
+  const agentCatalog =
+    readCatalog === undefined
+      ? undefined
+      : () => readCatalog({ env: composeSpawnEnv(raw), cwd: homeDir, timeoutMs: AGENT_CATALOG_TIMEOUT_MS });
+
   let linkStateProblemSaid = false;
   const onEvent = (event: HostEvent): void => {
     if (event.kind === 'link') {
@@ -560,6 +587,7 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       ? { baseEnv: raw, homeDir }
       : { registry: new SessionRegistry({ baseEnv: raw, homeDir, startProcess: deps.startProcess }) }),
     ...(deps.link === undefined ? {} : { link: deps.link }),
+    ...(agentCatalog === undefined ? {} : { agentCatalog }),
     report: onEvent,
   });
 
@@ -625,6 +653,16 @@ export function report(event: HostEvent, log: Logger): void {
       // untrusted workspace, an id collision. The detail is the operator's instruction and it
       // travels whole: the collision's detail is the only place "resume with fork" is ever said.
       return log('degrade', `${event.sessionKey} ${event.degrade.kind}`, event.degrade.detail);
+    case 'agent-catalog':
+      // What the hello tells a controller about the agent, said where the operator reads.
+      return event.agent === null
+        ? log('agent', 'the hello carries no model catalog', event.detail)
+        : log(
+            'agent',
+            `Claude Code ${event.agent.claudeCodeVersion} (agent SDK ${event.agent.sdkVersion}), ` +
+              `${event.agent.models.length} model(s) in the hello`,
+            null,
+          );
     default:
       return;
   }

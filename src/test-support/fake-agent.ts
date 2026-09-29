@@ -13,6 +13,12 @@ export interface FakeAgent {
   readonly prompts: string[];
   /** How many times the session interrupted the turn. */
   interrupts: number;
+  /** Every live setter the session called, in order, with what it asked for. */
+  readonly configured: { readonly setter: string; readonly value: unknown }[];
+  /** Make the next live setter the session calls reject with `error`, as the agent refusing it would. */
+  refuseNextSetter(error: Error): void;
+  /** What the process answers when asked whether its plugins loaded. Null until a test sets it. */
+  pluginsApplied: boolean | null;
   /** Push a message onto the process's output stream. */
   emit(message: SDKMessage): void;
   /** End the stream by throwing `error` from the generator, as a process death would. */
@@ -38,8 +44,18 @@ export function fakeAgents(): FakeAgents {
   const start = (request: AgentProcessRequest): AgentProcess => {
     const queue = new AsyncQueue<SDKMessage>();
     const prompts: string[] = [];
+    const configured: { setter: string; value: unknown }[] = [];
     let isClosed = false;
     let failure: Error | null = null;
+    let setterRefusal: Error | null = null;
+
+    /** Records the call, then answers the way the real setter would: resolved, or refused once. */
+    const setter = (name: string, value: unknown): Promise<void> => {
+      configured.push({ setter: name, value });
+      const refusal = setterRefusal;
+      setterRefusal = null;
+      return refusal === null ? Promise.resolve() : Promise.reject(refusal);
+    };
 
     async function* messages(): AsyncGenerator<SDKMessage, void> {
       for await (const message of queue) yield message;
@@ -50,6 +66,11 @@ export function fakeAgents(): FakeAgents {
       request,
       prompts,
       interrupts: 0,
+      configured,
+      refuseNextSetter: (error) => {
+        setterRefusal = error;
+      },
+      pluginsApplied: null,
       emit: (message) => queue.push(message),
       fail: (error) => {
         failure = error;
@@ -74,9 +95,14 @@ export function fakeAgents(): FakeAgents {
         record.interrupts += 1;
         return Promise.resolve();
       },
-      setModel: () => Promise.resolve(),
-      setPermissionMode: () => Promise.resolve(),
-      setThinking: () => Promise.resolve(),
+      setModel: (model) => setter('setModel', model),
+      setPermissionMode: (mode) => setter('setPermissionMode', mode),
+      setThinking: (thinking) => setter('setThinking', thinking),
+      setEffort: (level) => setter('setEffort', level),
+      // Answered on a later turn of the loop, as the real initialize answer is, so a test can set the
+      // field just after the session starts and the session still asks before it is known.
+      pluginsApplied: () =>
+        new Promise<boolean | null>((resolve) => setImmediate(() => resolve(record.pluginsApplied))),
       close: () => {
         isClosed = true;
         queue.end();

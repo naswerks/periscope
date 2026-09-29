@@ -3,9 +3,10 @@
  * that re-exports the SDK's types for every layer above.
  *
  * It is not the only file that names `@anthropic-ai/claude-agent-sdk`. Three others in
- * `src/host/` do (the MCP server builder, the store adapter and the telemetry reader), because
- * each bridges one SDK shape and none of them spawns anything. The rule the pin enforces is the
- * directory, not this file; what remains unique here is `query()`.
+ * `src/host/` import it (the MCP server builder, the store adapter and the telemetry reader),
+ * because each bridges one SDK shape and none of them spawns anything, and the package facts read
+ * its manifest. The rule the pin enforces is the directory, not this file; what remains unique here
+ * is `query()`.
  *
  * It lives in `src/host/` because calling `query()` spawns a real CLI subprocess. The boundary this
  * directory holds is stated as "nothing outside `src/host/` touches the filesystem, spawns a
@@ -35,6 +36,7 @@ import type {
   HookJSONOutput,
   McpSdkServerConfigWithInstance,
   McpServerConfig,
+  ModelInfo,
   Options,
   PermissionMode,
   Query,
@@ -49,7 +51,12 @@ import type {
   ThinkingConfig,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import type { HostAgent, HostModel } from '../control/frames.js';
 import { AsyncQueue } from '../core/async-queue.js';
+import { describeFailure } from '../core/failure.js';
+import { isAbsolutePath } from '../core/paths.js';
+import { agentSdkFacts } from './package-facts.js';
+import { isBypassMode } from './wire-request.js';
 
 export type {
   HookCallbackMatcher,
@@ -134,10 +141,12 @@ export interface AgentProcessRequest {
   /**
    * How much of the agent's reasoning is emitted. `null` leaves the SDK's own default.
    *
-   * `{type:'adaptive'}` fires `thinking_delta` events whose prose is EMPTY;
+   * The current models default to `display: 'omitted'`, so `{type:'adaptive'}` fires
+   * `thinking_delta` events whose prose is EMPTY and a transcript goes quiet between tool calls;
    * `{type:'adaptive', display:'summarized'}` streams real reasoning text — which costs tokens on
    * the wire and puts reasoning into transcripts and mirrors, so it is asked for rather than
-   * assumed. Requires `includePartialMessages`.
+   * assumed. Requires `includePartialMessages`. A fixed budget (`enabled`) never arrives here: the
+   * wire reader refuses it, because the current models reject it with a 400.
    */
   readonly thinking: ThinkingConfig | null;
   /**
@@ -209,13 +218,16 @@ export interface AgentProcessRequest {
    * 2. stderr. `SpawnedProcess` carries only stdin and stdout, so a custom spawn that does not
    *    route the child's stderr somewhere loses `onStderr` entirely, and the untrusted-workspace
    *    condition is reported only there.
+   *
+   * And one it must match: with plugins, the list travels over stdin (`composeOptions`), which a CLI
+   * older than 2.1.261 refuses at startup, so the CLI a custom spawn runs must be that new.
    */
   readonly spawn: SpawnAgentProcess | null;
   /**
    * Which model runs this session. `null` leaves the CLI's own default.
    *
    * Absent, not narrowed: `model` and `systemPrompt` were never among this type's keys, so adding
-   * them filled a gap; it did not widen a security narrowing. The eight `SHADOWING_LANES` below are
+   * them filled a gap; it did not widen a security narrowing. The nine `SHADOWING_LANES` below are
    * a deliberate narrowing and they stay closed. Two different facts, and conflating them costs a
    * reader a whole cycle on the wrong objection.
    *
@@ -260,10 +272,11 @@ export const MAX_PENDING_PROMPTS = 16;
  * Every key `Options` is composed from, as data.
  *
  * This is the permission-config pin's subject, and it is why that pin is a compile error rather
- * than a grep. The SDK's `Options` carries nine lanes that alter permission outcomes:
+ * than a grep. The SDK's `Options` carries ten lanes that alter permission outcomes:
  * `permissionMode`, `settings`, `managedSettings`, `toolAliases`, `permissionPromptToolName`,
- * `allowedTools`, `disallowedTools`, `canUseTool`, and the `permissions` block a settings object can
- * carry. Eight of them (`SHADOWING_LANES`) are unreachable, because a caller can only supply the
+ * `allowedTools`, `disallowedTools`, `canUseTool`, `permissionPrompts` (whose `none` denies every
+ * call that would have prompted), and the `permissions` block a settings object can carry. Nine of
+ * them (`SHADOWING_LANES`) are unreachable, because a caller can only supply the
  * keys below and `startAgentProcess` composes `Options` from exactly these; `permissionMode` is the
  * one opened by name, in `CLI_PARITY_OPTION_KEYS`. Adding a composable option breaks this
  * declaration, and the pin fails at build time instead of when someone remembers to look.
@@ -283,7 +296,7 @@ export const MAX_PENDING_PROMPTS = 16;
  *
  * The distinction that decides whether a widening is a weakening: `model` and `systemPrompt` were
  * absent, not narrowed. They were never among the composable keys, so opening them filled a gap.
- * The eight lanes in `SHADOWING_LANES` are a deliberate security narrowing and stay closed, and the
+ * The nine lanes in `SHADOWING_LANES` are a deliberate security narrowing and stay closed, and the
  * pin still asserts each one by name. A gap filled and a narrowing widened are different acts and
  * this file tells them apart.
  *
@@ -315,7 +328,7 @@ export const AGENT_PROCESS_REQUEST_KEYS = {
 } as const satisfies Record<keyof AgentProcessRequest, true>;
 
 /**
- * The eight closed lanes, as data: the subject both permission pins are about.
+ * The nine closed lanes, as data: the subject both permission pins are about.
  *
  * The defect this guards against: the lanes were once written out twice, once per pin, and the two
  * copies disagreed. The scan pin listed `permissionPrompt`, which does not exist in `sdk.d.ts` at
@@ -328,7 +341,7 @@ export const AGENT_PROCESS_REQUEST_KEYS = {
 export const SHADOWING_LANES: readonly string[] = [
   // `permissionMode` was deliberately removed from this list (CLI parity); see
   // `CLI_PARITY_OPTION_KEYS`. It is the one lane that is a posture the operator chooses in the open,
-  // not a rule file or a pre-answer; the eight below are the latter and stay closed.
+  // not a rule file or a pre-answer; the nine below are the latter and stay closed.
   'settings',
   'managedSettings',
   'toolAliases',
@@ -337,6 +350,8 @@ export const SHADOWING_LANES: readonly string[] = [
   'disallowedTools',
   'canUseTool',
   'permissions',
+  // Who answers a call that would prompt: `none` denies every one of them outright, a pre-answer.
+  'permissionPrompts',
 ];
 
 /**
@@ -347,7 +362,7 @@ export const SHADOWING_LANES: readonly string[] = [
  * evaluation path, so none can change whether a tool runs, only how much of the run is visible.
  * That is why widening the set here does not weaken the boundary above.
  *
- * The pin asserts every member is composable and is none of the eight shadowing lanes, so a later
+ * The pin asserts every member is composable and is none of the nine shadowing lanes, so a later
  * addition cannot join this list by assertion alone.
  */
 export const STREAMING_OPTION_KEYS = [
@@ -419,7 +434,7 @@ export const PERSISTENCE_OPTION_KEYS = [
  *
  * These were absent, not narrowed, and that is the whole classification. `model` and
  * `systemPrompt` were simply not in this type, so nothing was ever protecting them; there was no
- * decision to reverse, only a capability nobody had wired. The eight `SHADOWING_LANES` are the
+ * decision to reverse, only a capability nobody had wired. The nine `SHADOWING_LANES` are the
  * opposite case: each was considered and closed. Opening a gap and re-opening a closed lane look
  * identical in a diff, and this list is how they stop looking identical.
  *
@@ -434,7 +449,7 @@ export const PERSISTENCE_OPTION_KEYS = [
  * call, so the boundary is unmoved, but "the host can state what this agent was told" is not a
  * property this package has; `AgentInitFacts` is where that can be verified.
  *
- * The pin asserts every member is composable and is none of the eight, exactly as the other lists
+ * The pin asserts every member is composable and is none of the nine, exactly as the other lists
  * do.
  */
 export const AGENT_SELECTION_OPTION_KEYS = [
@@ -452,7 +467,12 @@ export const AGENT_SELECTION_OPTION_KEYS = [
  *   the boundary set is still held under `bypassPermissions`. What the mode changes is the CLI's
  *   own prompt flow, which this host's gate already answers.
  *
- * The other eight stay closed: they are rule files and pre-answers, which is a different thing from a
+ * The SDK enters `bypassPermissions` only with `allowDangerouslySkipPermissions` set, so
+ * `composeOptions` sets that flag exactly when the requested mode is bypass, and never otherwise:
+ * the flag permits the mode, it does not choose it, and nothing else in the package sets it. A switch
+ * into bypass mid-session from a session started in another mode meets the SDK without the flag.
+ *
+ * The other nine stay closed: they are rule files and pre-answers, which is a different thing from a
  * posture chosen in the open. Pinned by `pins/permission-config.test.ts`.
  */
 export const CLI_PARITY_OPTION_KEYS = [
@@ -467,10 +487,11 @@ export interface AgentProcess {
    *
    * This is a narrowing wrapper, not the SDK's `Query`, and that is load-bearing. `query()`
    * returns an object that IS an async generator AND carries `setPermissionMode`,
-   * `applyFlagSettings`, `setMcpServers` and `setMcpPermissionModeOverride` — four calls that change
-   * permission outcomes mid-session, after any construction-time check has run. Handing that object
-   * out under an `AsyncGenerator` annotation hides them from the compiler and from nobody else: one
-   * cast, or any plain JavaScript, reaches all four. So it is wrapped rather than annotated, and
+   * `applyFlagSettings`, `setMcpServers`, `setMcpPermissionModeOverride` and `updateSettings` — five
+   * calls that change permission outcomes mid-session, or the settings files permission rules are
+   * read from, after any construction-time check has run. Handing that object out under an
+   * `AsyncGenerator` annotation hides them from the compiler and from nobody else: one cast, or any
+   * plain JavaScript, reaches all five. So it is wrapped rather than annotated, and
    * "the composed options cannot ship a shadowing setting" stays true without the words "unless you
    * cast" attached to it.
    *
@@ -486,13 +507,24 @@ export interface AgentProcess {
   interrupt(): Promise<void>;
   /**
    * The named mid-session controls this package offers (the doc above says where they go): the
-   * three members of `session_configure`, each the SDK's own streaming-input setter behind a method.
-   * `setPermissionMode` is here deliberately: the one permission mutator that is a posture, reached
-   * only from the wire through `readSessionConfigure`; the other three stay unreachable.
+   * four members of `session_configure`, each an SDK control behind a method. `setPermissionMode`
+   * is here deliberately: the one permission mutator that is a posture, reached only from the wire
+   * through `readSessionConfigure`. `setEffort` reaches a second, `applyFlagSettings`, with the one
+   * key `effortLevel` and nothing beside it, so none of that call's permission keys can ride along;
+   * the other three stay unreachable.
    */
   setModel(model: string | null): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   setThinking(thinking: ThinkingConfig): Promise<void>;
+  setEffort(level: EffortLevel): Promise<void>;
+  /**
+   * The agent's initialize answer to whether every plugin it was started with loaded. Null when none
+   * were listed, when there was no answer, or when the CLI predates the field. Claude Code 2.1.284
+   * answered true with a missing directory in the list, so it is the agent's word and not a per-plugin
+   * receipt: the init message's `plugin_errors` names each one that did not load. A read, not a
+   * control, so it sits here without widening what the handle can change.
+   */
+  pluginsApplied(): Promise<boolean | null>;
   /** End the process and release everything it holds. Idempotent. */
   close(): void;
 }
@@ -514,7 +546,11 @@ export interface AgentInitFacts {
   readonly cwd: string;
   readonly model: string;
   readonly permissionMode: string;
-  /** Where the agent found its credentials. The evidence that ambient auth actually resolved. */
+  /**
+   * Where the agent's API key came from, verbatim: `none` on a claude.ai sign-in, a bearer token or a
+   * third-party provider (`oauth` is a legacy value current CLIs never send). Provenance, never
+   * proof of sign-in: a fully authenticated session reads `none`.
+   */
   readonly apiKeySource: string;
   readonly tools: readonly string[];
   readonly skills: readonly string[];
@@ -612,13 +648,14 @@ export function messagesOf(source: AsyncGenerator<SDKMessage, void>): AsyncGener
   } as AsyncGenerator<SDKMessage, void>;
 }
 
-/** Start an agent process. The subprocess exists when this returns. */
-export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
-  // The live prompt queue's bound. Turns the agent has not consumed wait here; a controller that
-  // sends past it is refused `prompt-queue-full` and the session is untouched.
-  const input = new AsyncQueue<SDKUserMessage>(MAX_PENDING_PROMPTS);
-
-  const options: Options = {
+/**
+ * The SDK's `Options` for one request, and nothing else.
+ *
+ * Pure, so what a session starts with can be checked without starting one. Exported for that;
+ * `startAgentProcess` is its only caller, and it is not part of the package's public surface.
+ */
+export function composeOptions(request: AgentProcessRequest): Options {
+  return {
     cwd: request.cwd,
     env: request.env,
     settingSources: [...request.settingSources],
@@ -632,7 +669,15 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
     // what makes that combination unbuildable here rather than merely undocumented.
     ...(request.sessionStore === null ? {} : { sessionStore: request.sessionStore }),
     ...(request.sessionStoreFlush === null ? {} : { sessionStoreFlush: request.sessionStoreFlush }),
-    ...(request.plugins === null ? {} : { plugins: [...request.plugins] }),
+    // The plugin list travels over stdin, not as one `--plugin-dir` flag per plugin: Windows refuses
+    // a command line over 32,767 characters, and a host with several plugin directories reaches it.
+    // Asked for only when there are plugins, because it needs a CLI of 2.1.261 or later, which the
+    // bundled one is and a custom `spawn` may not run.
+    ...(request.plugins === null
+      ? {}
+      : request.plugins.length === 0
+        ? { plugins: [] }
+        : { plugins: [...request.plugins], pluginDelivery: 'initialize' as const }),
     ...(request.hooks === null ? {} : { hooks: request.hooks }),
     ...(request.resume === null ? {} : { resume: request.resume, forkSession: request.fork }),
     ...(request.onStderr === null ? {} : { stderr: request.onStderr }),
@@ -643,9 +688,47 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
     ...(request.systemPrompt === null ? {} : { systemPrompt: request.systemPrompt }),
     ...(request.effort === null ? {} : { effort: request.effort }),
     ...(request.permissionMode === null ? {} : { permissionMode: request.permissionMode }),
+    // The SDK enters bypass only with this flag set. Set exactly when bypass is the mode asked for:
+    // it permits that mode and chooses nothing (see `CLI_PARITY_OPTION_KEYS`).
+    ...(isBypassMode(request.permissionMode) ? { allowDangerouslySkipPermissions: true } : {}),
   };
+}
 
-  const running: Query = query({ prompt: input, options });
+/**
+ * The cap the live thinking setter sends to turn thinking on. On the current models the SDK reads
+ * any positive cap as adaptive, 0 as disabled and null as "clear the limit", and a cleared limit
+ * does not turn thinking back on: after a disabled start, Opus 5.5, Fable 5.1 and Sonnet 5.5 came
+ * back to thinking prose on a positive cap and never on null (Claude Code 2.1.284,
+ * `agent-controls.live.test.ts`). A model that still takes a fixed budget reads it as one.
+ */
+export const THINKING_ON_CAP = 8_000;
+
+/**
+ * What the SDK's live thinking setter is sent for one wire value: the token cap, and the display
+ * when one was asked for. The setter is deprecated in favour of the start-time option and is on/off
+ * on the current models. Only `adaptive` and `disabled` arrive here; the wire reader refuses a fixed
+ * budget, which Opus 4.7 and later, Sonnet 5 and later and Fable 5 and later reject with a 400. The
+ * display rides along when asked, because the models' default (`omitted`) streams thinking blocks
+ * with empty text, the "no thinking" an operator sees while paying for it. Omitted, the session's
+ * own display stands.
+ *
+ * Pure, so the choice is checkable without a process. Exported for that; not on the public surface.
+ */
+export function thinkingControl(thinking: ThinkingConfig): {
+  readonly cap: number;
+  readonly display: Parameters<Query['setMaxThinkingTokens']>[1];
+} {
+  if (thinking.type === 'disabled') return { cap: 0, display: undefined };
+  return { cap: THINKING_ON_CAP, display: thinking.display };
+}
+
+/** Start an agent process. The subprocess exists when this returns. */
+export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
+  // The live prompt queue's bound. Turns the agent has not consumed wait here; a controller that
+  // sends past it is refused `prompt-queue-full` and the session is untouched.
+  const input = new AsyncQueue<SDKUserMessage>(MAX_PENDING_PROMPTS);
+
+  const running: Query = query({ prompt: input, options: composeOptions(request) });
   let closed = false;
 
   return {
@@ -679,14 +762,23 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
     },
     async setThinking(thinking: ThinkingConfig): Promise<void> {
       if (closed) return;
-      // The SDK's LIVE setter is the token cap, and on current models it is on/off: 0 = disabled,
-      // null = the default (adaptive). A fixed budget is REJECTED by Opus 5 / Sonnet 5 / Fable, so an
-      // `enabled` ask maps to adaptive rather than to a 400. The DISPLAY rides along: `summarized` when
-      // asked, because the models' default (`omitted`) streams thinking blocks with empty text — the
-      // "no thinking" an operator sees while paying for it.
-      const cap = thinking.type === 'disabled' ? 0 : null;
-      const display = thinking.type === 'disabled' ? undefined : thinking.display;
-      await running.setMaxThinkingTokens(cap, display);
+      const control = thinkingControl(thinking);
+      await running.setMaxThinkingTokens(control.cap, control.display);
+    },
+    async setEffort(level: EffortLevel): Promise<void> {
+      if (closed) return;
+      // The flag-settings call carries permission rules and a mode among its keys. This literal has
+      // the one key, and the permission pin allows this call only in this shape, in this file.
+      await running.applyFlagSettings({ effortLevel: level });
+    },
+    async pluginsApplied(): Promise<boolean | null> {
+      // The agent's own answer to its initialize request, cached by the SDK. Never a throw: a
+      // process that did not initialize has no answer to give, and null says exactly that.
+      try {
+        return (await running.initializationResult()).plugins_applied ?? null;
+      } catch {
+        return null;
+      }
     },
     close(): void {
       if (closed) return;
@@ -694,5 +786,133 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
       input.end();
       running.close();
     },
+  };
+}
+
+/** What reading the agent's catalog produced: the agent's versions and models, or why there are none. */
+export type AgentCatalog =
+  { readonly ok: true; readonly agent: HostAgent } | { readonly ok: false; readonly detail: string };
+
+export interface AgentCatalogOptions {
+  /**
+   * The environment the agent starts in. Pass the one sessions get (`composeSpawnEnv` over the
+   * host's own), so the read signs in as a session does and is offered the models a session is.
+   */
+  readonly env: Record<string, string>;
+  /** Absolute. Where the agent starts. Nothing there is read: no settings tier is loaded. */
+  readonly cwd: string;
+  /** How long the agent has to answer before the read gives up and closes it. */
+  readonly timeoutMs: number;
+}
+
+/** The part of a started query the catalog read uses. `query()` returns one; a test supplies its own. */
+export interface CatalogQuery {
+  initializationResult(): Promise<{ readonly models?: readonly ModelInfo[] }>;
+  close(): void;
+}
+
+/** How the catalog read starts its query: `query` itself, unless a test stands in. */
+export type StartCatalogQuery = (params: {
+  readonly prompt: AsyncIterable<SDKUserMessage>;
+  readonly options: Options;
+}) => CatalogQuery;
+
+/**
+ * Read the agent's versions and model catalog without calling a model.
+ *
+ * The agent starts with a prompt stream that never yields, so no turn begins and no model is called:
+ * its answer to the SDK's initialize request, which lists the models, is all that is read. No
+ * settings tier and no MCP server is loaded, and the session is not persisted, so the read leaves no
+ * transcript. The versions are the installed SDK's, from its manifest (`agentSdkFacts`).
+ *
+ * The process is closed exactly once on every path: an answer, a failure and the timeout. Never
+ * throws; a failure is a reading that says what failed.
+ */
+export function readAgentCatalog(options: AgentCatalogOptions): Promise<AgentCatalog> {
+  return readAgentCatalogWith(query, options);
+}
+
+/** `readAgentCatalog` over a supplied starter. Exported for its tests; not on the public surface. */
+export async function readAgentCatalogWith(
+  start: StartCatalogQuery,
+  options: AgentCatalogOptions,
+): Promise<AgentCatalog> {
+  const facts = agentSdkFacts();
+  if (facts === null) return { ok: false, detail: "the installed agent SDK's manifest could not be read" };
+  if (!isAbsolutePath(options.cwd)) {
+    return {
+      ok: false,
+      detail: `the catalog read needs an absolute directory to start in, not '${options.cwd}'`,
+    };
+  }
+
+  const input = new AsyncQueue<SDKUserMessage>(1);
+  let running: CatalogQuery;
+  try {
+    running = start({
+      prompt: input,
+      // `persistSession` is off here and nowhere else: this is not a session, it has no store, and
+      // a transcript of a read that sent nothing would be a file about nothing.
+      options: {
+        cwd: options.cwd,
+        env: options.env,
+        settingSources: [],
+        strictMcpConfig: true,
+        persistSession: false,
+      },
+    });
+  } catch (error) {
+    input.end();
+    return { ok: false, detail: `the agent did not start: ${describeFailure(error)}` };
+  }
+
+  const answered = (async (): Promise<AgentCatalog> => {
+    try {
+      const result = await running.initializationResult();
+      return {
+        ok: true,
+        agent: {
+          claudeCodeVersion: facts.claudeCodeVersion,
+          sdkVersion: facts.sdkVersion,
+          models: (result.models ?? []).map(hostModelOf),
+        },
+      };
+    } catch (error) {
+      return { ok: false, detail: `the agent's answer to initialize failed: ${describeFailure(error)}` };
+    }
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<AgentCatalog>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ ok: false, detail: `the agent did not answer within ${options.timeoutMs}ms` }),
+      options.timeoutMs,
+    );
+  });
+
+  try {
+    return await Promise.race([answered, timedOut]);
+  } finally {
+    clearTimeout(timer);
+    input.end();
+    try {
+      running.close();
+    } catch {
+      // The reading is already decided; a close that throws has nothing to add to it.
+    }
+  }
+}
+
+/** One model as the wire carries it: every member the agent may leave out is null, never absent. */
+function hostModelOf(model: ModelInfo): HostModel {
+  return {
+    value: model.value,
+    resolvedModel: model.resolvedModel ?? null,
+    displayName: model.displayName,
+    // Declared required and read guarded: the runtime wins over the types, and null says "not given".
+    description: model.description ?? null,
+    supportedEffortLevels: [...(model.supportedEffortLevels ?? [])],
+    supportsFastMode: model.supportsFastMode ?? null,
+    supportsAutoMode: model.supportsAutoMode ?? null,
+    supportsAdaptiveThinking: model.supportsAdaptiveThinking ?? null,
   };
 }

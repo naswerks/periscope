@@ -39,7 +39,9 @@ import type { BackoffOptions } from '../control/backoff.js';
 import type { LinkHandlers } from '../control/link.js';
 import { ControllerLink } from '../control/link.js';
 import type { LinkTransition } from '../control/link-state.js';
+import { hostAgentProblem } from '../control/codec.js';
 import type {
+  HostAgent,
   HostConfiguration,
   HostConfigure,
   HostConfigureEntry,
@@ -96,12 +98,12 @@ import type { SessionTransition, TransitionWhere } from '../state/model.js';
 import { SessionObserver } from '../state/observer.js';
 import type { WorkspaceEntry, WorkspaceInventory, WorkspaceProvider } from '../workspace/provider.js';
 import { keyPreview, unusableKeyProblem } from '../workspace/git-worktree.js';
-import type { McpServerConfig } from './agent-process.js';
+import type { AgentCatalog, McpServerConfig } from './agent-process.js';
 import type { BulkPostReceipt } from './bulk-post.js';
 import { bulkOriginFor, postBulk } from './bulk-post.js';
 import { readWhere } from './git-facts.js';
 import { normalizePath } from '../core/paths.js';
-import { mergeHooks, observationHooks } from './hooks.js';
+import { mergeHooks, modelSwitchHooks, observationHooks } from './hooks.js';
 import { createToolServer } from './mcp-server.js';
 import { listTranscripts, tailTranscript } from './claude-transcripts.js';
 import { listRepositoryDirectory, readRepositoryFile } from './repository-read.js';
@@ -293,14 +295,16 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
         }),
   });
 
-  // Observation first, the gate second. The order is a convention rather than a race guard (see
-  // permissionHooks' own note), but it is the one both files state, so it is written once here.
+  // Observation first, the gate second, the model-switch answer third. The order is a convention
+  // rather than a race guard (see permissionHooks' own note), but it is the one both files state, so
+  // it is written once here.
   const hooks = mergeHooks(
     observationHooks({
       observer,
       ...(options.onHookFailure === undefined ? {} : { onHandlerFailure: options.onHookFailure }),
     }),
     gate,
+    modelSwitchHooks(),
   );
 
   const created = options.registry.create({ ...(options.request ?? {}), cwd: options.cwd, hooks });
@@ -314,6 +318,7 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     session,
     observer,
     sink: options.sink,
+    clock,
     ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
   });
 
@@ -522,8 +527,9 @@ export interface PeriscopeHostOptions {
   readonly configuration?: HostConfiguration;
   /**
    * The plugin directories every session on this host loads, checked at each open: a directory
-   * that is gone refuses the open by name rather than letting the agent SDK skip it silently. The
-   * controller's own `session_new.request.plugins` are added after these; see `mergePlugins`.
+   * that is gone refuses the open by name, before a process exists, rather than leaving the agent to
+   * report it in a running session's `plugin_errors`. The controller's own
+   * `session_new.request.plugins` are added after these; see `mergePlugins`.
    */
   readonly pluginDirs?: readonly string[];
   /** The wire-settable keys the environment sets, reported on a configure answer. */
@@ -532,6 +538,13 @@ export interface PeriscopeHostOptions {
   readonly pendingRestart?: readonly string[];
   /** How a `host_configure` ask is applied. Omitted, every such ask refuses `config-write-failed`. */
   readonly reconfigure?: HostReconfigurer;
+  /**
+   * Reads the agent's versions and model catalog for the hello; `readAgentCatalog` is the real one.
+   * With it, `start()` reads the catalog before it dials, so the first hello carries it. A read that
+   * fails, or a catalog past the hello's bounds, rides as `agent: null` and is reported by name;
+   * never a failed start. Omitted, the hello carries no `agent` and the link starts at once.
+   */
+  readonly agentCatalog?: () => Promise<AgentCatalog>;
   readonly registry?: SessionRegistry;
   /** How the link is built. Defaults to the real `ControllerLink`. See `HostLink`. */
   readonly link?: (handlers: LinkHandlers) => HostLink;
@@ -569,7 +582,12 @@ export type HostEvent =
    * mean the one message that answers the operator's question is raised and never received. The
    * subscription in `#compose` is the audience; a pin in `host.test.ts` holds every kind to it.
    */
-  | { readonly kind: 'degrade'; readonly sessionKey: string; readonly degrade: SessionDegrade };
+  | { readonly kind: 'degrade'; readonly sessionKey: string; readonly degrade: SessionDegrade }
+  /**
+   * What the catalog read at start produced: the catalog the hello now carries, or null and what
+   * went wrong. Once per start, on a host composed with `agentCatalog`.
+   */
+  | { readonly kind: 'agent-catalog'; readonly agent: HostAgent | null; readonly detail: string | null };
 
 /**
  * How many turns may wait for one still-opening session before the rest are refused.
@@ -680,6 +698,15 @@ export class PeriscopeHost {
   #pluginDirs: readonly string[];
   #overriddenByEnvironment: readonly string[];
   #pendingRestart: readonly string[];
+  /**
+   * The agent's catalog as the last read left it: undefined until a read settles (for good, on a
+   * host composed without `agentCatalog`), null when the read gave nothing the hello can carry. Kept
+   * apart from `#configuration` because a reconfigure rebuilds that from the file, which has no
+   * catalog in it.
+   */
+  #agent: HostAgent | null | undefined;
+  /** The start whose catalog read is in flight; `stop()` clears it, so that read starts nothing. */
+  #pendingStart: object | null = null;
 
   constructor(options: PeriscopeHostOptions) {
     this.#options = options;
@@ -757,12 +784,31 @@ export class PeriscopeHost {
     return ok(composed);
   }
 
+  /**
+   * Dial the controller. With `agentCatalog`, the catalog is read first and the link starts when the
+   * read settles, because the hello is where a controller reads the configuration: a catalog that
+   * arrived after the first hello would wait for the next dial. A `stop()` before the read settles
+   * means the link never starts.
+   */
   start(): void {
-    this.#link.start();
+    const readCatalog = this.#options.agentCatalog;
+    if (readCatalog === undefined) {
+      this.#link.start();
+      return;
+    }
+    const pending = {};
+    this.#pendingStart = pending;
+    void settledCatalog(readCatalog).then((catalog) => {
+      if (this.#pendingStart !== pending) return;
+      this.#pendingStart = null;
+      this.#stampAgent(catalog);
+      this.#link.start();
+    });
   }
 
   /** Ends every session first, then the link — so the end transitions still have somewhere to go. */
   stop(detail = 'host shutting down'): void {
+    this.#pendingStart = null;
     if (this.#heldFramesTimer !== null) {
       clearTimeout(this.#heldFramesTimer);
       this.#heldFramesTimer = null;
@@ -809,16 +855,19 @@ export class PeriscopeHost {
         return;
       }
       case 'session_configure': {
-        // Protocol v6: the SDK's live setters. A session still opening has no query to configure yet; the
-        // controller is told so by name rather than left to assume the change landed.
+        // Protocol v6: the SDK's live setters. For a live session both failures answer on its own
+        // state lane: a value this host refuses (`frame-malformed`) and a setter the agent refuses
+        // (`session-configure-failed`). A session still opening has no query to configure yet, and
+        // that refusal, like any other for a handle this host does not hold, is reported here only.
         const composed = this.session(frame.sessionId);
         if (!composed.ok) return this.#refuse(frame.sessionId, composed.refusal);
         const change = readSessionConfigure(payload);
-        if (!change.ok) return this.#refuse(frame.sessionId, change.refusal);
+        if (!change.ok) return this.#refuseConfigure(frame.sessionId, composed.value, change.refusal);
         void composed.value.session.configure(change.value).catch((error: unknown) => {
-          this.#refuse(
+          this.#refuseConfigure(
             frame.sessionId,
-            refusal('session-unknown', `the configure failed: ${describe(error)}`),
+            composed.value,
+            refusal('session-configure-failed', describe(error)),
           );
         });
         return;
@@ -1147,8 +1196,8 @@ export class PeriscopeHost {
     if (!servers.ok) return giveBack(servers.refusal);
 
     // The host's plugin directories, checked now: one that vanished since it was configured refuses
-    // this open by name, because the agent SDK skips a missing plugin path without a word and the
-    // session would run with nothing to invoke.
+    // this open by name. The agent would report it in its init message's `plugin_errors`, but only
+    // once the session was running, with nothing to invoke.
     const pluginProblem = pluginDirsProblem(this.#pluginDirs);
     if (pluginProblem !== null) {
       return giveBack(
@@ -1715,7 +1764,8 @@ export class PeriscopeHost {
     this.#transcriptsRoot = rebuilt.transcriptsRoot;
     this.#bulk = rebuilt.bulk;
     this.#linkCapabilities = rebuilt.linkCapabilities;
-    this.#configuration = rebuilt.configuration;
+    // Rebuilt from the file, which holds no catalog: the one read at start is carried over.
+    this.#configuration = this.#withAgent(rebuilt.configuration);
     this.#pluginDirs = rebuilt.pluginDirs;
     this.#overriddenByEnvironment = rebuilt.overriddenByEnvironment;
     // The control-plane addresses are never applied to the live link: the host keeps dialling what it
@@ -1723,6 +1773,23 @@ export class PeriscopeHost {
     this.#pendingRestart = rebuilt.pendingRestart;
     this.#link.announce?.(this.#linkCapabilities, this.#configuration, this.#pendingRestart);
     return answer();
+  }
+
+  /**
+   * Put a catalog read's outcome into the configuration and the next hello, and report it. A catalog
+   * the codec would refuse, or one past `MAX_AGENT_CATALOG_BYTES`, rides as null: a hello the link
+   * cannot encode is never sent at all, which would cost the controller the whole configuration.
+   */
+  #stampAgent(catalog: AgentCatalog): void {
+    const problem = catalog.ok ? hostAgentProblem(catalog.agent) : catalog.detail;
+    this.#agent = catalog.ok && problem === null ? catalog.agent : null;
+    this.#configuration = this.#withAgent(this.#configuration);
+    this.#link.announce?.(this.#linkCapabilities, this.#configuration, this.#pendingRestart);
+    this.#report({ kind: 'agent-catalog', agent: this.#agent, detail: problem });
+  }
+
+  #withAgent(configuration: HostConfiguration): HostConfiguration {
+    return this.#agent === undefined ? configuration : { ...configuration, agent: this.#agent };
   }
 
   async #deliver(
@@ -1893,6 +1960,19 @@ export class PeriscopeHost {
   }
 
   /**
+   * A configure the session could not apply, reported here and put on the wire.
+   *
+   * Recorded on the session's own machine as a same-state transition with cause kind `refusal`, the
+   * lane the gate's outages take, so the controller that asked reads the answer in the session's
+   * trace. A refused value changed nothing; a failed setter's detail names its member, and the
+   * members before it in the frame were applied.
+   */
+  #refuseConfigure(sessionKey: string, composed: ComposedSession, refused: Refusal): void {
+    this.#refuse(sessionKey, refused);
+    composed.observer.refused({ kind: 'refusal', event: refused.reason, detail: refused.detail });
+  }
+
+  /**
    * A refused open goes on the wire. Reported locally only, the controller would keep a session
    * record nobody could talk to and the operator would watch a session that "did nothing" while
    * the refusal sat in this host's log. The session never had a machine, so this is the one
@@ -1939,6 +2019,15 @@ export class PeriscopeHost {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** An embedder's catalog read, settled: a read that throws or rejects is a failed reading, never a lost start. */
+async function settledCatalog(read: () => Promise<AgentCatalog>): Promise<AgentCatalog> {
+  try {
+    return await read();
+  } catch (error) {
+    return { ok: false, detail: `the catalog read failed: ${describe(error)}` };
+  }
 }
 
 /** The repository asks on a host composed without a repository root: nothing to read under. */
