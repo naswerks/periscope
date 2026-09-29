@@ -40,6 +40,11 @@ frames, and its own frames, which carry none, still decode here.
   and later reject it with a 400: a session that took it would open and then fail its first turn. The
   models that still accept a fixed budget lose that knob here. The `session_new.full` wire vector now
   carries `{type:'adaptive', display:'summarized'}`.
+- A `session_configure` that turns thinking on sends the SDK a positive thinking cap
+  (`THINKING_ON_CAP`) instead of clearing the cap. On Claude Code 2.1.284 a cleared cap left a
+  session started with thinking disabled without its thinking prose on Opus 5.5, Fable 5.1 and
+  Sonnet 5.5, and a positive cap brought it back. On those models any positive cap means adaptive;
+  a model that still takes a fixed budget reads it as one.
 - A `session_configure` that fails answers on the wire, as a same-state transition on the session's
   state lane with cause kind `refusal`. `session-configure-failed`, a new `RefusalReason`, is sent when
   the agent refuses a live setter, and its detail names the member and carries the agent's text.
@@ -52,10 +57,11 @@ frames, and its own frames, which carry none, still decode here.
 - Plugins reach the agent over stdin (`pluginDelivery: 'initialize'`) rather than as one
   `--plugin-dir` flag each, so a host with several plugin directories stays clear of the Windows
   command-line limit. A custom `spawn` that loads plugins must run a CLI of 2.1.261 or later.
-  `HostedSessionFacts.pluginsApplied` carries the agent's own answer to whether every plugin loaded.
-  The agent now names a plugin directory that did not load, with its path, in its init message's
-  `plugin_errors`, which reaches the controller forwarded. The host still refuses a missing
-  configured directory itself, before a process exists.
+  `HostedSessionFacts.pluginsApplied` carries the agent's own answer to whether every plugin loaded;
+  Claude Code 2.1.284 answers true with a missing directory in the list. The agent names a plugin
+  directory that did not load, with its path, in its init message's `plugin_errors`, which reaches
+  the controller forwarded. The host still refuses a missing configured directory itself, before a
+  process exists.
 - `permissionPrompts` joins the closed lanes: a controller cannot set it, so its `none`, which denies
   every call that would have prompted, cannot answer ahead of the gate. `updateSettings`, a new call
   that writes settings files mid-session, is among the calls the process handle keeps unreachable.

@@ -4,16 +4,16 @@
  * Each probe answers one question the package's handling rests on: a model switch with nobody at a
  * keyboard, thinking turned off on the models that think by default, the bypass mode and its flag,
  * the per-turn init, the gate under plan mode, the model catalog, a mid-session effort, plugins
- * delivered over stdin, and the four wired events measured not to fire. Each prints what it saw and
- * asserts what the package relies on; the rest is behaviour the docs record.
+ * delivered over stdin, the four wired events measured not to fire, and the Todo tools on a current
+ * model. Each prints what it saw and asserts what the package relies on; the rest is behaviour the
+ * docs record.
  *
  * They skip loudly. Without `PERISCOPE_LIVE=1` each is skipped with the reason in its name, and the
  * property is NOT exercised: the suite's `skipped` count is the standing reminder.
  *
  * Cost is kept to plumbing: one-line turns, and the `haiku` alias wherever the answer does not
- * depend on the model. The thinking probe runs the large models because its answer differs per
- * model, and it runs a second leg only when the first leaves the question open. The catalog read
- * sends no prompt at all.
+ * depend on the model. The thinking probe runs the large models, at `max` effort, because its
+ * answer differs per model. The catalog read sends no prompt at all.
  *
  * Every workspace is an OS temporary directory, outside any repository, and is removed afterwards:
  * the agent walks up from its working directory for project settings, so a workspace inside a
@@ -82,8 +82,26 @@ function workspace(label: string): string {
   return dir;
 }
 
-after(() => {
-  for (const dir of made) rmSync(dir, { recursive: true, force: true });
+// Every leg waits for its agent's stream to end before the next begins, so the directories are free
+// by now. A removal Windows still refuses is retried for a while, then named rather than failing a
+// run whose probes passed: cleanup is not the property under test.
+after(async () => {
+  for (const dir of made) {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+        break;
+      } catch (error) {
+        if (attempt === 40) {
+          console.log(
+            `[live] left behind, still refused after ${attempt} tries: ${dir} (${describeError(error)})`,
+          );
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+  }
 });
 
 interface Seen {
@@ -145,8 +163,9 @@ function request(
 }
 
 /**
- * A handle over `query()` with options this package would not compose, for the legs that measure
- * what the package declines: a start without the bypass flag, a thinking cap the handle never sets.
+ * A handle over `query()` with options or a thinking cap this package would not send, for the legs
+ * that measure what the package declines: a start without the bypass flag, and turning thinking on
+ * with a null cap, the cleared limit the package no longer sends.
  */
 function rawAgent(options: Options): { readonly agent: AgentProcess; readonly running: Query } {
   const input = new AsyncQueue<SDKUserMessage>(16);
@@ -164,9 +183,8 @@ function rawAgent(options: Options): { readonly agent: AgentProcess; readonly ru
     interrupt: () => running.interrupt().then(() => undefined),
     setModel: (model) => running.setModel(model ?? undefined),
     setPermissionMode: (mode: PermissionMode) => running.setPermissionMode(mode),
-    // The positive cap this package never sends: the other way back from a disabled start.
     setThinking: (thinking: ThinkingConfig) =>
-      running.setMaxThinkingTokens(thinking.type === 'disabled' ? 0 : 8_000, 'summarized'),
+      running.setMaxThinkingTokens(thinking.type === 'disabled' ? 0 : null, 'summarized'),
     setEffort: (level: EffortLevel) => running.applyFlagSettings({ effortLevel: level }),
     pluginsApplied: async () => (await running.initializationResult()).plugins_applied ?? null,
     close: () => {
@@ -183,8 +201,14 @@ interface Driven {
   readonly messages: SDKMessage[];
   /** Queue one turn and wait for its result; null at the timeout or when the stream ended first. */
   turn(text: string): Promise<SDKMessage | null>;
-  close(): void;
+  /**
+   * Close the agent and wait, bounded, for its stream to end. On Windows a running process holds its
+   * working directory, so a leg that did not wait would leave one the cleanup cannot remove.
+   */
+  close(): Promise<void>;
 }
+
+const CLOSE_WAIT_MS = 15_000;
 
 /**
  * Read the agent's stream in the background, keeping every message and handing each to `observe` as
@@ -194,6 +218,8 @@ function drive(agent: AgentProcess, stderr: string[], observe?: (message: SDKMes
   const messages: SDKMessage[] = [];
   let waiter: ((message: SDKMessage | null) => void) | null = null;
   let ended = false;
+  let finished: () => void = () => undefined;
+  const done = new Promise<void>((resolve) => (finished = resolve));
   const settle = (message: SDKMessage | null): void => {
     const waiting = waiter;
     waiter = null;
@@ -211,6 +237,7 @@ function drive(agent: AgentProcess, stderr: string[], observe?: (message: SDKMes
     } finally {
       ended = true;
       settle(null);
+      finished();
     }
   })();
   return {
@@ -225,7 +252,15 @@ function drive(agent: AgentProcess, stderr: string[], observe?: (message: SDKMes
         };
         agent.prompt(text);
       }),
-    close: () => agent.close(),
+    close: async () => {
+      agent.close();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        done,
+        new Promise<void>((resolve) => (timer = setTimeout(resolve, CLOSE_WAIT_MS))),
+      ]);
+      clearTimeout(timer);
+    },
   };
 }
 
@@ -377,7 +412,7 @@ test(
           );
         }
       } finally {
-        driven.close();
+        await driven.close();
       }
     }
   },
@@ -387,88 +422,122 @@ test(
 // (b) Thinking off, and back on
 // ---------------------------------------------------------------------------
 
-const REASONING =
-  'Think it through before you answer: a bat and a ball cost 1.10 dollars in total, and the bat costs ' +
-  '1.00 dollar more than the ball. What does the ball cost? Reply with only the amount.';
+// Two different questions: the second turn must be one the session has not already answered, or
+// a model that answers from its own history does not think whatever the setting says. Each needs a
+// few steps and asks for the bare answer, so the reasoning has to happen somewhere other than the
+// reply, and every leg runs at `max` effort, where adaptive thinking is least inclined to skip.
+const FIRST =
+  'What is the smallest positive integer that leaves a remainder of 1 when divided by 2, 3, 4, 5 and ' +
+  '6, and is divisible by 7? Reply with only the number.';
+const SECOND =
+  'How many positive integers below 1000 are divisible by 3 or by 5, but not by 15? Reply with only ' +
+  'the number.';
+
+interface ThinkingLeg {
+  readonly first: SDKMessage | null;
+  readonly firstThinking: { blocks: number; chars: number };
+  readonly changed: string;
+  readonly second: SDKMessage | null;
+  readonly secondThinking: { blocks: number; chars: number };
+  readonly model: string;
+}
+
+/** Start one agent, ask FIRST, apply `change` (when given), ask SECOND, and count the thinking each time. */
+async function thinkingLeg(
+  agent: AgentProcess,
+  stderr: string[],
+  change: ((agent: AgentProcess) => Promise<void>) | null,
+): Promise<ThinkingLeg> {
+  const driven = drive(agent, stderr);
+  try {
+    const first = await driven.turn(FIRST);
+    const firstThinking = thinkingSince(driven.messages, 0);
+    const model = readInitFacts(inits(driven.messages)[0] ?? ({} as SDKMessage))?.model ?? '?';
+    const changed = change === null ? 'no change' : await settled(change(agent));
+    const mark = driven.messages.length;
+    const second = await driven.turn(SECOND);
+    return {
+      first,
+      firstThinking,
+      changed,
+      second,
+      secondThinking: thinkingSince(driven.messages, mark),
+      model,
+    };
+  } finally {
+    await driven.close();
+  }
+}
+
+const legRow = (leg: ThinkingLeg): string =>
+  `first ${resultSummary(leg.first)} thinking ${JSON.stringify(leg.firstThinking)}; ${leg.changed}; ` +
+  `second ${isError(leg.second) ? 'ERROR' : 'ok'} thinking ${JSON.stringify(leg.secondThinking)}`;
 
 test(
   'live: thinking disabled on the models that think by default, and the way back from a disabled start',
   { skip, timeout: 1_800_000 },
   async () => {
     const rows: string[] = [];
-    let anyThinking = false;
+    let anyControlThought = false;
+    const wayBackFailures: string[] = [];
 
     for (const model of ['opus', 'fable', 'sonnet']) {
       const cwd = workspace(`thinking-${model}`);
       const stderr: string[] = [];
 
-      // Leg 1: a disabled start, then this package's way back (`setThinking` adaptive: a null cap).
-      const agent = startAgentProcess(request(cwd, stderr, { model, thinking: { type: 'disabled' } }));
-      const driven = drive(agent, stderr);
-      let nullWayBack: { blocks: number; chars: number };
-      try {
-        const off = await driven.turn(REASONING);
-        const offThinking = thinkingSince(driven.messages, 0);
-        const resolved = readInitFacts(inits(driven.messages)[0] ?? ({} as SDKMessage))?.model ?? '?';
-        const reenabled = await settled(agent.setThinking({ type: 'adaptive', display: 'summarized' }));
-        const mark = driven.messages.length;
-        const back = await driven.turn(REASONING);
-        nullWayBack = thinkingSince(driven.messages, mark);
-        rows.push(
-          `${model} (${resolved}): disabled start ${resultSummary(off)} thinking ${JSON.stringify(offThinking)}; ` +
-            `null cap ${reenabled}, next turn ${isError(back) ? 'ERROR' : 'ok'} thinking ${JSON.stringify(nullWayBack)}`,
-        );
-        anyThinking ||= nullWayBack.chars > 0;
-      } finally {
-        driven.close();
-      }
+      // Control: the same two turns on a session started with thinking on. What the ways back below
+      // are measured against, turn for turn. A block counts, with or without its prose.
+      const control = await thinkingLeg(
+        startAgentProcess(
+          request(cwd, stderr, {
+            model,
+            effort: 'max',
+            thinking: { type: 'adaptive', display: 'summarized' },
+          }),
+        ),
+        stderr,
+        null,
+      );
+      rows.push(`${model} (${control.model}) control, adaptive summarized start: ${legRow(control)}`);
+      const controlProse = control.secondThinking.chars > 0;
+      anyControlThought ||= control.secondThinking.blocks > 0 || control.firstThinking.blocks > 0;
 
-      // Leg 2, only when leg 1 left the question open: the positive cap this package never sends.
-      let capWayBack = { blocks: 0, chars: 0 };
-      if (nullWayBack.chars === 0) {
-        const raw = rawAgent({
-          ...composeOptions(request(cwd, stderr, { model, thinking: { type: 'disabled' } })),
-        });
-        const rawDriven = drive(raw.agent, stderr);
-        try {
-          await rawDriven.turn(REASONING);
-          const capped = await settled(raw.agent.setThinking({ type: 'adaptive' }));
-          const mark = rawDriven.messages.length;
-          const back = await rawDriven.turn(REASONING);
-          capWayBack = thinkingSince(rawDriven.messages, mark);
-          rows.push(
-            `${model}: positive cap ${capped}, next turn ${isError(back) ? 'ERROR' : 'ok'} thinking ${JSON.stringify(capWayBack)}`,
-          );
-          anyThinking ||= capWayBack.chars > 0;
-        } finally {
-          rawDriven.close();
-        }
-      }
+      // A disabled start, then this package's way back: `setThinking` adaptive with its display,
+      // which sends a positive cap (`THINKING_ON_CAP`).
+      const wayBack = await thinkingLeg(
+        startAgentProcess(request(cwd, stderr, { model, effort: 'max', thinking: { type: 'disabled' } })),
+        stderr,
+        (agent) => agent.setThinking({ type: 'adaptive', display: 'summarized' }),
+      );
+      rows.push(`${model} disabled start, then setThinking: ${legRow(wayBack)}`);
 
-      // Control, only when neither way back thought: does this prompt make this model think at all?
-      if (nullWayBack.chars === 0 && capWayBack.chars === 0) {
-        const control = startAgentProcess(
-          request(cwd, stderr, { model, thinking: { type: 'adaptive', display: 'summarized' } }),
-        );
-        const controlDriven = drive(control, stderr);
-        try {
-          const result = await controlDriven.turn(REASONING);
-          const seen = thinkingSince(controlDriven.messages, 0);
-          rows.push(
-            `${model}: control, adaptive summarized start: ${isError(result) ? 'ERROR' : 'ok'} thinking ${JSON.stringify(seen)}`,
-          );
-          anyThinking ||= seen.chars > 0;
-        } finally {
-          controlDriven.close();
-        }
-      }
+      // The cleared limit the package no longer sends, for the record: the reason it sends a cap.
+      const raw = rawAgent(
+        composeOptions(request(cwd, stderr, { model, effort: 'max', thinking: { type: 'disabled' } })),
+      );
+      const nullCap = await thinkingLeg(raw.agent, stderr, (agent) =>
+        agent.setThinking({ type: 'adaptive' }),
+      );
+      rows.push(`${model} disabled start, then a null cap: ${legRow(nullCap)}`);
       if (stderr.length > 0) rows.push(`${model}: stderr ${JSON.stringify(stderr.slice(-5))}`);
+
+      // What the package relies on: where a session started with thinking on streams prose, the way
+      // back from a disabled start streams it too.
+      if (controlProse) wayBackFailures.push(...(wayBack.secondThinking.chars > 0 ? [] : [model]));
     }
 
     for (const row of rows) console.log(`[live/thinking] ${row}`);
-    // Guards the detector, not a model: if no leg on any model streamed thinking text, the counts
-    // above could all be a reader that sees nothing.
-    assert.ok(anyThinking, 'no leg on any model streamed thinking text; the counts above prove nothing');
+    // Guards the detector, not a model: if no control on any model produced a thinking block, every
+    // count above could be a reader that sees nothing.
+    assert.ok(
+      anyControlThought,
+      'no control on any model produced a thinking block; the counts above prove nothing',
+    );
+    assert.deepEqual(
+      wayBackFailures,
+      [],
+      'setThinking did not bring thinking prose back after a disabled start',
+    );
   },
 );
 
@@ -503,7 +572,7 @@ test(
         assert.ok(!isError(result), 'a bypass start with the flag failed');
         assert.equal(modeOf(seen), 'bypassPermissions');
       } finally {
-        driven.close();
+        await driven.close();
       }
     }
 
@@ -532,7 +601,7 @@ test(
         );
         console.log('[live/bypass]   stderr               :', JSON.stringify(stderr.slice(-5)));
       } finally {
-        driven.close();
+        await driven.close();
       }
     }
 
@@ -567,7 +636,7 @@ test(
         assert.ok(!isError(first), 'a default start failed');
         assert.equal(before, 'default');
       } finally {
-        driven.close();
+        await driven.close();
       }
     }
   },
@@ -612,7 +681,7 @@ test(
       // What the package relies on, whatever the count: readiness is reported once.
       assert.equal(readies, 1, 'a later init moved the session back to ready');
     } finally {
-      driven.close();
+      await driven.close();
     }
   },
 );
@@ -661,7 +730,7 @@ test(
         assert.deepEqual(ran, [], `${mode}: a call the hook refused ran anyway`);
         assert.equal(said.includes(secret), false, `${mode}: the file's contents got past the refusal`);
       } finally {
-        driven.close();
+        await driven.close();
       }
     }
   },
@@ -784,7 +853,7 @@ test('live: setEffort moves the effort level the next turn runs at', { skip, tim
     assert.equal(set, 'resolved');
     assert.equal(after, 'high', 'setEffort did not move the level the next turn ran at');
   } finally {
-    driven.close();
+    await driven.close();
   }
 });
 
@@ -858,7 +927,7 @@ test(
           );
         }
       } finally {
-        driven.close();
+        await driven.close();
       }
     }
   },
@@ -908,7 +977,41 @@ test(
       }
       assert.equal(stateChanged, 0, 'session_state_changed arrived; the coverage table says it does not');
     } finally {
-      driven.close();
+      await driven.close();
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// (j) The Todo tools on a current model
+// ---------------------------------------------------------------------------
+
+test(
+  'live: the Todo and Task tools on a current model, without and with CLAUDE_CODE_ENABLE_TODO_TOOLS',
+  { skip, timeout: 600_000 },
+  async () => {
+    const todo = (tools: readonly string[]): string[] => tools.filter((name) => /todo|^task/i.test(name));
+    // Whatever the enclosing environment carries, the first leg runs without the variable.
+    const { CLAUDE_CODE_ENABLE_TODO_TOOLS: _inherited, ...base } = composeSpawnEnv(process.env);
+    for (const leg of ['unset', 'set'] as const) {
+      const cwd = workspace('todo');
+      const stderr: string[] = [];
+      const env = leg === 'set' ? { ...base, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' } : base;
+      const agent = startAgentProcess(request(cwd, stderr, { model: 'sonnet', env }));
+      const driven = drive(agent, stderr);
+      try {
+        const result = await driven.turn(ONE_WORD);
+        const init = inits(driven.messages)[0];
+        const facts = init === undefined ? null : readInitFacts(init);
+        const tools = facts?.tools ?? [];
+        console.log(`[live/todo:${leg}] model ${facts?.model ?? '?'}, ${tools.length} tools`);
+        console.log(`[live/todo:${leg}] todo and task tools: ${JSON.stringify(todo(tools))}`);
+        console.log(`[live/todo:${leg}] every tool: ${JSON.stringify(tools)}`);
+        // Control: the agent reported a tool list at all, so an empty match reads as absent, not unread.
+        assert.ok(tools.length > 0, `${leg}: the init carried no tool list; ${resultSummary(result)}`);
+      } finally {
+        await driven.close();
+      }
     }
   },
 );

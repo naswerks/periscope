@@ -19,9 +19,11 @@ import {
   PERSISTENCE_OPTION_KEYS,
   SHADOWING_LANES,
   STREAMING_OPTION_KEYS,
+  THINKING_ON_CAP,
   TOOL_SURFACE_OPTION_KEYS,
   composeOptions,
   messagesOf,
+  thinkingControl,
 } from './agent-process.js';
 
 const message = (id: string): SDKMessage => ({ type: 'user', session_id: id }) as unknown as SDKMessage;
@@ -436,4 +438,16 @@ test('regression: allowDangerouslySkipPermissions rides exactly with a bypass re
     false,
     'the flag rode with no mode',
   );
+});
+
+// A cleared limit is not a way back: after a disabled start the current models came back to
+// thinking prose on a positive cap and never on null, so turning thinking on sends a positive cap.
+test('regression: turning thinking on sends a positive cap, never null; turning it off sends 0', () => {
+  assert.ok(THINKING_ON_CAP > 0);
+  assert.deepEqual(thinkingControl({ type: 'adaptive', display: 'summarized' }), {
+    cap: THINKING_ON_CAP,
+    display: 'summarized',
+  });
+  assert.deepEqual(thinkingControl({ type: 'adaptive' }), { cap: THINKING_ON_CAP, display: undefined });
+  assert.deepEqual(thinkingControl({ type: 'disabled' }), { cap: 0, display: undefined });
 });

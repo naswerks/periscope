@@ -518,9 +518,11 @@ export interface AgentProcess {
   setThinking(thinking: ThinkingConfig): Promise<void>;
   setEffort(level: EffortLevel): Promise<void>;
   /**
-   * Whether every plugin the process was started with loaded, as the agent's initialize answer
-   * says. Null when none were listed, when there was no answer, or when the CLI predates the field.
-   * A read, not a control, so it sits here without widening what the handle can change.
+   * The agent's initialize answer to whether every plugin it was started with loaded. Null when none
+   * were listed, when there was no answer, or when the CLI predates the field. Claude Code 2.1.284
+   * answered true with a missing directory in the list, so it is the agent's word and not a per-plugin
+   * receipt: the init message's `plugin_errors` names each one that did not load. A read, not a
+   * control, so it sits here without widening what the handle can change.
    */
   pluginsApplied(): Promise<boolean | null>;
   /** End the process and release everything it holds. Idempotent. */
@@ -692,6 +694,34 @@ export function composeOptions(request: AgentProcessRequest): Options {
   };
 }
 
+/**
+ * The cap the live thinking setter sends to turn thinking on. On the current models the SDK reads
+ * any positive cap as adaptive, 0 as disabled and null as "clear the limit", and a cleared limit
+ * does not turn thinking back on: after a disabled start, Opus 5.5, Fable 5.1 and Sonnet 5.5 came
+ * back to thinking prose on a positive cap and never on null (Claude Code 2.1.284,
+ * `agent-controls.live.test.ts`). A model that still takes a fixed budget reads it as one.
+ */
+export const THINKING_ON_CAP = 8_000;
+
+/**
+ * What the SDK's live thinking setter is sent for one wire value: the token cap, and the display
+ * when one was asked for. The setter is deprecated in favour of the start-time option and is on/off
+ * on the current models. Only `adaptive` and `disabled` arrive here; the wire reader refuses a fixed
+ * budget, which Opus 4.7 and later, Sonnet 5 and later and Fable 5 and later reject with a 400. The
+ * display rides along when asked, because the models' default (`omitted`) streams thinking blocks
+ * with empty text, the "no thinking" an operator sees while paying for it. Omitted, the session's
+ * own display stands.
+ *
+ * Pure, so the choice is checkable without a process. Exported for that; not on the public surface.
+ */
+export function thinkingControl(thinking: ThinkingConfig): {
+  readonly cap: number;
+  readonly display: Parameters<Query['setMaxThinkingTokens']>[1];
+} {
+  if (thinking.type === 'disabled') return { cap: 0, display: undefined };
+  return { cap: THINKING_ON_CAP, display: thinking.display };
+}
+
 /** Start an agent process. The subprocess exists when this returns. */
 export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
   // The live prompt queue's bound. Turns the agent has not consumed wait here; a controller that
@@ -732,15 +762,8 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
     },
     async setThinking(thinking: ThinkingConfig): Promise<void> {
       if (closed) return;
-      // The SDK's live setter is the token cap, deprecated in favour of the start-time option, and on
-      // the current models it is on/off: 0 = disabled, null = the limit cleared. Only `adaptive` and
-      // `disabled` arrive here; the wire reader refuses a fixed budget, which Opus 4.7 and later,
-      // Sonnet 5 and later and Fable 5 and later reject with a 400. The DISPLAY rides along:
-      // `summarized` when asked, because the models' default (`omitted`) streams thinking blocks
-      // with empty text — the "no thinking" an operator sees while paying for it.
-      const cap = thinking.type === 'disabled' ? 0 : null;
-      const display = thinking.type === 'disabled' ? undefined : thinking.display;
-      await running.setMaxThinkingTokens(cap, display);
+      const control = thinkingControl(thinking);
+      await running.setMaxThinkingTokens(control.cap, control.display);
     },
     async setEffort(level: EffortLevel): Promise<void> {
       if (closed) return;

@@ -134,9 +134,10 @@ export interface HostedSessionFacts {
     readonly version: string | null;
   }[];
   /**
-   * Whether every plugin the session was started with loaded, from the agent's initialize answer.
-   * Null when none were listed, when the answer has not come (it can land after the facts do), or
-   * when the CLI predates it. `plugins` says which loaded; a failure names its path in the init
+   * The agent's initialize answer to whether every plugin the session was started with loaded. Null
+   * when none were listed, when the answer has not come (it can land after the facts do), or when the
+   * CLI predates it. Claude Code 2.1.284 answered true with a missing directory in the list, so read
+   * it as the agent's word: `plugins` says which loaded, and a failure names its path in the init
    * message's `plugin_errors`, which reaches the controller forwarded.
    */
   readonly pluginsApplied: boolean | null;
