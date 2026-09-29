@@ -48,8 +48,42 @@ export type ComposableRequest = Omit<SessionRequest, 'cwd' | 'hooks'>;
  */
 export const SETTING_SOURCES: readonly SettingSource[] = ['user', 'project', 'local'];
 
-/** The thinking shapes the SDK declares, by discriminator. Same argument as above. */
-export const THINKING_TYPES: readonly string[] = ['adaptive', 'enabled', 'disabled'];
+/**
+ * The thinking shapes this host passes to the agent, by discriminator. Same argument as above.
+ *
+ * The SDK declares a third, `enabled`, a fixed token budget, and it is refused by name: Opus 4.7
+ * and later, Sonnet 5 and later and Fable 5 and later reject a fixed budget with a 400, so a session
+ * that asked for one would open and then fail its first turn.
+ */
+export const THINKING_TYPES: readonly string[] = ['adaptive', 'disabled'];
+
+/** What adaptive thinking's optional `display` may ask for: summarized prose, or the default's empty blocks. */
+export const THINKING_DISPLAYS: readonly string[] = ['summarized', 'omitted'];
+
+/** Null when a thinking shape is one this host passes on; otherwise why it is refused. */
+function thinkingProblem(thinking: JsonObject): string | null {
+  const type = thinking['type'];
+  if (type === 'enabled') {
+    return (
+      'thinking.type is "enabled", a fixed token budget, which Opus 4.7 and later, Sonnet 5 and later ' +
+      'and Fable 5 and later reject with a 400; ask for {"type":"adaptive"}, with "display":"summarized" ' +
+      'to stream the reasoning, or for {"type":"disabled"}'
+    );
+  }
+  if (typeof type !== 'string' || !THINKING_TYPES.includes(type)) {
+    return `thinking.type is ${JSON.stringify(type)}; the shapes this host passes on are ${THINKING_TYPES.join(', ')}`;
+  }
+  const display = thinking['display'];
+  if (
+    type === 'adaptive' &&
+    display !== undefined &&
+    display !== null &&
+    (typeof display !== 'string' || !THINKING_DISPLAYS.includes(display))
+  ) {
+    return `thinking.display is ${JSON.stringify(display)}; adaptive thinking takes ${THINKING_DISPLAYS.join(' or ')}`;
+  }
+  return null;
+}
 
 /** The SDK's effort levels, by name. An unknown level is refused, never dropped. */
 export const EFFORT_LEVELS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -98,13 +132,8 @@ export function readSessionConfigure(payload: SessionConfigure): Result<SessionC
     change.permissionMode = payload.permissionMode as PermissionMode;
   }
   if (payload.thinking !== null) {
-    const type = payload.thinking['type'];
-    if (typeof type !== 'string' || !THINKING_TYPES.includes(type)) {
-      return refuse<SessionConfigureChange>(
-        'frame-malformed',
-        `thinking.type is ${JSON.stringify(type)}; the shapes this SDK declares are ${THINKING_TYPES.join(', ')}`,
-      );
-    }
+    const problem = thinkingProblem(payload.thinking);
+    if (problem !== null) return refuse<SessionConfigureChange>('frame-malformed', problem);
     change.thinking = payload.thinking as unknown as ThinkingConfig;
   }
   return ok(change);
@@ -176,14 +205,8 @@ export function readSessionRequest(
   }
 
   if (request.thinking !== null) {
-    const type = request.thinking['type'];
-    if (typeof type !== 'string' || !THINKING_TYPES.includes(type)) {
-      return refuse<ComposableRequest>(
-        'frame-malformed',
-        `thinking.type is ${JSON.stringify(type)}; the shapes this SDK declares are ` +
-          `${THINKING_TYPES.join(', ')}`,
-      );
-    }
+    const problem = thinkingProblem(request.thinking);
+    if (problem !== null) return refuse<ComposableRequest>('frame-malformed', problem);
     composed['thinking'] = request.thinking;
   }
 

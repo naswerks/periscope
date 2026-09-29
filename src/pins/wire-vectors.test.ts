@@ -214,7 +214,7 @@ const AUTHORED = {
             mcpServers: { docs: { type: 'stdio', command: 'docs-server', args: [] } },
             strictMcpConfig: true,
             includePartialMessages: false,
-            thinking: { type: 'enabled', budgetTokens: 2048 },
+            thinking: { type: 'adaptive', display: 'summarized' },
             forwardSubagentText: true,
             env: { extraAllowedKeys: ['CI'], extraDeniedKeys: ['SECRET'], extraEnv: { FLAG: '1' } },
             model: 'model-id',

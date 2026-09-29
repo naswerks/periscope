@@ -134,10 +134,12 @@ export interface AgentProcessRequest {
   /**
    * How much of the agent's reasoning is emitted. `null` leaves the SDK's own default.
    *
-   * `{type:'adaptive'}` fires `thinking_delta` events whose prose is EMPTY;
+   * The current models default to `display: 'omitted'`, so `{type:'adaptive'}` fires
+   * `thinking_delta` events whose prose is EMPTY and a transcript goes quiet between tool calls;
    * `{type:'adaptive', display:'summarized'}` streams real reasoning text — which costs tokens on
    * the wire and puts reasoning into transcripts and mirrors, so it is asked for rather than
-   * assumed. Requires `includePartialMessages`.
+   * assumed. Requires `includePartialMessages`. A fixed budget (`enabled`) never arrives here: the
+   * wire reader refuses it, because the current models reject it with a 400.
    */
   readonly thinking: ThinkingConfig | null;
   /**
@@ -679,11 +681,12 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
     },
     async setThinking(thinking: ThinkingConfig): Promise<void> {
       if (closed) return;
-      // The SDK's LIVE setter is the token cap, and on current models it is on/off: 0 = disabled,
-      // null = the default (adaptive). A fixed budget is REJECTED by Opus 5 / Sonnet 5 / Fable, so an
-      // `enabled` ask maps to adaptive rather than to a 400. The DISPLAY rides along: `summarized` when
-      // asked, because the models' default (`omitted`) streams thinking blocks with empty text — the
-      // "no thinking" an operator sees while paying for it.
+      // The SDK's live setter is the token cap, deprecated in favour of the start-time option, and on
+      // the current models it is on/off: 0 = disabled, null = the limit cleared. Only `adaptive` and
+      // `disabled` arrive here; the wire reader refuses a fixed budget, which Opus 4.7 and later,
+      // Sonnet 5 and later and Fable 5 and later reject with a 400. The DISPLAY rides along:
+      // `summarized` when asked, because the models' default (`omitted`) streams thinking blocks
+      // with empty text — the "no thinking" an operator sees while paying for it.
       const cap = thinking.type === 'disabled' ? 0 : null;
       const display = thinking.type === 'disabled' ? undefined : thinking.display;
       await running.setMaxThinkingTokens(cap, display);

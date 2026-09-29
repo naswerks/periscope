@@ -30,6 +30,12 @@ removed export. The package version and the wire protocol version are separate n
   cause event. The observer recorded it before, but the machine refused every such transition as
   `transition-cause-unnamed`, so only the forwarded message said the model refused. The detail names
   the model and, when the agent reports one, the refusal category.
+- Thinking is `adaptive`, with an optional `display` of `summarized` or `omitted`, or `disabled`. A
+  fixed budget (`{type:'enabled', budgetTokens}`) is refused by name at `session_new` and
+  `session_configure` (`frame-malformed`), because Opus 4.7 and later, Sonnet 5 and later and Fable 5
+  and later reject it with a 400: a session that took it would open and then fail its first turn. The
+  models that still accept a fixed budget lose that knob here. The `session_new.full` wire vector now
+  carries `{type:'adaptive', display:'summarized'}`.
 
 ## [1.2.0] - unreleased
 

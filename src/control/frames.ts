@@ -379,7 +379,11 @@ export interface SessionNewRequest {
   readonly strictMcpConfig: boolean | null;
   /** Stream turns as they compose. Null leaves the host's default, which is ON. */
   readonly includePartialMessages: boolean | null;
-  /** How much reasoning this session emits. Null leaves the SDK's own default. Opaque here. */
+  /**
+   * How much reasoning this session emits. Null leaves the SDK's own default. Opaque here; the host
+   * passes `adaptive` (with an optional `display`) and `disabled` on and refuses a fixed budget
+   * (`enabled`) by name, because the current models reject it with a 400.
+   */
   readonly thinking: JsonObject | null;
   /**
    * The effort level (`low` · `medium` · `high` · `xhigh` · `max`). Null leaves the SDK's own default.
@@ -596,7 +600,11 @@ export interface SessionConfigure {
   readonly model: string | null;
   /** The permission mode to switch to — the same vocabulary as `SessionNewRequest.permissionMode`. */
   readonly permissionMode: string | null;
-  /** `{type:'adaptive'}` · `{type:'disabled'}` · `{type:'enabled', budgetTokens}` — the SDK's own shapes. */
+  /**
+   * `{type:'adaptive'}`, optionally with `display` (`summarized` or `omitted`), or `{type:'disabled'}`.
+   * The SDK also declares a fixed budget, `{type:'enabled', budgetTokens}`; the host refuses it by
+   * name, because the current models reject it with a 400.
+   */
   readonly thinking: JsonObject | null;
 }
 
