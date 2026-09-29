@@ -99,6 +99,30 @@ PERISCOPE_LIVE=1 npm run test:live
 They start real sessions and cost money. Run them on a machine that is not itself inside an agent
 session, or the tool surface of the enclosing session contaminates the measurement.
 
+`src/host/agent-controls.live.test.ts` measures the controls this host reaches: a model switch,
+thinking off and back on, the bypass flag, the per-turn init, the gate under plan mode, the model
+catalog, effort, plugins over stdin, the four events measured not to fire, and the task-list tools.
+Its output is stated as behaviour in the documents, so run it after every agent SDK bump. One probe
+runs on its own by name:
+
+```sh
+npm run build && PERISCOPE_LIVE=1 node --test --test-name-pattern="model catalog" dist/host/agent-controls.live.test.js
+```
+
+## Moving the agent SDK
+
+The SDK is pinned exactly, and a bump is a minor release. In order:
+
+1. Move `@anthropic-ai/claude-agent-sdk` in `package.json`, and its peer `@anthropic-ai/sdk` to the
+   range the new manifest asks for, then `npm install`. Read the lockfile diff.
+2. `npm run check:drift -- --update`, and read the type diff it reports.
+3. Set `contracts/cli-version.txt` to the manifest's `claudeCodeVersion`; a pin derives it and fails
+   while they differ.
+4. Give every new hook event and message discriminator its coverage row (`src/state/coverage.ts`)
+   and its lane (`src/control/stream-routing.ts`); the build fails until each has one.
+5. `npm run contracts:update`, then update the version table in `README.md` and `SECURITY.md`.
+6. Run the live probes above and bring the documents into line with what they print.
+
 ## Boundaries the pins enforce
 
 - Only `src/host/` may import `node:fs`, `node:child_process`, `node:os`, or the Agent SDK.

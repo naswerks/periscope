@@ -23,6 +23,11 @@ real trace reads `working` then `ready` then `working`: `UserPromptSubmit` fires
 that missing `ready` is what makes the emits-nothing-until-prompted behaviour legible instead of a
 hang.
 
+The CLI re-sends `system/init` on every turn with current values; on Claude Code 2.1.284, one turn
+gave one init and two gave two. Only the first records `ready`. A later one records nothing and
+refreshes the session's facts instead (the model, the permission mode, the inventories), which is
+how a model switch reaches them; the id stays.
+
 Two notes for a consumer of the `ended` edge:
 
 - A refused open is emitted as `spawning` to `ended` with cause `{ kind: 'refusal', event: <reason> }`.
@@ -58,6 +63,16 @@ two are not symmetric.
 - `kind` and `event` are validated independently, never as a pair: `nameable()`
   (`src/state/machine.ts`) accepts `{ kind: 'hook', event: 'permission_denied' }` although it is
   incoherent. Coherence is the author's job, stated at `CONTROL_EVENTS`.
+- Some records move nothing: a transition to the state the session is already in, recorded for its
+  cause. Three kinds exist.
+  - `PostModelSwitch` names both models, who asked, the prompt cache's warmth and TTL, and the
+    estimated cost of re-caching the context.
+  - `system/model_refusal_no_fallback` names the model and, when the agent gives one, the refusal
+    category.
+  - A `session_configure` the agent refused is recorded as `refusal/session-configure-failed`.
+    `PreModelSwitch` is answered, never recorded: a switch that is denied or refused never happened.
+    A refusal that does fall back is reported by the SDK as `PostModelSwitch` with source `auto`,
+    after the fact; `PreModelSwitch`'s sources exclude `auto`, so the host's answer is never asked.
 - `where` carries forward across transitions and updates on `CwdChanged`; `src/host/git-facts.ts`
   reads worktree and branch read-only and understands the linked-worktree `.git` file. The
   `spawning` transition's `where.cwd` is the workspace the session got, and that property is
@@ -134,9 +149,11 @@ must never be merged.
 The runtime wins over the types. Four wired events are measured not to fire under an SDK-hosted
 session: `SessionStart` (take the start receipt from `system/init`), `PermissionRequest` and
 `PermissionDenied` (a hook-authored deny blocks while both stay silent), and
-`system/session_state_changed` (`Stop` and `result` are the observed turn boundaries). The rows stay
-wired, because "wired and not observed" is a question and "declined" closes one, and each says
-"measured not to fire" at the row. Re-measure before relying on any of the four.
+`system/session_state_changed` (`Stop` and `result` are the observed turn boundaries). Measured
+again on Claude Code 2.1.284: a turn whose Bash call the hook denied fired `UserPromptSubmit`,
+`PreToolUse`, `PostToolBatch` and `Stop`, and none of the four. The rows stay wired, because "wired
+and not observed" is a question and "declined" closes one, and each says "measured not to fire" at
+the row. Re-measure before relying on any of the four (`agent-controls.live.test.ts`).
 
 ## The reporter is not a roster
 

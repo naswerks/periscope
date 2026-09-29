@@ -22,6 +22,14 @@ pairing extends (below). The one thing the host refuses on its own is a grant la
 settings files in any other mode, `permission-grant-shadows-settings`, because two mechanisms
 would then answer one question with no stated precedence.
 
+A session started in `bypassPermissions` is started with the SDK's `allowDangerouslySkipPermissions`
+(the CLI's `--allow-dangerously-skip-permissions`), which the SDK names as the mode's requirement.
+A session started in any other mode is started without it, and the CLI then refuses a switch into
+bypass, by name: "the session was not launched with --dangerously-skip-permissions". That refusal
+reaches the controller as `session-configure-failed`, measured on Claude Code 2.1.284 from inside an
+agent session ([gate.md](docs/gate.md)). So bypass is chosen when a session opens, never added to a
+running session that did not start in it.
+
 The interactive prompt asks a human sitting at the terminal. That is a fine control when someone is
 sitting there. Periscope exists for the case where nobody is, so the question has to be answered by
 something that is still awake at 3am, and the options are _a stricter gate_ or _no gate_.
@@ -272,12 +280,16 @@ over the link and without a further credential:
   directory refuses `credential-path-denied` whatever the root is, on the lexical resolution and
   on the real path.
 - **Choose the agent's permission mode.** `session_new.request.permissionMode` and
-  `session_configure` take the SDK's own vocabulary, `bypassPermissions` included; under bypass the
-  agent's allow and ask rules are off and the `PreToolUse` hook is the only control, so a
-  controller that sets it is relying on its own decision endpoint entirely.
+  `session_configure` take the SDK's own vocabulary, `bypassPermissions` included. Under bypass the
+  agent's allow and ask rules are off and the `PreToolUse` hook is the only control, so a controller
+  that sets it is relying on its own decision endpoint entirely. A switch into bypass reaches only a
+  session that was started in it.
+- **Change a running session's model, thinking and effort.** Through `session_configure`. The effort
+  reaches the SDK's flag settings with the one key `effortLevel` and nothing beside it, so none of
+  that call's permission keys can ride along (`pins/permission-config.test.ts`).
 - **Reconfigure the host.** The workspace root, the repository root, the branch scheme, the agent
-  home and the two controller URLs through `host_configure`, written to the config file; the URLs
-  apply at the next start.
+  home, the plugin directories and the two controller URLs through `host_configure`, written to the
+  config file; the URLs apply at the next start.
 - **Start sessions** that run the agent with the interactive prompt replaced by the gate, and
   answer every permission decision those sessions raise.
 

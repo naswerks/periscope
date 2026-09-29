@@ -48,12 +48,16 @@ PERISCOPE_CONTROLLER_URL and PERISCOPE_DECISION_URL written to the config file -
 The fourth starts the host, in the foreground, until you stop it:
 
 ```
-[host] periscope 1.1.0 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
+[host] periscope 1.3.0 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
 [credential] paired as ph-8cb226ae… - the paired credential is presented on every dial
+[agent] Claude Code 2.1.284 (agent SDK 0.3.284), 12 model(s) in the hello
 [link] idle -> connecting (start_requested)
 [link] connecting -> open (socket_connected)
-[link] open -> accepted (hello_completed) — protocol v9
+[link] open -> accepted (hello_completed) — protocol v12
 ```
+
+Before it dials, the host asks the agent which models it offers, without sending a prompt, and the
+hello carries the list, so a controller can offer exactly the models this machine can run.
 
 `periscope status` prints the same posture from any terminal and never dials. A controller on a
 development certificate (`https://localhost:…`) is refused by Node until Node is pointed at that

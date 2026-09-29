@@ -12,10 +12,10 @@ A setting arrives one of three ways, and the order is the rule:
 2. **The config file** (`<config dir>/config.json`) fills absences. `periscope config <key> <value>`
    writes one key, `periscope config --unset <key>` removes it, `periscope config` lists the file and
    marks every value the environment is currently overriding. On Windows this is the way to set a
-   value that should outlive the shell. Only the eight keys marked "config-file key" below may live
+   value that should outlive the shell. Only the nine keys marked "config-file key" below may live
    in the file; a value the host would refuse at start (an `https:` controller address, a `ws:`
    decision address, a relative root) is refused by `periscope config` before it is written.
-3. **The controller, over the link** (`host_configure`) writes six of those keys to the file; see
+3. **The controller, over the link** (`host_configure`) writes seven of those keys to the file; see
    [what a controller can set](#what-a-controller-can-set-over-the-link).
 
 ## The two addresses
@@ -114,18 +114,84 @@ link. A controller can also list one directory or read the head of one text file
 repository root (`repository_list` / `repository_read`), jailed to that root and to the protected
 set, bounded, and text-only. [The wire protocol](protocol.md) states both doors.
 
+## The agent: models, effort, thinking, plugins and tools
+
+What follows was measured on Claude Code 2.1.284 by `src/host/agent-controls.live.test.ts`, run from
+inside an agent session. Re-measure it after an agent SDK bump.
+
+**The model catalog.** Before it dials, `serve` asks the agent which models it offers.
+
+- It starts the agent with no prompt, reads the models from the agent's answer to the SDK's
+  initialize request, and closes it. That took under a second, wrote no transcript and left no
+  process running; the read is bounded at 20 seconds.
+- The hello carries the list as `configuration.agent` ([the wire protocol](protocol.md)).
+- A session takes a model by the catalog's `value`: an alias (`default`, `opus`, `sonnet`, `haiku`)
+  or a full id. `resolvedModel` names the model the alias runs today.
+
+**Switching the model.** `session_configure.model` switches a running session.
+
+- The host answers the SDK's `PreModelSwitch` with allow, so a controller's switch never waits on
+  the interactive cache-miss confirm. A headless switch after a warm turn went through with that
+  answer and without it.
+- The switch is recorded when it happens (`PostModelSwitch`), with the estimated cost of re-caching
+  the context on the new model.
+
+**Effort.** `session_new.request.effort` sets it at start, and `session_configure.effort` changes it
+mid-session.
+
+- The levels are `low`, `medium`, `high`, `xhigh` and `max`; the catalog's `supportedEffortLevels`
+  says which a model takes.
+- A `sonnet` session started at `low` ran its next turn at `high` after a change, as its `Stop`
+  hook reported.
+- `max` runs as `high` on a model without it, and never above the organisation's limit.
+- The SDK turns ultracode off on any change of level sent without an `ultracode` key, and the host
+  never sends one.
+
+**Thinking.**
+
+- A session streams thinking prose only when started with `{ type: 'adaptive', display:
+'summarized' }`; Opus 5.5, Fable 5.1 and Sonnet 5.5 each did, at `max` effort.
+- `{ type: 'disabled' }` starts normally on all three but does not stop them thinking: at `max`
+  effort every turn still carried a thinking block, with no prose. Read it as "no prose", not "no
+  thinking".
+- On a session started disabled, a `session_configure` asking for `{ type: 'adaptive', display:
+'summarized' }` brings the prose back from its next turn. The host sends the SDK a positive
+  thinking cap (`THINKING_ON_CAP`) for this, because a cleared cap did not bring it back on any of
+  the three.
+- A fixed budget (`{ type: 'enabled' }`) is refused by name.
+
+**Plugins.** Plugins reach the agent over stdin, not as one command-line flag each, so several
+directories stay clear of the Windows command-line limit. A custom `spawn` must run a CLI of 2.1.261
+or later.
+
+- The agent names a directory that did not load in its init message's `plugin_errors`, with its path
+  (type `path-not-found` for a missing one).
+- `HostedSessionFacts.pluginsApplied` is the agent's own answer, and it read `true` with a missing
+  directory in the list, so `plugin_errors` is where a failure shows.
+- A session's `plugins` also lists the agent's built-in plugins, with the path `builtin`.
+- The host refuses a configured directory that is missing before any process starts, so only a
+  controller's own `session_new.request.plugins` can reach the agent missing.
+
+**The task-list tools.** A Sonnet 5.5 session's tools do not include `TaskCreate`, `TaskGet`,
+`TaskList` and `TaskUpdate` by default. `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` in the session's
+environment adds them; a controller sets it through `session_new.request.env.extraEnv`.
+
 ## What the host prints
 
 Every line of output is `<ISO timestamp> [channel] message`, with a detail after a dash when there
 is one. The first lines of a host with no identity configured look like this:
 
 ```
-2026-09-08T12:00:00.000Z [host] periscope 1.0.0 · host build-box · credential absent · workspace none · config file /home/agent/.periscope/config.json
+2026-09-08T12:00:00.000Z [host] periscope 1.3.0 · host build-box · credential absent · workspace none · config file /home/agent/.periscope/config.json
 2026-09-08T12:00:00.000Z [credential] absent - no identity is configured, so this host will dial without authentication
-2026-09-08T12:00:00.010Z [link] idle -> connecting (start_requested)
-2026-09-08T12:00:00.250Z [link] connecting -> open (socket_connected)
-2026-09-08T12:00:00.310Z [link] open -> accepted (hello_completed)
+2026-09-08T12:00:00.900Z [agent] Claude Code 2.1.284 (agent SDK 0.3.284), 12 model(s) in the hello
+2026-09-08T12:00:00.910Z [link] idle -> connecting (start_requested)
+2026-09-08T12:00:01.150Z [link] connecting -> open (socket_connected)
+2026-09-08T12:00:01.210Z [link] open -> accepted (hello_completed)
 ```
+
+The `[agent]` line comes from the model catalog the host reads before it dials (below). When the read
+fails it says `the hello carries no model catalog` with the reason, and the host dials anyway.
 
 A paired host prints `[credential] paired as <hostId> - the paired credential is presented on every
 dial` instead; a host on a signed-in token prints its first `[credential]` line (`cache-hit`,
@@ -158,7 +224,9 @@ With the reason on stderr and a non-zero exit, when:
   other, a non-https authority, one of the authorize/token endpoints without the other, a redirect
   port outside 0-65535, or a scopes variable set to nothing;
 - identity is configured but there is nowhere to keep the token cache (no home directory and no
-  `PERISCOPE_CONFIG_DIR`).
+  `PERISCOPE_CONFIG_DIR`);
+- `PERISCOPE_PLUGIN_DIRS` names more than `MAX_PLUGIN_DIRS` directories, or one that is absent or
+  carries no readable manifest.
 
 After start-up, one link event is fatal: `credential_rejected`. The controller or its identity
 provider has refused the host's material, so the process stops its sessions, prints the remedy

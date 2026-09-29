@@ -191,11 +191,29 @@ stream of them as the gate working, never as a credential problem.
 
 - `bypassPermissions` is composable, as the SDK's own `permissionMode` vocabulary. It travels wire
   to `readSessionRequest` to `src/host/agent-process.ts` and nowhere else, and
-  `pins/permission-config.test.ts` holds three things: no settings-file or rule-list option
-  anywhere, `permissionMode` only on that path, and `setPermissionMode` called from one module (by
-  `session_configure`) while the other mid-session mutators stay uncalled. The gate keeps its
-  authority through `PreToolUse` in every mode; the package's own measurement of a hook deny
-  surviving bypass is the unexercised probe above.
+  `pins/permission-config.test.ts` holds three things:
+  - no settings-file or rule-list option anywhere;
+  - `permissionMode` only on that path;
+  - `setPermissionMode` called from one module (by `session_configure`), and the other mid-session
+    mutators uncalled, except one: `applyFlagSettings` is called once, by `setEffort`, with the
+    single key `effortLevel`.
+
+  The gate keeps its authority through `PreToolUse` in every mode. The package's own measurement of
+  a hook deny surviving bypass is the unexercised probe above.
+
+- The bypass flag is set only for a bypass start. A session started in `bypassPermissions` gets the
+  SDK's `allowDangerouslySkipPermissions`, which the SDK names as the mode's requirement; a session
+  started in any other mode does not. On Claude Code 2.1.284 the CLI refuses a switch into bypass
+  for a session started without it ("the session was not launched with
+  --dangerously-skip-permissions"), and the controller hears `session-configure-failed`. With the
+  flag at start, the same switch is accepted. A controller that wants bypass asks for it when it
+  opens the session.
+- Plan mode does not move the decision. On Claude Code 2.1.284 a `PreToolUse` deny held under
+  `plan` exactly as under `default`: the hook was asked for the call, the call did not run, and the
+  model was told why.
+- Both measurements above come from `agent-controls.live.test.ts`, run from inside an agent session.
+  They are the CLI's own answers (a named refusal, and this hook's deny holding), not the enclosing
+  session's; rerun them outside an agent session before relying on them for more than that.
 - `permissionDecision: 'defer'` was evaluated and not adopted: it ends the query for a later
   resume, a different lifecycle from "hold, then continue with everything you knew".
 - `outputFor` cannot render a hold: `holding` is excluded by the type, not by a branch. A branch
