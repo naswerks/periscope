@@ -22,6 +22,10 @@ export type {
 } from './host.js';
 export { PeriscopeHost, composeSession } from './host.js';
 
+// The hello's model catalog: the agent asked for its models at start, with no prompt sent.
+export type { AgentCatalog, AgentCatalogOptions } from './agent-process.js';
+export { readAgentCatalog } from './agent-process.js';
+
 export type { BulkPostReceipt, BulkPostRequest } from './bulk-post.js';
 export { postBulk } from './bulk-post.js';
 

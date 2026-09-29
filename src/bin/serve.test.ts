@@ -23,8 +23,10 @@ import type { HostEvent } from '../host/index.js';
 import type { HostLink } from '../host/host.js';
 import { fakeAgents, initMessage, settle } from '../test-support/fake-agent.js';
 import { withTempDir } from '../test-support/temp-dir.js';
+import type { AgentCatalog, AgentCatalogOptions } from '../host/agent-process.js';
+import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import type { CredentialPosture, ServeDeps, ServeOutcome, ServeViews } from './serve.js';
-import { FATAL_EXIT_FLUSH_MS, readCredential, report, runServe } from './serve.js';
+import { AGENT_CATALOG_TIMEOUT_MS, FATAL_EXIT_FLUSH_MS, readCredential, report, runServe } from './serve.js';
 
 const AUTHORITY = 'https://identity.example/tenant';
 const CLIENT_ID = 'periscope-test-client';
@@ -630,3 +632,79 @@ test('an empty PERISCOPE_HOST_ID counts as unset: the hostname is announced', ()
       'the host line names the version and a host id',
     );
   }));
+
+// --- the model catalog ------------------------------------------------------------------------
+
+test('the daemon reads the catalog as a session would start, from the home directory, under its bound, then dials', () =>
+  inDir(async (dir) => {
+    const raw = rawEnv(dir, { PATH: '/usr/bin' });
+    const asked: AgentCatalogOptions[] = [];
+    let answer: (catalog: AgentCatalog) => void = () => undefined;
+    const out: string[] = [];
+    const link = new FakeLink();
+    const outcome = runServe(
+      { raw, merged: mergedEnv(raw) },
+      {
+        log: (line) => out.push(line),
+        stderr: () => undefined,
+        setExitCode: () => undefined,
+        exit: () => undefined,
+        onSignal: () => undefined,
+        link: (handlers) => {
+          link.handlers = handlers;
+          return link;
+        },
+        getuid: () => 1000,
+        startProcess: fakeAgents().start,
+        readAgentCatalog: (options) => {
+          asked.push(options);
+          return new Promise((resolve) => (answer = resolve));
+        },
+      },
+    );
+    assert.equal(outcome.ok, true);
+    assert.equal(asked.length, 1);
+    assert.deepEqual(asked[0]?.env, composeSpawnEnv(raw), 'the environment a session is started with');
+    assert.equal('PERISCOPE_CONFIG_DIR' in (asked[0]?.env ?? {}), false, 'control: the filter ran');
+    assert.equal(asked[0]?.cwd, '/home/agent');
+    assert.equal(asked[0]?.timeoutMs, AGENT_CATALOG_TIMEOUT_MS);
+    assert.equal(link.started, false, 'the link dialled before the catalog was read');
+
+    answer({
+      ok: true,
+      agent: { claudeCodeVersion: '2.1.284', sdkVersion: '0.3.284', models: [] },
+    });
+    await settle();
+    assert.equal(link.started, true);
+    assert.ok(
+      out.some((line) =>
+        /\[agent\] Claude Code 2\.1\.284 \(agent SDK 0\.3\.284\), 0 model\(s\) in the hello$/.test(line),
+      ),
+      out.join('\n'),
+    );
+    if (outcome.ok) outcome.host.stop();
+  }));
+
+test('control: with no catalog reader the daemon dials at once and says nothing about a catalog', () =>
+  inDir(async (dir) => {
+    const raw = rawEnv(dir);
+    const run = serve({ raw, merged: mergedEnv(raw) });
+    assert.equal(run.link.started, true);
+    assert.equal(
+      run.out.some((line) => line.includes('[agent]')),
+      false,
+    );
+    if (run.outcome.ok) run.outcome.host.stop();
+  }));
+
+test('a catalog the hello could not carry is said with its reason', () => {
+  const lines: string[] = [];
+  report(
+    { kind: 'agent-catalog', agent: null, detail: 'the agent did not answer within 20000ms' },
+    (channel, message, detail) =>
+      lines.push(`[${channel}] ${message}${detail === null ? '' : ` — ${detail}`}`),
+  );
+  assert.deepEqual(lines, [
+    '[agent] the hello carries no model catalog — the agent did not answer within 20000ms',
+  ]);
+});

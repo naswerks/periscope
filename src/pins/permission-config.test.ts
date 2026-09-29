@@ -122,13 +122,23 @@ test('regression: permissionMode travels only through the wire, reader and proce
   assert.deepEqual(choosers, [], `a module names a permission mode as a value: ${choosers.join(', ')}`);
 });
 
-test('the four mid-session permission mutators are never called; setPermissionMode is called in ONE place, by the wire', () => {
+/**
+ * The one call the flag-settings mutator may take: `setEffort`'s, on the process handle, with an
+ * object literal whose only key is `effortLevel`. That call also takes permission rules and a mode
+ * among its keys, so the allowance is the literal's shape, not the method's name: a second key, a
+ * spread, an object built elsewhere or a second call site is a violation like any other.
+ */
+const EFFORT_ONLY = /\brunning\.applyFlagSettings\(\{ effortLevel: [A-Za-z_$][\w$]* \}\)/;
+const EFFORT_MODULE = 'host/agent-process.ts';
+
+test('the four mid-session permission mutators are never called but for effort alone; setPermissionMode is called in ONE place, by the wire', () => {
   // These act after any construction-time check, so no inspection of the composed options could
   // catch them. They are unreachable by construction (the handle wraps the query object rather
   // than handing it out) and this asserts the absence directly rather than trusting that.
   // `setPermissionMode` is not on the list: it is the `session_configure` frame's own path and may
   // be called from exactly one module. `updateSettings` writes the settings files permission rules
-  // are read from, which is the same reach by a slower road.
+  // are read from, which is the same reach by a slower road. `applyFlagSettings` is reached once,
+  // for effort, in the shape `EFFORT_ONLY` states.
   const mutators = ['applyFlagSettings', 'setMcpServers', 'setMcpPermissionModeOverride', 'updateSettings'];
   const modeSetters = sourceFiles()
     .filter((file) => file.text.includes('running.setPermissionMode('))
@@ -139,11 +149,17 @@ test('the four mid-session permission mutators are never called; setPermissionMo
     'setPermissionMode reaches the SDK from one module only',
   );
   const violations: string[] = [];
+  const effortCalls: string[] = [];
 
   for (const file of sourceFiles()) {
     file.text.split('\n').forEach((line, index) => {
       for (const mutator of mutators) {
-        if (line.includes(`${mutator}(`)) violations.push(`${file.path}:${index + 1} calls ${mutator}`);
+        if (!line.includes(`${mutator}(`)) continue;
+        if (mutator === 'applyFlagSettings' && file.path === EFFORT_MODULE && EFFORT_ONLY.test(line)) {
+          effortCalls.push(`${file.path}:${index + 1}`);
+          continue;
+        }
+        violations.push(`${file.path}:${index + 1} calls ${mutator}`);
       }
     });
   }
@@ -153,6 +169,28 @@ test('the four mid-session permission mutators are never called; setPermissionMo
     [],
     `a mid-session permission mutator is called:\n  ${violations.join('\n  ')}`,
   );
+  assert.equal(
+    effortCalls.length,
+    1,
+    `the effort call is allowed at exactly one site; found ${effortCalls.length}: ${effortCalls.join(', ')}`,
+  );
+});
+
+test('control: the effort allowance matches its one shape and nothing wider', () => {
+  assert.equal(
+    EFFORT_ONLY.test('    await running.applyFlagSettings({ effortLevel: level });'),
+    true,
+    'the call',
+  );
+  for (const [wider, line] of [
+    ['a second key', 'await running.applyFlagSettings({ effortLevel: level, permissions: rules });'],
+    ['a spread', 'await running.applyFlagSettings({ ...settings });'],
+    ['a spread beside the key', 'await running.applyFlagSettings({ ...settings, effortLevel: level });'],
+    ['an object built elsewhere', 'await running.applyFlagSettings(settings);'],
+    ['a key before it', 'await running.applyFlagSettings({ model: m, effortLevel: level });'],
+  ] as const) {
+    assert.equal(EFFORT_ONLY.test(line), false, `${wider} passed as the effort call`);
+  }
 });
 
 /**

@@ -39,7 +39,9 @@ import type { BackoffOptions } from '../control/backoff.js';
 import type { LinkHandlers } from '../control/link.js';
 import { ControllerLink } from '../control/link.js';
 import type { LinkTransition } from '../control/link-state.js';
+import { hostAgentProblem } from '../control/codec.js';
 import type {
+  HostAgent,
   HostConfiguration,
   HostConfigure,
   HostConfigureEntry,
@@ -96,7 +98,7 @@ import type { SessionTransition, TransitionWhere } from '../state/model.js';
 import { SessionObserver } from '../state/observer.js';
 import type { WorkspaceEntry, WorkspaceInventory, WorkspaceProvider } from '../workspace/provider.js';
 import { keyPreview, unusableKeyProblem } from '../workspace/git-worktree.js';
-import type { McpServerConfig } from './agent-process.js';
+import type { AgentCatalog, McpServerConfig } from './agent-process.js';
 import type { BulkPostReceipt } from './bulk-post.js';
 import { bulkOriginFor, postBulk } from './bulk-post.js';
 import { readWhere } from './git-facts.js';
@@ -316,6 +318,7 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     session,
     observer,
     sink: options.sink,
+    clock,
     ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
   });
 
@@ -535,6 +538,13 @@ export interface PeriscopeHostOptions {
   readonly pendingRestart?: readonly string[];
   /** How a `host_configure` ask is applied. Omitted, every such ask refuses `config-write-failed`. */
   readonly reconfigure?: HostReconfigurer;
+  /**
+   * Reads the agent's versions and model catalog for the hello; `readAgentCatalog` is the real one.
+   * With it, `start()` reads the catalog before it dials, so the first hello carries it. A read that
+   * fails, or a catalog past the hello's bounds, rides as `agent: null` and is reported by name;
+   * never a failed start. Omitted, the hello carries no `agent` and the link starts at once.
+   */
+  readonly agentCatalog?: () => Promise<AgentCatalog>;
   readonly registry?: SessionRegistry;
   /** How the link is built. Defaults to the real `ControllerLink`. See `HostLink`. */
   readonly link?: (handlers: LinkHandlers) => HostLink;
@@ -572,7 +582,12 @@ export type HostEvent =
    * mean the one message that answers the operator's question is raised and never received. The
    * subscription in `#compose` is the audience; a pin in `host.test.ts` holds every kind to it.
    */
-  | { readonly kind: 'degrade'; readonly sessionKey: string; readonly degrade: SessionDegrade };
+  | { readonly kind: 'degrade'; readonly sessionKey: string; readonly degrade: SessionDegrade }
+  /**
+   * What the catalog read at start produced: the catalog the hello now carries, or null and what
+   * went wrong. Once per start, on a host composed with `agentCatalog`.
+   */
+  | { readonly kind: 'agent-catalog'; readonly agent: HostAgent | null; readonly detail: string | null };
 
 /**
  * How many turns may wait for one still-opening session before the rest are refused.
@@ -683,6 +698,15 @@ export class PeriscopeHost {
   #pluginDirs: readonly string[];
   #overriddenByEnvironment: readonly string[];
   #pendingRestart: readonly string[];
+  /**
+   * The agent's catalog as the last read left it: undefined until a read settles (for good, on a
+   * host composed without `agentCatalog`), null when the read gave nothing the hello can carry. Kept
+   * apart from `#configuration` because a reconfigure rebuilds that from the file, which has no
+   * catalog in it.
+   */
+  #agent: HostAgent | null | undefined;
+  /** The start whose catalog read is in flight; `stop()` clears it, so that read starts nothing. */
+  #pendingStart: object | null = null;
 
   constructor(options: PeriscopeHostOptions) {
     this.#options = options;
@@ -760,12 +784,31 @@ export class PeriscopeHost {
     return ok(composed);
   }
 
+  /**
+   * Dial the controller. With `agentCatalog`, the catalog is read first and the link starts when the
+   * read settles, because the hello is where a controller reads the configuration: a catalog that
+   * arrived after the first hello would wait for the next dial. A `stop()` before the read settles
+   * means the link never starts.
+   */
   start(): void {
-    this.#link.start();
+    const readCatalog = this.#options.agentCatalog;
+    if (readCatalog === undefined) {
+      this.#link.start();
+      return;
+    }
+    const pending = {};
+    this.#pendingStart = pending;
+    void settledCatalog(readCatalog).then((catalog) => {
+      if (this.#pendingStart !== pending) return;
+      this.#pendingStart = null;
+      this.#stampAgent(catalog);
+      this.#link.start();
+    });
   }
 
   /** Ends every session first, then the link — so the end transitions still have somewhere to go. */
   stop(detail = 'host shutting down'): void {
+    this.#pendingStart = null;
     if (this.#heldFramesTimer !== null) {
       clearTimeout(this.#heldFramesTimer);
       this.#heldFramesTimer = null;
@@ -1721,7 +1764,8 @@ export class PeriscopeHost {
     this.#transcriptsRoot = rebuilt.transcriptsRoot;
     this.#bulk = rebuilt.bulk;
     this.#linkCapabilities = rebuilt.linkCapabilities;
-    this.#configuration = rebuilt.configuration;
+    // Rebuilt from the file, which holds no catalog: the one read at start is carried over.
+    this.#configuration = this.#withAgent(rebuilt.configuration);
     this.#pluginDirs = rebuilt.pluginDirs;
     this.#overriddenByEnvironment = rebuilt.overriddenByEnvironment;
     // The control-plane addresses are never applied to the live link: the host keeps dialling what it
@@ -1729,6 +1773,23 @@ export class PeriscopeHost {
     this.#pendingRestart = rebuilt.pendingRestart;
     this.#link.announce?.(this.#linkCapabilities, this.#configuration, this.#pendingRestart);
     return answer();
+  }
+
+  /**
+   * Put a catalog read's outcome into the configuration and the next hello, and report it. A catalog
+   * the codec would refuse, or one past `MAX_AGENT_CATALOG_BYTES`, rides as null: a hello the link
+   * cannot encode is never sent at all, which would cost the controller the whole configuration.
+   */
+  #stampAgent(catalog: AgentCatalog): void {
+    const problem = catalog.ok ? hostAgentProblem(catalog.agent) : catalog.detail;
+    this.#agent = catalog.ok && problem === null ? catalog.agent : null;
+    this.#configuration = this.#withAgent(this.#configuration);
+    this.#link.announce?.(this.#linkCapabilities, this.#configuration, this.#pendingRestart);
+    this.#report({ kind: 'agent-catalog', agent: this.#agent, detail: problem });
+  }
+
+  #withAgent(configuration: HostConfiguration): HostConfiguration {
+    return this.#agent === undefined ? configuration : { ...configuration, agent: this.#agent };
   }
 
   async #deliver(
@@ -1958,6 +2019,15 @@ export class PeriscopeHost {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** An embedder's catalog read, settled: a read that throws or rejects is a failed reading, never a lost start. */
+async function settledCatalog(read: () => Promise<AgentCatalog>): Promise<AgentCatalog> {
+  try {
+    return await read();
+  } catch (error) {
+    return { ok: false, detail: `the catalog read failed: ${describe(error)}` };
+  }
 }
 
 /** The repository asks on a host composed without a repository root: nothing to read under. */

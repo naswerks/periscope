@@ -98,6 +98,7 @@ export function fakeAgents(): FakeAgents {
       setModel: (model) => setter('setModel', model),
       setPermissionMode: (mode) => setter('setPermissionMode', mode),
       setThinking: (thinking) => setter('setThinking', thinking),
+      setEffort: (level) => setter('setEffort', level),
       // Answered on a later turn of the loop, as the real initialize answer is, so a test can set the
       // field just after the session starts and the session still asks before it is known.
       pluginsApplied: () =>

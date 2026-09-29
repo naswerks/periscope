@@ -20,7 +20,7 @@ import type { HostedSession } from '../sessions/session.js';
 import { SessionStateMachine } from '../state/machine.js';
 import { SessionObserver } from '../state/observer.js';
 import type { JsonObject, SessionPayload } from './frames.js';
-import { readAgentMessage, readStateTransition } from './frames.js';
+import { readAgentMessage, readObservedAt, readStateTransition } from './frames.js';
 import type { FrameSink } from './stream.js';
 import { forwardSession } from './stream.js';
 import { laneFor } from './stream-routing.js';
@@ -394,4 +394,59 @@ test('regression: a forwarder bug is a subscriber_failed degrade — it never im
   // while its forwarder was failing, which is what containing the two separately buys.
   assert.equal(created.value.state, 'live', 'the session is fine; only a subscriber was not');
   assert.equal(created.value.ended, null, 'the process was never blamed for a subscriber bug');
+});
+
+// When a message was seen is the host's fact, not the consumer's: a consumer that stamped its own
+// receipt time would put every message replayed after a reconnect at the moment of the replay.
+test('every forwarded message states the instant this host took it off the stream, on both lanes', async () => {
+  const fake = fakeAgents();
+  const registry = new SessionRegistry({
+    baseEnv: { PATH: 'p' },
+    homeDir: 'C:/nonexistent-home-for-tests',
+    startProcess: fake.start,
+  });
+  const created = registry.create({ cwd: 'C:/work' });
+  assert.ok(created.ok);
+  const observer = new SessionObserver(
+    new SessionStateMachine({ where: WHERE, clock: () => AT, ticker: fixedTicker(0) }),
+  );
+  const sink = new RecordingSink();
+  const instants = ['2026-08-04T00:00:01.000Z', '2026-08-04T00:00:02.000Z', '2026-08-04T00:00:03.000Z'];
+  let next = 0;
+  forwardSession({
+    sessionKey: 'handle-1',
+    session: created.value,
+    observer,
+    sink,
+    clock: () => instants[next++] ?? 'past the list',
+  });
+  const agent = fake.started[0];
+  assert.ok(agent);
+  agent.emit(initMessage('agent-1'));
+  agent.emit(textDelta('Hel'));
+  agent.emit(assistantMessage('Hello'));
+  await settle();
+
+  const stamped = sink.sent
+    .filter((entry) => readAgentMessage(bodyOf(entry.payload)) !== null)
+    .map((entry) => `${entry.payload.kind}@${readObservedAt(bodyOf(entry.payload))}`);
+  assert.deepEqual(stamped, [
+    'session_update@2026-08-04T00:00:01.000Z',
+    'session_delta@2026-08-04T00:00:02.000Z',
+    'session_update@2026-08-04T00:00:03.000Z',
+  ]);
+  // A transition carries its own `at`; the stamp belongs to the message alone.
+  const transitions = sink.sent.filter((entry) => readStateTransition(bodyOf(entry.payload)) !== null);
+  assert.ok(transitions.length > 0, 'the init message caused no transition to compare against');
+  for (const entry of transitions) assert.equal(readObservedAt(bodyOf(entry.payload)), null);
+});
+
+test('with no clock given, the stamp is the system clock, as ISO-8601 in UTC', async () => {
+  const wired = wire();
+  wired.emit(initMessage('agent-1'));
+  await settle();
+  const message = wired.sink.sent.find((entry) => readAgentMessage(bodyOf(entry.payload)) !== null);
+  assert.ok(message !== undefined);
+  const observed = readObservedAt(bodyOf(message.payload));
+  assert.match(observed ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 });

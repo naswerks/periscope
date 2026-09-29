@@ -77,6 +77,8 @@ export {
 // `registry.create({cwd})` by hand gets a correct-looking session with no gate and no observation,
 // which is why the assembly ships rather than living in a document.
 export type {
+  AgentCatalog,
+  AgentCatalogOptions,
   BulkResolver,
   ComposeSessionOptions,
   ComposedSession,
@@ -84,7 +86,7 @@ export type {
   HostEvent,
   PeriscopeHostOptions,
 } from './host/index.js';
-export { PeriscopeHost, composeSession } from './host/index.js';
+export { PeriscopeHost, composeSession, readAgentCatalog } from './host/index.js';
 
 // Identity — the pure flows, plus the two impure halves that live in `host/` by the same rule as
 // everything else that touches the machine.

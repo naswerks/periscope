@@ -27,6 +27,7 @@ import { ok, refuse } from '../core/result.js';
 import type { SessionRequest } from '../sessions/registry.js';
 import type { SpawnEnvPolicy } from '../sessions/spawn-env.js';
 import type {
+  EffortLevel,
   McpServerConfig,
   PermissionMode,
   SdkPluginConfig,
@@ -112,6 +113,7 @@ export interface SessionConfigureChange {
   readonly model?: string | null;
   readonly permissionMode?: PermissionMode;
   readonly thinking?: ThinkingConfig;
+  readonly effort?: EffortLevel;
 }
 
 /**
@@ -119,7 +121,12 @@ export interface SessionConfigureChange {
  * not declare is REFUSED by name — a mode nobody recognises must never become "the default" silently.
  */
 export function readSessionConfigure(payload: SessionConfigure): Result<SessionConfigureChange> {
-  const change: { model?: string | null; permissionMode?: PermissionMode; thinking?: ThinkingConfig } = {};
+  const change: {
+    model?: string | null;
+    permissionMode?: PermissionMode;
+    thinking?: ThinkingConfig;
+    effort?: EffortLevel;
+  } = {};
   if (payload.model !== null) change.model = payload.model;
   if (payload.permissionMode !== null) {
     if (!PERMISSION_MODES.includes(payload.permissionMode)) {
@@ -135,6 +142,16 @@ export function readSessionConfigure(payload: SessionConfigure): Result<SessionC
     const problem = thinkingProblem(payload.thinking);
     if (problem !== null) return refuse<SessionConfigureChange>('frame-malformed', problem);
     change.thinking = payload.thinking as unknown as ThinkingConfig;
+  }
+  // Protocol 12. Absent from a controller one release behind, which reads the same as null.
+  if (payload.effort !== undefined && payload.effort !== null) {
+    if (!EFFORT_LEVELS.includes(payload.effort)) {
+      return refuse<SessionConfigureChange>(
+        'frame-malformed',
+        `effort is ${JSON.stringify(payload.effort)}; the levels this SDK declares are ${EFFORT_LEVELS.join(', ')}`,
+      );
+    }
+    change.effort = payload.effort as EffortLevel;
   }
   return ok(change);
 }

@@ -21,6 +21,8 @@ export interface PeerOptions {
 
 export class Peer {
   readonly received: Frame[] = [];
+  /** Every message the host sent, as the bytes arrived: what a controller on another codec reads. */
+  readonly raw: string[] = [];
   /** When each inbound connection was accepted, so a backoff can be measured rather than parsed. */
   readonly connectedAtMs: number[] = [];
   /** Gaps and duplicates the peer observed on session lanes, keyed `sessionId/seq`. */
@@ -99,6 +101,7 @@ export class Peer {
   }
 
   #onMessage(socket: ServerSocket, raw: string): void {
+    this.raw.push(raw);
     const decoded = decode(raw);
     if (!decoded.ok) return;
     const frame = decoded.value;

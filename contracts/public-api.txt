@@ -92,6 +92,7 @@ host: function periscopeCredentialDir(env?: NodeJS.ProcessEnv): string | null
 host: function postBulk(request: BulkPostRequest): Promise<Result<BulkPostReceipt>>
 host: function probeModeEnforcement(directory: string): ModeEnforcement
 host: function protocolFor(config: IdentityConfig): AuthProtocol
+host: function readAgentCatalog(options: AgentCatalogOptions): Promise<AgentCatalog>
 host: function readConfigFile(env?: NodeJS.ProcessEnv): ConfigFileReading
 host: function readMachineFacts(): MachineFacts
 host: function readMirrorDrop(message: SDKMessage): MirrorDrop | null
@@ -112,6 +113,7 @@ host: function tokenCachePath(env?: NodeJS.ProcessEnv): string | null
 host: function transcriptsRootUnder(agentHome: string): string
 host: function withConfigFallback(env: NodeJS.ProcessEnv, values: Readonly<Record<string, string>>): NodeJS.ProcessEnv
 host: function writeConfigEntry(env: NodeJS.ProcessEnv, key: string, value: string): string | null
+host: interface AgentCatalogOptions { readonly cwd: string; readonly env: Record<string, string>; readonly timeoutMs: number }
 host: interface BulkPostReceipt { readonly byteCount: number; readonly deliveryId: string; readonly mtimeMs: number; readonly sizeBytes: number }
 host: interface BulkPostRequest { readonly allowedOrigin: string; readonly deliveryId: string; readonly filePath: string; readonly fromOffset: number; readonly headers?: Readonly<Record<string, string>>; readonly postUrl: string }
 host: interface ComposeSessionOptions { readonly clock?: Clock; readonly correlationId?: string; readonly cwd: string; readonly decide: Decider; readonly gate?: GateTimings; readonly localGate?: LocalGate; readonly onHookFailure?: (failure: { event: string; error: unknown; }) => void; readonly onOutcome?: (outcome: GateOutcome) => void; readonly onRefusal?: (refused: Refusal) => void; readonly registry: SessionRegistry; readonly request?: Omit<SessionRequest, "cwd" | "hooks">; readonly sessionKey: string; readonly sink: FrameSink; readonly ticker?: Ticker; readonly where?: TransitionWhere }
@@ -123,16 +125,17 @@ host: interface GateTimings { readonly decisionTimeoutMs?: number; readonly gran
 host: interface LoopbackListener { close: () => void; readonly callback: Promise<Result<string>>; readonly port: number; readonly redirectUri: string }
 host: interface MachineFacts { readonly homeDir: string; readonly hostname: string; readonly platform: NodeJS.Platform; readonly release: string; readonly tempDir: string }
 host: interface PairedCredentialWrite { readonly mode: CredentialModeOutcome; readonly path: string }
-host: interface PeriscopeHostOptions { readonly backoff?: BackoffOptions; readonly baseEnv?: Readonly<Record<string, string>>; readonly bulk?: BulkResolver; readonly clock?: Clock; readonly configuration?: HostConfiguration; readonly controllerUrl: string; readonly credential?: ControllerCredential; readonly decide: Decider; readonly defaultWorkspaceKey?: string; readonly extraEnvFloor?: readonly string[]; readonly gate?: GateTimings; readonly homeDir?: string; readonly hostId: string; readonly link?: (handlers: LinkHandlers) => HostLink; readonly linkCapabilities?: readonly string[]; readonly linkTimings?: { readonly heartbeatIntervalMs?: number; readonly heartbeatTimeoutMs?: number; readonly connectTimeoutMs?: number; }; readonly maxSessions?: number; readonly overriddenByEnvironment?: readonly string[]; readonly pendingRestart?: readonly string[]; readonly pluginDirs?: readonly string[]; readonly protectedPaths: readonly string[]; readonly reconfigure?: HostReconfigurer; readonly registry?: SessionRegistry; readonly report?: (event: HostEvent) => void; readonly ticker?: Ticker; readonly toolFamilies?: ToolFamilies; readonly tools?: Omit<McpServerOptions, "identity">; readonly transcriptsRoot?: string; readonly workspaces?: WorkspaceProvider }
+host: interface PeriscopeHostOptions { readonly agentCatalog?: () => Promise<AgentCatalog>; readonly backoff?: BackoffOptions; readonly baseEnv?: Readonly<Record<string, string>>; readonly bulk?: BulkResolver; readonly clock?: Clock; readonly configuration?: HostConfiguration; readonly controllerUrl: string; readonly credential?: ControllerCredential; readonly decide: Decider; readonly defaultWorkspaceKey?: string; readonly extraEnvFloor?: readonly string[]; readonly gate?: GateTimings; readonly homeDir?: string; readonly hostId: string; readonly link?: (handlers: LinkHandlers) => HostLink; readonly linkCapabilities?: readonly string[]; readonly linkTimings?: { readonly heartbeatIntervalMs?: number; readonly heartbeatTimeoutMs?: number; readonly connectTimeoutMs?: number; }; readonly maxSessions?: number; readonly overriddenByEnvironment?: readonly string[]; readonly pendingRestart?: readonly string[]; readonly pluginDirs?: readonly string[]; readonly protectedPaths: readonly string[]; readonly reconfigure?: HostReconfigurer; readonly registry?: SessionRegistry; readonly report?: (event: HostEvent) => void; readonly ticker?: Ticker; readonly toolFamilies?: ToolFamilies; readonly tools?: Omit<McpServerOptions, "identity">; readonly transcriptsRoot?: string; readonly workspaces?: WorkspaceProvider }
 host: interface RepositoryListing { readonly entries: readonly RepositoryEntry[]; readonly truncated: boolean }
 host: interface RepositoryText { readonly sizeBytes: number; readonly text: string; readonly truncated: boolean }
 host: interface SignInDeps { readonly fetch?: { (input: RequestInfo | URL, init?: RequestInit): Promise<Response>; (input: string | URL | Request, init?: RequestInit): Promise<Response>; }; readonly nowMs?: Ticker; readonly present?: (url: string) => void; readonly sleep?: (ms: number) => Promise<void>; readonly timeoutMs?: number }
 host: interface TokenCacheWrite { readonly mode: CredentialModeOutcome; readonly path: string }
 host: interface TranscriptPage { readonly entries: readonly DiscoveredTranscript[]; readonly nextIndex: number; readonly totalCount: number }
 host: interface TranscriptTailAnswer { readonly absent: boolean; readonly found: boolean; readonly mtimeMs: number; readonly newOffset: number; readonly sizeBytes: number }
+host: type AgentCatalog = { readonly ok: true; readonly agent: HostAgent; } | { readonly ok: false; readonly detail: string; }
 host: type BulkResolver = { (what: string, sessionKey: string): Result<string> }
 host: type ConfigKey = "PERISCOPE_CONTROLLER_URL" | "PERISCOPE_DECISION_URL" | "PERISCOPE_HOST_ID" | "PERISCOPE_WORKSPACE_ROOT" | "PERISCOPE_REPOSITORY_ROOT" | "PERISCOPE_BRANCH_SCHEME" | "PERISCOPE_WORKSPACE_KEY" | "PERISCOPE_AGENT_HOME" | "PERISCOPE_PLUGIN_DIRS"
-host: type HostEvent = { readonly kind: "link"; readonly transition: LinkTransition; } | { readonly kind: "refusal"; readonly refusal: Refusal; readonly sessionKey: string | null; } | { readonly kind: "gap"; readonly sessionKey: string; readonly expected: number; readonly received: number; } | { readonly kind: "session-opened"; readonly sessionKey: string; readonly cwd: string; } | { readonly kind: "session-closed"; readonly sessionKey: string; } | { readonly kind: "prompt-held"; readonly sessionKey: string; readonly held: number; } | { readonly kind: "prompt-delivered"; readonly sessionKey: string; readonly delivered: number; } | { readonly kind: "prompt-withdrawn"; readonly sessionKey: string; readonly withdrawn: number; } | { readonly kind: "transition"; readonly sessionKey: string; readonly transition: SessionTransition; } | { readonly kind: "degrade"; readonly sessionKey: string; readonly degrade: SessionDegrade; }
+host: type HostEvent = { readonly kind: "link"; readonly transition: LinkTransition; } | { readonly kind: "refusal"; readonly refusal: Refusal; readonly sessionKey: string | null; } | { readonly kind: "gap"; readonly sessionKey: string; readonly expected: number; readonly received: number; } | { readonly kind: "session-opened"; readonly sessionKey: string; readonly cwd: string; } | { readonly kind: "session-closed"; readonly sessionKey: string; } | { readonly kind: "prompt-held"; readonly sessionKey: string; readonly held: number; } | { readonly kind: "prompt-delivered"; readonly sessionKey: string; readonly delivered: number; } | { readonly kind: "prompt-withdrawn"; readonly sessionKey: string; readonly withdrawn: number; } | { readonly kind: "transition"; readonly sessionKey: string; readonly transition: SessionTransition; } | { readonly kind: "degrade"; readonly sessionKey: string; readonly degrade: SessionDegrade; } | { readonly kind: "agent-catalog"; readonly agent: HostAgent | null; readonly detail: string | null; }
 identity: class PairedHostCredential { new (file: PairedCredentialFile): PairedHostCredential; authorize: () => Promise<Result<Authorization>> }
 identity: class TokenCredential { new (options: TokenCredentialOptions): TokenCredential; authorize: () => Promise<Result<Authorization>> }
 identity: const AUTHORIZATION_HEADER: "Authorization"
@@ -241,6 +244,8 @@ index: const HOST_NOUNS: readonly ["link", "bulk"]
 index: const INTERPRETER_NAMES: readonly string[]
 index: const LINK_CAUSES: readonly ["start_requested", "socket_connected", "hello_completed", "socket_error", "socket_closed", "heartbeat_timeout", "connect_timeout", "protocol_version_rejected", "replay_requested", "credential_unavailable", "credential_rejected", "retry_scheduled", "shutdown_requested"]
 index: const LOOPBACK_HOST: "127.0.0.1"
+index: const MAX_AGENT_CATALOG_BYTES: number
+index: const MAX_AGENT_MODELS: 32
 index: const MAX_BULK_RELEASES: 25
 index: const MAX_CONFIGURATION_VALUE_LENGTH: 1000
 index: const MAX_CONFIGURE_ENTRIES: 8
@@ -254,8 +259,8 @@ index: const MESSAGE_ROUTING: { readonly stream_event: { readonly lane: "delta";
 index: const MIRROR_ATTEMPTS: Readonly<Record<MirrorFailureKind, number>>
 index: const NO_SPEND: SpendTotal
 index: const PROCESS_EVENTS: readonly ["process_started", "stop_requested", "process_ended", "process_failed", "start_timed_out"]
-index: const PROTOCOL_VERSION: 11
-index: const PROTOCOL_VERSION_MIN: 10
+index: const PROTOCOL_VERSION: 12
+index: const PROTOCOL_VERSION_MIN: 11
 index: const REFUSAL_REASONS: readonly ["frame-not-json", "frame-malformed", "frame-too-large", "seq-gap", "seq-regressed", "link-not-open", "link-closed", "link-send-failed", "link-unauthorized", "link-write-deferred", "queue-dropped-droppable", "queue-overflow-undroppable", "retention-released-unacked", "credential-unavailable", "session-unknown", "session-spawn-failed", "workspace-untrusted", "session-cap-reached", "prompt-queue-full", "env-key-refused", "session-configure-failed", "transition-cause-unnamed", "permission-decision-unavailable", "permission-decision-unrecognised", "permission-grant-shadows-settings", "gate-deadlines-inverted", "bulk-target-invalid", "bulk-target-not-controller", "bulk-delivery-failed", "path-not-absolute", "path-escapes-root", "path-input-missing", "path-unresolvable", "credential-path-denied", "shell-command-missing", "shell-boundary-command", "shell-verb-unrecognised", "identity-not-configured", "identity-config-invalid", "token-unavailable", "auth-state-mismatch", "auth-callback-refused", "pkce-method-unsupported", "token-request-failed", "token-response-invalid", "token-grant-rejected", "credential-cache-unreadable", "credential-cache-write-failed", "credential-mode-too-wide", "credential-mode-unenforced", "credential-mode-unobservable", "device-code-not-enabled", "device-code-declined", "workspace-provision-failed", "workspace-release-failed", "resume-cwd-not-honoured", "mcp-descriptor-invalid", "mcp-schema-unsupported", "mcp-tool-input-invalid", "transcript-key-invalid", "transcript-entry-malformed", "transcript-read-failed", "transcript-write-failed", "receipt-anchor-unknown", "retention-window-invalid", "gate-cannot-grant", "transcript-path-escape", "config-key-unknown", "config-value-invalid", "config-host-busy", "config-write-failed", "workspace-list-failed", "repository-path-escape", "repository-read-failed", "branch-not-merged"]
 index: const SDK_ACTIVITY_KINDS: readonly ("tool" | "subagent" | "permission" | "requesting" | "compacting" | "elicitation")[]
 index: const SDK_NOUNS: readonly ["session", "message", "hook", "tool", "subagent", "turn", "result", "permission", "compaction"]
@@ -272,8 +277,8 @@ index: const nodeWorkspaceEffects: WorkspaceEffects
 index: const systemClock: Clock
 index: const systemTicker: Ticker
 index: function abandonmentsIn(entries: readonly TranscriptEntry[]): Map<string, TranscriptEntry>
-index: function agentMessageDelta(message: JsonObject): SessionDelta
-index: function agentMessageUpdate(message: JsonObject): SessionUpdate
+index: function agentMessageDelta(message: JsonObject, observedAt?: string | null): SessionDelta
+index: function agentMessageUpdate(message: JsonObject, observedAt?: string | null): SessionUpdate
 index: function asSessionStore(store: TranscriptStore): SessionStore
 index: function authorizationValue(tokens: TokenSet): string
 index: function baselineAnchor(entries: readonly TranscriptEntry[]): string | null
@@ -371,6 +376,7 @@ index: function probeModeEnforcement(directory: string): ModeEnforcement
 index: function programNameOf(token: string): string
 index: function protocolFor(config: IdentityConfig): AuthProtocol
 index: function randomUrlSafe(bytes?: number): string
+index: function readAgentCatalog(options: AgentCatalogOptions): Promise<AgentCatalog>
 index: function readAgentMessage(body: JsonObject): JsonObject | null
 index: function readAuthorizationCallback(rawQuery: string, expectedState: string): Result<AuthorizationCallback>
 index: function readCachedTokens(parsed: unknown): Result<CachedTokens>
@@ -381,6 +387,7 @@ index: function readDiscoveryDocument(body: unknown): Result<IdentityEndpoints>
 index: function readIdentityConfig(env: NodeJS.ProcessEnv): Result<IdentityConfig>
 index: function readMachineFacts(): MachineFacts
 index: function readMirrorDrop(message: SDKMessage): MirrorDrop | null
+index: function readObservedAt(body: JsonObject): string | null
 index: function readPairedCredentialFile(parsed: unknown): Result<PairedCredentialFile>
 index: function readRateLimit(message: SDKMessage): RateLimitStanding | null
 index: function readRefusal(wire: WireRefusal): ReadRefusal
@@ -450,7 +457,8 @@ index: function workspaceReleaseEntryResult(outcome?: Partial<WorkspaceReleaseEn
 index: function workspaceReleaseResult(requestId: string, outcome?: Partial<WorkspaceReleaseEntryResult>): WorkspaceReleaseResult
 index: function worktreeAddArgs(path: string, branch: string, baseRef: string, branchExists: boolean): readonly string[]
 index: interface AgedEntry { readonly abandonReason: string; readonly abandonedAt: string; readonly activity: SessionActivity; readonly ageMs: number; readonly agentId: string; readonly backgroundedAt: string; readonly cause: TransitionCause; readonly entryId: string; readonly lane: EntryLane; readonly openedAt: string }
-index: interface AgentMessageUpdate { readonly message: JsonObject; readonly update: "agent_message" }
+index: interface AgentCatalogOptions { readonly cwd: string; readonly env: Record<string, string>; readonly timeoutMs: number }
+index: interface AgentMessageUpdate { readonly message: JsonObject; readonly observedAt?: string; readonly update: "agent_message" }
 index: interface Authorization { readonly header: string; readonly value: string }
 index: interface AuthorizationCallback { readonly code: string }
 index: interface AuthorizationRequest { readonly pkce: Pkce; readonly redirectUri: string; readonly state: string; readonly url: string }
@@ -473,15 +481,17 @@ index: interface DeviceAuthorization { readonly deviceCode: string; readonly exp
 index: interface DeviceCodeInstruction { readonly userCode: string; readonly verificationUri: string }
 index: interface EscalationOptions { readonly credential?: ControllerCredential; readonly headers?: Record<string, string>; readonly transport: EscalationTransport; readonly url: string }
 index: interface EscalationResponse { readonly status: number; text: () => Promise<string> }
-index: interface ForwardSessionOptions { readonly observer: SessionObserver; readonly onRefusal?: (refusal: Refusal) => void; readonly session: HostedSession; readonly sessionKey: string; readonly sink: FrameSink }
+index: interface ForwardSessionOptions { readonly clock?: Clock; readonly observer: SessionObserver; readonly onRefusal?: (refusal: Refusal) => void; readonly session: HostedSession; readonly sessionKey: string; readonly sink: FrameSink }
 index: interface FrameSink { send: (sessionId: string, payload: SessionPayload) => Result<void> }
 index: interface GateTimings { readonly decisionTimeoutMs?: number; readonly grantOnAllow?: boolean; readonly holdAfterMs?: number; readonly matcherTimeoutSeconds?: number }
 index: interface GitWorktreeProviderOptions { readonly baseRef?: string; readonly branchFor?: (sessionId: string) => string; readonly commands: CommandEffects; readonly effects: WorkspaceEffects; readonly repositoryRoot: string; readonly workspaceRoot: string }
 index: interface GlobalFlag { readonly argument: string; readonly flag: string }
-index: interface HostConfiguration { readonly agentHome: string; readonly branchScheme: string; readonly controllerUrl: string; readonly decisionUrl: string; readonly plugins: readonly HostPlugin[]; readonly repositoryRoot: string; readonly transcriptsRoot: string; readonly workspaceRoot: string }
+index: interface HostAgent { readonly claudeCodeVersion: string; readonly models: readonly HostModel[]; readonly sdkVersion: string }
+index: interface HostConfiguration { readonly agent?: HostAgent; readonly agentHome: string; readonly branchScheme: string; readonly controllerUrl: string; readonly decisionUrl: string; readonly plugins: readonly HostPlugin[]; readonly repositoryRoot: string; readonly transcriptsRoot: string; readonly workspaceRoot: string }
 index: interface HostConfigure { readonly entries: readonly HostConfigureEntry[]; readonly kind: "host_configure"; readonly requestId: string }
 index: interface HostConfigureEntry { readonly key: string; readonly value: string }
 index: interface HostConfigureResult { readonly configuration: HostConfiguration; readonly kind: "host_configure_result"; readonly overriddenByEnvironment: readonly string[]; readonly pendingRestart: readonly string[]; readonly refusal: WireRefusal; readonly requestId: string }
+index: interface HostModel { readonly description: string; readonly displayName: string; readonly resolvedModel: string; readonly supportedEffortLevels: readonly string[]; readonly supportsAdaptiveThinking: boolean; readonly supportsAutoMode: boolean; readonly supportsFastMode: boolean; readonly value: string }
 index: interface HostPlugin { readonly name: string; readonly path: string; readonly version: string }
 index: interface HostedSessionFacts { readonly apiKeySource: string; readonly capabilities: readonly string[]; readonly cliVersion: string; readonly cwd: string; readonly id: string; readonly mcpServers: readonly { readonly name: string; readonly status: string; }[]; readonly model: string; readonly permissionMode: string; readonly plugins: readonly { readonly name: string; readonly path: string; readonly version: string | null; }[]; readonly pluginsApplied: boolean; readonly skills: readonly string[]; readonly startedAt: string; readonly tools: readonly string[]; readonly workspaceTrust: WorkspaceTrust }
 index: interface IdentityConfig { readonly authority: string; readonly clientId: string; readonly deviceCodeEnabled: boolean; readonly endpoints: IdentityEndpoints; readonly redirectPort: number; readonly scopes: readonly string[] }
@@ -511,7 +521,7 @@ index: interface OpenEntry { readonly abandonReason: string; readonly abandonedA
 index: interface PairedCredentialFile { readonly credential: string; readonly hostId: string }
 index: interface PairedCredentialStore { read: () => Result<PairedCredentialFile>; write: (file: PairedCredentialFile) => Result<unknown> }
 index: interface ParsedCommand { readonly hasInterpreter: boolean; readonly invocations: readonly Invocation[]; readonly scannable: string }
-index: interface PeriscopeHostOptions { readonly backoff?: BackoffOptions; readonly baseEnv?: Readonly<Record<string, string>>; readonly bulk?: BulkResolver; readonly clock?: Clock; readonly configuration?: HostConfiguration; readonly controllerUrl: string; readonly credential?: ControllerCredential; readonly decide: Decider; readonly defaultWorkspaceKey?: string; readonly extraEnvFloor?: readonly string[]; readonly gate?: GateTimings; readonly homeDir?: string; readonly hostId: string; readonly link?: (handlers: LinkHandlers) => HostLink; readonly linkCapabilities?: readonly string[]; readonly linkTimings?: { readonly heartbeatIntervalMs?: number; readonly heartbeatTimeoutMs?: number; readonly connectTimeoutMs?: number; }; readonly maxSessions?: number; readonly overriddenByEnvironment?: readonly string[]; readonly pendingRestart?: readonly string[]; readonly pluginDirs?: readonly string[]; readonly protectedPaths: readonly string[]; readonly reconfigure?: HostReconfigurer; readonly registry?: SessionRegistry; readonly report?: (event: HostEvent) => void; readonly ticker?: Ticker; readonly toolFamilies?: ToolFamilies; readonly tools?: Omit<McpServerOptions, "identity">; readonly transcriptsRoot?: string; readonly workspaces?: WorkspaceProvider }
+index: interface PeriscopeHostOptions { readonly agentCatalog?: () => Promise<AgentCatalog>; readonly backoff?: BackoffOptions; readonly baseEnv?: Readonly<Record<string, string>>; readonly bulk?: BulkResolver; readonly clock?: Clock; readonly configuration?: HostConfiguration; readonly controllerUrl: string; readonly credential?: ControllerCredential; readonly decide: Decider; readonly defaultWorkspaceKey?: string; readonly extraEnvFloor?: readonly string[]; readonly gate?: GateTimings; readonly homeDir?: string; readonly hostId: string; readonly link?: (handlers: LinkHandlers) => HostLink; readonly linkCapabilities?: readonly string[]; readonly linkTimings?: { readonly heartbeatIntervalMs?: number; readonly heartbeatTimeoutMs?: number; readonly connectTimeoutMs?: number; }; readonly maxSessions?: number; readonly overriddenByEnvironment?: readonly string[]; readonly pendingRestart?: readonly string[]; readonly pluginDirs?: readonly string[]; readonly protectedPaths: readonly string[]; readonly reconfigure?: HostReconfigurer; readonly registry?: SessionRegistry; readonly report?: (event: HostEvent) => void; readonly ticker?: Ticker; readonly toolFamilies?: ToolFamilies; readonly tools?: Omit<McpServerOptions, "identity">; readonly transcriptsRoot?: string; readonly workspaces?: WorkspaceProvider }
 index: interface PermissionGateOptions { readonly decide: Decider; readonly decisionTimeoutMs?: number; readonly grantOnAllow?: boolean; readonly holdAfterMs?: number; readonly localGate?: LocalGate; readonly matcherTimeoutSeconds?: number; readonly onDegrade?: (degrade: { readonly name: RefusalReason; readonly detail: string; }) => void; readonly onOutcome: OutcomeListener; readonly sessionKey: string }
 index: interface Pkce { readonly challenge: string; readonly method: "S256"; readonly verifier: string }
 index: interface PlainDirProviderOptions { readonly effects: WorkspaceEffects; readonly root: string }
@@ -535,7 +545,7 @@ index: interface RetentionPolicy { readonly maxAgeMs: number }
 index: interface RoutingRow { readonly lane: StreamLane; readonly note: string }
 index: interface SessionActivity { readonly kind: "tool" | "subagent" | "permission" | "requesting" | "compacting" | "elicitation"; readonly name: string }
 index: interface SessionCancel { readonly kind: "session_cancel" }
-index: interface SessionConfigure { readonly kind: "session_configure"; readonly model: string; readonly permissionMode: string; readonly thinking: JsonObject }
+index: interface SessionConfigure { readonly effort?: string; readonly kind: "session_configure"; readonly model: string; readonly permissionMode: string; readonly thinking: JsonObject }
 index: interface SessionCursor { readonly seq: number; readonly sessionId: string }
 index: interface SessionDegrade { readonly at: string; readonly detail: string; readonly kind: "workspace_untrusted" | "subscriber_failed" | "session_id_collision" }
 index: interface SessionDelta { readonly body: JsonObject; readonly kind: "session_delta" }
@@ -605,6 +615,7 @@ index: interface WorkspaceReleaseEntryResult { readonly branchDeleted: boolean; 
 index: interface WorkspaceReleaseFlags { readonly deleteBranch?: boolean; readonly force?: boolean }
 index: interface WorkspaceReleaseResult { readonly branchDeleted: boolean; readonly directoryRemoved: boolean; readonly kind: "workspace_release_result"; readonly path: string; readonly refusal: WireRefusal; readonly requestId: string; readonly workspaceKey: string }
 index: type ActivityKind = "tool" | "subagent" | "permission" | "requesting" | "compacting" | "elicitation"
+index: type AgentCatalog = { readonly ok: true; readonly agent: HostAgent; } | { readonly ok: false; readonly detail: string; }
 index: type AuthProtocol = "loopback" | "device-code"
 index: type BulkResolver = { (what: string, sessionKey: string): Result<string> }
 index: type CauseEvent = "assistant" | "result" | "permission_denied" | "system/init" | "system/compact_boundary" | "system/status" | "system/model_refusal_no_fallback" | "system/task_notification" | "system/task_started" | "system/task_updated" | "system/session_state_changed" | "system/worker_shutting_down" | "system/elicitation_complete" | "system/permission_denied" | "frame-not-json" | "frame-malformed" | "frame-too-large" | "seq-gap" | "seq-regressed" | "link-not-open" | "link-closed" | "link-send-failed" | "link-unauthorized" | "link-write-deferred" | "queue-dropped-droppable" | "queue-overflow-undroppable" | "retention-released-unacked" | "credential-unavailable" | "session-unknown" | "session-spawn-failed" | "workspace-untrusted" | "session-cap-reached" | "prompt-queue-full" | "env-key-refused" | "session-configure-failed" | "transition-cause-unnamed" | "permission-decision-unavailable" | "permission-decision-unrecognised" | "permission-grant-shadows-settings" | "gate-deadlines-inverted" | "bulk-target-invalid" | "bulk-target-not-controller" | "bulk-delivery-failed" | "path-not-absolute" | "path-escapes-root" | "path-input-missing" | "path-unresolvable" | "credential-path-denied" | "shell-command-missing" | "shell-boundary-command" | "shell-verb-unrecognised" | "identity-not-configured" | "identity-config-invalid" | "token-unavailable" | "auth-state-mismatch" | "auth-callback-refused" | "pkce-method-unsupported" | "token-request-failed" | "token-response-invalid" | "token-grant-rejected" | "credential-cache-unreadable" | "credential-cache-write-failed" | "credential-mode-too-wide" | "credential-mode-unenforced" | "credential-mode-unobservable" | "device-code-not-enabled" | "device-code-declined" | "workspace-provision-failed" | "workspace-release-failed" | "resume-cwd-not-honoured" | "mcp-descriptor-invalid" | "mcp-schema-unsupported" | "mcp-tool-input-invalid" | "transcript-key-invalid" | "transcript-entry-malformed" | "transcript-read-failed" | "transcript-write-failed" | "receipt-anchor-unknown" | "retention-window-invalid" | "gate-cannot-grant" | "transcript-path-escape" | "config-key-unknown" | "config-value-invalid" | "config-host-busy" | "config-write-failed" | "workspace-list-failed" | "repository-path-escape" | "repository-read-failed" | "branch-not-merged" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PostToolBatch" | "Notification" | "UserPromptSubmit" | "UserPromptExpansion" | "SessionStart" | "SessionEnd" | "Stop" | "StopFailure" | "SubagentStart" | "SubagentStop" | "PreCompact" | "PostCompact" | "PreModelSwitch" | "PostModelSwitch" | "PermissionRequest" | "PermissionDenied" | "Setup" | "TeammateIdle" | "TaskCreated" | "TaskCompleted" | "Elicitation" | "ElicitationResult" | "ConfigChange" | "WorktreeCreate" | "WorktreeRemove" | "InstructionsLoaded" | "CwdChanged" | "FileChanged" | "DirectoryAdded" | "MessageDisplay" | "create_requested" | "prompt_submitted" | "interrupt_requested" | "stop_requested" | "process_started" | "process_ended" | "process_failed" | "start_timed_out" | "hook_timed_out"
@@ -627,7 +638,7 @@ index: type Frame = SessionFrame | ControlFrame
 index: type GateOutcome = { readonly kind: "holding"; readonly request: DecisionRequest; } | { readonly kind: "allow"; readonly request: DecisionRequest; readonly updatedInput?: Record<string, unknown>; readonly held: boolean; } | { readonly kind: "deny"; readonly request: DecisionRequest; readonly message: string; readonly held: boolean; } | { readonly kind: "refused"; readonly request: DecisionRequest; readonly refusal: Refusal; readonly held: boolean; } | { readonly kind: "expired"; readonly request: DecisionRequest; readonly detail: string; readonly held: boolean; }
 index: type HookEventName = "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PostToolBatch" | "Notification" | "UserPromptSubmit" | "UserPromptExpansion" | "SessionStart" | "SessionEnd" | "Stop" | "StopFailure" | "SubagentStart" | "SubagentStop" | "PreCompact" | "PostCompact" | "PreModelSwitch" | "PostModelSwitch" | "PermissionRequest" | "PermissionDenied" | "Setup" | "TeammateIdle" | "TaskCreated" | "TaskCompleted" | "Elicitation" | "ElicitationResult" | "ConfigChange" | "WorktreeCreate" | "WorktreeRemove" | "InstructionsLoaded" | "CwdChanged" | "FileChanged" | "DirectoryAdded" | "MessageDisplay"
 index: type HookFailureListener = { (failure: { event: string; error: unknown; }): void }
-index: type HostEvent = { readonly kind: "link"; readonly transition: LinkTransition; } | { readonly kind: "refusal"; readonly refusal: Refusal; readonly sessionKey: string | null; } | { readonly kind: "gap"; readonly sessionKey: string; readonly expected: number; readonly received: number; } | { readonly kind: "session-opened"; readonly sessionKey: string; readonly cwd: string; } | { readonly kind: "session-closed"; readonly sessionKey: string; } | { readonly kind: "prompt-held"; readonly sessionKey: string; readonly held: number; } | { readonly kind: "prompt-delivered"; readonly sessionKey: string; readonly delivered: number; } | { readonly kind: "prompt-withdrawn"; readonly sessionKey: string; readonly withdrawn: number; } | { readonly kind: "transition"; readonly sessionKey: string; readonly transition: SessionTransition; } | { readonly kind: "degrade"; readonly sessionKey: string; readonly degrade: SessionDegrade; }
+index: type HostEvent = { readonly kind: "link"; readonly transition: LinkTransition; } | { readonly kind: "refusal"; readonly refusal: Refusal; readonly sessionKey: string | null; } | { readonly kind: "gap"; readonly sessionKey: string; readonly expected: number; readonly received: number; } | { readonly kind: "session-opened"; readonly sessionKey: string; readonly cwd: string; } | { readonly kind: "session-closed"; readonly sessionKey: string; } | { readonly kind: "prompt-held"; readonly sessionKey: string; readonly held: number; } | { readonly kind: "prompt-delivered"; readonly sessionKey: string; readonly delivered: number; } | { readonly kind: "prompt-withdrawn"; readonly sessionKey: string; readonly withdrawn: number; } | { readonly kind: "transition"; readonly sessionKey: string; readonly transition: SessionTransition; } | { readonly kind: "degrade"; readonly sessionKey: string; readonly degrade: SessionDegrade; } | { readonly kind: "agent-catalog"; readonly agent: HostAgent | null; readonly detail: string | null; }
 index: type HostNoun = "link" | "bulk"
 index: type IdentityPosture = { readonly kind: "configured"; readonly config: IdentityConfig; } | { readonly kind: "absent"; } | { readonly kind: "invalid"; readonly detail: string; }
 index: type InboundCheck = { readonly disposition: "accept"; } | { readonly disposition: "duplicate"; readonly seq: number; } | { readonly disposition: "gap"; readonly expected: number; readonly received: number; }
@@ -733,6 +744,8 @@ protocol: const CAUSE_KINDS: readonly ["hook", "sdk-message", "control", "timeou
 protocol: const DROPPABLE_KINDS: readonly ("bulk_delivered" | "bulk_failed" | "bulk_request" | "host_configure" | "host_configure_result" | "session_cancel" | "session_configure" | "session_delta" | "session_list" | "session_list_result" | "session_new" | "session_update" | "session_prompt" | "transcript_list" | "transcript_list_result" | "transcript_tail" | "transcript_tail_result" | "transcript_failed" | "workspace_release" | "workspace_release_result" | "workspace_release_bulk" | "workspace_release_bulk_result" | "workspace_list" | "workspace_list_result" | "repository_list" | "repository_list_result" | "repository_read" | "repository_read_result" | "answer_refused")[]
 protocol: const HOOK_EVENTS: readonly ["PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch", "Notification", "UserPromptSubmit", "UserPromptExpansion", "SessionStart", "SessionEnd", "Stop", "StopFailure", "SubagentStart", "SubagentStop", "PreCompact", "PostCompact", "PreModelSwitch", "PostModelSwitch", "PermissionRequest", "PermissionDenied", "Setup", "TeammateIdle", "TaskCreated", "TaskCompleted", "Elicitation", "ElicitationResult", "ConfigChange", "WorktreeCreate", "WorktreeRemove", "InstructionsLoaded", "CwdChanged", "FileChanged", "DirectoryAdded", "MessageDisplay"]
 protocol: const HOST_ACTIVITY_KINDS: readonly ("tool" | "subagent" | "permission" | "requesting" | "compacting" | "elicitation")[]
+protocol: const MAX_AGENT_CATALOG_BYTES: number
+protocol: const MAX_AGENT_MODELS: 32
 protocol: const MAX_BULK_RELEASES: 25
 protocol: const MAX_CONFIGURATION_VALUE_LENGTH: 1000
 protocol: const MAX_CONFIGURE_ENTRIES: 8
@@ -740,16 +753,16 @@ protocol: const MAX_FRAME_BYTES: number
 protocol: const MAX_PLUGIN_DIRS: 8
 protocol: const MAX_REPOSITORY_ENTRIES: 500
 protocol: const MAX_REPOSITORY_READ_BYTES: number
-protocol: const PROTOCOL_VERSION: 11
-protocol: const PROTOCOL_VERSION_MIN: 10
+protocol: const PROTOCOL_VERSION: 12
+protocol: const PROTOCOL_VERSION_MIN: 11
 protocol: const REFUSAL_REASONS: readonly ["frame-not-json", "frame-malformed", "frame-too-large", "seq-gap", "seq-regressed", "link-not-open", "link-closed", "link-send-failed", "link-unauthorized", "link-write-deferred", "queue-dropped-droppable", "queue-overflow-undroppable", "retention-released-unacked", "credential-unavailable", "session-unknown", "session-spawn-failed", "workspace-untrusted", "session-cap-reached", "prompt-queue-full", "env-key-refused", "session-configure-failed", "transition-cause-unnamed", "permission-decision-unavailable", "permission-decision-unrecognised", "permission-grant-shadows-settings", "gate-deadlines-inverted", "bulk-target-invalid", "bulk-target-not-controller", "bulk-delivery-failed", "path-not-absolute", "path-escapes-root", "path-input-missing", "path-unresolvable", "credential-path-denied", "shell-command-missing", "shell-boundary-command", "shell-verb-unrecognised", "identity-not-configured", "identity-config-invalid", "token-unavailable", "auth-state-mismatch", "auth-callback-refused", "pkce-method-unsupported", "token-request-failed", "token-response-invalid", "token-grant-rejected", "credential-cache-unreadable", "credential-cache-write-failed", "credential-mode-too-wide", "credential-mode-unenforced", "credential-mode-unobservable", "device-code-not-enabled", "device-code-declined", "workspace-provision-failed", "workspace-release-failed", "resume-cwd-not-honoured", "mcp-descriptor-invalid", "mcp-schema-unsupported", "mcp-tool-input-invalid", "transcript-key-invalid", "transcript-entry-malformed", "transcript-read-failed", "transcript-write-failed", "receipt-anchor-unknown", "retention-window-invalid", "gate-cannot-grant", "transcript-path-escape", "config-key-unknown", "config-value-invalid", "config-host-busy", "config-write-failed", "workspace-list-failed", "repository-path-escape", "repository-read-failed", "branch-not-merged"]
 protocol: const SDK_ACTIVITY_KINDS: readonly ("tool" | "subagent" | "permission" | "requesting" | "compacting" | "elicitation")[]
 protocol: const SESSION_STATES: readonly ["spawning", "ready", "working", "idle", "errored", "interrupted", "ended"]
 protocol: const TRANSCRIPT_PAGE_SIZE: 100
 protocol: const TRANSCRIPT_WHAT_PREFIX: "claude-transcript:"
 protocol: const WORKSPACE_PAGE_SIZE: 25
-protocol: function agentMessageDelta(message: JsonObject): SessionDelta
-protocol: function agentMessageUpdate(message: JsonObject): SessionUpdate
+protocol: function agentMessageDelta(message: JsonObject, observedAt?: string | null): SessionDelta
+protocol: function agentMessageUpdate(message: JsonObject, observedAt?: string | null): SessionUpdate
 protocol: function bulkDelivered(deliveryId: string, byteCount: number, stat?: { sizeBytes?: number; mtimeMs?: number; }): BulkDelivered
 protocol: function decode(raw: string): Result<Frame>
 protocol: function describeRaw(raw: unknown): string
@@ -766,6 +779,7 @@ protocol: function isRefusalReason(value: string): value is RefusalReason
 protocol: function isSessionFrame(frame: Frame): frame is SessionFrame
 protocol: function readAgentMessage(body: JsonObject): JsonObject | null
 protocol: function readDecision(raw: unknown): DecisionReading
+protocol: function readObservedAt(body: JsonObject): string | null
 protocol: function readRefusal(wire: WireRefusal): ReadRefusal
 protocol: function readStateTransition(body: JsonObject): SessionTransition | null
 protocol: function readWireRefusal(body: JsonObject): WireRefusalUpdate | null
@@ -794,7 +808,7 @@ protocol: function workspaceReleaseBulkResult(requestId: string, results: readon
 protocol: function workspaceReleaseEntryResult(outcome?: Partial<WorkspaceReleaseEntryResult>): WorkspaceReleaseEntryResult
 protocol: function workspaceReleaseResult(requestId: string, outcome?: Partial<WorkspaceReleaseEntryResult>): WorkspaceReleaseResult
 protocol: interface AgedEntry { readonly abandonReason: string; readonly abandonedAt: string; readonly activity: SessionActivity; readonly ageMs: number; readonly agentId: string; readonly backgroundedAt: string; readonly cause: TransitionCause; readonly entryId: string; readonly lane: EntryLane; readonly openedAt: string }
-protocol: interface AgentMessageUpdate { readonly message: JsonObject; readonly update: "agent_message" }
+protocol: interface AgentMessageUpdate { readonly message: JsonObject; readonly observedAt?: string; readonly update: "agent_message" }
 protocol: interface Authorization { readonly header: string; readonly value: string }
 protocol: interface BulkDelivered { readonly byteCount: number; readonly deliveryId: string; readonly kind: "bulk_delivered"; readonly mtimeMs: number; readonly sizeBytes: number }
 protocol: interface BulkFailed { readonly deliveryId: string; readonly kind: "bulk_failed"; readonly refusal: WireRefusal }
@@ -804,10 +818,12 @@ protocol: interface ControllerCredential { authorize: () => Promise<Result<Autho
 protocol: interface DecisionRequest { readonly agentId: string; readonly agentType: string; readonly cwd: string; readonly sessionId: string; readonly sessionKey: string; readonly toolInput: unknown; readonly toolName: string; readonly toolUseId: string }
 protocol: interface EscalationOptions { readonly credential?: ControllerCredential; readonly headers?: Record<string, string>; readonly transport: EscalationTransport; readonly url: string }
 protocol: interface EscalationResponse { readonly status: number; text: () => Promise<string> }
-protocol: interface HostConfiguration { readonly agentHome: string; readonly branchScheme: string; readonly controllerUrl: string; readonly decisionUrl: string; readonly plugins: readonly HostPlugin[]; readonly repositoryRoot: string; readonly transcriptsRoot: string; readonly workspaceRoot: string }
+protocol: interface HostAgent { readonly claudeCodeVersion: string; readonly models: readonly HostModel[]; readonly sdkVersion: string }
+protocol: interface HostConfiguration { readonly agent?: HostAgent; readonly agentHome: string; readonly branchScheme: string; readonly controllerUrl: string; readonly decisionUrl: string; readonly plugins: readonly HostPlugin[]; readonly repositoryRoot: string; readonly transcriptsRoot: string; readonly workspaceRoot: string }
 protocol: interface HostConfigure { readonly entries: readonly HostConfigureEntry[]; readonly kind: "host_configure"; readonly requestId: string }
 protocol: interface HostConfigureEntry { readonly key: string; readonly value: string }
 protocol: interface HostConfigureResult { readonly configuration: HostConfiguration; readonly kind: "host_configure_result"; readonly overriddenByEnvironment: readonly string[]; readonly pendingRestart: readonly string[]; readonly refusal: WireRefusal; readonly requestId: string }
+protocol: interface HostModel { readonly description: string; readonly displayName: string; readonly resolvedModel: string; readonly supportedEffortLevels: readonly string[]; readonly supportsAdaptiveThinking: boolean; readonly supportsAutoMode: boolean; readonly supportsFastMode: boolean; readonly value: string }
 protocol: interface HostPlugin { readonly name: string; readonly path: string; readonly version: string }
 protocol: interface LinkAck { readonly cursors: readonly SessionCursor[]; readonly kind: "link_ack" }
 protocol: interface LinkBye { readonly cause: string; readonly kind: "link_bye" }
@@ -825,7 +841,7 @@ protocol: interface RepositoryRead { readonly kind: "repository_read"; readonly 
 protocol: interface RepositoryReadResult { readonly kind: "repository_read_result"; readonly refusal: WireRefusal; readonly requestId: string; readonly sizeBytes: number; readonly text: string; readonly truncated: boolean }
 protocol: interface SessionActivity { readonly kind: "tool" | "subagent" | "permission" | "requesting" | "compacting" | "elicitation"; readonly name: string }
 protocol: interface SessionCancel { readonly kind: "session_cancel" }
-protocol: interface SessionConfigure { readonly kind: "session_configure"; readonly model: string; readonly permissionMode: string; readonly thinking: JsonObject }
+protocol: interface SessionConfigure { readonly effort?: string; readonly kind: "session_configure"; readonly model: string; readonly permissionMode: string; readonly thinking: JsonObject }
 protocol: interface SessionCursor { readonly seq: number; readonly sessionId: string }
 protocol: interface SessionDelta { readonly body: JsonObject; readonly kind: "session_delta" }
 protocol: interface SessionFrame { readonly at: string; readonly frame: "session"; readonly payload: SessionPayload; readonly seq: number; readonly sessionId: string }

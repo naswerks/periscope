@@ -3,9 +3,10 @@
  * that re-exports the SDK's types for every layer above.
  *
  * It is not the only file that names `@anthropic-ai/claude-agent-sdk`. Three others in
- * `src/host/` do (the MCP server builder, the store adapter and the telemetry reader), because
- * each bridges one SDK shape and none of them spawns anything. The rule the pin enforces is the
- * directory, not this file; what remains unique here is `query()`.
+ * `src/host/` import it (the MCP server builder, the store adapter and the telemetry reader),
+ * because each bridges one SDK shape and none of them spawns anything, and the package facts read
+ * its manifest. The rule the pin enforces is the directory, not this file; what remains unique here
+ * is `query()`.
  *
  * It lives in `src/host/` because calling `query()` spawns a real CLI subprocess. The boundary this
  * directory holds is stated as "nothing outside `src/host/` touches the filesystem, spawns a
@@ -35,6 +36,7 @@ import type {
   HookJSONOutput,
   McpSdkServerConfigWithInstance,
   McpServerConfig,
+  ModelInfo,
   Options,
   PermissionMode,
   Query,
@@ -49,7 +51,11 @@ import type {
   ThinkingConfig,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import type { HostAgent, HostModel } from '../control/frames.js';
 import { AsyncQueue } from '../core/async-queue.js';
+import { describeFailure } from '../core/failure.js';
+import { isAbsolutePath } from '../core/paths.js';
+import { agentSdkFacts } from './package-facts.js';
 import { isBypassMode } from './wire-request.js';
 
 export type {
@@ -501,13 +507,16 @@ export interface AgentProcess {
   interrupt(): Promise<void>;
   /**
    * The named mid-session controls this package offers (the doc above says where they go): the
-   * three members of `session_configure`, each the SDK's own streaming-input setter behind a method.
-   * `setPermissionMode` is here deliberately: the one permission mutator that is a posture, reached
-   * only from the wire through `readSessionConfigure`; the other four stay unreachable.
+   * four members of `session_configure`, each an SDK control behind a method. `setPermissionMode`
+   * is here deliberately: the one permission mutator that is a posture, reached only from the wire
+   * through `readSessionConfigure`. `setEffort` reaches a second, `applyFlagSettings`, with the one
+   * key `effortLevel` and nothing beside it, so none of that call's permission keys can ride along;
+   * the other three stay unreachable.
    */
   setModel(model: string | null): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   setThinking(thinking: ThinkingConfig): Promise<void>;
+  setEffort(level: EffortLevel): Promise<void>;
   /**
    * Whether every plugin the process was started with loaded, as the agent's initialize answer
    * says. Null when none were listed, when there was no answer, or when the CLI predates the field.
@@ -733,6 +742,12 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
       const display = thinking.type === 'disabled' ? undefined : thinking.display;
       await running.setMaxThinkingTokens(cap, display);
     },
+    async setEffort(level: EffortLevel): Promise<void> {
+      if (closed) return;
+      // The flag-settings call carries permission rules and a mode among its keys. This literal has
+      // the one key, and the permission pin allows this call only in this shape, in this file.
+      await running.applyFlagSettings({ effortLevel: level });
+    },
     async pluginsApplied(): Promise<boolean | null> {
       // The agent's own answer to its initialize request, cached by the SDK. Never a throw: a
       // process that did not initialize has no answer to give, and null says exactly that.
@@ -748,5 +763,133 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
       input.end();
       running.close();
     },
+  };
+}
+
+/** What reading the agent's catalog produced: the agent's versions and models, or why there are none. */
+export type AgentCatalog =
+  { readonly ok: true; readonly agent: HostAgent } | { readonly ok: false; readonly detail: string };
+
+export interface AgentCatalogOptions {
+  /**
+   * The environment the agent starts in. Pass the one sessions get (`composeSpawnEnv` over the
+   * host's own), so the read signs in as a session does and is offered the models a session is.
+   */
+  readonly env: Record<string, string>;
+  /** Absolute. Where the agent starts. Nothing there is read: no settings tier is loaded. */
+  readonly cwd: string;
+  /** How long the agent has to answer before the read gives up and closes it. */
+  readonly timeoutMs: number;
+}
+
+/** The part of a started query the catalog read uses. `query()` returns one; a test supplies its own. */
+export interface CatalogQuery {
+  initializationResult(): Promise<{ readonly models?: readonly ModelInfo[] }>;
+  close(): void;
+}
+
+/** How the catalog read starts its query: `query` itself, unless a test stands in. */
+export type StartCatalogQuery = (params: {
+  readonly prompt: AsyncIterable<SDKUserMessage>;
+  readonly options: Options;
+}) => CatalogQuery;
+
+/**
+ * Read the agent's versions and model catalog without calling a model.
+ *
+ * The agent starts with a prompt stream that never yields, so no turn begins and no model is called:
+ * its answer to the SDK's initialize request, which lists the models, is all that is read. No
+ * settings tier and no MCP server is loaded, and the session is not persisted, so the read leaves no
+ * transcript. The versions are the installed SDK's, from its manifest (`agentSdkFacts`).
+ *
+ * The process is closed exactly once on every path: an answer, a failure and the timeout. Never
+ * throws; a failure is a reading that says what failed.
+ */
+export function readAgentCatalog(options: AgentCatalogOptions): Promise<AgentCatalog> {
+  return readAgentCatalogWith(query, options);
+}
+
+/** `readAgentCatalog` over a supplied starter. Exported for its tests; not on the public surface. */
+export async function readAgentCatalogWith(
+  start: StartCatalogQuery,
+  options: AgentCatalogOptions,
+): Promise<AgentCatalog> {
+  const facts = agentSdkFacts();
+  if (facts === null) return { ok: false, detail: "the installed agent SDK's manifest could not be read" };
+  if (!isAbsolutePath(options.cwd)) {
+    return {
+      ok: false,
+      detail: `the catalog read needs an absolute directory to start in, not '${options.cwd}'`,
+    };
+  }
+
+  const input = new AsyncQueue<SDKUserMessage>(1);
+  let running: CatalogQuery;
+  try {
+    running = start({
+      prompt: input,
+      // `persistSession` is off here and nowhere else: this is not a session, it has no store, and
+      // a transcript of a read that sent nothing would be a file about nothing.
+      options: {
+        cwd: options.cwd,
+        env: options.env,
+        settingSources: [],
+        strictMcpConfig: true,
+        persistSession: false,
+      },
+    });
+  } catch (error) {
+    input.end();
+    return { ok: false, detail: `the agent did not start: ${describeFailure(error)}` };
+  }
+
+  const answered = (async (): Promise<AgentCatalog> => {
+    try {
+      const result = await running.initializationResult();
+      return {
+        ok: true,
+        agent: {
+          claudeCodeVersion: facts.claudeCodeVersion,
+          sdkVersion: facts.sdkVersion,
+          models: (result.models ?? []).map(hostModelOf),
+        },
+      };
+    } catch (error) {
+      return { ok: false, detail: `the agent's answer to initialize failed: ${describeFailure(error)}` };
+    }
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<AgentCatalog>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ ok: false, detail: `the agent did not answer within ${options.timeoutMs}ms` }),
+      options.timeoutMs,
+    );
+  });
+
+  try {
+    return await Promise.race([answered, timedOut]);
+  } finally {
+    clearTimeout(timer);
+    input.end();
+    try {
+      running.close();
+    } catch {
+      // The reading is already decided; a close that throws has nothing to add to it.
+    }
+  }
+}
+
+/** One model as the wire carries it: every member the agent may leave out is null, never absent. */
+function hostModelOf(model: ModelInfo): HostModel {
+  return {
+    value: model.value,
+    resolvedModel: model.resolvedModel ?? null,
+    displayName: model.displayName,
+    // Declared required and read guarded: the runtime wins over the types, and null says "not given".
+    description: model.description ?? null,
+    supportedEffortLevels: [...(model.supportedEffortLevels ?? [])],
+    supportsFastMode: model.supportsFastMode ?? null,
+    supportsAutoMode: model.supportsAutoMode ?? null,
+    supportsAdaptiveThinking: model.supportsAdaptiveThinking ?? null,
   };
 }

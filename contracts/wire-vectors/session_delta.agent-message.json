@@ -17,11 +17,12 @@
             "type": "content_block_delta",
             "index": 0
           }
-        }
+        },
+        "observedAt": "2000-01-01T00:00:00.000Z"
       }
     }
   },
   "name": "session_delta.agent-message",
-  "protocolVersion": 11,
-  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_delta\",\"body\":{\"update\":\"agent_message\",\"message\":{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"index\":0}}}}}"
+  "protocolVersion": 12,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_delta\",\"body\":{\"update\":\"agent_message\",\"message\":{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"index\":0}},\"observedAt\":\"2000-01-01T00:00:00.000Z\"}}}"
 }

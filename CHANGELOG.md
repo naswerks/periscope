@@ -8,6 +8,10 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+Protocol 12; the window is `[11, 12]`, so a version-11 controller is still spoken to. Every member
+protocol 12 adds is optional, so a version-11 controller, which reads none of them, decodes this host's
+frames, and its own frames, which carry none, still decode here.
+
 - The agent SDK is 0.3.284, bundling Claude Code 2.1.284 (from 0.3.220 and 2.1.220), so a session can
   run the models that CLI knows; `@anthropic-ai/sdk`, the SDK's peer, is `^0.129.0`.
 - The SDK's two new hook events are in the cause vocabulary (`HOOK_EVENTS`, `CauseEvent`).
@@ -64,6 +68,24 @@ removed export. The package version and the wire protocol version are separate n
   at every later turn, and recording each one moved a working session back to `ready` in the middle
   of its turn. A later init refreshes the session's facts instead: the model, the permission mode and
   the inventories it reports replace the first ones, and the id stays.
+- The hello's `configuration` gains `agent` (`HostAgent`): the Claude Code version the installed agent
+  SDK bundles, that SDK's version, and the models the agent offers (`HostModel`: the value a session
+  takes as `model`, the model id an alias resolves to, the effort levels and what else it supports).
+  It is read once at start by starting the agent with a prompt stream that never yields, so no model
+  is called (`readAgentCatalog`, `PeriscopeHostOptions.agentCatalog`), and the link dials once the read
+  settles, so the first hello carries it. `periscope serve` reads it bounded at 20 seconds and prints
+  it on an `[agent]` line. A read that fails, or a catalog past `MAX_AGENT_MODELS` or
+  `MAX_AGENT_CATALOG_BYTES`, rides as `agent: null` with the reason reported; it never fails a start.
+  A `host_configure_result` carries it too.
+- `session_configure` gains `effort`, in `session_new`'s vocabulary, applied after the model, the
+  permission mode and thinking. An unknown level is refused `frame-malformed`. It reaches the SDK's
+  flag settings with that one key and nothing beside it; as the SDK documents, a change of level also
+  turns ultracode off.
+- A forwarded message's body gains `observedAt`: when this host took it off the agent's stream,
+  ISO-8601 in UTC, so a consumer does not date a message replayed after a reconnect by its arrival.
+  `readObservedAt` returns null for a host one release behind. `agentMessageUpdate` and
+  `agentMessageDelta` take it as an optional second argument, and `forwardSession` stamps it from its
+  new `clock` option, the system clock when none is given.
 
 ## [1.2.0] - unreleased
 

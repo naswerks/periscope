@@ -70,6 +70,7 @@ import type {
   ControlPayload,
   ControlPayloadKind,
   Frame,
+  HostAgent,
   SessionPayload,
   SessionPayloadKind,
 } from '../control/frames.js';
@@ -173,6 +174,34 @@ const TRANSITION_TOOL: SessionTransition = {
 
 const REFUSAL = { reason: 'bulk-delivery-failed', detail: 'the controller answered 503' };
 
+/** A catalog with every member stated on one model and every nullable member null on the other. */
+const AGENT: HostAgent = {
+  claudeCodeVersion: '2.1.284',
+  sdkVersion: '0.3.284',
+  models: [
+    {
+      value: 'alias-1',
+      resolvedModel: 'model-id-1',
+      displayName: 'Model One',
+      description: 'The first model',
+      supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supportsFastMode: true,
+      supportsAutoMode: false,
+      supportsAdaptiveThinking: true,
+    },
+    {
+      value: 'model-id-2',
+      resolvedModel: null,
+      displayName: 'Model Two',
+      description: null,
+      supportedEffortLevels: [],
+      supportsFastMode: null,
+      supportsAutoMode: null,
+      supportsAdaptiveThinking: null,
+    },
+  ],
+};
+
 const AUTHORED = {
   session_update: [
     { name: 'session_update.state-transition', frame: session(stateTransitionUpdate(TRANSITION_READY)) },
@@ -183,7 +212,7 @@ const AUTHORED = {
     {
       name: 'session_update.agent-message',
       frame: session(
-        agentMessageUpdate({ type: 'result', subtype: 'success', is_error: false, num_turns: 1 }),
+        agentMessageUpdate({ type: 'result', subtype: 'success', is_error: false, num_turns: 1 }, AT),
       ),
     },
     {
@@ -195,7 +224,7 @@ const AUTHORED = {
     {
       name: 'session_delta.agent-message',
       frame: session(
-        agentMessageDelta({ type: 'stream_event', event: { type: 'content_block_delta', index: 0 } }),
+        agentMessageDelta({ type: 'stream_event', event: { type: 'content_block_delta', index: 0 } }, AT),
       ),
     },
   ],
@@ -254,6 +283,7 @@ const AUTHORED = {
         model: 'model-id',
         permissionMode: 'plan',
         thinking: { type: 'adaptive' },
+        effort: 'high',
       }),
     },
     {
@@ -639,8 +669,22 @@ const AUTHORED = {
           decisionUrl: 'https://controller.example/periscope/decision',
           agentHome: '/home/agent/.claude',
           plugins: [{ name: 'loop', version: '0.1.0', path: '/srv/plugins/loop' }],
+          agent: AGENT,
         },
         pendingRestart: ['PERISCOPE_DECISION_URL'],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    {
+      name: 'link_hello.agent-unread',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: { ...unsetHostConfiguration(), agent: null },
+        pendingRestart: [],
         protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
       }),
     },
@@ -912,6 +956,33 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
       kind: 'bulk_failed',
       deliveryId: 'delivery-1',
       refusal: { reason: 'a-reason-from-a-newer-peer', detail: 'the controller answered 503' },
+    }),
+  ),
+
+  // Tolerances: the protocol-11 shapes, which carry none of the members protocol 12 added. Each
+  // decodes as sent, with nothing added: an absent optional member stays absent.
+  asParsed(
+    'link_hello.protocol-11-without-agent',
+    controlWire({
+      kind: 'link_hello',
+      protocolVersion: 11,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: unsetHostConfiguration(),
+      pendingRestart: [],
+      protocolRange: { min: 10, max: 11 },
+    }),
+  ),
+  asParsed(
+    'session_configure.protocol-11-without-effort',
+    sessionWire({ kind: 'session_configure', model: 'model-id', permissionMode: null, thinking: null }),
+  ),
+  asParsed(
+    'session_update.protocol-11-without-observed-at',
+    sessionWire({
+      kind: 'session_update',
+      body: { update: 'agent_message', message: { type: 'result', subtype: 'success', num_turns: 1 } },
     }),
   ),
 ];

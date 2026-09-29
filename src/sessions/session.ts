@@ -261,21 +261,25 @@ export class HostedSession {
   }
 
   /**
-   * Apply a `session_configure` — the asked members, in order, through the SDK's live setters.
+   * Apply a `session_configure` — the asked members, in order (model, permission mode, thinking,
+   * effort), through the SDK's live controls.
    *
    * The first setter that fails stops the rest, and its error names the member, so a caller knows
-   * what changed: every member before it was applied, none after it.
+   * what changed: every member before it was applied, none after it. Effort comes after the model
+   * because the levels a session can take are the model's.
    */
   async configure(change: SessionConfigureChange): Promise<void> {
     if (this.#state === 'ended') return;
     const model = change.model;
     const permissionMode = change.permissionMode;
     const thinking = change.thinking;
+    const effort = change.effort;
     if (model !== undefined) await applying('model', () => this.#process.setModel(model));
     if (permissionMode !== undefined) {
       await applying('permissionMode', () => this.#process.setPermissionMode(permissionMode));
     }
     if (thinking !== undefined) await applying('thinking', () => this.#process.setThinking(thinking));
+    if (effort !== undefined) await applying('effort', () => this.#process.setEffort(effort));
   }
 
   /** End the session and release it from its registry. Idempotent. `#finish` closes the process. */

@@ -44,6 +44,8 @@ import type { SessionObserver } from '../state/observer.js';
 import type { SessionTransition } from '../state/model.js';
 import type { Refusal } from '../core/refusal.js';
 import type { Result } from '../core/result.js';
+import type { Clock } from '../core/time.js';
+import { systemClock } from '../core/time.js';
 import type { JsonObject, SessionPayload } from './frames.js';
 import { agentMessageDelta, agentMessageUpdate, stateTransitionUpdate } from './frames.js';
 import { laneFor } from './stream-routing.js';
@@ -77,6 +79,12 @@ export interface ForwardSessionOptions {
    * never a silent success — `send` has already declined by the time this is called.
    */
   readonly onRefusal?: (refusal: Refusal) => void;
+  /**
+   * Stamps each forwarded message's `observedAt`: the instant this host took it off the agent's
+   * stream. A consumer that used its own receipt time instead would run late after a reconnect
+   * replays what it missed. Defaults to the system clock.
+   */
+  readonly clock?: Clock;
 }
 
 /**
@@ -88,6 +96,7 @@ export interface ForwardSessionOptions {
  */
 export function forwardSession(options: ForwardSessionOptions): Unsubscribe {
   const { sessionKey, session, observer, sink } = options;
+  const clock = options.clock ?? systemClock;
 
   const refused = (refusal: Refusal): void => options.onRefusal?.(refusal);
 
@@ -112,7 +121,7 @@ export function forwardSession(options: ForwardSessionOptions): Unsubscribe {
 
   const dropMessages = session.onMessage((message: SDKMessage) => {
     // The message first, then what it caused. See this file's header.
-    forwardMessage(message, emit);
+    forwardMessage(message, clock(), emit);
     reportRejected(observer.observeMessage(message));
   });
 
@@ -137,7 +146,11 @@ export function forwardSession(options: ForwardSessionOptions): Unsubscribe {
  * but a consumer will see a turn whose largest tool result never arrived, so the refusal has to
  * reach someone. It does, through `onRefusal`.
  */
-function forwardMessage(message: SDKMessage, emit: (payload: SessionPayload) => void): void {
+function forwardMessage(
+  message: SDKMessage,
+  observedAt: string,
+  emit: (payload: SessionPayload) => void,
+): void {
   const lane = laneFor(message);
   if (lane === 'declined') return;
 
@@ -145,5 +158,5 @@ function forwardMessage(message: SDKMessage, emit: (payload: SessionPayload) => 
   // so re-validating it here would be a second wire edge. A message that genuinely cannot serialize
   // is refused by `encode` under its own name and reaches `onRefusal` like any other refusal.
   const body = message as unknown as JsonObject;
-  emit(lane === 'delta' ? agentMessageDelta(body) : agentMessageUpdate(body));
+  emit(lane === 'delta' ? agentMessageDelta(body, observedAt) : agentMessageUpdate(body, observedAt));
 }
