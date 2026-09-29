@@ -42,6 +42,9 @@ removed export. The package version and the wire protocol version are separate n
   `frame-malformed` is sent when this host refuses a value. Before, both reached only the host's own
   report, as `session-unknown`, and the controller heard nothing. A model switch can now be refused,
   for a model the account cannot run.
+- A message whose discriminator the routing table does not know, such as a subtype the CLI emits
+  before the SDK's types declare it, rides `update`, the table's stated default. The lookup used to
+  throw inside the forwarder, and the message was lost behind a `subscriber_failed` degrade.
 
 ## [1.2.0] - unreleased
 

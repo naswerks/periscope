@@ -23,6 +23,7 @@ import type { JsonObject, SessionPayload } from './frames.js';
 import { readAgentMessage, readStateTransition } from './frames.js';
 import type { FrameSink } from './stream.js';
 import { forwardSession } from './stream.js';
+import { laneFor } from './stream-routing.js';
 import { fakeAgents, initMessage, settle } from '../test-support/fake-agent.js';
 
 const AT = '2026-08-04T00:00:00.000Z';
@@ -196,6 +197,33 @@ test('a turn can be rendered as it happens: text arrives incrementally, before t
   assert.ok(
     deltasBeforeSettle.length >= 2,
     `only ${deltasBeforeSettle.length} fragment(s) arrived before the settle — that is not incremental`,
+  );
+});
+
+test('regression: a message whose discriminator the routing table does not know rides update and is not lost', async () => {
+  // A CLI can emit a subtype its SDK's types do not declare. The lookup once threw inside the
+  // forwarder, the pump reported that as `subscriber_failed`, and the message never reached the wire.
+  const unknown = {
+    type: 'system',
+    subtype: 'a_subtype_from_a_newer_cli',
+    uuid: 'uuid-new',
+  } as unknown as SDKMessage;
+  assert.equal(laneFor(unknown), 'update');
+
+  const wired = wire();
+  wired.emit(initMessage('agent-1'));
+  wired.emit(unknown);
+  await settle();
+
+  const forwarded = wired.sink.sent
+    .filter((entry) => entry.payload.kind === 'session_update')
+    .map((entry) => readAgentMessage(bodyOf(entry.payload)))
+    .filter((message) => message?.['subtype'] === 'a_subtype_from_a_newer_cli');
+  assert.equal(forwarded.length, 1, 'the unknown message did not reach the wire');
+  assert.deepEqual(
+    wired.session.degrades.filter((degrade) => degrade.kind === 'subscriber_failed'),
+    [],
+    'the forwarder threw on a message it could not route',
   );
 });
 

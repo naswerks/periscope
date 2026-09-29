@@ -1,10 +1,12 @@
 /**
  * The stream routing table. Every message the agent can emit rides a declared lane, in writing.
  *
- * An absent row is a gap, not a default, and it cannot happen, because this is declared
- * `satisfies Record<MessageDiscriminator, RoutingRow>` against the discriminator set derived from
- * the SDK's own union. A message added by an SDK upgrade breaks the build rather than silently
- * falling through to whichever lane a branch happened to end on.
+ * An absent row for a discriminator the SDK declares is a gap, not a default, and it cannot happen,
+ * because this is declared `satisfies Record<MessageDiscriminator, RoutingRow>` against the
+ * discriminator set derived from the SDK's own union. A message added by an SDK upgrade breaks the
+ * build rather than silently falling through to whichever lane a branch happened to end on. A
+ * discriminator the types do not name at all can still arrive at run time, and `laneFor` sends it to
+ * `update`, the default stated below.
  *
  * This is not `state/coverage.ts` and must not be merged with it. They answer different
  * questions and disagree in both directions:
@@ -203,9 +205,17 @@ export const MESSAGE_ROUTING = {
   },
 } as const satisfies Record<MessageDiscriminator, RoutingRow>;
 
-/** The lane one message rides. Total by construction — every discriminator has a row. */
+/**
+ * The lane one message rides.
+ *
+ * Every discriminator the SDK's types declare has a row, and the table's `satisfies` keeps it so. A
+ * message can still arrive at run time with one the types do not name (a subtype the bundled CLI
+ * emits before the types learn it), and that one rides `update`, the default this table states: the
+ * lookup once threw inside the forwarder, and the message was lost behind a `subscriber_failed`.
+ */
 export function laneFor(message: SDKMessage): StreamLane {
-  return MESSAGE_ROUTING[discriminatorOf(message)].lane;
+  const row = (MESSAGE_ROUTING as Partial<Record<string, RoutingRow>>)[discriminatorOf(message)];
+  return row?.lane ?? 'update';
 }
 
 /** Every discriminator on one lane, in declaration order. The subject of the routing pin. */
