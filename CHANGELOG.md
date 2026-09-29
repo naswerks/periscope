@@ -6,7 +6,7 @@ for no wire or API change, minor for a protocol bump (the previous version stays
 minor), an agent SDK pin bump or an additive API, major for a wire change outside the window or a
 removed export. The package version and the wire protocol version are separate numbers.
 
-## [Unreleased]
+## [1.3.0] - 2026-09-29
 
 Protocol 12; the window is `[11, 12]`, so a version-11 controller is still spoken to. Every member
 protocol 12 adds is optional, so a version-11 controller, which reads none of them, decodes this host's
@@ -19,7 +19,8 @@ frames, and its own frames, which carry none, still decode here.
   side, who asked, whether the prompt cache was warm and on which TTL, and the estimated cost of
   re-caching the context. `PreModelSwitch` is answered, not recorded: `modelSwitchHooks` allows every
   switch, so a switch a controller asks for is never left to the interactive cache-miss confirm, which
-  a session with nobody at a keyboard cannot answer. `composeSession` registers it.
+  a session with nobody at a keyboard cannot answer. `composeSession` registers it. Claude Code
+  2.1.284 lets a headless switch through without the answer too; the allow keeps it that way.
 - `deltaSpend(previous, next)`: a result's spend is a running total (it accumulates across a
   session's turns, continues across a resume or a fork, and resets at `/clear`), so one turn's spend
   is the difference of two results; a drop in any counter starts a new series. Seed a resumed or
@@ -68,8 +69,8 @@ frames, and its own frames, which carry none, still decode here.
 - A session asked to run under `bypassPermissions` starts with the SDK's
   `allowDangerouslySkipPermissions`, which the SDK requires before it enters that mode. A session in
   any other mode starts without it. The host still passes no `--dangerously-skip-permissions` and
-  chooses no mode of its own. A switch into bypass mid-session, from a session started in another
-  mode, meets the SDK without the flag.
+  chooses no mode of its own. Claude Code 2.1.284 refuses a switch into bypass mid-session for a
+  session started in another mode, by name, and the controller hears `session-configure-failed`.
 - Only a session's first `system/init` records `ready`. The CLI re-sends its init with current values
   at every later turn, and recording each one moved a working session back to `ready` in the middle
   of its turn. A later init refreshes the session's facts instead: the model, the permission mode and
@@ -93,7 +94,7 @@ frames, and its own frames, which carry none, still decode here.
   `agentMessageDelta` take it as an optional second argument, and `forwardSession` stamps it from its
   new `clock` option, the system clock when none is given.
 
-## [1.2.0] - unreleased
+## [1.2.0] - 2026-09-20
 
 Protocol 11; the window is `[10, 11]`, so a version-10 controller is still spoken to.
 
