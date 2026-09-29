@@ -608,6 +608,88 @@ test('regression: session_cancel interrupts the turn and says so, rather than en
   );
 });
 
+test('a session_configure the agent applies runs its setters in order and puts no refusal on the wire', async () => {
+  const { link, processes } = hostOver();
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await settle();
+
+  link.deliver(
+    'handle-1',
+    {
+      kind: 'session_configure',
+      model: 'model-b',
+      permissionMode: 'plan',
+      thinking: { type: 'adaptive', display: 'summarized' },
+    },
+    2,
+  );
+  await settle();
+
+  assert.deepEqual(
+    processes.started[0]?.configured.map((call) => call.setter),
+    ['setModel', 'setPermissionMode', 'setThinking'],
+  );
+  assert.deepEqual(
+    link.transitions().filter((transition) => transition.cause.kind === 'refusal'),
+    [],
+    'an applied configure refused something',
+  );
+});
+
+test('regression: a session_configure the agent refuses answers on the wire, naming the member and carrying its text', async () => {
+  // It once went to this host's own report under `session-unknown` and nowhere else, so the
+  // controller that asked for a model switch heard nothing and could only assume it landed.
+  const { link, processes } = hostOver();
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await settle();
+  processes.started[0]?.refuseNextSetter(new Error('model not-a-model is not available to this account'));
+
+  link.deliver(
+    'handle-1',
+    { kind: 'session_configure', model: 'not-a-model', permissionMode: 'plan', thinking: null },
+    2,
+  );
+  await settle();
+
+  const refused = link.transitions().filter((transition) => transition.cause.kind === 'refusal');
+  assert.equal(refused.length, 1, `the refusal is not on the wire: ${link.causes().join(', ')}`);
+  assert.equal(refused[0]?.cause.event, 'session-configure-failed');
+  assert.match(
+    refused[0]?.cause.detail ?? '',
+    /setting model failed: model not-a-model is not available to this account/,
+  );
+  assert.equal(refused[0]?.from, refused[0]?.to, 'a refused configure changes no state');
+  assert.deepEqual(
+    processes.started[0]?.configured.map((call) => call.setter),
+    ['setModel'],
+    'the members after the failed one are not applied',
+  );
+});
+
+test('a session_configure value this host refuses answers on the wire as frame-malformed, before any setter runs', async () => {
+  const { link, processes } = hostOver();
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await settle();
+
+  link.deliver(
+    'handle-1',
+    {
+      kind: 'session_configure',
+      model: null,
+      permissionMode: null,
+      thinking: { type: 'enabled', budgetTokens: 2048 },
+    },
+    2,
+  );
+  await settle();
+
+  assert.ok(
+    link.causes().includes('refusal/frame-malformed'),
+    `the refused value is not on the wire: ${link.causes().join(', ')}`,
+  );
+  assert.deepEqual(processes.started[0]?.configured, [], 'a refused value reached the agent');
+});
+
 test('regression: a command for a handle this host does not hold is refused, never dropped', async () => {
   const events: HostEvent[] = [];
   const { link } = hostOver({ events });

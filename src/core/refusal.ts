@@ -78,6 +78,11 @@ export const REFUSAL_REASONS = [
   'session-cap-reached',
   'prompt-queue-full',
   'env-key-refused',
+  //   session-configure-failed  a session_configure the agent refused: a live setter threw, and the
+  //                         detail carries its own text and names the member. Not session-unknown:
+  //                         the session exists and is unchanged by the member that failed. A model
+  //                         switch can be refused now, for a model the account cannot run.
+  'session-configure-failed',
 
   // The declared state model. A transition that cannot name what caused it is refused rather than
   // recorded, because a state nobody can explain is worse than no state at all: it reads as fact.

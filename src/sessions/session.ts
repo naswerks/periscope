@@ -240,12 +240,22 @@ export class HostedSession {
     return this.#process.interrupt();
   }
 
-  /** Apply a `session_configure` — the asked members, in order, through the SDK's live setters. */
+  /**
+   * Apply a `session_configure` — the asked members, in order, through the SDK's live setters.
+   *
+   * The first setter that fails stops the rest, and its error names the member, so a caller knows
+   * what changed: every member before it was applied, none after it.
+   */
   async configure(change: SessionConfigureChange): Promise<void> {
     if (this.#state === 'ended') return;
-    if (change.model !== undefined) await this.#process.setModel(change.model);
-    if (change.permissionMode !== undefined) await this.#process.setPermissionMode(change.permissionMode);
-    if (change.thinking !== undefined) await this.#process.setThinking(change.thinking);
+    const model = change.model;
+    const permissionMode = change.permissionMode;
+    const thinking = change.thinking;
+    if (model !== undefined) await applying('model', () => this.#process.setModel(model));
+    if (permissionMode !== undefined) {
+      await applying('permissionMode', () => this.#process.setPermissionMode(permissionMode));
+    }
+    if (thinking !== undefined) await applying('thinking', () => this.#process.setThinking(thinking));
   }
 
   /** End the session and release it from its registry. Idempotent. `#finish` closes the process. */
@@ -442,4 +452,13 @@ export class HostedSession {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** One live setter, its failure named by the member it was setting and carrying the agent's text. */
+async function applying(member: string, apply: () => Promise<void>): Promise<void> {
+  try {
+    await apply();
+  } catch (error) {
+    throw new Error(`setting ${member} failed: ${describe(error)}`, { cause: error });
+  }
 }

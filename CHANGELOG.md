@@ -36,6 +36,12 @@ removed export. The package version and the wire protocol version are separate n
   and later reject it with a 400: a session that took it would open and then fail its first turn. The
   models that still accept a fixed budget lose that knob here. The `session_new.full` wire vector now
   carries `{type:'adaptive', display:'summarized'}`.
+- A `session_configure` that fails answers on the wire, as a same-state transition on the session's
+  state lane with cause kind `refusal`. `session-configure-failed`, a new `RefusalReason`, is sent when
+  the agent refuses a live setter, and its detail names the member and carries the agent's text.
+  `frame-malformed` is sent when this host refuses a value. Before, both reached only the host's own
+  report, as `session-unknown`, and the controller heard nothing. A model switch can now be refused,
+  for a model the account cannot run.
 
 ## [1.2.0] - unreleased
 

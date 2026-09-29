@@ -811,16 +811,19 @@ export class PeriscopeHost {
         return;
       }
       case 'session_configure': {
-        // Protocol v6: the SDK's live setters. A session still opening has no query to configure yet; the
-        // controller is told so by name rather than left to assume the change landed.
+        // Protocol v6: the SDK's live setters. For a live session both failures answer on its own
+        // state lane: a value this host refuses (`frame-malformed`) and a setter the agent refuses
+        // (`session-configure-failed`). A session still opening has no query to configure yet, and
+        // that refusal, like any other for a handle this host does not hold, is reported here only.
         const composed = this.session(frame.sessionId);
         if (!composed.ok) return this.#refuse(frame.sessionId, composed.refusal);
         const change = readSessionConfigure(payload);
-        if (!change.ok) return this.#refuse(frame.sessionId, change.refusal);
+        if (!change.ok) return this.#refuseConfigure(frame.sessionId, composed.value, change.refusal);
         void composed.value.session.configure(change.value).catch((error: unknown) => {
-          this.#refuse(
+          this.#refuseConfigure(
             frame.sessionId,
-            refusal('session-unknown', `the configure failed: ${describe(error)}`),
+            composed.value,
+            refusal('session-configure-failed', describe(error)),
           );
         });
         return;
@@ -1892,6 +1895,19 @@ export class PeriscopeHost {
 
   #refuse(sessionKey: string, refused: Refusal): void {
     this.#report({ kind: 'refusal', refusal: refused, sessionKey });
+  }
+
+  /**
+   * A configure the session could not apply, reported here and put on the wire.
+   *
+   * Recorded on the session's own machine as a same-state transition with cause kind `refusal`, the
+   * lane the gate's outages take, so the controller that asked reads the answer in the session's
+   * trace. A refused value changed nothing; a failed setter's detail names its member, and the
+   * members before it in the frame were applied.
+   */
+  #refuseConfigure(sessionKey: string, composed: ComposedSession, refused: Refusal): void {
+    this.#refuse(sessionKey, refused);
+    composed.observer.refused({ kind: 'refusal', event: refused.reason, detail: refused.detail });
   }
 
   /**
