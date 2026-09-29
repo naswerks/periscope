@@ -74,6 +74,28 @@ export function observationHooks(options: ObservationHookOptions): HookRegistrat
 }
 
 /**
+ * The answer to `PreModelSwitch`: allow, every time.
+ *
+ * The event carries an interactive confirm, shown when a switch would give up a warm prompt cache.
+ * A session this host runs has nobody at a keyboard, so a switch the controller asked for over the
+ * wire would otherwise be left to a prompt nobody can see. The allow skips that confirm and nothing
+ * else: the event's own sources are a typed command, a model picker and the SDK's `setModel`, so
+ * every switch it gates is one a person or a controller asked for. The switch itself is recorded
+ * when it happens, by the observer on `PostModelSwitch`; this handler records nothing.
+ */
+export function modelSwitchHooks(): HookRegistrations {
+  const answer: HookJSONOutput = {
+    hookSpecificOutput: {
+      hookEventName: 'PreModelSwitch',
+      permissionDecision: 'allow',
+      permissionDecisionReason: 'this host allows every model switch its controller or its operator asks for',
+    },
+  };
+  const allow = (): Promise<HookJSONOutput> => Promise.resolve(answer);
+  return { PreModelSwitch: [{ hooks: [allow] }] };
+}
+
+/**
  * Combine independent hook registrations, concatenating the matchers per event.
  *
  * This is the seam that keeps observation and authorization apart. A permission decision and a

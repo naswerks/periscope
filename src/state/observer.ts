@@ -392,6 +392,22 @@ export class SessionObserver {
           },
         ];
 
+      case 'PostModelSwitch':
+        // No state change: the session is whatever it was, now on another model. What the record
+        // adds is the price of the move, because the next request re-sends the whole context and a
+        // warm cache on the old model does not carry over.
+        return [
+          {
+            to: this.#machine.state,
+            cause: cause(
+              `the model switched from ${input.from_model} to ${input.to_model} (${input.source}); ` +
+                `the prompt cache was ${input.prompt_cache_warm ? 'warm' : 'cold'} on a ${input.cache_ttl} TTL, ` +
+                `${input.context_tokens} context tokens to re-send, an estimated ` +
+                `$${input.estimated_cache_write_usd} to re-cache (${input.pricing} pricing)`,
+            ),
+          },
+        ];
+
       case 'PermissionRequest':
         // Keyed by tool name, because `PermissionRequestHookInput` carries no tool_use_id while
         // `PermissionDeniedHookInput` does — there is no shared id to join on. Two simultaneous

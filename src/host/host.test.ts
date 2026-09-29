@@ -229,6 +229,37 @@ test('regression: a composed session is observed; every wired hook event is regi
   }
 });
 
+test('a composed session answers a model switch with allow; the cache-miss confirm never decides it', async () => {
+  const fake = fakeAgents();
+  const composed = composeSession({
+    registry: registryOver(fake.start),
+    sessionKey: 'handle-1',
+    cwd: 'C:/work',
+    sink: new FakeLink(),
+    decide: allow,
+  });
+  assert.ok(composed.ok);
+
+  // What the process was handed, read the way the CLI reads it: the one matcher on the event and
+  // its handler's answer. Unregistered, a switch the controller asked for would meet an
+  // interactive confirm in a session with nobody to answer it.
+  const matchers = fake.started[0]?.request.hooks?.PreModelSwitch ?? [];
+  assert.equal(matchers.length, 1, 'PreModelSwitch is not answered by the composed session');
+  const handler = matchers[0]?.hooks[0];
+  assert.ok(handler !== undefined);
+  const answer = (await handler(
+    {
+      hook_event_name: 'PreModelSwitch',
+      from_model: 'a',
+      to_model: 'b',
+      source: 'sdk',
+    } as unknown as HookInput,
+    undefined,
+    { signal: new AbortController().signal },
+  )) as { hookSpecificOutput?: { permissionDecision?: string } };
+  assert.equal(answer.hookSpecificOutput?.permissionDecision, 'allow');
+});
+
 test('regression: the spawning transition reaches the wire; forwarding is attached before the first record', () => {
   const link = new FakeLink();
   const composed = composeSession({

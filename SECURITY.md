@@ -302,8 +302,8 @@ stops being true.
 
 |                                  |                                                              |
 | -------------------------------- | ------------------------------------------------------------ |
-| `@anthropic-ai/claude-agent-sdk` | **0.3.220**, pinned exactly, no caret                        |
-| Bundled Claude Code CLI          | **2.1.220**                                                  |
+| `@anthropic-ai/claude-agent-sdk` | **0.3.284**, pinned exactly, no caret                        |
+| Bundled Claude Code CLI          | **2.1.284**                                                  |
 | Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows |
 
 The SDK is pre-1.0 and its surface moves without semver protection, so a SHA-256 of the installed

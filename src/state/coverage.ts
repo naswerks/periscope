@@ -31,7 +31,7 @@ export interface CoverageRow {
 }
 
 /**
- * All 31 hook events. 18 wired, 13 declined.
+ * All 33 hook events. 19 wired, 14 declined.
  *
  * `PreToolUse` appears here as an observation only. The permission decision is a separate
  * concern with a separate handler; `HookCallbackMatcher.hooks` is an array and the SDK runs every
@@ -102,6 +102,12 @@ export const HOOK_COVERAGE = {
   PostCompact: {
     handling: 'wired',
     note: 'closes the `compacting` entry.',
+  },
+
+  // --- wired: the model -----------------------------------------------------
+  PostModelSwitch: {
+    handling: 'wired',
+    note: 'the model changed. No state change: it names a why the trace would otherwise lack, a turn that costs more because a switch gave up a warm prompt cache. The detail carries the models on either side, who asked (`source`), whether the cache was warm and on which TTL, the context the next request re-sends and the estimated cost of re-caching it. Recorded here rather than at PreModelSwitch, so a switch appears once, and only once it happened.',
   },
 
   // --- wired: the permission lane -------------------------------------------
@@ -176,6 +182,10 @@ export const HOOK_COVERAGE = {
   MessageDisplay: {
     handling: 'declined',
     note: "one flush of an assistant message, indexed per delta. The highest-volume event in the set and pure content — the streaming layer's lane, not the state model's.",
+  },
+  PreModelSwitch: {
+    handling: 'declined',
+    note: 'the ask before a model switch. A deny or an id the API does not confirm cancels a switch, so recording the ask would put a switch in the trace that may never have happened; PostModelSwitch records the one that did. It is still answered, by a separate handler: `modelSwitchHooks` in host/hooks.ts allows every switch, because the allow skips the interactive cache-miss confirm, and a session with nobody at a keyboard must not leave a switch the controller asked for to a prompt nobody sees.',
   },
 } as const satisfies Record<HookEvent, CoverageRow>;
 

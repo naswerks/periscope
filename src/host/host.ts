@@ -101,7 +101,7 @@ import type { BulkPostReceipt } from './bulk-post.js';
 import { bulkOriginFor, postBulk } from './bulk-post.js';
 import { readWhere } from './git-facts.js';
 import { normalizePath } from '../core/paths.js';
-import { mergeHooks, observationHooks } from './hooks.js';
+import { mergeHooks, modelSwitchHooks, observationHooks } from './hooks.js';
 import { createToolServer } from './mcp-server.js';
 import { listTranscripts, tailTranscript } from './claude-transcripts.js';
 import { listRepositoryDirectory, readRepositoryFile } from './repository-read.js';
@@ -293,14 +293,16 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
         }),
   });
 
-  // Observation first, the gate second. The order is a convention rather than a race guard (see
-  // permissionHooks' own note), but it is the one both files state, so it is written once here.
+  // Observation first, the gate second, the model-switch answer third. The order is a convention
+  // rather than a race guard (see permissionHooks' own note), but it is the one both files state, so
+  // it is written once here.
   const hooks = mergeHooks(
     observationHooks({
       observer,
       ...(options.onHookFailure === undefined ? {} : { onHandlerFailure: options.onHookFailure }),
     }),
     gate,
+    modelSwitchHooks(),
   );
 
   const created = options.registry.create({ ...(options.request ?? {}), cwd: options.cwd, hooks });

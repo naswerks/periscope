@@ -104,7 +104,7 @@ export {
 } from './host/index.js';
 
 export type { HookFailureListener, ObservationHookOptions } from './host/hooks.js';
-export { mergeHooks, observationHooks, wiredHookEvents } from './host/hooks.js';
+export { mergeHooks, modelSwitchHooks, observationHooks, wiredHookEvents } from './host/hooks.js';
 export { readWhere } from './host/git-facts.js';
 
 // The permission gate. Registered after observationHooks — see permissionHooks' own note on why the

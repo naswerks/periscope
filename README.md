@@ -124,8 +124,8 @@ anything. The figure for a release is in [`CHANGELOG.md`](CHANGELOG.md).
 
 |                                  |                                       |
 | -------------------------------- | ------------------------------------- |
-| `@anthropic-ai/claude-agent-sdk` | **0.3.220**, pinned exactly, no caret |
-| Claude Code CLI                  | **2.1.220** (bundled with that SDK)   |
+| `@anthropic-ai/claude-agent-sdk` | **0.3.284**, pinned exactly, no caret |
+| Claude Code CLI                  | **2.1.284** (bundled with that SDK)   |
 | Node                             | 22 or later; CI proves 22 and 24      |
 
 The SDK is pre-1.0, so the SHA-256 of its installed type definitions is kept in

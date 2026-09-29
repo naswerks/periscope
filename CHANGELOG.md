@@ -8,6 +8,15 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+- The agent SDK is 0.3.284, bundling Claude Code 2.1.284 (from 0.3.220 and 2.1.220), so a session can
+  run the models that CLI knows; `@anthropic-ai/sdk`, the SDK's peer, is `^0.129.0`.
+- The SDK's two new hook events are in the cause vocabulary (`HOOK_EVENTS`, `CauseEvent`).
+  `PostModelSwitch` is recorded: a same-state transition whose detail names the models on either
+  side, who asked, whether the prompt cache was warm and on which TTL, and the estimated cost of
+  re-caching the context. `PreModelSwitch` is answered, not recorded: `modelSwitchHooks` allows every
+  switch, so a switch a controller asks for is never left to the interactive cache-miss confirm, which
+  a session with nobody at a keyboard cannot answer. `composeSession` registers it.
+
 ## [1.2.0] - unreleased
 
 Protocol 11; the window is `[10, 11]`, so a version-10 controller is still spoken to.

@@ -306,3 +306,43 @@ test('a session that dies mid-tool keeps the entry, marked, with its age', () =>
   assert.notEqual(stranded?.abandonedAt, null, 'marked');
   assert.match(stranded?.abandonReason ?? '', /still open/);
 });
+
+test('a model switch is recorded once, as it happened, with what it cost the prompt cache', () => {
+  const { observer: o, machine, store } = observer();
+  o.observeHook(hook({ hook_event_name: 'UserPromptSubmit' }));
+  const before = store.all().length;
+
+  o.observeHook(
+    hook({
+      hook_event_name: 'PostModelSwitch',
+      from_model: 'model-a',
+      to_model: 'model-b',
+      requested_model: 'model-b',
+      source: 'sdk',
+      context_tokens: 41_000,
+      prompt_cache_warm: true,
+      cache_ttl: '1h',
+      estimated_cache_write_usd: 0.33,
+      pricing: 'catalog',
+    }),
+  );
+
+  assert.equal(store.all().length - before, 1, 'one switch, one record');
+  const record = store.all().at(-1);
+  assert.equal(record?.cause.kind, 'hook');
+  assert.equal(record?.cause.event, 'PostModelSwitch');
+  assert.equal(record?.to, 'working', 'a switch changes no state');
+  for (const fact of ['model-a', 'model-b', '(sdk)', 'warm', '1h', '41000', '$0.33', 'catalog']) {
+    assert.ok(
+      (record?.cause.detail ?? '').includes(fact),
+      `the detail lost "${fact}": ${record?.cause.detail}`,
+    );
+  }
+  assert.equal(machine.rejectedCount, 0, 'PostModelSwitch is a declared cause event');
+});
+
+test('the ask before a model switch records nothing; a deny or an unconfirmed id would cancel it', () => {
+  const { observer: o, store } = observer();
+  o.observeHook(hook({ hook_event_name: 'PreModelSwitch', from_model: 'model-a', to_model: 'model-b' }));
+  assert.equal(store.all().length, 0);
+});
