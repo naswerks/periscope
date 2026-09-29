@@ -6,6 +6,8 @@ for no wire or API change, minor for a protocol bump (the previous version stays
 minor), an agent SDK pin bump or an additive API, major for a wire change outside the window or a
 removed export. The package version and the wire protocol version are separate numbers.
 
+## [Unreleased]
+
 ## [1.3.0] - 2026-09-29
 
 Protocol 12; the window is `[11, 12]`, so a version-11 controller is still spoken to. Every member

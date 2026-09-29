@@ -99,7 +99,8 @@ the open `capabilities` list needs no version bump; a new hello member does. The
 The host sends these whichever version was chosen. A version-11 controller decodes them as keys it
 does not know and words it has not met, which its codec carries through. A version-11 controller's
 own frames carry none of them and decode here unchanged. `src/host/protocol-window.test.ts` holds
-both directions against the decoder v1.2.0 shipped.
+both directions over a real link: every frame this host sends decodes with the protocol-11 decoder
+v1.2.0 shipped, and a version-11 controller's `session_configure` decodes here and applies.
 
 Two close reasons carry meaning. A close with code 1002 whose reason starts with `seq gap` is a
 replay request: the controller names the position it holds, and the host's next dial replays from
@@ -568,5 +569,5 @@ Over the link:
 | `src/host/wire-request.ts`                                           | The single narrowing from `session_new.request` and `session_configure` to local requests                                                                                             |
 | `contracts/wire-vectors/`                                            | The byte-level contract                                                                                                                                                               |
 | `src/pins/wire-vectors.test.ts`, `src/pins/protocol-closure.test.ts` | The corpus check; the proof that the subpath reaches no `host/` file and no `node:` builtin                                                                                           |
-| `src/host/protocol-window.test.ts`                                   | The window's two directions over a real link, against the protocol-11 decoder v1.2.0 shipped                                                                                          |
+| `src/host/protocol-window.test.ts`                                   | The window's two directions over a real link: this host's frames through the protocol-11 decoder v1.2.0 shipped, and a version-11 controller's frames through this build              |
 | `examples/minimal-controller/`, `examples/test-controller/`          | The smallest controller that accepts a host, and the reference controller that drives every ask                                                                                       |
