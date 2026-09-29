@@ -45,6 +45,8 @@ export class SessionObserver {
   readonly #machine: SessionStateMachine;
   /** task_id -> the entryId that task's work is recorded under. */
   readonly #taskEntries = new Map<string, string>();
+  /** Whether the agent has reported itself; only its first init message says the session is ready. */
+  #reported = false;
 
   constructor(machine: SessionStateMachine) {
     this.#machine = machine;
@@ -122,6 +124,11 @@ export class SessionObserver {
     });
 
     if (message.type === 'system' && message.subtype === 'init') {
+      // The CLI re-sends its init with current values at every later turn. Only the first one is the
+      // agent reporting itself; a later one arrives mid-turn, and recording `ready` there would move
+      // a working session backwards. The session refreshes its facts from it instead.
+      if (this.#reported) return [];
+      this.#reported = true;
       return [
         {
           to: 'ready',

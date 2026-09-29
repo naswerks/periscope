@@ -535,7 +535,11 @@ export interface AgentInitFacts {
   readonly cwd: string;
   readonly model: string;
   readonly permissionMode: string;
-  /** Where the agent found its credentials. The evidence that ambient auth actually resolved. */
+  /**
+   * Where the agent's API key came from, verbatim: `none` on a claude.ai sign-in, a bearer token or a
+   * third-party provider (`oauth` is a legacy value current CLIs never send). Provenance, never
+   * proof of sign-in: a fully authenticated session reads `none`.
+   */
   readonly apiKeySource: string;
   readonly tools: readonly string[];
   readonly skills: readonly string[];

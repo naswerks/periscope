@@ -201,7 +201,7 @@ export const MESSAGE_COVERAGE = {
   // --- wired ----------------------------------------------------------------
   'system/init': {
     handling: 'wired',
-    note: 'state -> ready, and the only place the session id, CLI version receipt, model, tool/skill/plugin inventory and apiKeySource arrive. Everything downstream keys off the id it carries.',
+    note: 'the first one: state -> ready, and the only place the session id, CLI version receipt, model, tool/skill/plugin inventory and apiKeySource arrive. Everything downstream keys off the id it carries. The CLI re-sends it at every later turn with current values; a later one records nothing, since it arrives mid-turn and ready there would move a working session backwards, and the session refreshes its facts from it instead.',
   },
   'system/status': {
     handling: 'wired',

@@ -75,7 +75,7 @@ export const MESSAGE_ROUTING = {
   // --- update: facts of the turn that nothing later restates -----------------
   'system/init': {
     lane: 'update',
-    note: 'the per-spawn receipt — session id, CLI version, model, tool/skill/plugin inventory, apiKeySource. It arrives once and nothing restates it.',
+    note: 'the per-spawn receipt — session id, CLI version, model, tool/skill/plugin inventory, plugin load errors, apiKeySource. The first arrives with the first turn, and the CLI re-sends one at each later turn with current values; every one is forwarded, because a later one is the only report that the model, the permission mode or an inventory changed.',
   },
   assistant: {
     lane: 'update',

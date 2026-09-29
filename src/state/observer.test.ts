@@ -341,6 +341,23 @@ test('a model switch is recorded once, as it happened, with what it cost the pro
   assert.equal(machine.rejectedCount, 0, 'PostModelSwitch is a declared cause event');
 });
 
+test('regression: only the first init reports readiness; a later one arrives mid-turn and records nothing', () => {
+  // The CLI re-sends its init with current values at every later turn. Recording `ready` for each
+  // one moved a working session backwards in the middle of its turn.
+  const { observer: o, machine, store } = observer();
+  o.observeMessage(message({ type: 'system', subtype: 'init', session_id: 'sess-1', model: 'model-a' }));
+  o.observeHook(hook({ hook_event_name: 'UserPromptSubmit' }));
+  assert.equal(machine.state, 'working');
+
+  const later = o.observeMessage(
+    message({ type: 'system', subtype: 'init', session_id: 'sess-1', model: 'model-b' }),
+  );
+
+  assert.deepEqual(later, [], 'a later init recorded a transition');
+  assert.equal(machine.state, 'working', 'the session moved backwards mid-turn');
+  assert.equal(store.all().filter((transition) => transition.to === 'ready').length, 1);
+});
+
 test('regression: a refusal with no fallback is recorded, not refused as an unnamed cause', () => {
   // The observer always recorded it, but the event was missing from the declared vocabulary, so the
   // machine refused every such transition as `transition-cause-unnamed` and the trace never had it.

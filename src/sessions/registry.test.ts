@@ -602,6 +602,31 @@ test('every streaming option a caller asks for is what is passed — none is dec
   assert.equal(fake.started[0]?.request.forwardSubagentText, true);
 });
 
+test('a later init refreshes the facts: its model and mode replace the first ones, and the id stays', async () => {
+  // The CLI re-sends its init with current values each turn, and after a model switch the later one
+  // is the only report of the new model the facts get.
+  const fake = fakeAgents();
+  const registry = registryWith(fake.start);
+  const created = registry.create({ cwd: 'C:/work' });
+  assert.ok(created.ok);
+  const process = fake.started[0];
+  assert.ok(process);
+
+  created.value.prompt('go');
+  process.emit(initMessage('s-refresh', { model: 'model-a', permissionMode: 'default' }));
+  const live = await created.value.whenLive(2_000);
+  assert.ok(live.ok);
+  assert.equal(live.value.model, 'model-a');
+
+  process.emit(initMessage('s-refresh-later', { model: 'model-b', permissionMode: 'plan' }));
+  await settle();
+
+  assert.equal(created.value.facts?.model, 'model-b', 'the later init did not refresh the model');
+  assert.equal(created.value.facts?.permissionMode, 'plan');
+  assert.equal(created.value.facts?.id, 's-refresh', 'the id the registry keys on moved');
+  assert.ok(registry.get('s-refresh').ok);
+});
+
 test("the agent's plugin answer rides the facts when it lands before the init message", async () => {
   const fake = fakeAgents();
   const registry = registryWith(fake.start);

@@ -60,6 +60,10 @@ removed export. The package version and the wire protocol version are separate n
   any other mode starts without it. The host still passes no `--dangerously-skip-permissions` and
   chooses no mode of its own. A switch into bypass mid-session, from a session started in another
   mode, meets the SDK without the flag.
+- Only a session's first `system/init` records `ready`. The CLI re-sends its init with current values
+  at every later turn, and recording each one moved a working session back to `ready` in the middle
+  of its turn. A later init refreshes the session's facts instead: the model, the permission mode and
+  the inventories it reports replace the first ones, and the id stays.
 
 ## [1.2.0] - unreleased
 
