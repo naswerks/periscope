@@ -7,7 +7,7 @@
  * What is deliberately absent, and it is not an oversight: two facts a dashboard wants,
  * `getContextUsage()` for the context ring and `accountInfo()` for the account's own limits, are
  * methods on the query object, and this package does not hand that object out: it is the narrowing
- * that keeps four mid-session permission mutators unreachable, and it is pinned. Reaching them means
+ * that keeps five mid-session permission mutators unreachable, and it is pinned. Reaching them means
  * either widening that narrowing or adding a named method beside `prompt` and `interrupt`, and both
  * are decisions above this file. Everything below arrives on the message stream, which this host
  * already has, so none of it costs that trade.

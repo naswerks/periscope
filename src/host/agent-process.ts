@@ -50,6 +50,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import { AsyncQueue } from '../core/async-queue.js';
+import { isBypassMode } from './wire-request.js';
 
 export type {
   HookCallbackMatcher,
@@ -220,7 +221,7 @@ export interface AgentProcessRequest {
    * Which model runs this session. `null` leaves the CLI's own default.
    *
    * Absent, not narrowed: `model` and `systemPrompt` were never among this type's keys, so adding
-   * them filled a gap; it did not widen a security narrowing. The eight `SHADOWING_LANES` below are
+   * them filled a gap; it did not widen a security narrowing. The nine `SHADOWING_LANES` below are
    * a deliberate narrowing and they stay closed. Two different facts, and conflating them costs a
    * reader a whole cycle on the wrong objection.
    *
@@ -265,10 +266,11 @@ export const MAX_PENDING_PROMPTS = 16;
  * Every key `Options` is composed from, as data.
  *
  * This is the permission-config pin's subject, and it is why that pin is a compile error rather
- * than a grep. The SDK's `Options` carries nine lanes that alter permission outcomes:
+ * than a grep. The SDK's `Options` carries ten lanes that alter permission outcomes:
  * `permissionMode`, `settings`, `managedSettings`, `toolAliases`, `permissionPromptToolName`,
- * `allowedTools`, `disallowedTools`, `canUseTool`, and the `permissions` block a settings object can
- * carry. Eight of them (`SHADOWING_LANES`) are unreachable, because a caller can only supply the
+ * `allowedTools`, `disallowedTools`, `canUseTool`, `permissionPrompts` (whose `none` denies every
+ * call that would have prompted), and the `permissions` block a settings object can carry. Nine of
+ * them (`SHADOWING_LANES`) are unreachable, because a caller can only supply the
  * keys below and `startAgentProcess` composes `Options` from exactly these; `permissionMode` is the
  * one opened by name, in `CLI_PARITY_OPTION_KEYS`. Adding a composable option breaks this
  * declaration, and the pin fails at build time instead of when someone remembers to look.
@@ -288,7 +290,7 @@ export const MAX_PENDING_PROMPTS = 16;
  *
  * The distinction that decides whether a widening is a weakening: `model` and `systemPrompt` were
  * absent, not narrowed. They were never among the composable keys, so opening them filled a gap.
- * The eight lanes in `SHADOWING_LANES` are a deliberate security narrowing and stay closed, and the
+ * The nine lanes in `SHADOWING_LANES` are a deliberate security narrowing and stay closed, and the
  * pin still asserts each one by name. A gap filled and a narrowing widened are different acts and
  * this file tells them apart.
  *
@@ -320,7 +322,7 @@ export const AGENT_PROCESS_REQUEST_KEYS = {
 } as const satisfies Record<keyof AgentProcessRequest, true>;
 
 /**
- * The eight closed lanes, as data: the subject both permission pins are about.
+ * The nine closed lanes, as data: the subject both permission pins are about.
  *
  * The defect this guards against: the lanes were once written out twice, once per pin, and the two
  * copies disagreed. The scan pin listed `permissionPrompt`, which does not exist in `sdk.d.ts` at
@@ -333,7 +335,7 @@ export const AGENT_PROCESS_REQUEST_KEYS = {
 export const SHADOWING_LANES: readonly string[] = [
   // `permissionMode` was deliberately removed from this list (CLI parity); see
   // `CLI_PARITY_OPTION_KEYS`. It is the one lane that is a posture the operator chooses in the open,
-  // not a rule file or a pre-answer; the eight below are the latter and stay closed.
+  // not a rule file or a pre-answer; the nine below are the latter and stay closed.
   'settings',
   'managedSettings',
   'toolAliases',
@@ -342,6 +344,8 @@ export const SHADOWING_LANES: readonly string[] = [
   'disallowedTools',
   'canUseTool',
   'permissions',
+  // Who answers a call that would prompt: `none` denies every one of them outright, a pre-answer.
+  'permissionPrompts',
 ];
 
 /**
@@ -352,7 +356,7 @@ export const SHADOWING_LANES: readonly string[] = [
  * evaluation path, so none can change whether a tool runs, only how much of the run is visible.
  * That is why widening the set here does not weaken the boundary above.
  *
- * The pin asserts every member is composable and is none of the eight shadowing lanes, so a later
+ * The pin asserts every member is composable and is none of the nine shadowing lanes, so a later
  * addition cannot join this list by assertion alone.
  */
 export const STREAMING_OPTION_KEYS = [
@@ -424,7 +428,7 @@ export const PERSISTENCE_OPTION_KEYS = [
  *
  * These were absent, not narrowed, and that is the whole classification. `model` and
  * `systemPrompt` were simply not in this type, so nothing was ever protecting them; there was no
- * decision to reverse, only a capability nobody had wired. The eight `SHADOWING_LANES` are the
+ * decision to reverse, only a capability nobody had wired. The nine `SHADOWING_LANES` are the
  * opposite case: each was considered and closed. Opening a gap and re-opening a closed lane look
  * identical in a diff, and this list is how they stop looking identical.
  *
@@ -439,7 +443,7 @@ export const PERSISTENCE_OPTION_KEYS = [
  * call, so the boundary is unmoved, but "the host can state what this agent was told" is not a
  * property this package has; `AgentInitFacts` is where that can be verified.
  *
- * The pin asserts every member is composable and is none of the eight, exactly as the other lists
+ * The pin asserts every member is composable and is none of the nine, exactly as the other lists
  * do.
  */
 export const AGENT_SELECTION_OPTION_KEYS = [
@@ -457,7 +461,12 @@ export const AGENT_SELECTION_OPTION_KEYS = [
  *   the boundary set is still held under `bypassPermissions`. What the mode changes is the CLI's
  *   own prompt flow, which this host's gate already answers.
  *
- * The other eight stay closed: they are rule files and pre-answers, which is a different thing from a
+ * The SDK enters `bypassPermissions` only with `allowDangerouslySkipPermissions` set, so
+ * `composeOptions` sets that flag exactly when the requested mode is bypass, and never otherwise:
+ * the flag permits the mode, it does not choose it, and nothing else in the package sets it. A switch
+ * into bypass mid-session from a session started in another mode meets the SDK without the flag.
+ *
+ * The other nine stay closed: they are rule files and pre-answers, which is a different thing from a
  * posture chosen in the open. Pinned by `pins/permission-config.test.ts`.
  */
 export const CLI_PARITY_OPTION_KEYS = [
@@ -472,10 +481,11 @@ export interface AgentProcess {
    *
    * This is a narrowing wrapper, not the SDK's `Query`, and that is load-bearing. `query()`
    * returns an object that IS an async generator AND carries `setPermissionMode`,
-   * `applyFlagSettings`, `setMcpServers` and `setMcpPermissionModeOverride` — four calls that change
-   * permission outcomes mid-session, after any construction-time check has run. Handing that object
-   * out under an `AsyncGenerator` annotation hides them from the compiler and from nobody else: one
-   * cast, or any plain JavaScript, reaches all four. So it is wrapped rather than annotated, and
+   * `applyFlagSettings`, `setMcpServers`, `setMcpPermissionModeOverride` and `updateSettings` — five
+   * calls that change permission outcomes mid-session, or the settings files permission rules are
+   * read from, after any construction-time check has run. Handing that object out under an
+   * `AsyncGenerator` annotation hides them from the compiler and from nobody else: one cast, or any
+   * plain JavaScript, reaches all five. So it is wrapped rather than annotated, and
    * "the composed options cannot ship a shadowing setting" stays true without the words "unless you
    * cast" attached to it.
    *
@@ -493,7 +503,7 @@ export interface AgentProcess {
    * The named mid-session controls this package offers (the doc above says where they go): the
    * three members of `session_configure`, each the SDK's own streaming-input setter behind a method.
    * `setPermissionMode` is here deliberately: the one permission mutator that is a posture, reached
-   * only from the wire through `readSessionConfigure`; the other three stay unreachable.
+   * only from the wire through `readSessionConfigure`; the other four stay unreachable.
    */
   setModel(model: string | null): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
@@ -663,6 +673,9 @@ export function composeOptions(request: AgentProcessRequest): Options {
     ...(request.systemPrompt === null ? {} : { systemPrompt: request.systemPrompt }),
     ...(request.effort === null ? {} : { effort: request.effort }),
     ...(request.permissionMode === null ? {} : { permissionMode: request.permissionMode }),
+    // The SDK enters bypass only with this flag set. Set exactly when bypass is the mode asked for:
+    // it permits that mode and chooses nothing (see `CLI_PARITY_OPTION_KEYS`).
+    ...(isBypassMode(request.permissionMode) ? { allowDangerouslySkipPermissions: true } : {}),
   };
 }
 

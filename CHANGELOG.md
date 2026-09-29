@@ -52,6 +52,14 @@ removed export. The package version and the wire protocol version are separate n
   The agent now names a plugin directory that did not load, with its path, in its init message's
   `plugin_errors`, which reaches the controller forwarded. The host still refuses a missing
   configured directory itself, before a process exists.
+- `permissionPrompts` joins the closed lanes: a controller cannot set it, so its `none`, which denies
+  every call that would have prompted, cannot answer ahead of the gate. `updateSettings`, a new call
+  that writes settings files mid-session, is among the calls the process handle keeps unreachable.
+- A session asked to run under `bypassPermissions` starts with the SDK's
+  `allowDangerouslySkipPermissions`, which the SDK requires before it enters that mode. A session in
+  any other mode starts without it. The host still passes no `--dangerously-skip-permissions` and
+  chooses no mode of its own. A switch into bypass mid-session, from a session started in another
+  mode, meets the SDK without the flag.
 
 ## [1.2.0] - unreleased
 

@@ -397,8 +397,8 @@ export interface SessionNewRequest {
    * which the SDK fires under every mode, so the boundary set (push · remote surgery · branch
    * delete · `gh pr merge`) is still held for a decision under bypass. What stays closed:
    * `settings`, `managedSettings`, `allowedTools`, `disallowedTools`, `canUseTool`, `permissions`,
-   * `toolAliases`, `permissionPromptToolName`. A mode is a posture the operator chooses in the open;
-   * those are rule files and pre-answers nobody can see.
+   * `toolAliases`, `permissionPromptToolName`, `permissionPrompts`. A mode is a posture the operator
+   * chooses in the open; those are rule files and pre-answers nobody can see.
    */
   readonly permissionMode: string | null;
   /** Forward a subagent's whole conversation rather than only its tool calls. Null means OFF. */
@@ -434,7 +434,7 @@ export interface SessionNewRequest {
    * Which model runs. Null leaves the CLI's default.
    *
    * This and `systemPrompt` select what the process emits; neither can answer a permission, so
-   * carrying them does not widen a security narrowing. The eight `SHADOWING_LANES` that can answer
+   * carrying them does not widen a security narrowing. The nine `SHADOWING_LANES` that can answer
    * a permission before the gate does are a deliberate narrowing and they stay closed. Two different
    * facts; see `AGENT_SELECTION_OPTION_KEYS` in host/agent-process.ts for the checked version of
    * this sentence.
