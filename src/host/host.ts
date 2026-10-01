@@ -53,6 +53,8 @@ import type {
   RepositoryListResult,
   RepositoryRead,
   RepositoryReadResult,
+  WorkspaceRead,
+  WorkspaceReadResult,
   WireRefusal,
   SessionNewGate,
   SessionPayload,
@@ -79,6 +81,7 @@ import {
   repositoryListResult,
   repositoryReadResult,
   stateTransitionUpdate,
+  workspaceReadResult,
 } from '../control/frames.js';
 import type { FrameSink } from '../control/stream.js';
 import { forwardSession } from '../control/stream.js';
@@ -106,8 +109,8 @@ import { normalizePath } from '../core/paths.js';
 import { mergeHooks, modelSwitchHooks, observationHooks } from './hooks.js';
 import { createToolServer } from './mcp-server.js';
 import { listTranscripts, tailTranscript } from './claude-transcripts.js';
-import { listRepositoryDirectory, readRepositoryFile } from './repository-read.js';
-import { nodePathResolver } from './paths.js';
+import { listRepositoryDirectory, readRepositoryFile, readWorkspaceFile } from './repository-read.js';
+import { homeDirectory, nodePathResolver } from './paths.js';
 import { isBypassMode, mergeMcpServers, readSessionConfigure, readSessionRequest } from './wire-request.js';
 import { mergePlugins, pluginDirsProblem } from './plugin-dirs.js';
 import { isDroppable } from '../control/frames.js';
@@ -447,6 +450,11 @@ export interface PeriscopeHostOptions {
    */
   readonly protectedPaths: readonly string[];
   /**
+   * The home directory a shell command's `~` and `$HOME` forms name, for the credential check.
+   * Defaults to the process environment's (`host/paths.ts`'s `homeDirectory`).
+   */
+  readonly home?: string | null;
+  /**
    * Which tool names the local gate treats as path writes, path reads and shell commands.
    *
    * Defaults to the SDK's own tools (`DEFAULT_TOOL_FAMILIES`). An MCP tool the embedder registers
@@ -624,6 +632,11 @@ export class PeriscopeHost {
    * the reservation is taken synchronously and released in the same call, whatever the outcome.
    */
   readonly #opening = new Set<string>();
+  /**
+   * Handles whose end was asked for while their open was still in flight. `#open` serves the end the
+   * moment the session exists, so a session the controller let go of is never left running.
+   */
+  readonly #endOnOpen = new Set<string>();
 
   /**
    * regression: an undroppable frame the link's queue refused at capacity — a turn-end transition, a
@@ -854,6 +867,21 @@ export class PeriscopeHost {
         });
         return;
       }
+      case 'session_end': {
+        // An end arriving while the session is still opening withdraws the turns waiting for it and
+        // is served the moment the open completes; see `#endOnOpen`.
+        if (!this.#sessions.has(frame.sessionId) && this.#opening.has(frame.sessionId)) {
+          this.#withdraw(frame.sessionId);
+          this.#endOnOpen.add(frame.sessionId);
+          return;
+        }
+        const composed = this.session(frame.sessionId);
+        if (!composed.ok) return this.#refuse(frame.sessionId, composed.refusal);
+        // `stop` ends the process; the session's end listeners then report the transition to `ended`
+        // and close the session here, which frees its workspace.
+        composed.value.session.stop('the controller ended the session');
+        return;
+      }
       case 'session_configure': {
         // Protocol v6: the SDK's live setters. For a live session both failures answer on its own
         // state lane: a value this host refuses (`frame-malformed`) and a setter the agent refuses
@@ -908,6 +936,9 @@ export class PeriscopeHost {
         return;
       case 'repository_read':
         void this.#answerRepositoryRead(frame.sessionId, payload);
+        return;
+      case 'workspace_read':
+        void this.#answerWorkspaceRead(frame.sessionId, payload);
         return;
       default:
         // A kind this host produces, or one a newer controller invented. Named either way.
@@ -1039,6 +1070,11 @@ export class PeriscopeHost {
       );
     } finally {
       this.#opening.delete(sessionKey);
+      // An end asked for during the open is served now. A refused open produced no session, so there
+      // is nothing to end and the mark simply goes.
+      if (this.#endOnOpen.delete(sessionKey)) {
+        this.#sessions.get(sessionKey)?.session.stop('the controller ended the session while it was opening');
+      }
       // A successful open drained and cleared the queue already, so this finds nothing. Anything still
       // here means the open did not produce a session (a refused request, a failed provision, a
       // `giveBack`, or a throw) and each waiting turn is answered rather than forgotten. It sits in
@@ -1218,6 +1254,7 @@ export class PeriscopeHost {
         workspaceRoot: cwd,
         resolve: nodePathResolver,
         protectedPaths: this.#options.protectedPaths,
+        home: this.#options.home === undefined ? homeDirectory() : this.#options.home,
         ...(this.#options.toolFamilies === undefined ? {} : { toolFamilies: this.#options.toolFamilies }),
       }),
       where,
@@ -1468,10 +1505,64 @@ export class PeriscopeHost {
     }
   }
 
-  /** A refused repository ask goes on the wire as its result kind, and is reported locally too. */
+  /**
+   * Answer `workspace_read`: one page of a text file inside a workspace this host provisioned,
+   * jailed to that workspace's directory by `readWorkspaceFile`. Host-scoped, so a workspace whose
+   * sessions have all ended can still be read; every exit is the one result kind.
+   */
+  async #answerWorkspaceRead(channelKey: string, asked: WorkspaceRead): Promise<void> {
+    const nothing = { text: null, sizeBytes: 0, nextOffset: null };
+    const refused = (why: Refusal): void =>
+      this.#refuseRepository(
+        channelKey,
+        workspaceReadResult(asked.requestId, nothing, wireRefusalOf(why)),
+        why,
+      );
+    const provider = this.#workspaces;
+    if (provider === undefined) {
+      return refused(
+        refusal(
+          'workspace-read-failed',
+          'this host has no workspace provider — there is no workspace to read',
+        ),
+      );
+    }
+    if (provider.pathFor === undefined) {
+      return refused(
+        refusal(
+          'workspace-read-failed',
+          "this host's workspace provider cannot locate a workspace by its key",
+        ),
+      );
+    }
+    const problem = unusableKeyProblem(asked.workspaceKey);
+    if (problem !== null) {
+      return refused(
+        refusal(
+          'workspace-read-failed',
+          `workspace_read.workspaceKey ${keyPreview(asked.workspaceKey)} ${problem}`,
+        ),
+      );
+    }
+    try {
+      const read = await readWorkspaceFile(
+        provider.pathFor(asked.workspaceKey),
+        asked.path,
+        asked.offset,
+        asked.maxBytes,
+        this.#options.protectedPaths,
+      );
+      if (!read.ok) return refused(read.refusal);
+      this.#send(channelKey, workspaceReadResult(asked.requestId, read.value));
+    } catch (error) {
+      refused(refusal('workspace-read-failed', describe(error)));
+    }
+  }
+
+  /** A refused read ask goes on the wire as its result kind, and is reported locally too. */
   #refuseRepository(
     channelKey: string,
-    answer: RepositoryListResult | RepositoryReadResult,
+    answer: RepositoryListResult | RepositoryReadResult | WorkspaceReadResult,
     why: Refusal,
   ): void {
     this.#send(channelKey, answer);

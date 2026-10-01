@@ -112,6 +112,11 @@ export interface WorkspaceProvider {
    */
   keyForPath?(path: string): string | null;
   /**
+   * The directory of the workspace at `key`, whether or not it exists yet. Optional: a provider
+   * without it cannot be read from by key, and the host answers `workspace-read-failed` by name.
+   */
+  pathFor?(key: string): string;
+  /**
    * What exists under the workspace root right now, read from disk on demand. Optional: a provider
    * that keeps no inventory leaves it out and the host answers `workspace-list-failed` by name.
    * Only what this provider provisioned is listed; the repository it links from never is.

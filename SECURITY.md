@@ -117,24 +117,25 @@ on POSIX does not create protection on Windows.
 
 ### 3. The gate has no opinion about MCP tools you register, or about built-in tools outside its families
 
-The local gate matches on tool name, in three families (`DEFAULT_TOOL_FAMILIES`): writes are `Write`,
-`Edit`, `MultiEdit`, `NotebookEdit`; reads are `Read`, `NotebookRead`; shells are `Bash`,
-`PowerShell`. An MCP tool
-arrives as `mcp__{server}__{tool}`, matches nothing, and gets no local opinion, so the decision
-escalates to your controller. That is fail-closed and correct.
+The local gate matches on tool name, in four families (`DEFAULT_TOOL_FAMILIES`): writes are `Write`,
+`Edit`, `MultiEdit`, `NotebookEdit`; reads are `Read`, `NotebookRead`; searches are `Grep`, `Glob`;
+shells are `Bash`, `PowerShell`. An MCP tool arrives as `mcp__{server}__{tool}`, matches nothing, and
+gets no local opinion, so the decision escalates to your controller. That is fail-closed and correct.
 
-The same fall-through applies to built-in tools the families do not name, and that scopes the
-credential-path denial itself. The default read family is `Read`/`NotebookRead` only, so built-in
-`Grep` and `Glob`, both read primitives, get no local opinion and escalate; the gate's own suite
-pins that deliberately (`local.test.ts`, _"a tool outside every declared family gets no local
-opinion"_, with `Grep` as the example). The shell scan matches a protected path written literally,
-so expansion forms (`~`, `$HOME`, `%USERPROFILE%`) and symlink indirection escalate too. What this
-means for fact 1's picture: offline, every one of those escalations is refused as an outage, which
-is still fail-closed, a narrower control than a by-name denial rather than an open door; online, for
+Within the families the credential-path denial is scoped, and the scope is what to review. Writes
+are jailed to the session's workspace. Reads are not jailed: a read goes anywhere this host's OS user
+can read, the agent's own tool output and installed packages included, and the protected set is what
+stops it. A search is refused when its root (`path`, else the workspace) is at or beneath a protected
+path, and also when a protected path sits beneath its root, because the search would read it. The
+shell scan matches a protected path written literally or through a home-directory form (`~`,
+`$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, `%USERPROFILE%`), and every comparison folds
+case. What falls through is symlink indirection (the gate resolves paths as text and follows no
+link) and a shell command that reaches a protected path without naming it: a recursive search of an
+ancestor directory, or a path the command builds at run time. What this means for fact 1's picture:
+offline, those calls escalate and are refused as outages, which is still fail-closed; online, for
 exactly those vectors, what stands between the agent and the token cache is your controller, not
-this gate. Widening the local denial to cover them is a known open question, deliberately left open
-rather than closed in passing: a `Grep` refused for carrying no path at all is the kind of
-over-refusal a widening has to weigh, and that deserves its own decision.
+this gate. Closing them is a known open question: a link needs the filesystem the gate deliberately
+does not consult, and a computed path cannot be read from a command's text.
 
 Name what is lost, because "no opinion" undersells it. With the controller unreachable, such a call
 is refused as an outage rather than by name, which is precisely the distinction the local gate was
@@ -275,10 +276,11 @@ over the link and without a further credential:
   `~/.claude/projects`), which includes sessions the operator ran from an editor or a terminal,
   not only sessions this host started; and any directory listing or text-file head under the
   repository root (`repository_list` / `repository_read`, read-only and bounded), a root the
-  controller can re-point through `host_configure`. Both doors are jailed to their root, and the
-  repository doors also honour the host's protected set: a path at or beneath a credential
-  directory refuses `credential-path-denied` whatever the root is, on the lexical resolution and
-  on the real path.
+  controller can re-point through `host_configure`; and any text file up to 512 KiB inside a
+  workspace this host provisioned, a page at a time (`workspace_read`, by the workspace's key). Each
+  door is jailed to its root, and the repository and workspace doors also honour the host's
+  protected set: a path at or beneath a protected path refuses `credential-path-denied` whatever the
+  root is, on the lexical resolution and on the real path.
 - **Choose the agent's permission mode.** `session_new.request.permissionMode` and
   `session_configure` take the SDK's own vocabulary, `bypassPermissions` included. Under bypass the
   agent's allow and ask rules are off and the `PreToolUse` hook is the only control, so a controller
@@ -291,7 +293,8 @@ over the link and without a further credential:
   home, the plugin directories and the two controller URLs through `host_configure`, written to the
   config file; the URLs apply at the next start.
 - **Start sessions** that run the agent with the interactive prompt replaced by the gate, and
-  answer every permission decision those sessions raise.
+  answer every permission decision those sessions raise; and **end** one it no longer needs
+  (`session_end`): the agent's process exits, and its transcript stays where the agent CLI wrote it.
 
 None of this is a defect to be closed: a runner that could not run a tool server, set a session's
 environment or clean up its worktrees would not be a runner. It is the trust a pairing extends, so

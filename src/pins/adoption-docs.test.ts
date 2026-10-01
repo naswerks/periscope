@@ -97,21 +97,22 @@ test("regression: SECURITY.md discloses that the gate has no opinion about an em
 
 test('regression: SECURITY.md scopes the credential-path denial: the covered families and what falls through', () => {
   // The denial is tool-shaped and text-shaped. A reader deciding to install must meet the scope in
-  // the document, not discover it in the gate's own suite: the built-in search tools sit in no
-  // declared family and get no local opinion, and the shell scan matches a protected path written
-  // literally.
-  assert.match(securityProse, /\bGrep\b/, 'the built-in read tool that falls through is not named');
-  assert.match(securityProse, /\bGlob\b/, 'the second ungated built-in read tool is not named');
+  // the document, not discover it in the gate's own suite: reads leave the workspace and only the
+  // protected set stops them, the search family is held to it in both directions, the shell scan
+  // expands the home-directory forms, and a link or a computed path still falls through.
+  assert.match(securityProse, /Reads are not jailed/, 'the document must say reads leave the workspace');
+  assert.match(securityProse, /\bGrep\b/, 'the search tool the denial covers is not named');
+  assert.match(securityProse, /\bGlob\b/, 'the second search tool is not named');
   assert.match(securityProse, /symlink/i, 'the indirection the textual resolver cannot see is not named');
   assert.match(
     securityProse,
     /USERPROFILE|\$HOME/,
-    'the expansion forms the literal scan misses are not named',
+    'the home-directory forms the shell scan expands are not named',
   );
   assert.match(
     securityProse,
     /known open question/i,
-    'the widening must be stated as known and open: a silent gap reads as a missed one',
+    'what falls through must be stated as known and open: a silent gap reads as a missed one',
   );
   assert.match(
     securityProse,

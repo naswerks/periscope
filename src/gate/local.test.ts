@@ -57,7 +57,7 @@ test('a shell call it has no objection to gets no local opinion at all', () => {
 });
 
 test('a tool outside every declared family gets no local opinion', () => {
-  assert.equal(gate(request({ toolName: 'Grep', toolInput: { pattern: 'x' } })), null);
+  assert.equal(gate(request({ toolName: 'WebFetch', toolInput: { url: 'https://example.com' } })), null);
 });
 
 test('a boundary command is refused locally, by name', () => {
@@ -83,6 +83,102 @@ test('regression: a read of the credential path refuses — reads are jailed too
 
 test('a read of ordinary source flows', () => {
   assert.equal(gate(request({ toolName: 'Read', toolInput: { file_path: 'C:/repo/src/a.ts' } })), null);
+});
+
+test('a read outside the workspace flows: reads stop only at credential material', () => {
+  const installed = 'C:/Program Files/nodejs/node_modules/tool/dist/index.js';
+  assert.equal(gate(request({ toolName: 'Read', toolInput: { file_path: installed } })), null);
+  // control: the same path as a write is still refused, so the jail is in force and only reads left it.
+  assert.equal(
+    gate(request({ toolName: 'Write', toolInput: { file_path: installed } }))?.reason,
+    'path-escapes-root',
+  );
+});
+
+test('a read of the credential path in another case still refuses', () => {
+  const found = gate(
+    request({ toolName: 'Read', toolInput: { file_path: 'c:/USERS/Agent/.CLAUDE/.credentials.json' } }),
+  );
+  assert.equal(found?.reason, 'credential-path-denied');
+});
+
+// ---------------------------------------------------------------------------
+// Searches
+// ---------------------------------------------------------------------------
+
+test('a search under a protected path refuses', () => {
+  const found = gate(
+    request({ toolName: 'Grep', toolInput: { pattern: 'token', path: `${CREDENTIALS}/sub` } }),
+  );
+  assert.equal(found?.reason, 'credential-path-denied');
+});
+
+test('a search whose root holds a protected path refuses, because the search would read it', () => {
+  const found = gate(request({ toolName: 'Grep', toolInput: { pattern: 'token', path: 'C:/Users/agent' } }));
+  assert.equal(found?.reason, 'credential-path-denied');
+  assert.match(found?.detail ?? '', /a search under/);
+});
+
+test('a search elsewhere flows, with the workspace as its root when it names none', () => {
+  assert.equal(gate(request({ toolName: 'Grep', toolInput: { pattern: 'token' } })), null);
+  assert.equal(
+    gate(
+      request({ toolName: 'Grep', toolInput: { pattern: 'gh pr merge', path: 'C:/Program Files/nodejs' } }),
+    ),
+    null,
+  );
+  assert.equal(gate(request({ toolName: 'Glob', toolInput: { pattern: '**/*.md' } })), null);
+});
+
+test('a glob pattern that names a protected place refuses, absolute or climbing', () => {
+  assert.equal(
+    gate(request({ toolName: 'Glob', toolInput: { pattern: `${CREDENTIALS}/**` } }))?.reason,
+    'credential-path-denied',
+  );
+  assert.equal(
+    gate(request({ toolName: 'Glob', toolInput: { pattern: '../Users/agent/.claude/*' } }))?.reason,
+    'credential-path-denied',
+  );
+});
+
+test('a workspace that holds a protected path refuses a search that names no root', () => {
+  const home = localGate({
+    workspaceRoot: 'C:/Users/agent',
+    resolve: fakeResolve,
+    protectedPaths: [CREDENTIALS],
+  });
+  assert.equal(
+    home(request({ toolName: 'Grep', toolInput: { pattern: 'token' } }))?.reason,
+    'credential-path-denied',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Home-directory forms in a shell command
+// ---------------------------------------------------------------------------
+
+const homed = localGate({
+  workspaceRoot: WORKSPACE,
+  resolve: fakeResolve,
+  protectedPaths: [CREDENTIALS],
+  home: 'C:/Users/agent',
+});
+
+test('a shell command naming a protected path through a home-directory form refuses', () => {
+  for (const command of [
+    'cat ~/.claude/.credentials.json',
+    'cat "$HOME/.claude/.credentials.json"',
+    'cat ${HOME}/.claude/x',
+    'Get-Content $env:USERPROFILE\\.claude\\x',
+    'type %USERPROFILE%\\.claude\\x',
+  ]) {
+    assert.equal(homed(request({ toolInput: { command } }))?.reason, 'credential-path-denied', command);
+  }
+});
+
+test('control: the expansion is what refuses; with no home known the same command has no credential opinion', () => {
+  assert.equal(gate(request({ toolInput: { command: 'cat ~/.claude/.credentials.json' } })), null);
+  assert.equal(homed(request({ toolInput: { command: 'cat ~/notes.txt' } })), null);
 });
 
 test('the credential check runs before the boundary check, so the reader gets the graver answer', () => {

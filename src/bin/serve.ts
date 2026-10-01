@@ -23,6 +23,7 @@ import {
   transcriptsRootUnder,
   claudeTranscriptResolver,
   credentialPaths,
+  homeDirectory,
   packageVersion,
   pairedCredentialPath,
   protocolFor,
@@ -543,6 +544,8 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     // Derived, never spelled out here: `credentialPaths` is the one source both this and the token
     // cache's own location come from, so they cannot disagree about what is protected.
     protectedPaths: credentialPaths(raw, { agentHome }),
+    // The home the shell check expands `~` and `$HOME` to, from the same environment as the set above.
+    home: homeDirectory(raw),
     // The discovery door: read-only, jailed. The root is derived here because reading the
     // environment is the composition root's job; a machine with no resolvable home gets a host
     // whose door answers with a named failure rather than a guessed root. The bulk resolver

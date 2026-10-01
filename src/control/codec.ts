@@ -23,6 +23,8 @@ import {
   MAX_PLUGIN_DIRS,
   MAX_REPOSITORY_ENTRIES,
   MAX_REPOSITORY_READ_BYTES,
+  MAX_WORKSPACE_FILE_BYTES,
+  MAX_WORKSPACE_READ_BYTES,
 } from './frames.js';
 import { MAX_WORKSPACE_ID_LENGTH } from '../core/workspace-id.js';
 
@@ -221,6 +223,7 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
   }),
   z.looseObject({ kind: z.literal('session_prompt'), text: z.string() }),
   z.looseObject({ kind: z.literal('session_cancel') }),
+  z.looseObject({ kind: z.literal('session_end') }),
   // v6: live model / permission mode / thinking. Every member nullable — null is "not asked".
   z.looseObject({
     kind: z.literal('session_configure'),
@@ -430,6 +433,22 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     truncated: z.boolean(),
     refusal: refusalSchema.nullable(),
   }),
+  z.looseObject({
+    kind: z.literal('workspace_read'),
+    requestId: z.string().min(1),
+    workspaceKey: z.string().min(1),
+    path: z.string().min(1).max(MAX_CONFIGURATION_VALUE_LENGTH),
+    offset: z.number().int().min(0).max(MAX_WORKSPACE_FILE_BYTES),
+    maxBytes: z.number().int().min(1).max(MAX_WORKSPACE_READ_BYTES),
+  }),
+  z.looseObject({
+    kind: z.literal('workspace_read_result'),
+    requestId: z.string().min(1),
+    text: z.string().nullable(),
+    sizeBytes: z.number().int().nonnegative(),
+    nextOffset: z.number().int().positive().nullable(),
+    refusal: refusalSchema.nullable(),
+  }),
 ]);
 
 const controlPayloadSchema = z.discriminatedUnion('kind', [
@@ -591,6 +610,7 @@ function undeclaredRefusalReason(frame: Frame): string | null {
     case 'workspace_list_result':
     case 'repository_list_result':
     case 'repository_read_result':
+    case 'workspace_read_result':
       carried = [payload.refusal];
       break;
     case 'workspace_release_bulk_result':

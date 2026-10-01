@@ -9,11 +9,12 @@ import { join } from 'node:path';
 import { tempDir } from '../test-support/temp-dir.js';
 import { isContainedBy, normalizePath } from '../core/paths.js';
 import { nodePathResolver } from './paths.js';
-import { MAX_REPOSITORY_READ_BYTES } from '../control/frames.js';
+import { MAX_REPOSITORY_READ_BYTES, MAX_WORKSPACE_FILE_BYTES } from '../control/frames.js';
 import {
   BINARY_PROBE_BYTES,
   listRepositoryDirectory,
   readRepositoryFile,
+  readWorkspaceFile,
   resolveRepositoryPath,
 } from './repository-read.js';
 
@@ -293,6 +294,107 @@ test('the protected set is checked on the real path too: a link into a protected
     // Control: without the protected set the same link is inside the root and is served.
     const unprotected = await readRepositoryFile(root, 'linked/token-cache.json');
     assert.ok(unprotected.ok);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The workspace read: the same jail over a workspace's directory, read in pages.
+// ---------------------------------------------------------------------------
+
+test('a workspace file is read in pages that never split a character, and the last page says so', async () => {
+  const root = await tempDir('workspace');
+  try {
+    // 'a' (1 byte), 'é' (2 bytes), '漢' (3 bytes), 'b' (1 byte): seven bytes.
+    await writeFile(join(root, 'mixed.md'), 'aé漢b', 'utf8');
+
+    const first = await readWorkspaceFile(root, 'mixed.md', 0, 2);
+    assert.ok(first.ok);
+    assert.deepEqual(first.value, { text: 'a', sizeBytes: 7, nextOffset: 1 }, 'the cut steps back off the é');
+
+    const second = await readWorkspaceFile(root, 'mixed.md', 1, 4);
+    assert.ok(second.ok);
+    assert.deepEqual(second.value, { text: 'é', sizeBytes: 7, nextOffset: 3 });
+
+    const third = await readWorkspaceFile(root, 'mixed.md', 3, 1);
+    assert.ok(third.ok);
+    assert.deepEqual(
+      third.value,
+      { text: '漢', sizeBytes: 7, nextOffset: 6 },
+      'a page smaller than its first character carries that character whole, so paging makes progress',
+    );
+
+    const last = await readWorkspaceFile(root, 'mixed.md', 6, 100);
+    assert.ok(last.ok);
+    assert.deepEqual(last.value, { text: 'b', sizeBytes: 7, nextOffset: null });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an offset inside a character or past the end refuses workspace-read-failed by name', async () => {
+  const root = await tempDir('workspace');
+  try {
+    await writeFile(join(root, 'mixed.md'), 'aé', 'utf8');
+    const inside = await readWorkspaceFile(root, 'mixed.md', 2, 10);
+    assert.ok(!inside.ok);
+    assert.equal(inside.refusal.reason, 'workspace-read-failed');
+    assert.match(inside.refusal.detail, /inside a character/);
+
+    const past = await readWorkspaceFile(root, 'mixed.md', 9, 10);
+    assert.ok(!past.ok);
+    assert.match(past.refusal.detail, /past the end/);
+
+    // control: the end itself is a valid offset and answers an empty last page.
+    const atEnd = await readWorkspaceFile(root, 'mixed.md', 3, 10);
+    assert.ok(atEnd.ok);
+    assert.deepEqual(atEnd.value, { text: '', sizeBytes: 3, nextOffset: null });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a file larger than the workspace read serves, or a binary one, is refused rather than paged', async () => {
+  const root = await tempDir('workspace');
+  try {
+    await writeFile(join(root, 'large.txt'), 'x'.repeat(MAX_WORKSPACE_FILE_BYTES + 1), 'utf8');
+    await writeFile(join(root, 'image.bin'), Buffer.from([0x89, 0x50, 0x00, 0x47]));
+
+    const large = await readWorkspaceFile(root, 'large.txt');
+    assert.ok(!large.ok);
+    assert.equal(large.refusal.reason, 'workspace-read-failed');
+    assert.match(large.refusal.detail, /serves files up to/);
+
+    const binary = await readWorkspaceFile(root, 'image.bin');
+    assert.ok(!binary.ok);
+    assert.match(binary.refusal.detail, /NUL byte/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the workspace read's jail and protected set: a climb refuses workspace-path-escape, a protected path refuses in any case", async () => {
+  const root = await tempDir('workspace');
+  try {
+    await mkdir(join(root, 'secrets'), { recursive: true });
+    await writeFile(join(root, 'secrets', 'token.json'), '{}', 'utf8');
+
+    const climbed = await readWorkspaceFile(root, '../outside.md');
+    assert.ok(!climbed.ok);
+    assert.equal(climbed.refusal.reason, 'workspace-path-escape');
+
+    const upper = normalizePath(join(root, 'SECRETS'));
+    const denied = await readWorkspaceFile(root, 'secrets/token.json', 0, 100, [upper]);
+    assert.ok(!denied.ok);
+    assert.equal(denied.refusal.reason, 'credential-path-denied', 'the protected set folds case');
+
+    // The lexical check folds case too, so a path beneath a protected directory spelled in another case
+    // is refused by name before the filesystem is asked whether anything is there: the answer says
+    // nothing about what the protected directory holds.
+    const absent = await readWorkspaceFile(root, 'secrets/absent.json', 0, 100, [upper]);
+    assert.ok(!absent.ok);
+    assert.equal(absent.refusal.reason, 'credential-path-denied');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

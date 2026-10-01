@@ -83,17 +83,26 @@ export function pairedCredentialPath(env: NodeJS.ProcessEnv = process.env): stri
   return dir === null ? null : join(dir, 'paired-credential.json');
 }
 
+/** The home directory the host and the agent share: the environment's spelling, else the OS's. */
+export function homeDirectory(env: NodeJS.ProcessEnv = process.env): string | null {
+  const home = env['USERPROFILE'] ?? env['HOME'] ?? safeHomedir();
+  return home === null || home === '' ? null : home;
+}
+
 /**
  * Where credential material lives, as absolute paths.
  *
  * This exists because file permissions are not a boundary here. The agent runs as the same OS
  * user as the host, so a 0600 token file is readable by the agent exactly as it is by the host. No
  * mode, no owner and no ACL separates them. The gate refusing these paths is the only local
- * control there is, and its refusal covers the declared tool families and shell commands naming a
- * path literally; a call outside that scope (built-in `Grep`/`Glob`, an expansion form, a symlink)
- * escalates to the controller instead, which offline means an outage refusal rather than a by-name
- * one. Without this list "the agent holds no credential" is true only in the narrowest sense: it
- * holds none of its own, and can read the host's.
+ * control there is: the read, write and search tools, and shell commands naming a path literally or
+ * through a home-directory form (`~`, `$HOME`, `%USERPROFILE%`). A symlink to one of these paths is
+ * outside that scope. Without this list "the agent holds no credential" is true only in the narrowest
+ * sense: it holds none of its own, and can read the host's.
+ *
+ * The set names credential material, not the directories it sits in. An agent reads its own CLI's
+ * settings, skills and tool output under the CLI's home; what it may not read is the CLI's token cache
+ * (`.credentials.json`) and the configuration file that can carry an API key (`.claude.json`).
  *
  * The set is returned, not applied. The embedder receives it, may add to it, and hands it to the
  * gate at construction. A policy the caller cannot read back is a policy the caller cannot audit.
@@ -109,8 +118,16 @@ export function credentialPaths(
   env: NodeJS.ProcessEnv = process.env,
   options: { readonly agentHome?: string | null } = {},
 ): string[] {
-  const home = env['USERPROFILE'] ?? env['HOME'] ?? safeHomedir();
+  const home = homeDirectory(env);
   const paths: string[] = [];
+  const add = (path: string): void => {
+    if (!paths.includes(path)) paths.push(path);
+  };
+  // The two files of an agent CLI home that hold or can hold a credential.
+  const cliHome = (directory: string): void => {
+    add(join(directory, '.credentials.json'));
+    add(join(directory, '.claude.json'));
+  };
 
   // The host's own credential directory, first, and derived rather than spelled out. The
   // directory is named rather than the file, so anything the host later keeps beside the token
@@ -120,35 +137,32 @@ export function credentialPaths(
   // because all three read this one list. That is the point of deriving it here rather than
   // restating the path where the cache is written.
   const own = periscopeCredentialDir(env);
-  if (own !== null) paths.push(own);
+  if (own !== null) add(own);
 
-  if (home !== null && home !== '') {
-    // The agent CLI's own token cache and its per-project state file. `.claude.json` is a FILE and
-    // `.claude` a DIRECTORY; both are named because the containment check treats a protected path as
-    // protected along with everything beneath it, and a file simply has nothing beneath it.
-    paths.push(join(home, '.claude'));
-    paths.push(join(home, '.claude.json'));
+  if (home !== null) {
+    // The agent CLI's token cache, in its default home, and its configuration file beside that home.
+    // A protected path covers everything beneath it; a file simply has nothing beneath it.
+    cliHome(join(home, '.claude'));
+    add(join(home, '.claude.json'));
     // Ambient cloud credentials reachable by the same user.
-    paths.push(join(home, '.aws'));
-    paths.push(join(home, '.config', 'gcloud'));
-    paths.push(join(home, '.azure'));
+    add(join(home, '.aws'));
+    add(join(home, '.config', 'gcloud'));
+    add(join(home, '.azure'));
     // SSH keys: not a token cache, but the same class — material that authenticates this user.
-    paths.push(join(home, '.ssh'));
+    add(join(home, '.ssh'));
   }
 
-  // An explicitly configured credential location wins over the derived ones and is added as well.
+  // An explicitly configured CLI home keeps its credential files there instead.
   const configured = env['CLAUDE_CONFIG_DIR'];
-  if (typeof configured === 'string' && configured.trim() !== '') paths.push(configured);
+  if (typeof configured === 'string' && configured.trim() !== '') cliHome(configured);
 
-  // The effective agent home, when it is not the default under the home directory: the agent CLI
-  // keeps its token cache and per-project state there, so protecting only `~/.claude` would leave a
-  // host configured with `PERISCOPE_AGENT_HOME` guarding the wrong directory. The composition root
-  // passes the value it resolved (environment or config file); the environment key alone is read
-  // here for a caller that has nothing else.
+  // The effective agent home, when it is not the default under the home directory: the agent CLI keeps
+  // its token cache there, so protecting only `~/.claude`'s would leave a host configured with
+  // `PERISCOPE_AGENT_HOME` guarding the wrong file. The composition root passes the value it resolved
+  // (environment or config file); the environment key alone is read here for a caller that has
+  // nothing else.
   const agentHome = options.agentHome ?? env['PERISCOPE_AGENT_HOME'] ?? null;
-  if (typeof agentHome === 'string' && agentHome.trim() !== '' && !paths.includes(agentHome)) {
-    paths.push(agentHome);
-  }
+  if (typeof agentHome === 'string' && agentHome.trim() !== '') cliHome(agentHome);
 
   return paths;
 }

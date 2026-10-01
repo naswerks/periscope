@@ -33,9 +33,12 @@ import { SessionStateMachine } from '../state/machine.js';
 import { SessionObserver } from '../state/observer.js';
 import type { SessionTransition } from '../state/model.js';
 import { systemClock, systemTicker } from '../core/time.js';
+import { nodePathResolver } from '../host/paths.js';
 import type { Decider } from './decision.js';
 import type { GateOutcome } from './outcome.js';
 import { permissionHooks } from './gate.js';
+import type { LocalGate } from './local.js';
+import { localGate } from './local.js';
 import { recordGateOutcome } from './outcome.js';
 
 const LIVE = process.env['PERISCOPE_LIVE'] === '1';
@@ -61,6 +64,8 @@ interface Wired {
   readonly transitions: SessionTransition[];
   readonly outcomes: GateOutcome[];
   readonly hookEvents: string[];
+  /** The turn's result message, or null when none arrived inside the turn timeout. */
+  readonly result: SDKMessage | null;
 }
 
 /**
@@ -75,7 +80,13 @@ async function wire(
   label: string,
   decide: Decider,
   prompt: string,
-  gateOptions: { decisionTimeoutMs?: number; holdAfterMs?: number } = {},
+  gateOptions: {
+    decisionTimeoutMs?: number;
+    holdAfterMs?: number;
+    localGateFor?: (cwd: string) => LocalGate;
+    model?: string;
+    permissionMode?: 'bypassPermissions';
+  } = {},
 ): Promise<Wired & { cwd: string }> {
   const cwd = workspaceOutsideAnyRepo(label);
   const machine = new SessionStateMachine({
@@ -114,6 +125,7 @@ async function wire(
       ? {}
       : { decisionTimeoutMs: gateOptions.decisionTimeoutMs }),
     ...(gateOptions.holdAfterMs === undefined ? {} : { holdAfterMs: gateOptions.holdAfterMs }),
+    ...(gateOptions.localGateFor === undefined ? {} : { localGate: gateOptions.localGateFor(cwd) }),
   });
 
   const registry = new SessionRegistry({
@@ -126,15 +138,17 @@ async function wire(
     cwd,
     prompt,
     hooks: mergeHooks(counting, observationHooks({ observer }), gate),
+    ...(gateOptions.model === undefined ? {} : { model: gateOptions.model }),
+    ...(gateOptions.permissionMode === undefined ? {} : { permissionMode: gateOptions.permissionMode }),
   });
   assert.equal(opened.ok, true, `the probe session did not start: ${opened.ok ? '' : opened.refusal.detail}`);
   const session = opened.ok ? opened.value : (undefined as never);
 
   session.onMessage((message) => observer.observeMessage(message));
-  await waitForResult(session, TURN_TIMEOUT_MS);
+  const result = await waitForResult(session, TURN_TIMEOUT_MS);
   session.stop('the probe finished');
 
-  return { session, machine, transitions, outcomes, hookEvents, cwd };
+  return { session, machine, transitions, outcomes, hookEvents, result, cwd };
 }
 
 function waitForResult(session: HostedSession, timeoutMs: number): Promise<SDKMessage | null> {
@@ -510,5 +524,70 @@ test(
       'a PreToolUse hook `allow` overrode an operator deny rule — the documented order is wrong, ' +
         'and every comment in this package that says deny rules survive a grant must be corrected',
     );
+  },
+);
+
+test(
+  'live: a read leaves the workspace, and a read or a search that reaches the protected set is refused by name',
+  { skip, timeout: 420_000 },
+  async () => {
+    const base = mkdtempSync(`${tmpdir()}/periscope-gate-reads-`);
+    const outside = join(base, 'outside');
+    const secret = join(base, 'secret');
+    mkdirSync(outside);
+    mkdirSync(secret);
+    writeFileSync(join(outside, 'readme.txt'), 'outside-marker-7\n');
+    writeFileSync(join(secret, 'token.json'), '{"value":"secret-marker-9"}\n');
+
+    const allow: Decider = async () => ({ behavior: 'allow' });
+    const wired = await wire(
+      'reads',
+      allow,
+      [
+        `Use the Read tool to read ${join(outside, 'readme.txt')}.`,
+        `Then use the Read tool to read ${join(secret, 'token.json')}.`,
+        `Then use the Grep tool to search for the word marker in ${base}.`,
+        'Then reply with the exact text of every file you could read, and the word refused for each call that was refused.',
+      ].join(' '),
+      {
+        model: 'haiku',
+        // Under bypass the agent's own permission checks are off and the hook is the only control, so
+        // what is measured is this gate, as it is for a host whose sessions run that way.
+        permissionMode: 'bypassPermissions',
+        localGateFor: (cwd) =>
+          localGate({ workspaceRoot: cwd, resolve: nodePathResolver, protectedPaths: [secret] }),
+      },
+    );
+    const final = wired.result as { result?: unknown } | null;
+    const reply = typeof final?.result === 'string' ? final.result : '';
+
+    const refused = wired.outcomes.filter(
+      (outcome): outcome is Extract<GateOutcome, { kind: 'refused' }> => outcome.kind === 'refused',
+    );
+    const refusedTools = refused
+      .filter((outcome) => outcome.refusal.reason === 'credential-path-denied')
+      .map((outcome) => outcome.request.toolName);
+    assert.ok(
+      refusedTools.includes('Read'),
+      `the protected read was not refused by name: ${refusedTools.join(', ')}`,
+    );
+    assert.ok(
+      refusedTools.includes('Grep'),
+      `the search holding the protected path was not refused: ${refusedTools.join(', ')}`,
+    );
+
+    const allowedReads = wired.outcomes.filter(
+      (outcome) =>
+        outcome.kind === 'allow' &&
+        outcome.request.toolName === 'Read' &&
+        JSON.stringify(outcome.request.toolInput).includes('readme.txt'),
+    );
+    assert.equal(
+      allowedReads.length,
+      1,
+      'the read outside the workspace was not allowed through to the decider',
+    );
+    assert.match(reply, /outside-marker-7/, 'the file outside the workspace did not reach the agent');
+    assert.doesNotMatch(reply, /secret-marker-9/, 'the protected file reached the agent');
   },
 );

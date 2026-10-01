@@ -1,6 +1,7 @@
 /**
  * The repository read: a controller listing one directory or reading one text file of the
- * operator's checkout through this host, jailed to the repository root.
+ * operator's checkout through this host, jailed to the repository root. The workspace read is the
+ * same door over a workspace's directory: one jail, with its own two refusal reasons, and pages.
  *
  * The posture is the discovery door's, over a different root. The transcripts door reads the agent
  * CLI's own directory; this reads the repository the host provisions workspaces from, so a
@@ -33,8 +34,14 @@ import { createReadStream } from 'node:fs';
 import { readdir, realpath, stat } from 'node:fs/promises';
 
 import type { RepositoryEntry } from '../control/frames.js';
-import { MAX_REPOSITORY_ENTRIES, MAX_REPOSITORY_READ_BYTES } from '../control/frames.js';
-import { isContainedBy, normalizePath } from '../core/paths.js';
+import {
+  MAX_REPOSITORY_ENTRIES,
+  MAX_REPOSITORY_READ_BYTES,
+  MAX_WORKSPACE_FILE_BYTES,
+  MAX_WORKSPACE_READ_BYTES,
+} from '../control/frames.js';
+import { isContainedBy, isContainedByIgnoringCase, normalizePath } from '../core/paths.js';
+import type { RefusalReason } from '../core/refusal.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import { nodePathResolver } from './paths.js';
@@ -55,44 +62,72 @@ export interface RepositoryText {
   readonly truncated: boolean;
 }
 
+/** One page of a workspace file as text: the file's whole size, and where the next page starts. */
+export interface WorkspaceText {
+  readonly text: string;
+  readonly sizeBytes: number;
+  /** Null when this page reached the end of the file. */
+  readonly nextOffset: number | null;
+}
+
+/** What a jailed read reads under: the root's name for details, and the two reasons it refuses with. */
+interface ReadDoor {
+  readonly root: string;
+  readonly escape: RefusalReason;
+  readonly failed: RefusalReason;
+}
+
+const REPOSITORY_DOOR: ReadDoor = {
+  root: 'the repository root',
+  escape: 'repository-path-escape',
+  failed: 'repository-read-failed',
+};
+
+const WORKSPACE_DOOR: ReadDoor = {
+  root: "the workspace's directory",
+  escape: 'workspace-path-escape',
+  failed: 'workspace-read-failed',
+};
+
 /**
  * The lexical half of the jail: join `relative` under `root`, resolve, and refuse anything that
  * resolves outside. `''` is the root itself. Pure over the resolver; the physical half needs the
- * filesystem and lives in the two readers.
+ * filesystem and lives in the readers.
  */
 export function resolveRepositoryPath(root: string, relative: string): Result<string> {
+  return resolveUnder(root, relative, REPOSITORY_DOOR);
+}
+
+function resolveUnder(root: string, relative: string, door: ReadDoor): Result<string> {
   if (relative.includes('\0')) {
-    return refuse('repository-path-escape', 'the path holds a NUL byte, refused before it is resolved');
+    return refuse(door.escape, 'the path holds a NUL byte, refused before it is resolved');
   }
   const resolvedRoot = normalizePath(nodePathResolver(root));
   const candidate = normalizePath(nodePathResolver(`${resolvedRoot}/${relative}`));
   if (!isContainedBy(candidate, resolvedRoot)) {
-    return refuse(
-      'repository-path-escape',
-      'the path resolves outside the repository root, refused by the containment layer',
-    );
+    return refuse(door.escape, `the path resolves outside ${door.root}, refused by the containment layer`);
   }
   return ok(candidate);
 }
 
 /** The physical half: the real path of both, links followed, and the same containment rule. */
-async function containedRealPath(root: string, candidate: string): Promise<Result<string>> {
+async function containedRealPath(root: string, candidate: string, door: ReadDoor): Promise<Result<string>> {
   let realRoot: string;
   try {
     realRoot = normalizePath(await realpath(root));
   } catch (error) {
-    return refuse('repository-read-failed', `the repository root could not be resolved: ${describe(error)}`);
+    return refuse(door.failed, `${door.root} could not be resolved: ${describe(error)}`);
   }
   let real: string;
   try {
     real = normalizePath(await realpath(candidate));
   } catch (error) {
-    return refuse('repository-read-failed', `nothing is at that path: ${describe(error)}`);
+    return refuse(door.failed, `nothing is at that path: ${describe(error)}`);
   }
   if (!isContainedBy(real, realRoot)) {
     return refuse(
-      'repository-path-escape',
-      'the path leads outside the repository root through a link, refused by the containment layer',
+      door.escape,
+      `the path leads outside ${door.root} through a link, refused by the containment layer`,
     );
   }
   return ok(real);
@@ -106,10 +141,10 @@ async function containedRealPath(root: string, candidate: string): Promise<Resul
  */
 function protectedPathRefusal(resolved: string, protectedPaths: readonly string[]): Result<null> {
   for (const candidate of protectedPaths) {
-    if (isContainedBy(resolved, candidate)) {
+    if (isContainedByIgnoringCase(resolved, candidate)) {
       return refuse(
         'credential-path-denied',
-        `the path is at or beneath ${candidate}, which holds credential material; the repository doors honour the same protected set as the gate`,
+        `the path is at or beneath ${candidate}, which holds credential material; the read doors honour the same protected set as the gate`,
       );
     }
   }
@@ -121,12 +156,13 @@ async function admittedRealPath(
   root: string,
   relative: string,
   protectedPaths: readonly string[],
+  door: ReadDoor = REPOSITORY_DOOR,
 ): Promise<Result<string>> {
-  const resolved = resolveRepositoryPath(root, relative);
+  const resolved = resolveUnder(root, relative, door);
   if (!resolved.ok) return resolved;
   const lexical = protectedPathRefusal(resolved.value, protectedPaths);
   if (!lexical.ok) return lexical;
-  const real = await containedRealPath(root, resolved.value);
+  const real = await containedRealPath(root, resolved.value, door);
   if (!real.ok) return real;
   // The real path is compared against the protected set's real paths, not its spellings: a
   // component `realpath` rewrites (a short name, a linked directory) would otherwise make the
@@ -238,6 +274,88 @@ export async function readRepositoryFile(
   while (cut > 0 && cut < head.length && (head[cut]! & 0xc0) === 0x80) cut -= 1;
   const text = head.subarray(0, cut).toString('utf8');
   return ok({ text, sizeBytes: stats.size, truncated: cut < stats.size });
+}
+
+/**
+ * Read one page of a text file inside a workspace's directory: from byte `offset`, at most `maxBytes`
+ * (capped at the wire's bound), cut back to a character boundary. A page that would end inside its
+ * first character carries that whole character, so every page makes progress. The file must be at
+ * most `MAX_WORKSPACE_FILE_BYTES` and text by the repository read's rule (no NUL byte in its first
+ * `BINARY_PROBE_BYTES`); an offset past the end or inside a character is refused.
+ */
+export async function readWorkspaceFile(
+  root: string,
+  relative: string,
+  offset = 0,
+  maxBytes = MAX_WORKSPACE_READ_BYTES,
+  protectedPaths: readonly string[] = [],
+): Promise<Result<WorkspaceText>> {
+  const door = WORKSPACE_DOOR;
+  const real = await admittedRealPath(root, relative, protectedPaths, door);
+  if (!real.ok) return real;
+
+  let stats;
+  try {
+    stats = await stat(real.value);
+  } catch (error) {
+    return refuse(door.failed, `the file could not be read: ${describe(error)}`);
+  }
+  if (!stats.isFile()) return refuse(door.failed, 'the path is not a file');
+  if (stats.size > MAX_WORKSPACE_FILE_BYTES) {
+    return refuse(
+      door.failed,
+      `the file is ${stats.size} bytes; the workspace read serves files up to ${MAX_WORKSPACE_FILE_BYTES}`,
+    );
+  }
+  const start = Math.max(0, Math.floor(offset));
+  if (start > stats.size) {
+    return refuse(door.failed, `the offset ${start} is past the end of the file (${stats.size} bytes)`);
+  }
+
+  const wanted = Math.min(Math.max(1, Math.floor(maxBytes)), MAX_WORKSPACE_READ_BYTES);
+  let head: Buffer;
+  let page: Buffer;
+  try {
+    head = await readRange(real.value, 0, Math.min(stats.size, BINARY_PROBE_BYTES));
+    // Three bytes past the page: enough to see whether a character straddles the cut.
+    page = await readRange(real.value, start, Math.min(stats.size - start, wanted + 3));
+  } catch (error) {
+    return refuse(door.failed, `the file could not be read: ${describe(error)}`);
+  }
+  if (head.includes(0)) {
+    return refuse(door.failed, 'the file holds a NUL byte in its head and is not served as text');
+  }
+  if (page.length > 0 && (page[0]! & 0xc0) === 0x80) {
+    return refuse(
+      door.failed,
+      `the offset ${start} falls inside a character; start at 0 or at the nextOffset an answer gave`,
+    );
+  }
+
+  let cut = Math.min(page.length, wanted);
+  // A continuation byte at the cut means a character straddles it: step back to its first byte.
+  while (cut > 0 && cut < page.length && (page[cut]! & 0xc0) === 0x80) cut -= 1;
+  if (cut === 0 && page.length > 0) {
+    // The first character is longer than `maxBytes`: the page carries it whole rather than nothing.
+    cut = 1;
+    while (cut < page.length && (page[cut]! & 0xc0) === 0x80) cut += 1;
+  }
+  const end = start + cut;
+  return ok({
+    text: page.subarray(0, cut).toString('utf8'),
+    sizeBytes: stats.size,
+    nextOffset: end < stats.size ? end : null,
+  });
+}
+
+/** `length` bytes of a file from `start`; fewer when the file ends first. */
+async function readRange(path: string, start: number, length: number): Promise<Buffer> {
+  if (length <= 0) return Buffer.alloc(0);
+  const chunks: Buffer[] = [];
+  for await (const chunk of createReadStream(path, { start, end: start + length - 1 })) {
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
 function describe(error: unknown): string {

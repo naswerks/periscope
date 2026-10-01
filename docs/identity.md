@@ -22,9 +22,12 @@ inactivity, and a paired credential cannot.
 The credential above authenticates the host to the controller. The agent the host spawns
 authenticates to its own provider separately, through the Claude Code CLI's ambient credential
 under the agent home (`~/.claude` by default). The spawn environment is an allow-list, so
-`ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` set on the host are not inherited by a session;
-sign the CLI in once, as the OS user that runs the host (`claude auth login`; `claude auth status`
-confirms), or pass a key to one session through `session_new.request.env.extraEnv`.
+`ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` set on the host are not inherited by a session, and
+a controller cannot put them back: both sit beneath the `extraEnv` floor (`EXTRA_ENV_FLOOR`), so a
+`session_new` naming one in `session_new.request.env.extraEnv` refuses `env-key-refused` before a
+process exists. Sign the CLI in once, as the OS user that runs the host (`claude auth login`;
+`claude auth status` confirms). An embedder that composes its own host may pass a shorter floor
+(`extraEnvFloor`); the binary never does.
 
 ## Pairing: the durable machine credential
 

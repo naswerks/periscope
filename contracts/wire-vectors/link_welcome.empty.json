@@ -7,13 +7,13 @@
     "at": "2000-01-01T00:00:00.000Z",
     "payload": {
       "kind": "link_welcome",
-      "protocolVersion": 12,
+      "protocolVersion": 13,
       "protocolRange": null,
       "capabilities": [],
       "cursors": []
     }
   },
   "name": "link_welcome.empty",
-  "protocolVersion": 12,
-  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_welcome\",\"protocolVersion\":12,\"protocolRange\":null,\"capabilities\":[],\"cursors\":[]}}"
+  "protocolVersion": 13,
+  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_welcome\",\"protocolVersion\":13,\"protocolRange\":null,\"capabilities\":[],\"cursors\":[]}}"
 }

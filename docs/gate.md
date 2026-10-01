@@ -84,9 +84,14 @@ property: with the controller unreachable a locally refused call is refused imme
 after `DEFAULT_DECISION_TIMEOUT_MS` reported as an outage. It is synchronous and total by contract;
 an asynchronous local policy would be a second place a decision can hang.
 
-What refuses locally, and only locally: a path that escapes the session's workspace
-(`path-escapes-root`), a read of the protected set (`credential-path-denied`), and a git invocation
-whose verb is not on the allow-list. A boundary-crossing shell shape (`shell-boundary-command`: a
+What refuses locally, and only locally: a write that escapes the session's workspace
+(`path-escapes-root`), a read, a write or a search that reaches the protected set
+(`credential-path-denied`), and a git invocation whose verb is not on the allow-list. Reads are not
+jailed: a read goes anywhere the host's OS user can read except the protected set. A search (`Grep`,
+`Glob`) is refused when its root (`path`, else the workspace) is at or beneath a protected path and
+also when a protected path sits beneath its root. The shell scan matches a protected path written
+literally or through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE` or `%USERPROFILE%`, and
+every protected-path comparison folds case. A boundary-crossing shell shape (`shell-boundary-command`: a
 push, a force, a remote change, a branch deletion, a hard reset, a merge) is classified locally and then
 escalated like any other call, because a controller may hold it for a person to answer; refusing it
 in-process would make that answer impossible to give. With the controller unreachable it refuses at
@@ -98,14 +103,16 @@ the decision deadline.
 - A throwing local gate refuses; it must not fall through (`askLocalGate` in `src/gate/gate.ts`).
 - The vocabulary is owned locally, never received. The wire carries no policy in either direction;
   the embedder chooses tool families and protected paths at construction.
-- Optional in the type, supplied by default by `PeriscopeHost`: jailed to the session's own
-  workspace, with `credentialPaths(env, { agentHome })` as the protected set. That set, stated once
-  (`src/host/paths.ts`): the host's own config directory (`PERISCOPE_CONFIG_DIR` or
-  `~/.periscope`, which holds the token cache, the paired credential and the config file);
-  `~/.claude` and `~/.claude.json`; `~/.aws`, `~/.config/gcloud`, `~/.azure`, `~/.ssh`;
-  `CLAUDE_CONFIG_DIR` when set; and the effective agent home when it is not the default. The
-  host's own cache location derives from the same function, so the two cannot disagree about what
-  is protected. The repository read doors honour the same set.
+- Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
+  workspace, with `credentialPaths(env, { agentHome })` as the protected set and the home directory
+  the shell scan expands from `homeDirectory(env)`. That set, stated once (`src/host/paths.ts`): the
+  host's own config directory (`PERISCOPE_CONFIG_DIR` or `~/.periscope`, which holds the token
+  cache, the paired credential and the config file); the agent CLI's token cache and configuration
+  file (`.credentials.json` and `.claude.json`) in `~/.claude`, in `CLAUDE_CONFIG_DIR` when set and
+  in the effective agent home, plus `~/.claude.json`; and `~/.aws`, `~/.config/gcloud`, `~/.azure`,
+  `~/.ssh`. The rest of the CLI's home (its settings, skills and tool output) is the agent's to read.
+  The host's own cache location derives from the same function, so the two cannot disagree about
+  what is protected. The repository and workspace read doors honour the same set.
 - Shell commands are parsed before they are judged (`src/gate/command.ts`, `src/gate/shell.ts`):
   the classifier sees a parsed shape, never text. An interpreter payload (`bash -c "..."`) is
   scanned as the nested command it is, with the interpreter's own delimiter closing it, so a nested

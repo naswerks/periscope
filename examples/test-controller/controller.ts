@@ -68,6 +68,7 @@ export const ASK_KINDS = [
   'host_configure',
   'repository_list',
   'repository_read',
+  'workspace_read',
 ] as const;
 export type AskKind = (typeof ASK_KINDS)[number];
 

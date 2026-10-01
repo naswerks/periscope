@@ -3,20 +3,20 @@
  *
  * The jail bounds where an agent can write at all. It is self-contained: a call whose target
  * resolves outside the declared workspace root is refused without asking anything, so it holds
- * with the controller unreachable, unresponsive, or wrong.
+ * with the controller unreachable, unresponsive, or wrong. Reads are not jailed: an agent reads
+ * whatever its OS user can read, its own tool output and installed packages included, except
+ * credential material.
  *
- * The credential denial covers what a default-open read policy misses. Default-open reads are
- * correct for source files and wrong for the host's own token cache. The agent runs as the same
- * OS user as the host, so file permissions are not a boundary against it: an 0600 credential is
- * readable by the agent exactly as it is by the host. This denial is the local control, and it is
- * scoped, not total: it refuses reads through the declared read tools (`Read`, `NotebookRead` by
- * default), writes, and shell commands naming a protected path literally — each by absolute path,
- * with a named refusal. Built-in tools outside the declared families (`Grep`, `Glob`), shell
- * expansion forms (`~`, `$HOME`, `%USERPROFILE%`) and symlink indirection get no opinion here —
- * those calls escalate to the controller, and with it unreachable they are refused as outages
- * rather than by name. Widening the local denial to cover them is a known open question,
- * deliberately not taken in passing: every widening is an over-refusal risk that deserves its own
- * decision.
+ * The credential denial is what keeps reads open. The agent runs as the same OS user as the host,
+ * so file permissions are not a boundary against it: an 0600 credential is readable by the agent
+ * exactly as it is by the host. This denial is the local control, and it covers the declared read,
+ * write and search tools (`Read`, `NotebookRead`, the write tools, `Grep`, `Glob` by default) and
+ * shell commands naming a protected path literally or through a home-directory form (`~`, `$HOME`,
+ * `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, `%USERPROFILE%`), each with a named refusal and with
+ * case folded. A search is refused when its root is at or beneath a protected path and also when a
+ * protected path sits beneath its root, since the search would read it. What stays outside: symlink
+ * indirection, and a shell command that reaches a protected path without naming it (a recursive
+ * search of an ancestor, a path built at run time); those are not refused here.
  *
  * Every unknown resolves toward refusing. No path in the input: refuse. A resolver that throws:
  * refuse. Not absolute: refuse. No declared root: refuse, because a jail with no walls is not a
@@ -24,7 +24,7 @@
  */
 import type { Refusal } from '../core/refusal.js';
 import { refusal } from '../core/refusal.js';
-import { isContainedBy, isAbsolutePath, normalizePath } from '../core/paths.js';
+import { isContainedBy, isContainedByIgnoringCase, isAbsolutePath, normalizePath } from '../core/paths.js';
 
 /**
  * Turns a path into its canonical absolute form.
@@ -43,12 +43,14 @@ export interface JailOptions {
   readonly workspaceRoot: string | null;
   readonly resolve: PathResolver;
   /**
-   * Absolute paths the agent may not read, write or name in a shell command.
+   * Absolute paths the agent may not read, write, search or name in a shell command.
    *
    * Supplied by the embedder at construction — `host/paths.ts` computes the default set. It is a
    * list rather than a predicate so an embedder can read back exactly what is protected.
    */
   readonly protectedPaths: readonly string[];
+  /** The home directory a shell command's `~` and `$HOME` forms name. Absent: the forms stay as written. */
+  readonly home?: string | null;
 }
 
 /** The tool-input fields that carry a path, in precedence order. First readable one wins. */
@@ -110,15 +112,29 @@ function resolveOrRefuse(
 /**
  * Is this resolved path at or beneath one of the protected paths?
  *
- * `isContainedBy` compares segment-wise after normalizing both sides, so a protected `C:\Users\x\.claude`
- * does not also protect `C:\Users\x\.claude-notes`, and the protected path itself counts as protected.
+ * The comparison is segment-wise after normalizing both sides, so a protected `C:\Users\x\.ssh` does
+ * not also protect `C:\Users\x\.ssh-notes`, and the protected path itself counts as protected. Case is
+ * folded: on a filesystem that ignores it, another spelling names the same file.
  */
 function protectedPathCovering(resolved: string, protectedPaths: readonly string[]): string | null {
   for (const candidate of protectedPaths) {
-    if (isContainedBy(resolved, candidate)) return candidate;
+    if (isContainedByIgnoringCase(resolved, candidate)) return candidate;
   }
   return null;
 }
+
+/** The credential refusal for a resolved path, or null when no protected path covers it. */
+function credentialRefusal(resolved: string, protectedPaths: readonly string[]): Refusal | null {
+  const covering = protectedPathCovering(resolved, protectedPaths);
+  if (covering === null) return null;
+  return refusal(
+    'credential-path-denied',
+    `${resolved} is at or beneath ${covering}, which holds credential material; the agent shares the host's OS user, so this gate is the only control over it`,
+  );
+}
+
+const MISSING_PATH_DETAIL =
+  'this tool takes a path and the input carries none, so there is nothing to bound — refused rather than guessed';
 
 /**
  * Check a path-taking tool call against the jail and the protected set.
@@ -128,24 +144,14 @@ function protectedPathCovering(resolved: string, protectedPaths: readonly string
  * reader gets, not for whether the call is refused — both answers block.
  */
 export function checkPath(candidate: string | null, options: JailOptions): Refusal | null {
-  if (candidate === null) {
-    return refusal(
-      'path-input-missing',
-      'this tool takes a path and the input carries none, so there is nothing to bound — refused rather than guessed',
-    );
-  }
+  if (candidate === null) return refusal('path-input-missing', MISSING_PATH_DETAIL);
 
   const outcome = resolveOrRefuse(candidate, options.resolve);
   if ('refusal' in outcome) return outcome.refusal;
   const { resolved } = outcome;
 
-  const covering = protectedPathCovering(resolved, options.protectedPaths);
-  if (covering !== null) {
-    return refusal(
-      'credential-path-denied',
-      `${resolved} is at or beneath ${covering}, which holds credential material; the agent shares the host's OS user, so this gate is the only control over it`,
-    );
-  }
+  const credential = credentialRefusal(resolved, options.protectedPaths);
+  if (credential !== null) return credential;
 
   if (options.workspaceRoot === null || options.workspaceRoot.trim() === '') {
     return refusal(
@@ -165,6 +171,91 @@ export function checkPath(candidate: string | null, options: JailOptions): Refus
   }
 
   return null;
+}
+
+/**
+ * Check a read tool call: the protected set and nothing else. A read goes anywhere the host's user can
+ * read except credential material; the workspace bounds where an agent writes, not what it may look at.
+ */
+export function checkReadPath(candidate: string | null, options: JailOptions): Refusal | null {
+  if (candidate === null) return refusal('path-input-missing', MISSING_PATH_DETAIL);
+  const outcome = resolveOrRefuse(candidate, options.resolve);
+  if ('refusal' in outcome) return outcome.refusal;
+  return credentialRefusal(outcome.resolved, options.protectedPaths);
+}
+
+/** The characters that begin the wildcard part of a glob pattern. */
+const GLOB_MAGIC = /[*?[\]{}]/;
+
+/**
+ * The directories a search reads under: its `path` (else the workspace root), and the literal head of
+ * a `pattern` that names a place of its own (absolute, from the home directory, or climbing with `..`),
+ * resolved against that root. A pattern with no such head names files, not a place, and adds nothing.
+ */
+function searchRoots(toolInput: unknown, options: JailOptions): string[] | null {
+  const record =
+    typeof toolInput === 'object' && toolInput !== null ? (toolInput as Record<string, unknown>) : {};
+  const named = record['path'];
+  const base = typeof named === 'string' && named.trim() !== '' ? named : options.workspaceRoot;
+  if (base === null || base.trim() === '') return null;
+
+  const roots = [expandHome(base, options.home)];
+  const pattern = record['pattern'];
+  if (typeof pattern === 'string') {
+    const expanded = normalizePath(expandHome(pattern, options.home));
+    const head: string[] = [];
+    for (const segment of expanded.split('/')) {
+      if (GLOB_MAGIC.test(segment)) break;
+      head.push(segment);
+    }
+    const literal = head.join('/');
+    const placed = isAbsolutePath(literal) || /(^|\/)\.\.(\/|$)/.test(literal);
+    if (literal !== '' && placed) roots.push(isAbsolutePath(literal) ? literal : `${roots[0]}/${literal}`);
+  }
+  return roots;
+}
+
+/**
+ * Check a search tool call (`Grep`, `Glob` by default) against the protected set.
+ *
+ * A search reads every file under its root, so it is refused when a root is at or beneath a protected
+ * path and also when a protected path sits beneath a root: searching the home directory reads the token
+ * cache as surely as reading the cache does. With no root to judge (no `path` and no workspace root)
+ * there is no local opinion and the call is asked about like any other.
+ */
+export function checkSearch(toolInput: unknown, options: JailOptions): Refusal | null {
+  const roots = searchRoots(toolInput, options);
+  if (roots === null) return null;
+  for (const root of roots) {
+    const outcome = resolveOrRefuse(root, options.resolve);
+    if ('refusal' in outcome) return outcome.refusal;
+    const { resolved } = outcome;
+    const covering = credentialRefusal(resolved, options.protectedPaths);
+    if (covering !== null) return covering;
+    for (const candidate of options.protectedPaths) {
+      if (isContainedByIgnoringCase(candidate, resolved)) {
+        return refusal(
+          'credential-path-denied',
+          `a search under ${resolved} reads ${candidate}, which holds credential material; search a directory that does not contain it`,
+        );
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * The command with its home-directory forms spelled out, so a protected path written through one of
+ * them is matched as if written in full: `~` at the start of a word, `$HOME`, `${HOME}`, `$env:HOME`,
+ * `$env:USERPROFILE` and `%USERPROFILE%`. With no home known the text is returned as written.
+ */
+function expandHome(text: string, home: string | null | undefined): string {
+  if (home === null || home === undefined || home.trim() === '') return text;
+  return text
+    .replace(/\$\{HOME\}|\$HOME\b/g, () => home)
+    .replace(/\$env:(?:USERPROFILE|HOME)\b/gi, () => home)
+    .replace(/%USERPROFILE%/gi, () => home)
+    .replace(/(^|[\s'"=:;(|&<>])~(?=[\\/]|$|[\s'";|&)<>])/g, (_match, lead: string) => `${lead}${home}`);
 }
 
 /**
@@ -189,11 +280,12 @@ export function checkPath(candidate: string | null, options: JailOptions): Refus
  * haystack empty, then run the suite. The over-refusal is the price of those tests, not an
  * oversight in them.
  *
- * The comparison is on the resolved protected paths and on the raw command text, case-insensitively,
- * because Windows paths reach here in both slash styles and either case.
+ * The comparison is on the resolved protected paths and on the command text with its home-directory
+ * forms spelled out, case-insensitively, because Windows paths reach here in both slash styles and
+ * either case.
  */
 export function checkShellForProtectedPaths(command: string, options: JailOptions): Refusal | null {
-  const haystack = normalizePath(command).toLowerCase();
+  const haystack = normalizePath(expandHome(command, options.home)).toLowerCase();
   for (const candidate of options.protectedPaths) {
     const outcome = resolveOrRefuse(candidate, options.resolve);
     // A protected path this host cannot resolve is still protected — fall back to its literal form
