@@ -35,7 +35,7 @@ import type { SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -45,13 +45,12 @@ export const PROTOCOL_VERSION = 12;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 12 adds the agent's model catalog to the hello's `configuration` (`agent`), an `effort`
- * on `session_configure`, the instant a forwarded message was seen (`observedAt`), the refusal
- * `session-configure-failed`, and three cause events (`PreModelSwitch`, `PostModelSwitch`,
- * `system/model_refusal_no_fallback`). Every new member is optional, so a version-11 controller,
- * which reads none of them, is still spoken to, and its frames, which carry none, still decode.
+ * Version 13 adds two asks and one answer: `session_end`, `workspace_read` and
+ * `workspace_read_result`, with the refusals `workspace-path-escape` and `workspace-read-failed`. It
+ * adds no member to an existing kind, so a version-12 controller, which sends neither ask, is still
+ * spoken to, and every frame it sends still decodes.
  */
-export const PROTOCOL_VERSION_MIN = 11;
+export const PROTOCOL_VERSION_MIN = 12;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {
@@ -622,6 +621,16 @@ export interface SessionPrompt {
 /** Interrupt the current turn. ACP: `session/cancel`. */
 export interface SessionCancel {
   readonly kind: 'session_cancel';
+}
+
+/**
+ * End a session the controller no longer needs: the agent's process exits, the end is reported as the
+ * session's transition to `ended`, and the workspace the session held is free for its next ask. A
+ * cancel ends a turn; this ends the session. A session still opening ends as soon as it opens; a
+ * handle this host does not hold is refused like any other session command.
+ */
+export interface SessionEnd {
+  readonly kind: 'session_end';
 }
 
 /**
@@ -1363,6 +1372,80 @@ export function repositoryReadResult(
   };
 }
 
+// ---------------------------------------------------------------------------
+// The workspace read: a controller reading a text file inside a workspace this host provisioned.
+// ---------------------------------------------------------------------------
+
+/**
+ * The most text one `workspace_read_result` carries, with the repository read's margin under the
+ * frame cap. A longer file is read in pages: each answer says where the next one starts.
+ */
+export const MAX_WORKSPACE_READ_BYTES = 48 * 1024;
+
+/**
+ * The largest file the workspace read serves. Pages keep every frame under the cap; this bound keeps
+ * the link a command lane rather than a file transfer, so a larger file is refused by name.
+ */
+export const MAX_WORKSPACE_FILE_BYTES = 512 * 1024;
+
+/**
+ * Ask this host for the text of one file inside a workspace it provisioned: the workspace by its key,
+ * the file by a path relative to the workspace's directory, from byte `offset` and at most `maxBytes`
+ * of it (1 to `MAX_WORKSPACE_READ_BYTES`). Host-scoped like `repository_read`, so it needs no live
+ * session; a workspace outlives the sessions that worked in it. The repository read's jail and
+ * protected set apply, over the workspace's directory. Text files only, at most
+ * `MAX_WORKSPACE_FILE_BYTES` of them.
+ */
+export interface WorkspaceRead {
+  readonly kind: 'workspace_read';
+  readonly requestId: string;
+  readonly workspaceKey: string;
+  readonly path: string;
+  /** Where the page starts, in bytes: 0, or the `nextOffset` of the answer before it. */
+  readonly offset: number;
+  readonly maxBytes: number;
+}
+
+/** The read's answer; every exit is this one kind. `text` is null exactly when `refusal` is not. */
+export interface WorkspaceReadResult {
+  readonly kind: 'workspace_read_result';
+  readonly requestId: string;
+  /** UTF-8 text from `offset`, at most `maxBytes` of it, cut on a character boundary. */
+  readonly text: string | null;
+  /** The file's whole size in bytes. */
+  readonly sizeBytes: number;
+  /** Where the next page starts, or null when this page reached the end of the file. */
+  readonly nextOffset: number | null;
+  readonly refusal: WireRefusal | null;
+}
+
+/** Build a `workspace_read`. Fills `offset` with 0 and `maxBytes` with the cap. */
+export function workspaceRead(
+  requestId: string,
+  workspaceKey: string,
+  path: string,
+  offset = 0,
+  maxBytes = MAX_WORKSPACE_READ_BYTES,
+): WorkspaceRead {
+  return { kind: 'workspace_read', requestId, workspaceKey, path, offset, maxBytes };
+}
+
+/** Build a `workspace_read_result`. Fills `refusal` with null, the read answer. */
+export function workspaceReadResult(
+  requestId: string,
+  read: { readonly text: string | null; readonly sizeBytes: number; readonly nextOffset: number | null },
+  refusal?: WireRefusal,
+): WorkspaceReadResult {
+  return {
+    kind: 'workspace_read_result',
+    requestId,
+    text: read.text,
+    sizeBytes: read.sizeBytes,
+    nextOffset: read.nextOffset,
+    refusal: refusal ?? null,
+  };
+}
+
 /**
  * A refusal as it arrives from the wire: `reason` is a plain string, not the closed enum.
  *
@@ -1410,6 +1493,7 @@ export type SessionPayload =
   | SessionNew
   | SessionPrompt
   | SessionCancel
+  | SessionEnd
   | SessionConfigure
   | BulkRequest
   | BulkDelivered
@@ -1433,6 +1517,8 @@ export type SessionPayload =
   | RepositoryListResult
   | RepositoryRead
   | RepositoryReadResult
+  | WorkspaceRead
+  | WorkspaceReadResult
   | AnswerRefused;
 
 export type SessionPayloadKind = SessionPayload['kind'];

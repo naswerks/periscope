@@ -26,7 +26,14 @@ import type { Refusal } from '../core/refusal.js';
 import { refusal } from '../core/refusal.js';
 import type { DecisionRequest } from './decision.js';
 import type { JailOptions, PathResolver } from './jail.js';
-import { checkPath, checkShellForProtectedPaths, commandFromToolInput, pathFromToolInput } from './jail.js';
+import {
+  checkPath,
+  checkReadPath,
+  checkSearch,
+  checkShellForProtectedPaths,
+  commandFromToolInput,
+  pathFromToolInput,
+} from './jail.js';
 import { classifyShellCommand } from './shell.js';
 import { parseCommand } from './command.js';
 
@@ -46,19 +53,25 @@ export interface ToolFamilies {
   readonly read: readonly string[];
   /** Tools that run a command. */
   readonly shell: readonly string[];
+  /**
+   * Tools that read every file under a directory (`path`, else the workspace root). Absent: the
+   * default family.
+   */
+  readonly search?: readonly string[];
 }
 
 /**
  * The SDK's own tool names.
  *
- * Read tools are jailed too. Reading source is benign; reading the host's token cache is not, and
- * the two arrive through the same tool. The jail
- * bounds where reads may go and the protected set names what is off-limits wherever it sits.
+ * Reads go anywhere except credential material: reading source, packages or the agent's own output is
+ * benign, reading the host's token cache is not, and the two arrive through the same tool, so the
+ * protected set names what is off-limits wherever it sits. Writes are jailed to the workspace.
  */
 export const DEFAULT_TOOL_FAMILIES: ToolFamilies = {
   write: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'],
   read: ['Read', 'NotebookRead'],
   shell: ['Bash', 'PowerShell'],
+  search: ['Grep', 'Glob'],
 };
 
 export interface LocalGateOptions {
@@ -68,6 +81,8 @@ export interface LocalGateOptions {
   readonly resolve: PathResolver;
   /** Absolute paths holding credential material. `host/paths.ts` computes the default set. */
   readonly protectedPaths: readonly string[];
+  /** The home directory a shell command's `~` and `$HOME` forms name. */
+  readonly home?: string | null;
   /** Defaults to `DEFAULT_TOOL_FAMILIES`. */
   readonly toolFamilies?: ToolFamilies;
 }
@@ -84,11 +99,13 @@ export function localGate(options: LocalGateOptions): LocalGate {
     workspaceRoot: options.workspaceRoot,
     resolve: options.resolve,
     protectedPaths: options.protectedPaths,
+    home: options.home ?? null,
   };
 
   const writeTools = new Set(families.write);
   const readTools = new Set(families.read);
   const shellTools = new Set(families.shell);
+  const searchTools = new Set(families.search ?? DEFAULT_TOOL_FAMILIES.search);
 
   return (request: DecisionRequest): Refusal | null => {
     if (shellTools.has(request.toolName)) {
@@ -105,8 +122,16 @@ export function localGate(options: LocalGateOptions): LocalGate {
       return checkShellForProtectedPaths(command, jail) ?? classifyShellCommand(command, parsed);
     }
 
-    if (writeTools.has(request.toolName) || readTools.has(request.toolName)) {
+    if (writeTools.has(request.toolName)) {
       return checkPath(pathFromToolInput(request.toolInput), jail);
+    }
+
+    if (readTools.has(request.toolName)) {
+      return checkReadPath(pathFromToolInput(request.toolInput), jail);
+    }
+
+    if (searchTools.has(request.toolName)) {
+      return checkSearch(request.toolInput, jail);
     }
 
     // No opinion. The surrounding gate asks whoever it was going to ask.

@@ -8,6 +8,42 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-01
+
+Protocol 13; the window is `[12, 13]`, so a version-12 controller is still spoken to. Protocol 13 adds
+two asks and one answer and no member to an existing kind: a version-12 controller sends neither ask,
+so it is sent nothing it does not know, and every frame it sends still decodes.
+
+- `session_end`: a controller ends a session it no longer needs. The agent's process exits, the end is
+  reported as the session's transition to `ended` with cause `stop_requested`, and the workspace the
+  session held is free. An end that arrives while the session is opening withdraws the turns waiting
+  for it and ends the session as it opens. `session_cancel` still ends a turn and never a session.
+- `workspace_read` and `workspace_read_result`: a controller reads a text file inside a workspace this
+  host provisioned, by the workspace's key and a path relative to its directory, a page at a time
+  (`MAX_WORKSPACE_READ_BYTES` per page, files up to `MAX_WORKSPACE_FILE_BYTES`). Each answer says
+  where the next page starts. The repository read's jail and protected set apply over the
+  workspace's directory, and the ask is host-scoped, so a workspace whose sessions have all ended can
+  still be read. Two refusals, `workspace-path-escape` and `workspace-read-failed`. A provider locates
+  a workspace through the new optional `WorkspaceProvider.pathFor`, which both shipped providers
+  implement; `readWorkspaceFile` is the reader.
+- The local gate's read policy. What an agent can now reach: reads are no longer jailed to the
+  session's workspace, so `Read` and `NotebookRead` go anywhere the host's OS user can read (installed
+  packages, the agent's own tool output, the agent CLI's settings and skills) except the protected
+  set. What it can no longer reach: the search family, `Grep` and `Glob` by default
+  (`ToolFamilies.search`, optional), is refused by name when its root is at or beneath a protected
+  path or holds one beneath it, where before those tools had no local opinion; a shell command naming
+  a protected path through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE` or
+  `%USERPROFILE%` is refused by name (`LocalGateOptions.home`, `PeriscopeHostOptions.home`,
+  `homeDirectory`); and every protected-path comparison folds case, so another spelling of a
+  protected path no longer passes. Writes stay jailed to the workspace.
+- `credentialPaths` names credential material rather than the directories it sits in: the agent CLI's
+  `.credentials.json` and `.claude.json` in `~/.claude`, in `CLAUDE_CONFIG_DIR` and in the effective
+  agent home, plus `~/.claude.json`, replace the whole `~/.claude`, `CLAUDE_CONFIG_DIR` and agent home.
+  The host's own config directory and `~/.aws`, `~/.config/gcloud`, `~/.azure` and `~/.ssh` stay
+  protected whole.
+- `docs/identity.md` states the `extraEnv` floor: `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`
+  passed through `session_new.request.env.extraEnv` refuse `env-key-refused`.
+
 ## [1.3.0] - 2026-09-29
 
 Protocol 12; the window is `[11, 12]`, so a version-11 controller is still spoken to. Every member

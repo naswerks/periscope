@@ -18,6 +18,6 @@
     }
   },
   "name": "session_configure.full",
-  "protocolVersion": 12,
+  "protocolVersion": 13,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_configure\",\"model\":\"model-id\",\"permissionMode\":\"plan\",\"thinking\":{\"type\":\"adaptive\"},\"effort\":\"high\"}}"
 }

@@ -1,0 +1,22 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "workspace_read_result",
+      "requestId": "request-11",
+      "text": "## Progress\n",
+      "sizeBytes": 81920,
+      "nextOffset": 65536,
+      "refusal": null
+    }
+  },
+  "name": "workspace_read_result.page",
+  "protocolVersion": 13,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"workspace_read_result\",\"requestId\":\"request-11\",\"text\":\"## Progress\\n\",\"sizeBytes\":81920,\"nextOffset\":65536,\"refusal\":null}}"
+}

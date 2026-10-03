@@ -88,19 +88,16 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[11, 12]`. Version 12 adds:
+`[12, 13]`. Version 13 adds:
 
-- the hello's `configuration.agent` (below);
-- `effort` on `session_configure`;
-- `observedAt` on a forwarded message's body;
-- the refusal `session-configure-failed`;
-- three cause events: `PreModelSwitch`, `PostModelSwitch` and `system/model_refusal_no_fallback`.
+- `session_end` (below);
+- `workspace_read` and its answer, `workspace_read_result` (below);
+- the refusals `workspace-path-escape` and `workspace-read-failed`.
 
-The host sends these whichever version was chosen. A version-11 controller decodes them as keys it
-does not know and words it has not met, which its codec carries through. A version-11 controller's
-own frames carry none of them and decode here unchanged. `src/host/protocol-window.test.ts` holds
-both directions over a real link: every frame this host sends decodes with the protocol-11 decoder
-v1.2.0 shipped, and a version-11 controller's `session_configure` decodes here and applies.
+It adds no member to an existing kind. A version-12 controller sends neither ask, so it receives
+neither answer, and every frame it sends decodes here unchanged. `src/host/protocol-window.test.ts`
+holds both directions over a real link: every frame this host sends decodes with the protocol-12
+decoder v1.3.0 shipped, and a version-12 controller's `session_configure` decodes here and applies.
 
 Two close reasons carry meaning. A close with code 1002 whose reason starts with `seq gap` is a
 replay request: the controller names the position it holds, and the host's next dial replays from
@@ -267,6 +264,7 @@ watched is not something the host can know, so it offers the knob instead of gue
 | `session_new`       | open a session: `cwd` (nullable; the workspace provider decides when null), `workspaceKey` (nullable; the key sessions share a tree under), `correlationId` (opaque, echoed, never interpreted), `gate` (per-session deadlines or null), `request` (the JSON-expressible subset of a session request or null). Every member of `request` is `T | null`. |
 | `session_prompt`    | queue a turn; a session already holding every turn it can queue refuses `prompt-queue-full` and is otherwise untouched                                                                                                                                                                                                                         |
 | `session_cancel`    | interrupt the current turn; never ends the session                                                                                                                                                                                                                                                                                             |
+| `session_end`       | end the session: the agent's process exits, the end is reported as the transition to `ended` with cause `stop_requested`, and the workspace it held is free. One that arrives while the session is opening ends it as it opens; on a handle this host does not hold it is refused like any session command                                     |
 | `session_configure` | apply the live controls in this order: `model`, `permissionMode`, `thinking`, and from v12 `effort`. Each is null when not asked, and `effort` may also be absent                                                                                                                                                                              |
 | `bulk_request`      | ask for bulk content (below)                                                                                                                                                                                                                                                                                                                   |
 
@@ -364,6 +362,7 @@ rather than a truncated one when a bound is missed.
 | `host_configure`         | `host_configure_result`         | `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed` |
 | `repository_list`        | `repository_list_result`        | `repository-path-escape`, `repository-read-failed`                                      |
 | `repository_read`        | `repository_read_result`        | `repository-path-escape`, `repository-read-failed`                                      |
+| `workspace_read`         | `workspace_read_result`         | `workspace-path-escape`, `workspace-read-failed`, `credential-path-denied`              |
 
 On every result kind that carries `refusal`, `refusal: null` is the good answer. `transcript_failed`
 is the one failure kind for the three transcript asks; a reader discriminates on the echoed
@@ -376,7 +375,17 @@ on the transcript, null when its head carries none.
 Bounds: `TRANSCRIPT_PAGE_SIZE` transcripts per page, `WORKSPACE_PAGE_SIZE` worktrees per page,
 `MAX_BULK_RELEASES` entries per bulk release, `MAX_CONFIGURE_ENTRIES` entries per configure,
 `MAX_REPOSITORY_ENTRIES` names per directory listing, `MAX_REPOSITORY_READ_BYTES` per file head, cut
-on a character boundary with the file's whole size in the answer.
+on a character boundary with the file's whole size in the answer. `MAX_WORKSPACE_READ_BYTES` per
+workspace page and `MAX_WORKSPACE_FILE_BYTES` per workspace file.
+
+`workspace_read` names a workspace by the key it was provisioned at and a file by a path relative to
+that workspace's directory, with `offset` (0, or the `nextOffset` of the answer before) and
+`maxBytes`. The answer carries the page as text, cut on a character boundary, the file's whole size,
+and `nextOffset`, null on the last page. A page that would end inside its first character carries
+that character whole, so every page moves forward; an offset inside a character or past the end, a
+file over `MAX_WORKSPACE_FILE_BYTES`, a binary file and a provider that cannot locate a workspace by
+key each refuse `workspace-read-failed` by name. The ask is host-scoped, so a workspace whose
+sessions have all ended can still be read.
 
 `workspace_release` names exactly one of `workspaceKey` or `path`, with `deleteBranch` and `force`;
 the receipt states `directoryRemoved` and `branchDeleted` separately, and released or already
@@ -488,6 +497,7 @@ The reasons a controller meets most, and what each is not:
 | `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed` | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                     |
 | `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force`     |
 | `repository-path-escape`, `repository-read-failed`                                      | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                      |
+| `workspace-path-escape`, `workspace-read-failed`                                        | the same two over a workspace's directory; the second also names an unusable key, an offset inside a character or past the end, and a file larger than the read serves                    |
 
 `protocol_version_rejected` is not a refusal reason but a link cause: the windows did not overlap,
 and the link's state reports it.
@@ -569,5 +579,5 @@ Over the link:
 | `src/host/wire-request.ts`                                           | The single narrowing from `session_new.request` and `session_configure` to local requests                                                                                             |
 | `contracts/wire-vectors/`                                            | The byte-level contract                                                                                                                                                               |
 | `src/pins/wire-vectors.test.ts`, `src/pins/protocol-closure.test.ts` | The corpus check; the proof that the subpath reaches no `host/` file and no `node:` builtin                                                                                           |
-| `src/host/protocol-window.test.ts`                                   | The window's two directions over a real link: this host's frames through the protocol-11 decoder v1.2.0 shipped, and a version-11 controller's frames through this build              |
+| `src/host/protocol-window.test.ts`                                   | The window's two directions over a real link: this host's frames through the protocol-12 decoder v1.3.0 shipped, and a version-12 controller's frames through this build              |
 | `examples/minimal-controller/`, `examples/test-controller/`          | The smallest controller that accepts a host, and the reference controller that drives every ask                                                                                       |

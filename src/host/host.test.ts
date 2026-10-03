@@ -26,6 +26,7 @@ import type {
   WorkspaceListResult,
   RepositoryListResult,
   RepositoryReadResult,
+  WorkspaceReadResult,
   HostConfigureEntry,
   HostConfigureResult,
   JsonObject,
@@ -61,6 +62,8 @@ import {
   repositoryListResult,
   repositoryRead,
   repositoryReadResult,
+  workspaceRead,
+  workspaceReadResult,
 } from '../control/frames.js';
 import type { LinkHandlers } from '../control/link.js';
 import type { ControllerCredential } from '../control/credential.js';
@@ -1589,6 +1592,7 @@ const EVERY_PAYLOAD_KIND: { [K in SessionPayloadKind]: 'command' | 'refused' } =
   session_new: 'command',
   session_prompt: 'command',
   session_cancel: 'command',
+  session_end: 'command',
   session_configure: 'command',
   bulk_request: 'command',
   session_list: 'command',
@@ -1600,6 +1604,7 @@ const EVERY_PAYLOAD_KIND: { [K in SessionPayloadKind]: 'command' | 'refused' } =
   workspace_list: 'command',
   repository_list: 'command',
   repository_read: 'command',
+  workspace_read: 'command',
   session_update: 'refused',
   session_delta: 'refused',
   bulk_delivered: 'refused',
@@ -1615,6 +1620,7 @@ const EVERY_PAYLOAD_KIND: { [K in SessionPayloadKind]: 'command' | 'refused' } =
   workspace_list_result: 'refused',
   repository_list_result: 'refused',
   repository_read_result: 'refused',
+  workspace_read_result: 'refused',
 };
 
 /** One minimal instance per kind, kind-correct by construction so the map cannot drift. */
@@ -1622,6 +1628,7 @@ const PAYLOAD_SAMPLES: { [K in SessionPayloadKind]: Extract<SessionPayload, { ki
   session_new: sessionNew('C:/work'),
   session_prompt: { kind: 'session_prompt', text: 'hello' },
   session_cancel: { kind: 'session_cancel' },
+  session_end: { kind: 'session_end' },
   session_configure: { kind: 'session_configure', model: null, permissionMode: null, thinking: null },
   bulk_request: { kind: 'bulk_request', deliveryId: 'd', what: 'x', fromOffset: 0, postUrl: 'http://c/' },
   session_list: sessionList('r'),
@@ -1654,6 +1661,8 @@ const PAYLOAD_SAMPLES: { [K in SessionPayloadKind]: Extract<SessionPayload, { ki
   repository_list_result: repositoryListResult('r', []),
   repository_read: repositoryRead('r', 'README.md'),
   repository_read_result: repositoryReadResult('r', { text: null, sizeBytes: 0, truncated: false }),
+  workspace_read: workspaceRead('r', 'w1', 'README.md'),
+  workspace_read_result: workspaceReadResult('r', { text: null, sizeBytes: 0, nextOffset: null }),
 };
 
 test('regression: the closed-set pin; commands are handled, everything else refuses frame-malformed by name', async () => {
@@ -2870,4 +2879,109 @@ test('regression: an answer the link refuses as too large is followed by answer_
     1,
     'one substitute per refused answer, never a loop of substitutes',
   );
+});
+
+// --- session_end (v13) --------------------------------------------------------------------------
+
+test('session_end ends the session: the process closes and the end reaches the controller as its transition', async () => {
+  const { host, link, processes } = hostOver();
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await settle();
+  link.deliver('handle-1', { kind: 'session_end' }, 2);
+  await settle();
+
+  assert.equal(processes.started[0]?.closed(), true, 'the process was not closed');
+  const ended = link.transitions().find((transition) => transition.to === 'ended');
+  assert.ok(ended, 'the end never reached the controller');
+  assert.equal(ended?.cause.event, 'stop_requested');
+  assert.equal(host.session('handle-1').ok, false, 'the host still holds a session it ended');
+});
+
+test('a session_end that arrives while the session is still opening ends it the moment it opens', async () => {
+  const { provider, finish } = heldProvider();
+  const { host, link, processes } = hostOver({ workspaces: provider });
+  link.deliver('handle-1', sessionNew(null));
+  await settle();
+  link.deliver('handle-1', { kind: 'session_end' }, 2);
+  await settle();
+  finish();
+  await settle();
+
+  assert.equal(processes.started.length, 1, 'the open itself went ahead');
+  assert.equal(processes.started[0]?.closed(), true, 'the session the controller let go of was left running');
+  assert.equal(host.session('handle-1').ok, false);
+});
+
+test('session_end on a handle this host does not hold is refused like any other session command', async () => {
+  const events: HostEvent[] = [];
+  const { link } = hostOver({ events });
+  link.deliver('handle-unknown', { kind: 'session_end' });
+  await settle();
+
+  assert.equal(refusalsIn(events).at(-1)?.refusal.reason, 'session-unknown');
+});
+
+// --- workspace_read (v13) -----------------------------------------------------------------------
+
+function workspaceReads(link: FakeLink): WorkspaceReadResult[] {
+  return link.sent
+    .filter((entry) => entry.payload.kind === 'workspace_read_result')
+    .map((entry) => entry.payload as WorkspaceReadResult);
+}
+
+/** A provider whose workspaces are directories under `root`, named by key, and that can locate one. */
+function providerWithWorkspacesUnder(root: string): WorkspaceProvider {
+  return {
+    provision: async (key: string) => ok({ path: join(root, key), meta: {} }),
+    release: async () => ok(undefined),
+    pathFor: (key: string) => join(root, key),
+  };
+}
+
+test("workspace_read answers a file in a workspace by the workspace's key, a page at a time, jailed to it", async () => {
+  const root = await tempDir('workspace-read');
+  try {
+    await mkdir(join(root, 'w1', 'notes'), { recursive: true });
+    await mkdir(join(root, 'w2'), { recursive: true });
+    await writeFile(join(root, 'w1', 'notes', 'progress.md'), 'abcdef', 'utf8');
+    await writeFile(join(root, 'w2', 'other.md'), 'another workspace', 'utf8');
+    const { link } = hostOver({ workspaces: providerWithWorkspacesUnder(root) });
+
+    link.deliver('discovery-channel', workspaceRead('wr-1', 'w1', 'notes/progress.md', 0, 4));
+    await answered(link, 'workspace_read_result', 'the first page');
+    const first = workspaceReads(link)[0];
+    assert.equal(first?.refusal, null);
+    assert.equal(first?.text, 'abcd');
+    assert.equal(first?.sizeBytes, 6);
+    assert.equal(first?.nextOffset, 4, 'the answer says where the next page starts');
+
+    link.deliver('discovery-channel', workspaceRead('wr-2', 'w1', 'notes/progress.md', 4, 4));
+    await answeredTimes(link, 'workspace_read_result', 2, 'the last page');
+    assert.equal(workspaceReads(link)[1]?.text, 'ef');
+    assert.equal(workspaceReads(link)[1]?.nextOffset, null, 'the last page says it is the last');
+
+    link.deliver('discovery-channel', workspaceRead('wr-3', 'w1', '../w2/other.md'));
+    await answeredTimes(link, 'workspace_read_result', 3, 'the read into another workspace');
+    assert.equal(workspaceReads(link)[2]?.refusal?.reason, 'workspace-path-escape');
+    assert.equal(workspaceReads(link)[2]?.text, null);
+
+    link.deliver('discovery-channel', workspaceRead('wr-4', '../outside', 'x.md'));
+    await answeredTimes(link, 'workspace_read_result', 4, 'the unusable key');
+    assert.equal(workspaceReads(link)[3]?.refusal?.reason, 'workspace-read-failed');
+    assert.match(
+      workspaceReads(link)[3]?.refusal?.detail ?? '',
+      /workspace_read\.workspaceKey/,
+      'the key is refused before it names a directory',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('control: a provider that cannot locate a workspace by key refuses the read by name, never guesses a directory', async () => {
+  const { link } = hostOver({ workspaces: providerRootedAt('C:/repo') });
+  link.deliver('discovery-channel', workspaceRead('wr-1', 'w1', 'a.md'));
+  await answered(link, 'workspace_read_result', 'the refusal');
+  assert.equal(workspaceReads(link)[0]?.refusal?.reason, 'workspace-read-failed');
+  assert.match(workspaceReads(link)[0]?.refusal?.detail ?? '', /cannot locate a workspace by its key/);
 });

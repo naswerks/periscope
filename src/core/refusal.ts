@@ -390,6 +390,18 @@ export const REFUSAL_REASONS = [
   'repository-path-escape',
   'repository-read-failed',
 
+  // The workspace read: a controller reading a text file inside a workspace this host provisioned,
+  // jailed to that workspace's directory.
+  //
+  //   workspace-path-escape     The asked path resolves outside the workspace's directory. The
+  //                             repository read's `repository-path-escape`, over the workspace.
+  //   workspace-read-failed     The workspace key is unusable or names nothing this host can find,
+  //                             the path is not a text file, the file is larger than the read
+  //                             serves, the offset is past the end or inside a character, or the
+  //                             filesystem refused. The detail names which.
+  'workspace-path-escape',
+  'workspace-read-failed',
+
   // The branch half of a release: deleting a branch is not reversible, so it is refused by name
   // rather than done quietly.
   //

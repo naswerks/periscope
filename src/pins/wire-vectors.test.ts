@@ -60,6 +60,8 @@ import {
   repositoryListResult,
   repositoryRead,
   repositoryReadResult,
+  workspaceRead,
+  workspaceReadResult,
   workspaceRelease,
   workspaceReleaseBulk,
   workspaceReleaseBulkResult,
@@ -275,6 +277,7 @@ const AUTHORED = {
     },
   ],
   session_cancel: [{ name: 'session_cancel.bare', frame: session({ kind: 'session_cancel' }) }],
+  session_end: [{ name: 'session_end.bare', frame: session({ kind: 'session_end' }) }],
   session_configure: [
     {
       name: 'session_configure.full',
@@ -647,6 +650,36 @@ const AUTHORED = {
           'request-10',
           { text: null, sizeBytes: 0, truncated: false },
           { reason: 'repository-read-failed', detail: 'the path is not a file' },
+        ),
+      ),
+    },
+  ],
+  workspace_read: [
+    {
+      name: 'workspace_read.page',
+      frame: session(workspaceRead('request-11', 'workspace-7', 'notes/progress.md', 49152, 16384)),
+    },
+  ],
+  workspace_read_result: [
+    {
+      name: 'workspace_read_result.page',
+      frame: session(
+        workspaceReadResult('request-11', { text: '## Progress\n', sizeBytes: 81920, nextOffset: 65536 }),
+      ),
+    },
+    {
+      name: 'workspace_read_result.last',
+      frame: session(
+        workspaceReadResult('request-11', { text: 'done\n', sizeBytes: 81920, nextOffset: null }),
+      ),
+    },
+    {
+      name: 'workspace_read_result.refused',
+      frame: session(
+        workspaceReadResult(
+          'request-11',
+          { text: null, sizeBytes: 0, nextOffset: null },
+          { reason: 'workspace-path-escape', detail: "the path resolves outside the workspace's directory" },
         ),
       ),
     },

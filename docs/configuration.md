@@ -97,8 +97,9 @@ workspace provider live, except while a session is open or opening.
 | `PERISCOPE_FC_SEED`                  | Tests only. The property-test seed: a number reproduces a reported failure, `random` explores.                                                                                                                                                                                                                                                                                                                                                                         |
 | `PERISCOPE_UPDATE_CONTRACTS`         | Tests only. Set by `npm run contracts:update` while it re-approves the snapshots under `contracts/`.                                                                                                                                                                                                                                                                                                                                                                   |
 
-`CLAUDE_CONFIG_DIR`, when set, and `PERISCOPE_AGENT_HOME`, when it is not the default, are added to
-the gate's protected paths; the full set is listed in [the gate](gate.md).
+The agent CLI's token cache and configuration file in `CLAUDE_CONFIG_DIR`, when set, and in
+`PERISCOPE_AGENT_HOME`, when it is not the default, are added to the gate's protected paths; the full
+set is listed in [the gate](gate.md).
 
 ## What a controller can set over the link
 
@@ -112,7 +113,9 @@ applied to the live link: the host keeps dialling what it dialled, names them as
 answer and in every hello, and the next start reads the file. The host id is never settable over the
 link. A controller can also list one directory or read the head of one text file under the
 repository root (`repository_list` / `repository_read`), jailed to that root and to the protected
-set, bounded, and text-only. [The wire protocol](protocol.md) states both doors.
+set, bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
+a time, by the workspace's key (`workspace_read`), under the same jail and protected set. [The wire
+protocol](protocol.md) states the three doors.
 
 ## The agent: models, effort, thinking, plugins and tools
 

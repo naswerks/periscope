@@ -82,3 +82,12 @@ export function isContainedBy(candidate: string, root: string): boolean {
   const boundary = normalizedRoot.endsWith('/') ? normalizedRoot : `${normalizedRoot}/`;
   return normalizedCandidate.startsWith(boundary);
 }
+
+/**
+ * `isContainedBy` with both sides' case folded. The protected set uses it: on a filesystem that
+ * ignores case (Windows, macOS by default) `.SSH` names `.ssh`, so a case-sensitive check would let a
+ * different spelling of a protected path through. It can only answer true more often, never less.
+ */
+export function isContainedByIgnoringCase(candidate: string, root: string): boolean {
+  return isContainedBy(candidate.toLowerCase(), root.toLowerCase());
+}

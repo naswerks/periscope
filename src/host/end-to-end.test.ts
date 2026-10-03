@@ -337,6 +337,7 @@ test(
       provision: (id) => plain.provision(id),
       release: (id, options) => plain.release(id, options),
       inventory: () => plain.inventory(),
+      pathFor: (key) => plain.pathFor(key),
       repositoryRoot,
     };
     const hostOf = (hostId: string, credential?: ControllerCredential): PeriscopeHost =>
@@ -380,9 +381,11 @@ test(
       await waitFor(() => accepted() === 1, 'the first host to be accepted', DOOR_TIMEOUT_MS);
       assert.equal(controller.hostId, 'reference-host', 'the controller did not record the hello host id');
 
-      // One live session, so the listing and the inventory have a row.
+      // One live session, so the listing and the inventory have a row, and a file in its workspace
+      // for the workspace read.
       controller.send('s-1', sessionNew(null));
       await waitFor(() => host.session('s-1').ok, 'the session to open', DOOR_TIMEOUT_MS);
+      await writeFile(join(workspaceRoot, 's-1', 'notes.md'), 'hello from the workspace\n', 'utf8');
       agents.started[0]?.emit(initMessage('agent-1'));
       await waitFor(
         () => controller.transitions().some((one) => one.to === 'ready'),
@@ -413,6 +416,11 @@ test(
         ['workspace_list', { fromIndex: 0 }, 'workspace_list_result'],
         ['repository_list', { path: '' }, 'repository_list_result'],
         ['repository_read', { path: 'README.md', maxBytes: 1024 }, 'repository_read_result'],
+        [
+          'workspace_read',
+          { workspaceKey: 's-1', path: 'notes.md', offset: 0, maxBytes: 1024 },
+          'workspace_read_result',
+        ],
         [
           'workspace_release',
           { workspaceKey: 'never-provisioned', path: null, deleteBranch: false, force: false },
@@ -472,6 +480,12 @@ test(
         ),
       );
       assert.match(String(answers.get('repository_read')?.['text']), /hello from the repository/);
+      assert.equal(
+        answers.get('workspace_read')?.['text'],
+        'hello from the workspace\n',
+        "the session's workspace file, read by the workspace's key",
+      );
+      assert.equal(answers.get('workspace_read')?.['nextOffset'], null, 'one page holds the whole file');
       assert.equal(
         answers.get('workspace_release')?.['refusal'],
         null,

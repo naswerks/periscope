@@ -17,6 +17,8 @@ import {
   MAX_BULK_RELEASES,
   MAX_FRAME_BYTES,
   MAX_REPOSITORY_READ_BYTES,
+  MAX_WORKSPACE_FILE_BYTES,
+  MAX_WORKSPACE_READ_BYTES,
   PROTOCOL_VERSION,
   unsetHostConfiguration,
 } from './frames.js';
@@ -147,6 +149,7 @@ const sessionPayloadArbs = {
   }),
   session_prompt: fc.record({ kind: fc.constant('session_prompt' as const), text: fc.string() }),
   session_cancel: fc.record({ kind: fc.constant('session_cancel' as const) }),
+  session_end: fc.record({ kind: fc.constant('session_end' as const) }),
   session_configure: fc.record({
     kind: fc.constant('session_configure' as const),
     model: nullable(nonEmptyString),
@@ -352,6 +355,22 @@ const sessionPayloadArbs = {
     text: nullable(fc.string({ maxLength: 80 })),
     sizeBytes: nonNegative,
     truncated: fc.boolean(),
+    refusal: nullable(wireRefusalArb),
+  }),
+  workspace_read: fc.record({
+    kind: fc.constant('workspace_read' as const),
+    requestId: nonEmptyString,
+    workspaceKey: nonEmptyString,
+    path: fc.string({ minLength: 1, maxLength: 40 }),
+    offset: fc.integer({ min: 0, max: MAX_WORKSPACE_FILE_BYTES }),
+    maxBytes: fc.integer({ min: 1, max: MAX_WORKSPACE_READ_BYTES }),
+  }),
+  workspace_read_result: fc.record({
+    kind: fc.constant('workspace_read_result' as const),
+    requestId: nonEmptyString,
+    text: nullable(fc.string({ maxLength: 80 })),
+    sizeBytes: nonNegative,
+    nextOffset: nullable(fc.integer({ min: 1, max: MAX_WORKSPACE_FILE_BYTES })),
     refusal: nullable(wireRefusalArb),
   }),
 } satisfies Record<SessionPayloadKind, fc.Arbitrary<SessionPayload>>;
@@ -608,6 +627,7 @@ test('a refusal reason this host does not declare never encodes through the resu
         'workspace_list_result',
         'repository_list_result',
         'repository_read_result',
+        'workspace_read_result',
         'wire_refusal',
       ),
     )
@@ -637,6 +657,8 @@ test('a refusal reason this host does not declare never encodes through the resu
           return { kind, requestId: 'req-1', entries: [], truncated: false, refusal };
         case 'repository_read_result':
           return { kind, requestId: 'req-1', text: null, sizeBytes: 0, truncated: false, refusal };
+        case 'workspace_read_result':
+          return { kind, requestId: 'req-1', text: null, sizeBytes: 0, nextOffset: null, refusal };
         default:
           return {
             kind: 'session_update',

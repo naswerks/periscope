@@ -45,12 +45,14 @@ export {
   tailTranscript,
 } from './claude-transcripts.js';
 
-// The repository read: the same read-only, jailed posture over the repository root.
-export type { RepositoryListing, RepositoryText } from './repository-read.js';
+// The repository read: the same read-only, jailed posture over the repository root, and over a
+// workspace's directory for the workspace read.
+export type { RepositoryListing, RepositoryText, WorkspaceText } from './repository-read.js';
 export {
   BINARY_PROBE_BYTES,
   listRepositoryDirectory,
   readRepositoryFile,
+  readWorkspaceFile,
   resolveRepositoryPath,
 } from './repository-read.js';
 
@@ -58,6 +60,7 @@ export {
 // this host's own credential material — `credentialPaths` covers it BECAUSE both come from here.
 export {
   credentialPaths,
+  homeDirectory,
   nodePathResolver,
   pairedCredentialPath,
   periscopeCredentialDir,

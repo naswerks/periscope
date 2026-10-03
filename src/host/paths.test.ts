@@ -71,16 +71,12 @@ test('a drive-relative Windows path resolves rather than being read as rooted', 
 // Credential paths
 // ---------------------------------------------------------------------------
 
-test('the agent CLI token cache and its state file are both protected', () => {
+test("the agent CLI's token cache and its configuration file are protected, and the rest of its home is not", () => {
   const paths = credentialPaths({ USERPROFILE: 'C:/Users/agent' });
-  assert.ok(
-    paths.some((path) => path.endsWith('/.claude')),
-    'the token cache directory is not protected',
-  );
-  assert.ok(
-    paths.some((path) => path.endsWith('/.claude.json')),
-    'the state file is not protected',
-  );
+  assert.ok(paths.includes('C:/Users/agent/.claude/.credentials.json'), 'the token cache is not protected');
+  assert.ok(paths.includes('C:/Users/agent/.claude.json'), 'the configuration file is not protected');
+  // The agent reads its own settings, skills and tool output under the CLI's home.
+  assert.ok(!paths.includes('C:/Users/agent/.claude'), 'the whole CLI home is protected');
 });
 
 test('ambient cloud and ssh credentials are protected too — same user, same tools', () => {
@@ -115,17 +111,18 @@ test('regression: USERPROFILE wins over HOME; it is the load-bearing one on Wind
 
 test('HOME is used when USERPROFILE is absent', () => {
   const paths = credentialPaths({ HOME: '/home/agent' });
-  assert.ok(paths.some((path) => path === '/home/agent/.claude'));
+  assert.ok(paths.includes('/home/agent/.claude/.credentials.json'), `got ${paths.join(', ')}`);
 });
 
-test('an explicitly configured credential directory is protected as well', () => {
+test('an explicitly configured CLI home has its credential files protected as well', () => {
   const paths = credentialPaths({ HOME: '/home/agent', CLAUDE_CONFIG_DIR: '/opt/creds' });
-  assert.ok(paths.includes('/opt/creds'));
+  assert.ok(paths.includes('/opt/creds/.credentials.json'), `got ${paths.join(', ')}`);
+  assert.ok(paths.includes('/opt/creds/.claude.json'), `got ${paths.join(', ')}`);
 });
 
 test('a trailing separator on the home directory does not double up', () => {
   const paths = credentialPaths({ HOME: '/home/agent/' });
-  assert.ok(paths.includes('/home/agent/.claude'), `got ${paths.join(', ')}`);
+  assert.ok(paths.includes('/home/agent/.claude/.credentials.json'), `got ${paths.join(', ')}`);
 });
 
 test('an environment with no home at all still returns a usable set rather than throwing', () => {
@@ -197,11 +194,12 @@ test("USERPROFILE wins over HOME for the host's own directory too", () => {
   );
 });
 
-test('the effective agent home is protected: passed by the composition root, or read from the environment', () => {
+test("the effective agent home's token cache is protected: passed by the composition root, or read from the environment", () => {
   const env = { USERPROFILE: 'C:/Users/x' };
-  assert.ok(credentialPaths({ ...env, PERISCOPE_AGENT_HOME: 'D:/agents/home' }).includes('D:/agents/home'));
-  assert.ok(credentialPaths(env, { agentHome: 'D:/agents/home' }).includes('D:/agents/home'));
+  const cache = 'D:/agents/home/.credentials.json';
+  assert.ok(credentialPaths({ ...env, PERISCOPE_AGENT_HOME: 'D:/agents/home' }).includes(cache));
+  assert.ok(credentialPaths(env, { agentHome: 'D:/agents/home' }).includes(cache));
   // The default under the home directory is already there, and is not listed twice.
   const defaulted = credentialPaths(env, { agentHome: 'C:/Users/x/.claude' });
-  assert.equal(defaulted.filter((path) => path === 'C:/Users/x/.claude').length, 1);
+  assert.equal(defaulted.filter((path) => path === 'C:/Users/x/.claude/.credentials.json').length, 1);
 });
