@@ -23,11 +23,16 @@ The credential above authenticates the host to the controller. The agent the hos
 authenticates to its own provider separately, through the Claude Code CLI's ambient credential
 under the agent home (`~/.claude` by default). The spawn environment is an allow-list, so
 `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` set on the host are not inherited by a session, and
-a controller cannot put them back: both sit beneath the `extraEnv` floor (`EXTRA_ENV_FLOOR`), so a
-`session_new` naming one in `session_new.request.env.extraEnv` refuses `env-key-refused` before a
-process exists. Sign the CLI in once, as the OS user that runs the host (`claude auth login`;
-`claude auth status` confirms). An embedder that composes its own host may pass a shorter floor
-(`extraEnvFloor`); the binary never does.
+a controller cannot put them back, or point the agent at another server or identity. A controller
+places a key in a session's environment only when the host's operator declared it
+(`PERISCOPE_CONTROLLER_ENV_KEYS`), and beneath the floor (`EXTRA_ENV_FLOOR`) no declaration reaches:
+both credentials, `ANTHROPIC_*` (the model endpoint, its tokens and headers, every provider's base
+URL), the provider switches `CLAUDE_CODE_USE_*` and `CLAUDE_CODE_SKIP_*_AUTH`, the client certificate
+`CLAUDE_CODE_CLIENT_*`, the proxies `*_PROXY` and the certificate trust `SSL_CERT_*` and
+`NODE_EXTRA_CA_CERTS`. A `session_new` naming one, in `session_new.request.env.extraEnv` or
+`extraAllowedKeys`, refuses `env-key-refused` before a process exists. Sign the CLI in once, as the
+OS user that runs the host (`claude auth login`; `claude auth status` confirms). An embedder that
+composes its own host may pass a shorter floor (`extraEnvFloor`); the binary never does.
 
 ## Pairing: the durable machine credential
 

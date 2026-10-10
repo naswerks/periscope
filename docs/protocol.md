@@ -88,7 +88,9 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[12, 13]`. Version 13 adds:
+`[13, 14]`. Version 14 changes no shape: it narrows `session_new.request.env` (below), so a
+version-13 controller is still spoken to and every frame it sends still decodes. The narrowing holds
+at every version the host negotiates, 13 included. Version 13 added:
 
 - `session_end` (below);
 - `workspace_read` and its answer, `workspace_read_result` (below);
@@ -269,9 +271,11 @@ watched is not something the host can know, so it offers the knob instead of gue
 | `bulk_request`      | ask for bulk content (below)                                                                                                                                                                                                                                                                                                                   |
 
 A `session_new` past the host's session bound (`PeriscopeHostOptions.maxSessions`) refuses
-`session-cap-reached` before anything is reserved; one naming an `extraEnv` key beneath the host's
-floor (`EXTRA_ENV_FLOOR`: `PATH`, `NODE_OPTIONS`, TLS verification, the model endpoint, the
-credentials) refuses `env-key-refused` before a process exists.
+`session-cap-reached` before anything is reserved. One whose `env` names, in `extraEnv` or
+`extraAllowedKeys`, a key the host's operator did not declare (`PERISCOPE_CONTROLLER_ENV_KEYS`), or
+a key beneath the host's floor (`EXTRA_ENV_FLOOR`: `PATH`, `NODE_OPTIONS`, TLS verification and the
+certificates trusted, the model endpoint, provider and credentials, every proxy), refuses
+`env-key-refused` before a process exists, naming every such key.
 
 `session_new.request` carries `resume`, `fork`, `settingSources`, `plugins`, `mcpServers`,
 `strictMcpConfig`, `includePartialMessages`, `thinking`, `forwardSubagentText`, `env`, `model`,
@@ -306,7 +310,11 @@ settings, plugins or agent frontmatter is loaded. In-process tool descriptors ar
 
 `env` is `{ extraAllowedKeys, extraDeniedKeys, extraEnv }`, each nullable: names of the host's own
 environment to re-admit into the spawn (the credential-shaped deny list still wins), names to deny,
-and values to set outright after the allow-list has run.
+and values to set outright after the allow-list has run. The two lanes that add a key are screened:
+a key in `extraAllowedKeys` or `extraEnv` must be one the host's operator declared, and must be
+above the floor, which no declaration opens. A host declares nothing by default, so its controller
+sends `env` as null, or only `extraDeniedKeys`, unless its operator said otherwise. The
+declaration is the operator's and has no wire lane.
 
 Three ids ride a session and are never interchangeable: the frame's `sessionId` is the controller's
 handle and the routing key for the session's whole life; `SessionTransition.sessionId` is the

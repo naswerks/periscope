@@ -51,7 +51,12 @@ import { writeLinkState } from '../host/link-state-file.js';
 import { describePosture, postureLine } from './posture.js';
 import { isAbsolutePath } from '../core/paths.js';
 import { systemClock, systemTicker } from '../core/time.js';
-import { configValueProblem, overriddenByEnvironment, reconfigureHost } from './reconfigure.js';
+import {
+  configValueProblem,
+  overriddenByEnvironment,
+  parseControllerEnvKeys,
+  reconfigureHost,
+} from './reconfigure.js';
 import {
   hostConfigurationOf,
   workspaceCapabilitiesOf,
@@ -137,6 +142,8 @@ interface Config {
   readonly agentHome: string | null;
   /** The plugin directories every session loads, as configured (a path list). Null = none. */
   readonly pluginDirs: string | null;
+  /** The names a controller may place in a spawn's environment. Empty = none. */
+  readonly controllerEnvKeys: readonly string[];
 }
 
 function readConfig(env: NodeJS.ProcessEnv): Config | string {
@@ -169,6 +176,14 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     if (problem !== null) return problem;
   }
 
+  // What a controller may place in a spawn's environment, screened at boot by the same check
+  // `periscope config` runs: a name that is malformed, or beneath the floor, would declare nothing.
+  const controllerEnvKeys = env['PERISCOPE_CONTROLLER_ENV_KEYS'];
+  if (controllerEnvKeys !== undefined) {
+    const problem = configValueProblem('PERISCOPE_CONTROLLER_ENV_KEYS', controllerEnvKeys);
+    if (problem !== null) return problem;
+  }
+
   const configuredHostId = env['PERISCOPE_HOST_ID'];
   return {
     controllerUrl,
@@ -185,6 +200,7 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     workspaceKey: env['PERISCOPE_WORKSPACE_KEY'] ?? null,
     agentHome: env['PERISCOPE_AGENT_HOME'] ?? null,
     pluginDirs: env['PERISCOPE_PLUGIN_DIRS'] ?? null,
+    controllerEnvKeys: parseControllerEnvKeys(controllerEnvKeys),
   };
 }
 
@@ -568,6 +584,9 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     }),
     // The directories themselves, for every open; the manifests above are what the hello says.
     pluginDirs,
+    // What a controller may place in a spawn's environment: the operator's declaration, never the
+    // controller's. Nothing declared means both lanes refuse every key.
+    controllerEnvKeys: config.controllerEnvKeys,
     overriddenByEnvironment: overriddenByEnvironment(raw),
     // The configure seam: validates, writes the config file, rebuilds the provider. It reads
     // the raw environment because the file fills absences in it, and only this file may read that.

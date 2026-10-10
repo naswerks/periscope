@@ -16,7 +16,7 @@ import type { Result } from '../core/result.js';
 import { ok } from '../core/result.js';
 import { refusal } from '../core/refusal.js';
 import type { SessionFrame, SessionPayload } from '../control/frames.js';
-import { sessionNew } from '../control/frames.js';
+import { sessionNew, sessionNewRequest } from '../control/frames.js';
 import type { LinkHandlers } from '../control/link.js';
 import type { LinkTransition } from '../control/link-state.js';
 import type { HostEvent } from '../host/index.js';
@@ -708,3 +708,54 @@ test('a catalog the hello could not carry is said with its reason', () => {
     '[agent] the hello carries no model catalog — the agent did not answer within 20000ms',
   ]);
 });
+
+// --- what a controller may place in a spawn's environment ---------------------------------------
+
+test('regression: a declaration beneath the floor refuses start by name, before anything dials', () =>
+  inDir(async (dir) => {
+    const raw = rawEnv(dir);
+    const run = serve({
+      raw,
+      merged: mergedEnv(raw, { PERISCOPE_CONTROLLER_ENV_KEYS: 'NAS_Y,ANTHROPIC_BASE_URL' }),
+    });
+
+    assert.match(refused(run), /PERISCOPE_CONTROLLER_ENV_KEYS declares ANTHROPIC_BASE_URL/);
+    assert.deepEqual(run.exitCodes, [1]);
+    assert.equal(run.link.handlers, null, 'a host refusing its own configuration must not dial');
+  }));
+
+/** A session whose controller sets one variable in the agent's environment. */
+const TODO_TOOLS = sessionNewRequest({
+  env: { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv: { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' } },
+});
+
+test('regression: with nothing declared, a controller setting a variable is refused on the wire and no agent starts', () =>
+  inDir(async (dir) => {
+    const raw = rawEnv(dir);
+    const run = serve({ raw, merged: mergedEnv(raw) });
+    assert.equal(run.outcome.ok, true, refused(run));
+
+    run.link.deliver('handle-1', sessionNew(dir, { request: TODO_TOOLS }));
+    await settle();
+
+    assert.equal(run.agents.started.length, 0, 'an undeclared key must refuse before a process exists');
+    const refusedLine = run.out.find((line) => line.includes('[refused]'));
+    assert.match(refusedLine ?? '', /env-key-refused/, 'the refusal is said where the operator reads');
+    assert.match(refusedLine ?? '', /CLAUDE_CODE_ENABLE_TODO_TOOLS/);
+  }));
+
+test('control: the same session on a host that declared the key starts, and the agent environment carries it', () =>
+  inDir(async (dir) => {
+    const raw = rawEnv(dir);
+    const run = serve({
+      raw,
+      merged: mergedEnv(raw, { PERISCOPE_CONTROLLER_ENV_KEYS: ' CLAUDE_CODE_ENABLE_TODO_TOOLS ,' }),
+    });
+    assert.equal(run.outcome.ok, true, refused(run));
+
+    run.link.deliver('handle-1', sessionNew(dir, { request: TODO_TOOLS }));
+    await settle();
+
+    assert.equal(run.agents.started.length, 1, 'a declared key must let the session start');
+    assert.equal(run.agents.started[0]?.request.env['CLAUDE_CODE_ENABLE_TODO_TOOLS'], '1');
+  }));

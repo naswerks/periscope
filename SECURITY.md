@@ -260,15 +260,25 @@ over the link and without a further credential:
   to the agent as declared; a stdio server declaration (`{ type: 'stdio', command, args }`) is a
   process the CLI spawns as this host's OS user, before the gate sees a single tool call. The host
   screens the shape of the declaration, not what the command does.
-- **Set the agent's environment, above a floor.** `session_new.request.env.extraEnv` sets
-  variables in the spawn environment after the allow-list has run, and `extraAllowedKeys`
+- **Set the agent's environment, only where you declared it.** `session_new.request.env.extraEnv`
+  sets variables in the spawn environment after the allow-list has run, and `extraAllowedKeys`
   re-admits keys of this host's own environment by name (the credential-shaped deny list still
-  wins there); the host-session markers are stripped after it. Beneath the floor it cannot reach:
-  `PATH`, `NODE_OPTIONS`, `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `LD_PRELOAD`,
-  `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `ANTHROPIC_BASE_URL`,
-  `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` (`EXTRA_ENV_FLOOR`) — a `session_new` naming one
-  refuses `env-key-refused` before a process exists. An embedder may pass a shorter floor; the
-  binary never does.
+  wins there); the host-session markers are stripped after both. A key reaches the agent by either
+  lane only when you declared it (`PERISCOPE_CONTROLLER_ENV_KEYS`, or
+  `PeriscopeHostOptions.controllerEnvKeys`), and nothing is declared by default, so out of the box
+  a controller adds nothing to the agent's environment. The declaration is yours: a controller
+  cannot write it over the link. Beneath the floor no declaration reaches: `PATH`, `NODE_OPTIONS`,
+  `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`,
+  `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_API_KEY`, and the families `ANTHROPIC_*` (the model endpoint, its tokens and headers,
+  every provider's base URL), `CLAUDE_CODE_USE_*` (the provider switches),
+  `CLAUDE_CODE_SKIP_*_AUTH`, `CLAUDE_CODE_CLIENT_*` (the client certificate), `SSL_CERT_*` and
+  `*_PROXY` (`EXTRA_ENV_FLOOR`). So a controller cannot change which server the model call goes
+  to, as whom, or through which proxy and certificate authority. A `session_new` naming an
+  undeclared key, or one beneath the floor, in either lane refuses `env-key-refused` before a
+  process exists, naming the keys. Declaring a name beneath the floor refuses start. An embedder may
+  pass a shorter floor; the binary never does. What the host's own environment passes to a session
+  is untouched by either screen: a proxy you set is still inherited.
 - **Remove directories.** `workspace_release` deletes a worktree under the workspace root, and the
   controller can set that root through `host_configure` (a root change is refused only while a
   session is live or opening).

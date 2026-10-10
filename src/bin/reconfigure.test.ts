@@ -320,3 +320,31 @@ test('PERISCOPE_TRANSCRIPTS_ROOT is an unknown key, over the wire and in the fil
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('regression: PERISCOPE_CONTROLLER_ENV_KEYS over the wire refuses config-key-unknown and writes nothing', async () => {
+  // A controller able to write this list would declare its own keys; the operator's file is the
+  // only place it comes from.
+  const { env, dir } = await scratchEnv();
+  try {
+    const outcome = reconfigureHost(
+      env,
+      [{ key: 'PERISCOPE_CONTROLLER_ENV_KEYS', value: 'CLAUDE_CODE_ENABLE_TODO_TOOLS' }],
+      false,
+    );
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) assert.equal(outcome.refusal.reason, 'config-key-unknown');
+    assert.equal(await fileBytes(dir), null, 'nothing was written');
+
+    // Control: a wire-settable key in the same shape is written.
+    const root = await mkdtemp(join(tmpdir(), 'periscope-reconfigure-root-'));
+    try {
+      const applied = reconfigureHost(env, [{ key: 'PERISCOPE_WORKSPACE_ROOT', value: root }], false);
+      assert.equal(applied.ok, true, applied.ok ? '' : applied.refusal.detail);
+      assert.notEqual(await fileBytes(dir), null, 'the control was written');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

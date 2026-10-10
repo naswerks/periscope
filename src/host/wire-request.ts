@@ -20,8 +20,8 @@
  * They have no JSON form, so the wire type has no member for them and this file has nothing to read.
  * That is the boundary, and it is structural rather than a check somebody remembered to write.
  */
-import { EXTRA_ENV_FLOOR, extraEnvKeyBeneathFloor } from '../sessions/spawn-env.js';
-import type { JsonObject, SessionNewRequest } from '../control/frames.js';
+import { EXTRA_ENV_FLOOR, envKeysBeneathFloor, envKeysUndeclared } from '../sessions/spawn-env.js';
+import type { JsonObject, SessionNewEnv, SessionNewRequest } from '../control/frames.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import type { SessionRequest } from '../sessions/registry.js';
@@ -157,14 +157,43 @@ export function readSessionConfigure(payload: SessionConfigure): Result<SessionC
 }
 
 /**
+ * The keys a controller's `env` places in the spawn environment, by lane: `extraAllowedKeys`
+ * re-admits keys this host holds, and `extraEnv` sets values. `extraDeniedKeys` only removes keys,
+ * so it is not a lane in here and is never screened.
+ */
+function envLanes(env: SessionNewEnv): ReadonlyArray<readonly [string, readonly string[]]> {
+  return [
+    ['extraAllowedKeys names', env.extraAllowedKeys ?? []],
+    ['extraEnv sets', Object.keys(env.extraEnv ?? {})],
+  ];
+}
+
+/** "extraAllowedKeys names A and extraEnv sets B, C" for the keys `select` picks, or null for none. */
+function namedInLanes(
+  lanes: ReadonlyArray<readonly [string, readonly string[]]>,
+  select: (keys: readonly string[]) => readonly string[],
+): string | null {
+  const named = lanes.flatMap(([lane, keys]) => {
+    const picked = select(keys);
+    return picked.length === 0 ? [] : [`${lane} ${picked.join(', ')}`];
+  });
+  return named.length === 0 ? null : named.join(' and ');
+}
+
+/**
  * Turn a controller's request into a local one, or refuse it by name.
  *
  * `null` in means "every default", which is byte-for-byte the behaviour before this payload grew —
  * so a controller that sends nothing new is unaffected by any of this.
+ *
+ * `controllerEnvKeys` is what this host's operator declared a controller may place in the spawn
+ * environment; it defaults to nothing, so a request whose `env` adds any key is refused unless the
+ * operator declared that key.
  */
 export function readSessionRequest(
   request: SessionNewRequest | null,
   extraEnvFloor: readonly string[] = EXTRA_ENV_FLOOR,
+  controllerEnvKeys: readonly string[] = [],
 ): Result<ComposableRequest> {
   if (request === null) return ok({});
 
@@ -251,13 +280,27 @@ export function readSessionRequest(
   }
 
   if (request.env !== null) {
-    // Beneath the floor, refused by name before anything is reserved: the allow-list protects
-    // against accidental inheritance, this protects against the controller.
-    const beneath = extraEnvKeyBeneathFloor(request.env.extraEnv ?? undefined, extraEnvFloor);
+    // Both lanes are screened by name before anything is reserved, in two steps, and every key a
+    // step refuses is named. The floor first: no declaration admits a key beneath it. Then the
+    // operator's declaration: a key reaches the spawn by a controller's lane only when it is
+    // declared. The allow-list protects against accidental inheritance; this protects against the
+    // controller.
+    const lanes = envLanes(request.env);
+    const beneath = namedInLanes(lanes, (keys) => envKeysBeneathFloor(keys, extraEnvFloor));
     if (beneath !== null) {
       return refuse<ComposableRequest>(
         'env-key-refused',
-        `extraEnv sets ${beneath}, which is beneath this host's floor (${extraEnvFloor.join(', ')})`,
+        `${beneath}: beneath this host's floor (${extraEnvFloor.join(', ')}), where no declaration ` +
+          `admits a key`,
+      );
+    }
+    const undeclared = namedInLanes(lanes, (keys) => envKeysUndeclared(keys, controllerEnvKeys));
+    if (undeclared !== null) {
+      return refuse<ComposableRequest>(
+        'env-key-refused',
+        `${undeclared}, which this host's operator has not declared for a controller to set. A key ` +
+          `reaches the agent's environment by these lanes only when it is declared: ` +
+          `PERISCOPE_CONTROLLER_ENV_KEYS on the host, or PeriscopeHostOptions.controllerEnvKeys`,
       );
     }
     const policy: SpawnEnvPolicy = {

@@ -13,6 +13,6 @@
     }
   },
   "name": "refused.encode.seq-zero",
-  "protocolVersion": 13,
+  "protocolVersion": 14,
   "wire": null
 }

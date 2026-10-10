@@ -33,7 +33,11 @@ import {
   DECLARED_EXACT_KEYS,
   DECLARED_PREFIXES,
   DECLARED_SUFFIXES,
+  EXTRA_ENV_FLOOR,
   composeSpawnEnv,
+  envFloorEntryCovers,
+  envKeysBeneathFloor,
+  envKeysUndeclared,
   isDeclaredSpawnEnvKey,
   redactProxyCredential,
 } from './spawn-env.js';
@@ -652,4 +656,105 @@ test('the declared set is a real list, and its load-bearing members are in it', 
   for (const key of ['CLAUDE_EFFORT', 'CLAUDE_CODE_CHILD_SESSION', 'WORKER_KEY']) {
     assert.equal(DECLARED_EXACT_KEYS.includes(key), false, `${key} must never be declared`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// The floor beneath a controller's two lanes.
+// ---------------------------------------------------------------------------
+
+test('a floor entry is an exact name or a pattern, and each shape covers exactly its family', () => {
+  // Exact: the whole name, in any case, and nothing that merely starts with it.
+  assert.equal(envFloorEntryCovers('PATH', 'PATH'), true);
+  assert.equal(envFloorEntryCovers('PATH', 'path'), true);
+  assert.equal(envFloorEntryCovers('PATH', 'PATHEXT'), false, 'an exact name is not a prefix');
+
+  // A trailing `*`: a prefix, anchored at the start.
+  assert.equal(envFloorEntryCovers('ANTHROPIC_*', 'ANTHROPIC_BEDROCK_BASE_URL'), true);
+  assert.equal(envFloorEntryCovers('ANTHROPIC_*', 'anthropic_auth_token'), true);
+  assert.equal(envFloorEntryCovers('ANTHROPIC_*', 'MY_ANTHROPIC_KEY'), false, 'a prefix is anchored');
+
+  // A leading `*`: a suffix, anchored at the end.
+  assert.equal(envFloorEntryCovers('*_PROXY', 'HTTPS_PROXY'), true);
+  assert.equal(envFloorEntryCovers('*_PROXY', 'https_proxy'), true);
+  assert.equal(envFloorEntryCovers('*_PROXY', 'PROXY_HOST'), false, 'a suffix is anchored');
+
+  // A `*` inside: both ends anchored.
+  assert.equal(envFloorEntryCovers('CLAUDE_CODE_SKIP_*_AUTH', 'CLAUDE_CODE_SKIP_BEDROCK_AUTH'), true);
+  assert.equal(
+    envFloorEntryCovers('CLAUDE_CODE_SKIP_*_AUTH', 'CLAUDE_CODE_SKIP_PROMPT_HISTORY'),
+    false,
+    'the family is the auth switches, not every skip',
+  );
+
+  // Every other character is itself, never a regular-expression operator.
+  assert.equal(envFloorEntryCovers('A.B', 'AXB'), false);
+  assert.equal(envFloorEntryCovers('A.B', 'A.B'), true);
+});
+
+test('regression: every model-route, identity, proxy and certificate name the agent CLI reads is beneath the floor', () => {
+  // Names from the bundled CLI's own strings. A name missing here is one a controller could set
+  // whatever this host's operator declared.
+  const routes = [
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_API_KEY',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_AUTH_TOKEN',
+    'ANTHROPIC_CUSTOM_HEADERS',
+    'ANTHROPIC_UNIX_SOCKET',
+    'CLAUDE_CODE_USE_BEDROCK',
+    'CLAUDE_CODE_USE_VERTEX',
+    'CLAUDE_CODE_USE_FOUNDRY',
+    'CLAUDE_CODE_USE_GATEWAY',
+    'CLAUDE_CODE_USE_MANTLE',
+    'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+    'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD',
+    'ANTHROPIC_BEDROCK_BASE_URL',
+    'ANTHROPIC_BEDROCK_MANTLE_BASE_URL',
+    'ANTHROPIC_VERTEX_BASE_URL',
+    'ANTHROPIC_FOUNDRY_BASE_URL',
+    'ANTHROPIC_AWS_BASE_URL',
+    'ANTHROPIC_GOOGLE_CLOUD_BASE_URL',
+    'CLAUDE_CODE_SKIP_BEDROCK_AUTH',
+    'CLAUDE_CODE_SKIP_VERTEX_AUTH',
+    'CLAUDE_CODE_SKIP_FOUNDRY_AUTH',
+    'CLAUDE_CODE_SKIP_MANTLE_AUTH',
+    'CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH',
+    'CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH',
+    'CLAUDE_CODE_CLIENT_CERT',
+    'CLAUDE_CODE_CLIENT_KEY',
+    'CLAUDE_CODE_CLIENT_KEY_PASSPHRASE',
+    'HTTPS_PROXY',
+    'https_proxy',
+    'HTTP_PROXY',
+    'ALL_PROXY',
+    'NO_PROXY',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR',
+    'NODE_EXTRA_CA_CERTS',
+    'NODE_TLS_REJECT_UNAUTHORIZED',
+  ];
+  const above = routes.filter((key) => !envKeysBeneathFloor([key]).includes(key));
+  assert.deepEqual(above, [], `above the floor: ${above.join(', ')}`);
+
+  // Control: the floor is not everything. Names a controller has a use for stay above it.
+  for (const key of ['CLAUDE_CODE_ENABLE_TODO_TOOLS', 'CLAUDE_CODE_ENABLE_TELEMETRY', 'CI', 'NAS_Y']) {
+    assert.deepEqual(envKeysBeneathFloor([key], EXTRA_ENV_FLOOR), [], `${key} must stay above the floor`);
+  }
+});
+
+test('a declaration is exact names compared case-insensitively, and an empty one declares nothing', () => {
+  assert.deepEqual(envKeysUndeclared(['https_proxy', 'NAS_Y'], ['HTTPS_PROXY']), ['NAS_Y']);
+  assert.deepEqual(envKeysUndeclared(['NAS_Y'], []), ['NAS_Y']);
+  assert.deepEqual(envKeysUndeclared(['NAS_YY'], ['NAS_Y']), ['NAS_YY'], 'a declaration is not a prefix');
+});
+
+test('control: the floor never touches inheritance; a proxy and a certificate directory the host set still reach every spawn', () => {
+  const env = composeSpawnEnv({
+    PATH: 'p',
+    HTTPS_PROXY: 'http://proxy.example.com:8080',
+    SSL_CERT_DIR: '/etc/ssl/certs',
+  });
+  assert.equal(env['HTTPS_PROXY'], 'http://proxy.example.com:8080');
+  assert.equal(env['SSL_CERT_DIR'], '/etc/ssl/certs');
+  assert.equal(env['PATH'], 'p');
 });
