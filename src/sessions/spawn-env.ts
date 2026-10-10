@@ -37,12 +37,27 @@
 export type EnvSource = Readonly<Record<string, string | undefined>>;
 
 /**
- * The keys a controller may not set through `extraEnv`, however it is trusted: each of them changes
- * what the agent process IS rather than what it sees — where its binaries come from, what Node loads
- * before any code runs, whether TLS is verified, which server the model call goes to. The allow-list
- * screens what a session inherits by accident; this screens what a peer can set on purpose. An
- * embedder that wants a different floor passes one (`PeriscopeHostOptions.extraEnvFloor`); the
- * binary never widens it. Matched by upper-cased name, as Windows matches.
+ * The keys a controller may not set or re-admit by either of its two lanes (`extraEnv`,
+ * `extraAllowedKeys`), whatever this host's operator declared: each of them changes what the agent
+ * process IS rather than what it sees. Where its binaries come from, what Node loads before any code
+ * runs, whether TLS is verified and which certificates it trusts, which server the model call goes to
+ * and as whom, and which proxy carries its traffic.
+ *
+ * Two screens stand between a controller and the spawn environment. The first is the operator's
+ * declaration (`PeriscopeHostOptions.controllerEnvKeys`; the binary reads
+ * `PERISCOPE_CONTROLLER_ENV_KEYS`): a key reaches the spawn by a controller's lane only when it is
+ * declared, and nothing is declared by default. This is the second, and no declaration opens it.
+ *
+ * An entry is an exact name, or a pattern in which `*` stands for any run of characters. The agent
+ * CLI's routing and identity variables are families that grow, and a list of names misses the next
+ * one, so each family is one pattern: every name the bundled CLI's own strings carry under
+ * `ANTHROPIC_`, `CLAUDE_CODE_USE_`, `CLAUDE_CODE_SKIP_..._AUTH`, `CLAUDE_CODE_CLIENT_`, `SSL_CERT_` and
+ * `_PROXY` is covered, and so is the next one it adds. Matched by upper-cased name, as Windows matches.
+ *
+ * It screens the controller's lanes only. What a spawn inherits from this host's own environment is
+ * the allow-list's business below, so a proxy or a certificate directory the operator set still
+ * reaches every spawn. An embedder that wants a different floor passes one
+ * (`PeriscopeHostOptions.extraEnvFloor`); the binary never widens it.
  */
 export const EXTRA_ENV_FLOOR: readonly string[] = [
   'PATH',
@@ -56,19 +71,48 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'ANTHROPIC_BASE_URL',
   'CLAUDE_CODE_OAUTH_TOKEN',
   'ANTHROPIC_API_KEY',
+  // The model route and the identity it uses: the endpoint, its token and headers, its socket, every
+  // provider's base URL, region and project.
+  'ANTHROPIC_*',
+  // The provider switches: Bedrock, Vertex, Foundry, the gateway and the rest.
+  'CLAUDE_CODE_USE_*',
+  // The switches that skip a provider's own authentication.
+  'CLAUDE_CODE_SKIP_*_AUTH',
+  // The client certificate, its key and its passphrase.
+  'CLAUDE_CODE_CLIENT_*',
+  // The certificate authority file and directory.
+  'SSL_CERT_*',
+  // Every proxy, in either spelling.
+  '*_PROXY',
 ];
 
-/** The first `extraEnv` key at or beneath the floor, or null when every key is above it. */
-export function extraEnvKeyBeneathFloor(
-  extraEnv: Readonly<Record<string, string>> | undefined,
+/**
+ * Whether one floor entry covers a key: an exact name, or a pattern in which each `*` stands for any
+ * run of characters (`ANTHROPIC_*`, `*_PROXY`, `CLAUDE_CODE_SKIP_*_AUTH`). Compared upper-cased.
+ */
+export function envFloorEntryCovers(entry: string, key: string): boolean {
+  const parts = entry.toUpperCase().split('*');
+  const upper = key.toUpperCase();
+  if (parts.length === 1) return upper === parts[0];
+  const pattern = parts.map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+  return new RegExp(`^${pattern}$`).test(upper);
+}
+
+/** The keys a floor covers, in the order given. */
+export function envKeysBeneathFloor(
+  keys: readonly string[],
   floor: readonly string[] = EXTRA_ENV_FLOOR,
-): string | null {
-  if (extraEnv === undefined) return null;
-  const banned = new Set(floor.map((key) => key.toUpperCase()));
-  for (const key of Object.keys(extraEnv)) {
-    if (banned.has(key.toUpperCase())) return key;
-  }
-  return null;
+): string[] {
+  return keys.filter((key) => floor.some((entry) => envFloorEntryCovers(entry, key)));
+}
+
+/**
+ * The keys a declaration does not name, in the order given. A declaration is a list of exact names,
+ * compared upper-cased, so `HTTPS_PROXY` declared also admits `https_proxy`.
+ */
+export function envKeysUndeclared(keys: readonly string[], declared: readonly string[]): string[] {
+  const named = new Set(declared.map((key) => key.toUpperCase()));
+  return keys.filter((key) => !named.has(key.toUpperCase()));
 }
 
 export interface SpawnEnvPolicy {

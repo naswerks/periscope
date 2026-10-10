@@ -72,9 +72,10 @@ export const REFUSAL_REASONS = [
   //   prompt-queue-full     a session_prompt past the live session's pending-turn bound. The turn was
   //                         not taken; the session is fine. A peer that keeps sending past this is the
   //                         unbounded buffer this package refuses everywhere else.
-  //   env-key-refused       a session_new whose extraEnv names a key beneath the host's floor (PATH,
-  //                         NODE_OPTIONS and the like): refused before a process exists. The floor is
-  //                         the embedder's to widen; the binary never does.
+  //   env-key-refused       a session_new whose env names, in extraEnv or extraAllowedKeys, a key the
+  //                         host's operator did not declare, or one beneath the host's floor (PATH,
+  //                         NODE_OPTIONS, the model route, the proxies and the like): refused before a
+  //                         process exists. The floor is the embedder's to shorten; the binary never does.
   'session-cap-reached',
   'prompt-queue-full',
   'env-key-refused',

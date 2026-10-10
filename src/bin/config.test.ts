@@ -122,3 +122,30 @@ test('a value the wire would refuse is refused before it is written: the same sc
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('regression: a declaration beneath the floor, or not a variable name, is refused before it is written', async () => {
+  const { env, dir } = await scratchEnv();
+  try {
+    for (const [value, why] of [
+      ['ANTHROPIC_BASE_URL', /ANTHROPIC_BASE_URL, which is beneath the floor/],
+      ['NAS_Y, https_proxy', /https_proxy, which is beneath the floor \(\*_PROXY\)/],
+      ['NAS_*', /'NAS_\*', which is not an environment variable name/],
+    ] as const) {
+      const outcome = runConfig('PERISCOPE_CONTROLLER_ENV_KEYS', value, env);
+      assert.equal(outcome.ok, false, `PERISCOPE_CONTROLLER_ENV_KEYS=${value} must be refused`);
+      assert.match(outcome.lines[0] ?? '', why);
+    }
+    assert.equal(
+      runConfig(null, null, env).lines.some((line) => line.includes(' = ')),
+      false,
+      'nothing was written',
+    );
+    assert.equal(
+      runConfig('PERISCOPE_CONTROLLER_ENV_KEYS', 'CLAUDE_CODE_ENABLE_TODO_TOOLS, NAS_Y', env).ok,
+      true,
+      'the control: names above the floor are written',
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

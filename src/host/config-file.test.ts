@@ -213,3 +213,14 @@ test('a file carrying PERISCOPE_TRANSCRIPTS_ROOT is a file with an unknown key: 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('PERISCOPE_CONTROLLER_ENV_KEYS is a config-file key and never settable over the wire', () => {
+  // The names a controller may place in a spawn's environment are the operator's declaration. A
+  // controller able to write that list would declare its own keys.
+  assert.ok((CONFIG_KEYS as readonly string[]).includes('PERISCOPE_CONTROLLER_ENV_KEYS'));
+  assert.equal(
+    (WIRE_CONFIGURABLE_KEYS as readonly string[]).includes('PERISCOPE_CONTROLLER_ENV_KEYS'),
+    false,
+    'PERISCOPE_CONTROLLER_ENV_KEYS must not be settable over the wire',
+  );
+});

@@ -35,7 +35,7 @@ import type { SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -45,12 +45,15 @@ export const PROTOCOL_VERSION = 13;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 13 adds two asks and one answer: `session_end`, `workspace_read` and
- * `workspace_read_result`, with the refusals `workspace-path-escape` and `workspace-read-failed`. It
- * adds no member to an existing kind, so a version-12 controller, which sends neither ask, is still
- * spoken to, and every frame it sends still decodes.
+ * Version 14 narrows `session_new.request.env` and changes no shape. A key a controller places in
+ * the spawn environment, by `extraEnv` or `extraAllowedKeys`, must be one this host's operator
+ * declared, and the floor beneath it now covers both lanes and the agent's model-route, proxy and
+ * certificate families; anything else refuses `env-key-refused`. A version-13 controller is still
+ * spoken to, and every frame it sends still decodes. The narrowing holds at every version this
+ * host negotiates, 13 included: one that held only at 14 would be one a controller opts out of by
+ * asking for 13.
  */
-export const PROTOCOL_VERSION_MIN = 12;
+export const PROTOCOL_VERSION_MIN = 13;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {
@@ -440,28 +443,25 @@ export interface SessionNewRequest {
   /**
    * Extra allow / deny / literal declarations on top of the host's spawn environment.
    *
-   * What survives an off-box widening is a short, named list, and it is not "whatever the host
-   * refuses". Two facts in `sessions/spawn-env.ts` are true and are worth having: an extra allowed
-   * key cannot override a denied one, and the host-session strip runs last, after the literals. What
-   * does not follow from them is that a variable the host declines to carry into a child cannot be
-   * re-admitted from off-box. It can.
+   * Two of the three lanes add to what the agent sees: `extraAllowedKeys` re-admits keys of the
+   * host's own environment that the allow-list left out, and `extraEnv` sets values outright, after
+   * the allow-list has run. Both are screened by the host before anything is reserved, and a key
+   * either names is refused `env-key-refused`, naming every such key, unless it passes two screens:
    *
-   * The host's posture is an allow-list: everything undeclared is absent, and `extraAllowedKeys`
-   * re-admits any of those by name. Further, `extraEnv` is applied after the filter with no allow
-   * or deny check at all. That is deliberate, because setting a value is a different act from
-   * inheriting one and was designed for an embedder with an author. Carrying it here makes the
-   * author a controller instead. So `NODE_OPTIONS`, `PATH`, `ANTHROPIC_BASE_URL` and even
-   * `NODE_TLS_REJECT_UNAUTHORIZED` (which the host refuses to inherit by explicit pattern) are all
-   * settable through this field.
+   * - The host's operator declared it (`PeriscopeHostOptions.controllerEnvKeys`;
+   *   `PERISCOPE_CONTROLLER_ENV_KEYS` for the binary). Nothing is declared by default, so a host
+   *   that declared nothing refuses every key in both lanes. The declaration is the operator's and
+   *   is never settable over the link.
+   * - It is above the floor (`EXTRA_ENV_FLOOR`, or the embedder's `extraEnvFloor`), which no
+   *   declaration opens: `PATH`, the Node loader and TLS keys, the dynamic-linker keys, and the
+   *   families that decide which server the model call goes to and as whom, which proxy carries the
+   *   traffic and which certificates are trusted.
    *
-   * Irrevocable, and exhaustive: the 2 `DENIED_PATTERNS` (only against inheritance, not against
-   * `extraEnv`) and the 15 `HOST_SESSION_MARKERS`, which are stripped last and unconditionally. The
-   * marker set is the one real guarantee: a spawned agent is never told it is a continuation of the
+   * `extraDeniedKeys` only removes keys, so it is never screened. Two facts in
+   * `sessions/spawn-env.ts` still hold after the screens: an extra allowed key cannot override a
+   * denied one (`DENIED_PATTERNS`, against inheritance), and the 15 `HOST_SESSION_MARKERS` are
+   * stripped last and unconditionally, so a spawned agent is never told it is a continuation of the
    * host process, whatever any of these three arrays says.
-   *
-   * This is disclosure, not an argument against the widening, which is the point of carrying `env`
-   * at all. Narrowing it later is a versioned break, so an embedder that wants a floor beneath a
-   * controller's declarations needs one built for it; none exists in this package.
    */
   readonly env: SessionNewEnv | null;
   /**

@@ -18,6 +18,7 @@ import type { HostConfigureEntry } from '../control/frames.js';
 import { isAbsolutePath, normalizePath } from '../core/paths.js';
 import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
 import { MAX_PLUGIN_DIRS } from '../control/frames.js';
+import { EXTRA_ENV_FLOOR, envFloorEntryCovers } from '../sessions/spawn-env.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import {
@@ -104,9 +105,47 @@ export function configValueProblem(key: string, value: string): string | null {
       return value.includes('{key}')
         ? null
         : `PERISCOPE_BRANCH_SCHEME '${value}' has no {key} placeholder — every workspace would render the same branch`;
+    case 'PERISCOPE_CONTROLLER_ENV_KEYS':
+      return controllerEnvKeysProblem(value);
     default:
       return null;
   }
+}
+
+/**
+ * The names a `PERISCOPE_CONTROLLER_ENV_KEYS` value declares: comma-separated, each trimmed, empty
+ * entries dropped. Unset declares nothing.
+ */
+export function parseControllerEnvKeys(value: string | null | undefined): string[] {
+  if (value === null || value === undefined) return [];
+  return value
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => name !== '');
+}
+
+/**
+ * A declaration that could never take effect, by name. A name that is not a variable name, or one the
+ * floor covers, declares nothing: no controller could set it, and a declaration that silently does
+ * nothing is a misconfiguration nobody finds. The binary's floor is `EXTRA_ENV_FLOOR`, never widened.
+ */
+function controllerEnvKeysProblem(value: string): string | null {
+  for (const name of parseControllerEnvKeys(value)) {
+    if (/[\s=*]/.test(name)) {
+      return (
+        `PERISCOPE_CONTROLLER_ENV_KEYS names '${name}', which is not an environment variable name — ` +
+        'declare exact names, comma-separated'
+      );
+    }
+    const covering = EXTRA_ENV_FLOOR.find((entry) => envFloorEntryCovers(entry, name));
+    if (covering !== undefined) {
+      return (
+        `PERISCOPE_CONTROLLER_ENV_KEYS declares ${name}, which is beneath the floor (${covering}): no ` +
+        'declaration lets a controller set it, so this one would do nothing'
+      );
+    }
+  }
+  return null;
 }
 
 function addressProblem(key: string, value: string | null, schemes: readonly string[]): string | null {

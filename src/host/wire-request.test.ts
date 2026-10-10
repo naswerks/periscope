@@ -24,6 +24,9 @@ import {
   readSessionRequest,
 } from './wire-request.js';
 import type { McpServerConfig } from './agent-process.js';
+import { EXTRA_ENV_FLOOR, composeSpawnEnv } from '../sessions/spawn-env.js';
+import type { EnvSource } from '../sessions/spawn-env.js';
+import type { SessionNewEnv } from '../control/frames.js';
 
 // ---------------------------------------------------------------------------
 // The defaults path — the one that must not change for anybody.
@@ -44,28 +47,31 @@ test('every field left null is left ABSENT, never passed through as null', () =>
   assert.deepEqual(Object.keys(read.ok ? read.value : {}), []);
 });
 
+/** Every wire key at once, for the anti-drop check and its twin. */
+const EVERY_KEY = sessionNewRequest({
+  resume: 'session-abc',
+  fork: true,
+  settingSources: ['project'],
+  plugins: [{ type: 'local', path: '/plugins/one', skipMcpDiscovery: null }],
+  mcpServers: { probe: { type: 'http', url: 'http://127.0.0.1:1/mcp' } },
+  strictMcpConfig: false,
+  includePartialMessages: false,
+  thinking: { type: 'adaptive', display: 'summarized' },
+  forwardSubagentText: true,
+  env: { extraAllowedKeys: ['NAS_X'], extraDeniedKeys: null, extraEnv: { NAS_Y: '1' } },
+  model: 'claude-fable-5',
+  systemPrompt: 'be brief',
+  effort: 'high',
+  permissionMode: 'bypassPermissions',
+});
+
 test('every declared wire key is one this narrowing knows how to carry', () => {
   // The anti-drop check. A field added to the wire type and forgotten here would be accepted by
   // the codec, arrive intact, and then be silently discarded — the exact failure this file exists to
   // make impossible. Driving every key at once and asserting each one lands is what catches it.
-  const asked = sessionNewRequest({
-    resume: 'session-abc',
-    fork: true,
-    settingSources: ['project'],
-    plugins: [{ type: 'local', path: '/plugins/one', skipMcpDiscovery: null }],
-    mcpServers: { probe: { type: 'http', url: 'http://127.0.0.1:1/mcp' } },
-    strictMcpConfig: false,
-    includePartialMessages: false,
-    thinking: { type: 'adaptive', display: 'summarized' },
-    forwardSubagentText: true,
-    env: { extraAllowedKeys: ['NAS_X'], extraDeniedKeys: null, extraEnv: { NAS_Y: '1' } },
-    model: 'claude-fable-5',
-    systemPrompt: 'be brief',
-    effort: 'high',
-    permissionMode: 'bypassPermissions',
-  });
+  const asked = EVERY_KEY;
 
-  const read = readSessionRequest(asked);
+  const read = readSessionRequest(asked, EXTRA_ENV_FLOOR, ['NAS_X', 'NAS_Y']);
   assert.equal(read.ok, true, read.ok ? '' : `${read.refusal.reason}: ${read.refusal.detail}`);
   const composed = read.ok ? (read.value as Record<string, unknown>) : {};
 
@@ -83,6 +89,17 @@ test('every declared wire key is one this narrowing knows how to carry', () => {
   assert.equal(composed['permissionMode'], 'bypassPermissions');
   assert.deepEqual(composed['settingSources'], ['project']);
   assert.deepEqual(composed['env'], { extraAllowedKeys: ['NAS_X'], extraEnv: { NAS_Y: '1' } });
+});
+
+test('regression: the same request with nothing declared is refused env-key-refused, naming the key in each lane', () => {
+  // The twin of the anti-drop check: its env lanes carry above only because the operator declared
+  // both keys. With no declaration, the default, the same request is refused, and one refusal names
+  // every undeclared key in both lanes.
+  const read = readSessionRequest(EVERY_KEY);
+  assert.equal(read.ok, false, 'an undeclared key was accepted');
+  assert.equal(read.ok ? '' : read.refusal.reason, 'env-key-refused');
+  assert.match(read.ok ? '' : read.refusal.detail, /extraAllowedKeys names NAS_X/);
+  assert.match(read.ok ? '' : read.refusal.detail, /extraEnv sets NAS_Y/);
 });
 
 // ---------------------------------------------------------------------------
@@ -341,17 +358,228 @@ test('regression: an extraEnv key beneath the floor is refused env-key-refused b
   }
 });
 
+/** A key above the floor, and one only an embedder-shortened floor lets through: the control and its twin. */
+const ABOVE_THE_FLOOR = sessionNewRequest({
+  env: { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv: { NAS_Y: '1' } },
+});
+const NODE_OPTIONS_SET = sessionNewRequest({
+  env: { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv: { NODE_OPTIONS: '--x' } },
+});
+
 test('control: a key above the floor composes, and an embedder-shortened floor admits what it names', () => {
-  const above = readSessionRequest(
-    sessionNewRequest({ env: { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv: { NAS_Y: '1' } } }),
-  );
+  const above = readSessionRequest(ABOVE_THE_FLOOR, EXTRA_ENV_FLOOR, ['NAS_Y']);
   assert.equal(above.ok, true);
 
-  const widened = readSessionRequest(
-    sessionNewRequest({
-      env: { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv: { NODE_OPTIONS: '--x' } },
-    }),
-    ['PATH'],
-  );
+  const widened = readSessionRequest(NODE_OPTIONS_SET, ['PATH'], ['NODE_OPTIONS']);
   assert.equal(widened.ok, true, "the floor is the embedder's: a shorter list admits NODE_OPTIONS");
+});
+
+test('regression: the same two requests with nothing declared are refused env-key-refused, naming the key', () => {
+  // The twin of the control above: being above the floor, or beneath none, is not enough. A key
+  // reaches the spawn by a controller's lane only when this host's operator declared it.
+  const above = readSessionRequest(ABOVE_THE_FLOOR);
+  assert.equal(above.ok, false, 'a key above the floor was accepted with nothing declared');
+  assert.equal(above.ok ? '' : above.refusal.reason, 'env-key-refused');
+  assert.match(above.ok ? '' : above.refusal.detail, /NAS_Y/);
+
+  const widened = readSessionRequest(NODE_OPTIONS_SET, ['PATH']);
+  assert.equal(widened.ok, false, 'a shortened floor admitted a key nobody declared');
+  assert.equal(widened.ok ? '' : widened.refusal.reason, 'env-key-refused');
+  assert.match(widened.ok ? '' : widened.refusal.detail, /NODE_OPTIONS/);
+});
+
+// ---------------------------------------------------------------------------
+// The controller's two env lanes. A key reaches the spawn by either lane only when this host's
+// operator declared it, and nothing declares a key by default.
+// ---------------------------------------------------------------------------
+
+/**
+ * The environment a spawn would receive for this request over the stated base environment. The base
+ * is always the test's own literal and never `process.env`, so a failure message prints only what the
+ * test put there, not this machine's variables.
+ */
+function spawnedFrom(base: EnvSource, read: ReturnType<typeof readSessionRequest>): Record<string, string> {
+  return read.ok ? composeSpawnEnv(base, read.value.env ?? {}) : {};
+}
+
+test('regression: extraAllowedKeys cannot re-admit ANTHROPIC_BASE_URL from the host environment', () => {
+  // The allow-list keeps the host's own model endpoint out of every spawn. Naming it in
+  // extraAllowedKeys must not put it back: that would send the session's model traffic to a server
+  // the controller chose.
+  const base = { ANTHROPIC_BASE_URL: 'https://elsewhere.example' };
+  const read = readSessionRequest(
+    sessionNewRequest({
+      env: { extraAllowedKeys: ['ANTHROPIC_BASE_URL'], extraDeniedKeys: null, extraEnv: null },
+    }),
+  );
+  assert.equal(
+    read.ok,
+    false,
+    `accepted; the spawn environment would be ${JSON.stringify(spawnedFrom(base, read))}`,
+  );
+  assert.equal(read.ok ? '' : read.refusal.reason, 'env-key-refused');
+  assert.match(read.ok ? '' : read.refusal.detail, /ANTHROPIC_BASE_URL/);
+});
+
+test('regression: extraEnv cannot switch the model provider and name the server it calls', () => {
+  const base = {};
+  const read = readSessionRequest(
+    sessionNewRequest({
+      env: {
+        extraAllowedKeys: null,
+        extraDeniedKeys: null,
+        extraEnv: { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_BEDROCK_BASE_URL: 'https://x' },
+      },
+    }),
+  );
+  assert.equal(
+    read.ok,
+    false,
+    `accepted; the spawn environment would be ${JSON.stringify(spawnedFrom(base, read))}`,
+  );
+  assert.equal(read.ok ? '' : read.refusal.reason, 'env-key-refused');
+  assert.match(read.ok ? '' : read.refusal.detail, /CLAUDE_CODE_USE_BEDROCK/);
+  assert.match(read.ok ? '' : read.refusal.detail, /ANTHROPIC_BEDROCK_BASE_URL/);
+});
+
+test('regression: extraEnv cannot route the agent through a proxy it trusts, in either spelling of the proxy key', () => {
+  // Tools on POSIX read both `HTTPS_PROXY` and `https_proxy`, so each spelling is refused by name,
+  // and the certificate file that would make the proxy trusted with it.
+  const base = {};
+  const read = readSessionRequest(
+    sessionNewRequest({
+      env: {
+        extraAllowedKeys: null,
+        extraDeniedKeys: null,
+        extraEnv: { HTTPS_PROXY: 'http://x', https_proxy: 'http://x', SSL_CERT_FILE: 'C:\\x.pem' },
+      },
+    }),
+  );
+  assert.equal(
+    read.ok,
+    false,
+    `accepted; the spawn environment would be ${JSON.stringify(spawnedFrom(base, read))}`,
+  );
+  assert.equal(read.ok ? '' : read.refusal.reason, 'env-key-refused');
+  assert.match(read.ok ? '' : read.refusal.detail, /HTTPS_PROXY/);
+  assert.match(read.ok ? '' : read.refusal.detail, /https_proxy/);
+  assert.match(read.ok ? '' : read.refusal.detail, /SSL_CERT_FILE/);
+});
+
+// Each of the three requests above is held by two screens, and each screen is proven here on its
+// own: the floor with every key declared, the declaration with the floor emptied, and the pair that
+// admits them when an embedder empties the floor and the operator declares the keys.
+
+interface EnvAttack {
+  readonly name: string;
+  /** The host's own environment, a literal: never `process.env`. */
+  readonly base: EnvSource;
+  readonly env: SessionNewEnv;
+  /** Every key the request places, in the spelling sent. */
+  readonly keys: readonly string[];
+  /** What an operator declares to admit them. Case-insensitive, so one spelling admits both. */
+  readonly declare: readonly string[];
+}
+
+const ENV_ATTACKS: readonly EnvAttack[] = [
+  {
+    name: 'the host model endpoint re-admitted',
+    base: { ANTHROPIC_BASE_URL: 'https://elsewhere.example' },
+    env: { extraAllowedKeys: ['ANTHROPIC_BASE_URL'], extraDeniedKeys: null, extraEnv: null },
+    keys: ['ANTHROPIC_BASE_URL'],
+    declare: ['ANTHROPIC_BASE_URL'],
+  },
+  {
+    name: 'the provider switched and its server named',
+    base: {},
+    env: {
+      extraAllowedKeys: null,
+      extraDeniedKeys: null,
+      extraEnv: { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_BEDROCK_BASE_URL: 'https://x' },
+    },
+    keys: ['CLAUDE_CODE_USE_BEDROCK', 'ANTHROPIC_BEDROCK_BASE_URL'],
+    declare: ['CLAUDE_CODE_USE_BEDROCK', 'ANTHROPIC_BEDROCK_BASE_URL'],
+  },
+  {
+    name: 'a proxy in both spellings and a certificate file',
+    base: {},
+    env: {
+      extraAllowedKeys: null,
+      extraDeniedKeys: null,
+      extraEnv: { HTTPS_PROXY: 'http://x', https_proxy: 'http://x', SSL_CERT_FILE: 'C:\\x.pem' },
+    },
+    keys: ['HTTPS_PROXY', 'https_proxy', 'SSL_CERT_FILE'],
+    declare: ['HTTPS_PROXY', 'SSL_CERT_FILE'],
+  },
+];
+
+test('regression: the floor alone refuses each of them, with every key declared', () => {
+  for (const attack of ENV_ATTACKS) {
+    const read = readSessionRequest(sessionNewRequest({ env: attack.env }), EXTRA_ENV_FLOOR, attack.keys);
+    assert.equal(
+      read.ok,
+      false,
+      `${attack.name}: accepted with every key declared; the spawn environment would be ` +
+        JSON.stringify(spawnedFrom(attack.base, read)),
+    );
+    assert.equal(read.ok ? '' : read.refusal.reason, 'env-key-refused');
+    assert.match(read.ok ? '' : read.refusal.detail, /floor/, `${attack.name}: refused by the floor`);
+    for (const key of attack.keys) {
+      assert.ok(
+        (read.ok ? '' : read.refusal.detail).includes(key),
+        `${attack.name}: the refusal does not name ${key}`,
+      );
+    }
+  }
+});
+
+test('regression: the declaration alone refuses each of them, with the floor emptied', () => {
+  for (const attack of ENV_ATTACKS) {
+    const read = readSessionRequest(sessionNewRequest({ env: attack.env }), [], []);
+    assert.equal(
+      read.ok,
+      false,
+      `${attack.name}: accepted with nothing declared; the spawn environment would be ` +
+        JSON.stringify(spawnedFrom(attack.base, read)),
+    );
+    assert.equal(read.ok ? '' : read.refusal.reason, 'env-key-refused');
+    assert.match(read.ok ? '' : read.refusal.detail, /not declared/, `${attack.name}: refused as undeclared`);
+    for (const key of attack.keys) {
+      assert.ok(
+        (read.ok ? '' : read.refusal.detail).includes(key),
+        `${attack.name}: the refusal does not name ${key}`,
+      );
+    }
+  }
+});
+
+test('control: an emptied floor and a declaration admit each of them, and the spawn carries every key', () => {
+  // The pair the two tests above stand on: the same request, the same screens, one variable each.
+  // A declaration in one spelling admits both, so `https_proxy` arrives on `HTTPS_PROXY`'s name.
+  for (const attack of ENV_ATTACKS) {
+    const read = readSessionRequest(sessionNewRequest({ env: attack.env }), [], attack.declare);
+    assert.equal(read.ok, true, `${attack.name}: ${read.ok ? '' : read.refusal.detail}`);
+    const spawned = spawnedFrom(attack.base, read);
+    for (const key of attack.keys) {
+      assert.ok(key in spawned, `${attack.name}: the spawn does not carry ${key}`);
+    }
+  }
+});
+
+test('control: an env whose three lanes are all null composes an empty policy, with nothing declared', () => {
+  const read = readSessionRequest(
+    sessionNewRequest({ env: { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv: null } }),
+  );
+  assert.equal(read.ok, true, read.ok ? '' : read.refusal.detail);
+  assert.deepEqual(read.ok ? read.value.env : null, {});
+});
+
+test('control: extraDeniedKeys only removes keys, so it is never screened, a floored name included', () => {
+  const read = readSessionRequest(
+    sessionNewRequest({
+      env: { extraAllowedKeys: null, extraDeniedKeys: ['ANTHROPIC_BASE_URL', 'NAS_Z'], extraEnv: null },
+    }),
+  );
+  assert.equal(read.ok, true, read.ok ? '' : read.refusal.detail);
+  assert.deepEqual(read.ok ? read.value.env : null, { extraDeniedKeys: ['ANTHROPIC_BASE_URL', 'NAS_Z'] });
 });

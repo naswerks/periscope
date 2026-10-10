@@ -8,6 +8,37 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-10
+
+Protocol 14; the window is `[13, 14]`, so a version-13 controller is still spoken to. Protocol 14
+changes no shape. It narrows what `session_new.request.env` may carry, and the narrowing holds at
+every version the host negotiates, 13 included.
+
+- Closed: a paired controller could change where a session's model traffic went. `SECURITY.md`
+  promised a floor of environment keys beneath every controller, and the floor did not hold. It was
+  checked against `extraEnv` only, so `extraAllowedKeys` could re-admit `ANTHROPIC_BASE_URL`, or any
+  other key the host's own environment held. And it was a list of eleven names, so `extraEnv` could
+  set the agent CLI's other routing variables: `ANTHROPIC_AUTH_TOKEN`, a provider switch such as
+  `CLAUDE_CODE_USE_BEDROCK` with its base URL, `HTTPS_PROXY` with `SSL_CERT_FILE`. A controller
+  could point a session's model calls, and everything the agent had read, at a server of its
+  choosing.
+- `session_new.request.env` is absent unless declared. A key a controller places in the agent's
+  environment, by `extraEnv` or `extraAllowedKeys`, must be one the host's operator declared:
+  `PERISCOPE_CONTROLLER_ENV_KEYS` (comma-separated, from the environment or the config file, never
+  settable over the link) or `PeriscopeHostOptions.controllerEnvKeys`. Nothing is declared by
+  default, so **a controller that sends `extraEnv` or `extraAllowedKeys` is refused
+  `env-key-refused` until the operator declares the keys**, and the refusal names each one.
+  `extraDeniedKeys` is unchanged.
+- The floor beneath the declaration covers both lanes and every name of the families the agent CLI
+  routes by: beside its eleven names, `ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `CLAUDE_CODE_SKIP_*_AUTH`,
+  `CLAUDE_CODE_CLIENT_*`, `SSL_CERT_*` and `*_PROXY`. A floor entry may be a pattern in which `*`
+  stands for any run of characters; `extraEnvFloor` keeps its type. No declaration opens the floor,
+  and a declared name beneath it refuses `serve` at start and `periscope config` before it writes.
+  What a session inherits from the host's own environment is unchanged: a proxy the host sets still
+  reaches every session.
+- Setting `CLAUDE_CODE_ENABLE_TODO_TOOLS` from a controller now needs the host to declare it
+  (`docs/configuration.md`).
+
 ## [1.4.0] - 2026-10-01
 
 Protocol 13; the window is `[12, 13]`, so a version-12 controller is still spoken to. Protocol 13 adds

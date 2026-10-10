@@ -464,12 +464,23 @@ export interface PeriscopeHostOptions {
    */
   readonly toolFamilies?: ToolFamilies;
   /**
-   * The `extraEnv` keys a controller may not set; a `session_new` naming one refuses
-   * `env-key-refused` before a process exists. Defaults to `EXTRA_ENV_FLOOR` (`PATH`,
-   * `NODE_OPTIONS`, TLS verification, the model endpoint, the credentials); an embedder that trusts
-   * its controller with more passes a shorter list, and the binary never does.
+   * The keys a controller may not set or re-admit through `session_new.request.env`, by either
+   * `extraEnv` or `extraAllowedKeys`, whatever `controllerEnvKeys` declares; a `session_new` naming
+   * one refuses `env-key-refused` before a process exists. Defaults to `EXTRA_ENV_FLOOR` (`PATH`,
+   * `NODE_OPTIONS`, TLS verification and the certificates trusted, the model endpoint, provider and
+   * credentials, every proxy). An entry is an exact name or a pattern with `*`. An embedder that
+   * trusts its controller with more passes a shorter list, and the binary never does.
    */
   readonly extraEnvFloor?: readonly string[];
+  /**
+   * The names a controller may place in a spawned agent's environment, by `extraEnv` or
+   * `extraAllowedKeys`. A `session_new` naming any other key in either lane refuses
+   * `env-key-refused` before a process exists, naming every such key. Exact names, compared
+   * case-insensitively. Defaults to none: a controller adds nothing to the agent's environment unless
+   * this host's operator declared it, and the floor (`extraEnvFloor`) still refuses its own keys
+   * whatever is declared. The binary reads `PERISCOPE_CONTROLLER_ENV_KEYS`.
+   */
+  readonly controllerEnvKeys?: readonly string[];
   /**
    * How many sessions this host holds at once, live and opening together; a `session_new` past it
    * refuses `session-cap-reached`. Defaults to `DEFAULT_MAX_SESSIONS`. Ignored when a `registry` is
@@ -1092,7 +1103,11 @@ export class PeriscopeHost {
     // cannot use is refused while it still owns nothing: provisioning first would take a directory,
     // find the request unusable, and have to hand it back, a claim/release round trip on every
     // malformed frame, in the one path a stranger can drive.
-    const requested = readSessionRequest(opening.request, this.#options.extraEnvFloor);
+    const requested = readSessionRequest(
+      opening.request,
+      this.#options.extraEnvFloor,
+      this.#options.controllerEnvKeys,
+    );
     if (!requested.ok) return this.#refuseOpen(sessionKey, null, requested.refusal);
 
     const provider = this.#workspaces;

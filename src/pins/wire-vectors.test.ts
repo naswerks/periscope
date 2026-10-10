@@ -174,6 +174,29 @@ const TRANSITION_TOOL: SessionTransition = {
   correlationId: null,
 };
 
+/**
+ * A `session_new` refused before any process existed: the shape every open refusal takes on the
+ * wire. This one is what a host that declared nothing answers to `session_new.full`'s `env`.
+ */
+const TRANSITION_OPEN_REFUSED: SessionTransition = {
+  sessionId: null,
+  seq: 1,
+  at: AT,
+  from: 'spawning',
+  to: 'ended',
+  activity: null,
+  entryId: null,
+  cause: {
+    kind: 'refusal',
+    event: 'env-key-refused',
+    detail:
+      "extraAllowedKeys names CI and extraEnv sets FLAG, which this host's operator has not declared " +
+      'for a controller to set',
+  },
+  where: { cwd: '', worktree: null, branch: null, unknownReason: 'the session never had a workspace' },
+  correlationId: 'session-1',
+};
+
 const REFUSAL = { reason: 'bulk-delivery-failed', detail: 'the controller answered 503' };
 
 /** A catalog with every member stated on one model and every nullable member null on the other. */
@@ -221,6 +244,7 @@ const AUTHORED = {
       name: 'session_update.wire-refusal',
       frame: session(wireRefusalUpdate({ reason: 'seq-gap', detail: 'expected 4, received 6' }, 4, 6)),
     },
+    { name: 'session_update.open-refused', frame: session(stateTransitionUpdate(TRANSITION_OPEN_REFUSED)) },
   ],
   session_delta: [
     {

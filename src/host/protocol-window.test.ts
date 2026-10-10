@@ -1,15 +1,14 @@
 /**
- * The window's promise, checked against the peer it is made to: a controller on protocol 12 reads
+ * The window's promise, checked against the peer it is made to: a controller on protocol 13 reads
  * everything this host sends it, and this host reads everything that controller sends.
  *
- * `V12` below is that controller's decoder: the protocol-12 schemas transcribed from the codec the
- * v1.3.0 tag ships (`git show v1.3.0:src/control/codec.ts`), cut to the kinds this file reads, with
+ * `V13` below is that controller's decoder: the protocol-13 schemas transcribed from the codec the
+ * v1.4.0 tag ships (`git show v1.4.0:src/control/codec.ts`), cut to the kinds this file reads, with
  * that release's bounds written as numbers. It describes a released peer, so it never changes to
  * follow this build; an edit here that turns a test green changes the contract rather than fixing
- * it. The frames it reads are the bytes a real link carried, from a host the peer welcomed at 12.
- * Protocol 13 adds no member to a kind such a controller receives (its one new answer answers an ask
- * that controller never sends), so what is read here is the traffic it does receive, protocol 12's
- * own members included.
+ * it. The frames it reads are the bytes a real link carried, from a host the peer welcomed at 13.
+ * Protocol 14 changes no shape, so what is read here is the traffic such a controller receives, the
+ * members protocol 12 added included.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,102 +34,102 @@ import { PeriscopeHost } from './host.js';
 import { readSessionConfigure } from './wire-request.js';
 
 // ---------------------------------------------------------------------------
-// The protocol-12 decoder, as v1.3.0 shipped it.
+// The protocol-13 decoder, as v1.4.0 shipped it.
 // ---------------------------------------------------------------------------
 
-const V12_MAX_CONFIGURATION_VALUE_LENGTH = 1000;
-const V12_MAX_PLUGIN_DIRS = 8;
-const V12_MAX_CONFIGURE_ENTRIES = 8;
-const V12_MAX_AGENT_MODELS = 32;
+const V13_MAX_CONFIGURATION_VALUE_LENGTH = 1000;
+const V13_MAX_PLUGIN_DIRS = 8;
+const V13_MAX_CONFIGURE_ENTRIES = 8;
+const V13_MAX_AGENT_MODELS = 32;
 
-const v12JsonValue: z.ZodType<JsonValue> = z.lazy(() =>
+const v13JsonValue: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
     z.string(),
     z.number(),
     z.boolean(),
     z.null(),
-    z.array(v12JsonValue),
-    z.record(z.string(), v12JsonValue),
+    z.array(v13JsonValue),
+    z.record(z.string(), v13JsonValue),
   ]),
 );
-const v12JsonObject = z.record(z.string(), v12JsonValue);
-const v12Refusal = z.looseObject({ reason: z.string().min(1), detail: z.string() });
-const v12SessionCursor = z.looseObject({ sessionId: z.string().min(1), seq: z.number().int().nonnegative() });
-const v12ConfigurationValue = z.string().max(V12_MAX_CONFIGURATION_VALUE_LENGTH).nullable();
-const v12HostPlugin = z.looseObject({
+const v13JsonObject = z.record(z.string(), v13JsonValue);
+const v13Refusal = z.looseObject({ reason: z.string().min(1), detail: z.string() });
+const v13SessionCursor = z.looseObject({ sessionId: z.string().min(1), seq: z.number().int().nonnegative() });
+const v13ConfigurationValue = z.string().max(V13_MAX_CONFIGURATION_VALUE_LENGTH).nullable();
+const v13HostPlugin = z.looseObject({
   name: z.string().min(1).max(200),
   version: z.string().max(64).nullable(),
-  path: z.string().min(1).max(V12_MAX_CONFIGURATION_VALUE_LENGTH),
+  path: z.string().min(1).max(V13_MAX_CONFIGURATION_VALUE_LENGTH),
 });
-const v12AgentModelText = z.string().min(1).max(200);
-const v12HostModel = z.looseObject({
-  value: v12AgentModelText,
-  resolvedModel: v12AgentModelText.nullable(),
+const v13AgentModelText = z.string().min(1).max(200);
+const v13HostModel = z.looseObject({
+  value: v13AgentModelText,
+  resolvedModel: v13AgentModelText.nullable(),
   displayName: z.string().max(200),
-  description: z.string().max(V12_MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
+  description: z.string().max(V13_MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
   supportedEffortLevels: z.array(z.string().min(1).max(32)).max(16),
   supportsFastMode: z.boolean().nullable(),
   supportsAutoMode: z.boolean().nullable(),
   supportsAdaptiveThinking: z.boolean().nullable(),
 });
-const v12HostAgent = z.looseObject({
+const v13HostAgent = z.looseObject({
   claudeCodeVersion: z.string().min(1).max(64),
   sdkVersion: z.string().min(1).max(64),
-  models: z.array(v12HostModel).max(V12_MAX_AGENT_MODELS),
+  models: z.array(v13HostModel).max(V13_MAX_AGENT_MODELS),
 });
-const v12HostConfiguration = z.looseObject({
-  repositoryRoot: v12ConfigurationValue,
-  workspaceRoot: v12ConfigurationValue,
-  branchScheme: v12ConfigurationValue,
-  transcriptsRoot: v12ConfigurationValue,
-  controllerUrl: v12ConfigurationValue,
-  decisionUrl: v12ConfigurationValue,
-  agentHome: v12ConfigurationValue,
-  plugins: z.array(v12HostPlugin).max(V12_MAX_PLUGIN_DIRS),
-  agent: v12HostAgent.nullable().optional(),
+const v13HostConfiguration = z.looseObject({
+  repositoryRoot: v13ConfigurationValue,
+  workspaceRoot: v13ConfigurationValue,
+  branchScheme: v13ConfigurationValue,
+  transcriptsRoot: v13ConfigurationValue,
+  controllerUrl: v13ConfigurationValue,
+  decisionUrl: v13ConfigurationValue,
+  agentHome: v13ConfigurationValue,
+  plugins: z.array(v13HostPlugin).max(V13_MAX_PLUGIN_DIRS),
+  agent: v13HostAgent.nullable().optional(),
 });
-const v12PendingRestart = z.array(z.string().min(1).max(64)).max(V12_MAX_CONFIGURE_ENTRIES);
-const v12ProtocolRange = z.looseObject({ min: z.number().int().min(1), max: z.number().int().min(1) });
+const v13PendingRestart = z.array(z.string().min(1).max(64)).max(V13_MAX_CONFIGURE_ENTRIES);
+const v13ProtocolRange = z.looseObject({ min: z.number().int().min(1), max: z.number().int().min(1) });
 
-const v12SessionPayload = z.discriminatedUnion('kind', [
-  z.looseObject({ kind: z.literal('session_update'), body: v12JsonObject }),
-  z.looseObject({ kind: z.literal('session_delta'), body: v12JsonObject }),
+const v13SessionPayload = z.discriminatedUnion('kind', [
+  z.looseObject({ kind: z.literal('session_update'), body: v13JsonObject }),
+  z.looseObject({ kind: z.literal('session_delta'), body: v13JsonObject }),
   z.looseObject({
     kind: z.literal('host_configure_result'),
     requestId: z.string().min(1),
-    configuration: v12HostConfiguration,
+    configuration: v13HostConfiguration,
     overriddenByEnvironment: z.array(z.string()),
-    pendingRestart: v12PendingRestart,
-    refusal: v12Refusal.nullable(),
+    pendingRestart: v13PendingRestart,
+    refusal: v13Refusal.nullable(),
   }),
 ]);
 
-const v12ControlPayload = z.discriminatedUnion('kind', [
+const v13ControlPayload = z.discriminatedUnion('kind', [
   z.looseObject({
     kind: z.literal('link_hello'),
     protocolVersion: z.number().int(),
     hostId: z.string().min(1),
     capabilities: z.array(z.string()),
-    cursors: z.array(v12SessionCursor),
-    configuration: v12HostConfiguration,
-    pendingRestart: v12PendingRestart,
-    protocolRange: v12ProtocolRange,
+    cursors: z.array(v13SessionCursor),
+    configuration: v13HostConfiguration,
+    pendingRestart: v13PendingRestart,
+    protocolRange: v13ProtocolRange,
   }),
 ]);
 
-const V12 = z.discriminatedUnion('frame', [
+const V13 = z.discriminatedUnion('frame', [
   z.looseObject({
     frame: z.literal('session'),
     sessionId: z.string().min(1),
     seq: z.number().int().positive(),
     at: z.string().min(1),
-    payload: v12SessionPayload,
+    payload: v13SessionPayload,
   }),
-  z.looseObject({ frame: z.literal('control'), at: z.string().min(1), payload: v12ControlPayload }),
+  z.looseObject({ frame: z.literal('control'), at: z.string().min(1), payload: v13ControlPayload }),
 ]);
 
-/** The kinds `V12` models: everything this file's host is driven to send, bar the link's own chatter. */
-const V12_KINDS = ['link_hello', 'session_update', 'session_delta', 'host_configure_result'];
+/** The kinds `V13` models: everything this file's host is driven to send, bar the link's own chatter. */
+const V13_KINDS = ['link_hello', 'session_update', 'session_delta', 'host_configure_result'];
 
 // ---------------------------------------------------------------------------
 
@@ -172,8 +171,8 @@ function bodyOf(sent: Sent): Record<string, unknown> {
   return (sent.payload['body'] ?? {}) as Record<string, unknown>;
 }
 
-test('a controller on protocol 12 decodes every frame a host of this build sends it', async () => {
-  const peer = await peerOn({ welcomeVersion: 12, ack: true });
+test('a controller on protocol 13 decodes every frame a host of this build sends it', async () => {
+  const peer = await peerOn({ welcomeVersion: 13, ack: true });
   const cwd = await tempDir('protocol-window');
   const agents = fakeAgents();
   const host = new PeriscopeHost({
@@ -187,7 +186,7 @@ test('a controller on protocol 12 decodes every frame a host of this build sends
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 12, 'the welcome at 12', TIMEOUT_MS);
+    await waitFor(() => host.link.negotiatedVersion === 13, 'the welcome at 13', TIMEOUT_MS);
 
     // A session, driven through each member protocol 12 added on the way out: a forwarded message
     // with its instant, a transition caused by a model switch and one by a refusal with no fallback.
@@ -252,9 +251,9 @@ test('a controller on protocol 12 decodes every frame a host of this build sends
     );
 
     const sent = sentFrames(peer.raw);
-    const read = sent.filter((one) => V12_KINDS.includes(one.kind));
+    const read = sent.filter((one) => V13_KINDS.includes(one.kind));
     const refused = read.flatMap((one) => {
-      const decoded = V12.safeParse(JSON.parse(one.raw));
+      const decoded = V13.safeParse(JSON.parse(one.raw));
       return decoded.success
         ? []
         : [`${one.kind}: ${decoded.error.issues.map((issue) => issue.message).join('; ')}`];
@@ -262,7 +261,7 @@ test('a controller on protocol 12 decodes every frame a host of this build sends
     assert.deepEqual(
       refused,
       [],
-      `a protocol-12 controller refuses what this host sent:\n  ${refused.join('\n  ')}`,
+      `a protocol-13 controller refuses what this host sent:\n  ${refused.join('\n  ')}`,
     );
 
     // What was read carries protocol 12's members, so the green above is about them too.
@@ -288,8 +287,8 @@ test('a controller on protocol 12 decodes every frame a host of this build sends
   }
 });
 
-test('a controller on protocol 12 is read in turn: its configure, effort included, applies what it asks', async () => {
-  const peer = await peerOn({ welcomeVersion: 12, ack: true });
+test('a controller on protocol 13 is read in turn: its configure, effort included, applies what it asks', async () => {
+  const peer = await peerOn({ welcomeVersion: 13, ack: true });
   const cwd = await tempDir('protocol-window');
   const agents = fakeAgents();
   const host = new PeriscopeHost({
@@ -302,21 +301,22 @@ test('a controller on protocol 12 is read in turn: its configure, effort include
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 12, 'the welcome at 12', TIMEOUT_MS);
+    await waitFor(() => host.link.negotiatedVersion === 13, 'the welcome at 13', TIMEOUT_MS);
     peer.send('session-1', 1, sessionNew(cwd));
     await waitFor(() => agents.started.length === 1, 'the session to start', TIMEOUT_MS);
     const agent = agents.started[0]!;
     agent.emit(initMessage('agent-1'));
 
-    // The protocol-12 shape: the effort member it added, applied after the model.
-    const fromV12 = {
+    // The shape a protocol-13 controller sends: the effort member protocol 12 added, applied after
+    // the model.
+    const fromV13 = {
       kind: 'session_configure',
       model: 'model-b',
       permissionMode: null,
       thinking: null,
       effort: 'max',
     };
-    peer.send('session-1', 2, fromV12 as SessionConfigure);
+    peer.send('session-1', 2, fromV13 as SessionConfigure);
     await waitFor(() => agent.configured.length === 2, 'the configure to apply', TIMEOUT_MS);
     assert.deepEqual(agent.configured, [
       { setter: 'setModel', value: 'model-b' },
@@ -335,13 +335,13 @@ test('a hello from a host one release behind, catalog and all, decodes on this b
     at: '2000-01-01T00:00:00.000Z',
     payload: {
       kind: 'link_hello',
-      protocolVersion: 12,
+      protocolVersion: 13,
       hostId: 'host-1',
       capabilities: [],
       cursors: [],
       configuration: { ...unsetHostConfiguration(), agent: AGENT },
       pendingRestart: [],
-      protocolRange: { min: 11, max: 12 },
+      protocolRange: { min: 12, max: 13 },
     },
   });
   const decoded = decode(wire);
@@ -368,37 +368,37 @@ test('an effort a controller names that the SDK does not is refused by name, not
 
 // The frozen decoder is only evidence if it can refuse. A released peer's shape that accepted
 // anything would pass every frame above whatever this host sent.
-test('control: the protocol-12 decoder refuses what a version-12 controller refuses', () => {
+test('control: the protocol-13 decoder refuses what a version-13 controller refuses', () => {
   const hello = (configuration: Record<string, unknown>): unknown => ({
     frame: 'control',
     at: '2000-01-01T00:00:00.000Z',
     payload: {
       kind: 'link_hello',
-      protocolVersion: 12,
+      protocolVersion: 13,
       hostId: 'host-1',
       capabilities: [],
       cursors: [],
       configuration,
       pendingRestart: [],
-      protocolRange: { min: 11, max: 12 },
+      protocolRange: { min: 12, max: 13 },
     },
   });
   const { plugins: _plugins, ...version10 } = unsetHostConfiguration();
 
   assert.equal(
-    V12.safeParse(hello({ ...unsetHostConfiguration(), agent: AGENT })).success,
+    V13.safeParse(hello({ ...unsetHostConfiguration(), agent: AGENT })).success,
     true,
-    'a protocol-12 hello',
+    'a protocol-13 hello',
   );
   assert.equal(
-    V12.safeParse(hello({ ...unsetHostConfiguration(), agent: { ...AGENT, models: 'all' } })).success,
+    V13.safeParse(hello({ ...unsetHostConfiguration(), agent: { ...AGENT, models: 'all' } })).success,
     false,
     'a catalog whose models are not a list: the member protocol 12 added is checked',
   );
   assert.equal(
-    V12.safeParse(hello({ ...unsetHostConfiguration(), plugins: 'loop' })).success,
+    V13.safeParse(hello({ ...unsetHostConfiguration(), plugins: 'loop' })).success,
     false,
     'a member whose type changed',
   );
-  assert.equal(V12.safeParse(hello(version10)).success, false, 'a protocol-10 hello, which has no plugins');
+  assert.equal(V13.safeParse(hello(version10)).success, false, 'a protocol-10 hello, which has no plugins');
 });

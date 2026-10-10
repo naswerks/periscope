@@ -118,7 +118,12 @@ see each other's sessions; everyone else borrows a `HostedSession` handle.
 - The spawn environment is a derived allow-list, never inherited (`src/sessions/spawn-env.ts`):
   exact, prefix and suffix rules, case-insensitive, deny before allow, and the host-session strip
   (`HOST_SESSION_MARKERS`) runs last, after `extraEnv`, so the recorded hazards cannot be
-  re-admitted. Product-specific keys come in through `extraAllowedKeys` and `extraEnv`.
+  re-admitted. Product-specific keys come in through `extraAllowedKeys` and `extraEnv`. From a
+  controller, over the wire, those two lanes carry only what the host's operator declared
+  (`PeriscopeHostOptions.controllerEnvKeys`, `PERISCOPE_CONTROLLER_ENV_KEYS`), and never a key
+  beneath the floor (`EXTRA_ENV_FLOOR`): the narrowing is `src/host/wire-request.ts`'s, before any
+  process exists. An embedder composing a `SessionRequest` in process is not screened; it is the
+  operator.
 - Workspace trust is read, never granted (`src/host/workspace-trust.ts`). The package default is
   `settingSources: []`, the only setting under which the host can state what an agent's permissions
   are; what it costs is `CLAUDE.md` loading. The project tier loads only in a directory the CLI

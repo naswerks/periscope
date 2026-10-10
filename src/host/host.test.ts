@@ -520,6 +520,8 @@ function hostOver(
     reconfigure?: HostReconfigurer;
     /** The local gate's tool families. Absent means the SDK's own tool names. */
     toolFamilies?: ToolFamilies;
+    /** What a controller may place in a spawn's environment. Absent means nothing. */
+    controllerEnvKeys?: readonly string[];
   } = {},
 ): { host: PeriscopeHost; link: FakeLink; processes: FakeAgents } {
   const processes = options.processes ?? fakeAgents();
@@ -544,9 +546,44 @@ function hostOver(
       : { defaultWorkspaceKey: options.defaultWorkspaceKey }),
     ...(options.reconfigure === undefined ? {} : { reconfigure: options.reconfigure }),
     ...(options.toolFamilies === undefined ? {} : { toolFamilies: options.toolFamilies }),
+    ...(options.controllerEnvKeys === undefined ? {} : { controllerEnvKeys: options.controllerEnvKeys }),
   });
   return { host, link, processes };
 }
+
+/** A `session_new` whose controller sets these variables in the agent's environment. */
+const settingEnv = (extraEnv: Record<string, string>): ReturnType<typeof sessionNew> =>
+  sessionNew('C:/work', {
+    request: sessionNewRequest({ env: { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv } }),
+  });
+
+test('regression: a key nobody declared is refused on the wire before any process exists, naming the key', async () => {
+  const { link, processes } = hostOver();
+  link.deliver('handle-1', settingEnv({ CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }));
+  await settle();
+
+  assert.equal(processes.started.length, 0, 'an undeclared key must refuse before a process exists');
+  const ended = link.transitions().find((transition) => transition.to === 'ended');
+  assert.equal(ended?.cause.kind, 'refusal');
+  assert.equal(ended?.cause.event, 'env-key-refused');
+  assert.match(ended?.cause.detail ?? '', /CLAUDE_CODE_ENABLE_TODO_TOOLS/);
+});
+
+test('control: an embedder that declares the key gets it in the agent environment; the floor still refuses beneath it', async () => {
+  const declared = hostOver({ controllerEnvKeys: ['CLAUDE_CODE_ENABLE_TODO_TOOLS', 'ANTHROPIC_BASE_URL'] });
+  declared.link.deliver('handle-1', settingEnv({ CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }));
+  await settle();
+  assert.equal(declared.processes.started.length, 1, 'a declared key must let the session start');
+  assert.equal(declared.processes.started[0]?.request.env['CLAUDE_CODE_ENABLE_TODO_TOOLS'], '1');
+
+  // Declared, and beneath the floor: no declaration opens it.
+  declared.link.deliver('handle-2', settingEnv({ ANTHROPIC_BASE_URL: 'https://elsewhere.example' }));
+  await settle();
+  assert.equal(declared.processes.started.length, 1, 'a floored key must not start a second process');
+  const ended = declared.link.transitions().find((transition) => transition.to === 'ended');
+  assert.equal(ended?.cause.event, 'env-key-refused');
+  assert.match(ended?.cause.detail ?? '', /ANTHROPIC_BASE_URL: beneath this host's floor/);
+});
 
 test('regression: toolFamilies reaches the local gate, so an embedder-named MCP tool is jailed like the built-in it resembles', async () => {
   const families: ToolFamilies = {
