@@ -313,6 +313,39 @@ export interface TransitionWhere {
 }
 
 // ---------------------------------------------------------------------------
+// control tier
+// ---------------------------------------------------------------------------
+
+/**
+ * How much of a session's tool use this host can see and stop, strongest first.
+ *
+ *   intercepted                every tool call reaches the gate before it runs, and the gate's answer holds
+ *   intercepted-with-residual  the same, except for the paths `degrades` names
+ *   cooperative                the agent reports its calls and asks, but nothing stops one it does not ask about
+ *   none                       the session is observed and driven; no call is held for a decision
+ *
+ * It is a fact about the runtime the session runs on, stated by the host; it decides nothing here.
+ */
+export const CONTROL_TIER_LEVELS = [
+  'intercepted',
+  'intercepted-with-residual',
+  'cooperative',
+  'none',
+] as const;
+
+export type ControlTierLevel = (typeof CONTROL_TIER_LEVELS)[number];
+
+/**
+ * A session's control tier: its level, and the named paths that fall below it. `degrades` is empty
+ * when nothing does. Stated on the session's first transition into `ready` and in each runtime's
+ * entry in the hello.
+ */
+export interface ControlTier {
+  readonly level: ControlTierLevel;
+  readonly degrades: readonly string[];
+}
+
+// ---------------------------------------------------------------------------
 // the transition record
 // ---------------------------------------------------------------------------
 
@@ -350,6 +383,11 @@ export interface SessionTransition {
    * would know something about one product's conventions and stop being general.
    */
   readonly correlationId: string | null;
+  /**
+   * The session's control tier (protocol 15). Present on the session's first transition into
+   * `ready`, when the agent has reported itself, and absent on every other transition.
+   */
+  readonly controlTier?: ControlTier | null;
 }
 
 // ---------------------------------------------------------------------------

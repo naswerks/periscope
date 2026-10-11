@@ -29,3 +29,4 @@ export { SessionRegistry } from './registry.js';
 // The fact lifts: one per runtime, each reading that runtime's messages into the wire's facts.
 export type { FactLift, LiftedFacts } from './fact-lift.js';
 export { FACT_LIFTS, factLiftFor } from './fact-lift.js';
+export { CONTROL_TIERS, controlTierFor, runtimeOf } from './runtimes.js';

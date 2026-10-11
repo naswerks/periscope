@@ -22,6 +22,7 @@
  */
 import { EXTRA_ENV_FLOOR, envKeysBeneathFloor, envKeysUndeclared } from '../sessions/spawn-env.js';
 import type { JsonObject, SessionNewEnv, SessionNewRequest } from '../control/frames.js';
+import { DEFAULT_RUNTIME } from '../control/frames.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import type { SessionRequest } from '../sessions/registry.js';
@@ -197,7 +198,20 @@ export function readSessionRequest(
 ): Result<ComposableRequest> {
   if (request === null) return ok({});
 
+  // The runtime first: every other member is read as that runtime's own, so a session on a runtime
+  // this host cannot spawn is refused before any of them is. Null or absent is the host's default and
+  // composes nothing; the composer reads the default through `runtimeOf`.
+  const runtime = request.runtime ?? null;
+  if (runtime !== null && runtime !== DEFAULT_RUNTIME) {
+    return refuse<ComposableRequest>(
+      'runtime-unavailable',
+      `runtime is ${JSON.stringify(runtime)}; this host spawns sessions on ${DEFAULT_RUNTIME} only, the ` +
+        `one runtime its hello lists in agents`,
+    );
+  }
+
   const composed: Record<string, unknown> = {};
+  if (runtime !== null) composed['runtime'] = runtime;
 
   if (request.resume !== null) composed['resume'] = request.resume;
   if (request.fork !== null) composed['fork'] = request.fork;

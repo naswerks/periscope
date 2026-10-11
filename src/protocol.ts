@@ -30,6 +30,8 @@ export type {
   FragmentChannel,
   Frame,
   HostAgent,
+  HostAgentEntry,
+  HostAgentVocabularies,
   HostConfiguration,
   HostModel,
   HostPlugin,
@@ -114,6 +116,8 @@ export type {
   AgedEntry,
   CauseEvent,
   CauseKind,
+  ControlTier,
+  ControlTierLevel,
   EntryLane,
   HookEventName,
   OpenEntry,
@@ -127,6 +131,7 @@ export type {
 export {
   ACTIVITY_KINDS,
   CAUSE_KINDS,
+  CONTROL_TIER_LEVELS,
   HOOK_EVENTS,
   HOST_ACTIVITY_KINDS,
   SDK_ACTIVITY_KINDS,
@@ -146,6 +151,7 @@ export {
   DROPPABLE_KINDS,
   FRAGMENT_CHANNELS,
   MAX_AGENT_CATALOG_BYTES,
+  MAX_AGENT_ENTRIES,
   MAX_AGENT_MODELS,
   MAX_CONFIGURATION_VALUE_LENGTH,
   MAX_FACT_LIST_ENTRIES,
@@ -253,8 +259,8 @@ export type { Result } from './core/result.js';
 // them from the SDK's messages stays in `host/`.
 // ---------------------------------------------------------------------------
 
-export type { Decider, Decision, DecisionReading, DecisionRequest } from './gate/decision.js';
-export { describeRaw, readDecision } from './gate/decision.js';
+export type { Decider, Decision, DecisionReading, DecisionRequest, ToolKind } from './gate/decision.js';
+export { TOOL_KINDS, describeRaw, readDecision } from './gate/decision.js';
 
 export type { EscalationOptions, EscalationResponse, EscalationTransport } from './gate/escalate.js';
 

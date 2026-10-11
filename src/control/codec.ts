@@ -12,7 +12,15 @@ import { z } from 'zod';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import { isRefusalReason } from '../core/refusal.js';
-import type { AgentFact, Frame, HostAgent, JsonObject, JsonValue, WireRefusal } from './frames.js';
+import type {
+  AgentFact,
+  Frame,
+  HostAgent,
+  HostAgentEntry,
+  JsonObject,
+  JsonValue,
+  WireRefusal,
+} from './frames.js';
 import {
   CACHE_TTLS,
   COMPACTION_STATUSES,
@@ -20,6 +28,7 @@ import {
   COST_BASES,
   FRAGMENT_CHANNELS,
   MAX_AGENT_CATALOG_BYTES,
+  MAX_AGENT_ENTRIES,
   MAX_AGENT_MODELS,
   MAX_BULK_RELEASES,
   MAX_CONFIGURATION_VALUE_LENGTH,
@@ -37,6 +46,7 @@ import {
   TURN_SCOPES,
 } from './frames.js';
 import { MAX_WORKSPACE_ID_LENGTH } from '../core/workspace-id.js';
+import { CONTROL_TIER_LEVELS } from '../state/model.js';
 
 /**
  * UTF-8 byte length, the web-standard way.
@@ -121,6 +131,38 @@ const hostAgentSchema = z.looseObject({
   models: z.array(hostModelSchema).max(MAX_AGENT_MODELS),
 });
 
+/**
+ * A control tier (protocol 15): its level and the paths that fall below it, each a word. The level
+ * is a bounded string here, so a newer peer's added level is read; `encode` refuses a level this
+ * host does not declare.
+ */
+const controlTierSchema = z.looseObject({
+  level: z.string().min(1).max(MAX_FACT_WORD_LENGTH),
+  degrades: z.array(z.string().min(1).max(MAX_FACT_WORD_LENGTH)).max(MAX_FACT_LIST_ENTRIES),
+});
+
+/** A runtime's session-control words: bounded like a model's effort levels. */
+const vocabularyWordsSchema = z.array(z.string().min(1).max(32)).max(16);
+
+// One runtime the host can spawn (protocol 15). The entry is new, so its own members are required;
+// the list that carries it is the optional member.
+const hostAgentEntrySchema = z.looseObject({
+  runtime: z.string().min(1).max(MAX_FACT_WORD_LENGTH),
+  version: z.string().min(1).max(64),
+  sdkVersion: z.string().min(1).max(64).nullable(),
+  models: z.array(hostModelSchema).max(MAX_AGENT_MODELS),
+  vocabularies: z.looseObject({
+    permissionModes: vocabularyWordsSchema,
+    efforts: vocabularyWordsSchema,
+    thinking: z.boolean(),
+  }),
+  controlTier: controlTierSchema,
+  available: z.boolean(),
+  unavailableReason: z.string().max(MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
+});
+
+const hostAgentsSchema = z.array(hostAgentEntrySchema).max(MAX_AGENT_ENTRIES);
+
 const hostConfigurationSchema = z.looseObject({
   repositoryRoot: configurationValueSchema,
   workspaceRoot: configurationValueSchema,
@@ -132,6 +174,8 @@ const hostConfigurationSchema = z.looseObject({
   plugins: z.array(hostPluginSchema).max(MAX_PLUGIN_DIRS),
   // Protocol 12, and optional: a host one release behind omits it (see frames.ts's header).
   agent: hostAgentSchema.nullable().optional(),
+  // Protocol 15, optional for the same reason.
+  agents: hostAgentsSchema.nullable().optional(),
 });
 
 /** The key names a hello or a configure result lists as pending: config keys, so short and few. */
@@ -307,6 +351,9 @@ function carryIssues(
   }
 }
 
+/** A transition's `controlTier`, the one member of a transition the codec checks. */
+const transitionControlTierSchema = controlTierSchema.nullable().optional();
+
 /**
  * The checks a body earns by its `update`, for the bodies protocol 15 added shapes to. Every other
  * body is open JSON, exactly as before.
@@ -315,6 +362,17 @@ function checkBody(body: JsonObject, lane: 'update' | 'delta', ctx: BodyCheckCon
   const update = body['update'];
   if (update === 'agent_message') {
     carryIssues(agentMessageRuntimeSchema.safeParse(body), [], ctx);
+    return;
+  }
+  if (lane === 'update' && update === 'state_transition') {
+    // Only the tier protocol 15 added is checked; the rest of a transition stays unnarrowed.
+    const transition = body['transition'];
+    if (typeof transition !== 'object' || transition === null || Array.isArray(transition)) return;
+    carryIssues(
+      transitionControlTierSchema.safeParse(transition['controlTier']),
+      ['transition', 'controlTier'],
+      ctx,
+    );
     return;
   }
   if (lane === 'update' && update === 'agent_facts') {
@@ -358,9 +416,10 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
   // be rejected here. The typed union is what a consumer reads it back as.
   //
   // The bodies protocol 15 added shapes to are checked for the members they declare, and only those:
-  // an `agent_facts` or `agent_fragment` body, and an `agent_message`'s `runtime` (`checkBody`).
-  // Every declared member is optional and every unknown key is carried, so a richer body still
-  // crosses; `state_transition`, `wire_refusal` and an `agent_message`'s `message` are not narrowed.
+  // an `agent_facts` or `agent_fragment` body, an `agent_message`'s `runtime` and a
+  // `state_transition`'s `controlTier` (`checkBody`). Every declared member is optional and every
+  // unknown key is carried, so a richer body still crosses; the rest of a `state_transition`, a
+  // `wire_refusal` and an `agent_message`'s `message` are not narrowed.
   z.looseObject({ kind: z.literal('session_update'), body: sessionUpdateBodySchema }),
   z.looseObject({ kind: z.literal('session_delta'), body: sessionDeltaBodySchema }),
   // Every added field is `.nullable()`, never `.optional()`, and that mirrors the type on purpose.
@@ -425,6 +484,9 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
         // A string, a list of strings, or a preset object — all three are what the SDK accepts, so
         // the wire carries any JSON value and the host hands it straight through.
         systemPrompt: jsonValueSchema.nullable(),
+        // Protocol 15, and optional: a controller one release behind omits it. A runtime's name is
+        // a word; whether this host can spawn it is the host's question, answered by name.
+        runtime: z.string().min(1).max(MAX_FACT_WORD_LENGTH).nullable().optional(),
       })
       .nullable(),
   }),
@@ -723,9 +785,9 @@ export function encode(frame: Frame): Result<string> {
     );
   }
 
-  // The same pair for the fact layer's vocabularies: a newer peer's word is read on the way in, and
-  // this host may send only the words it declares.
-  const undeclaredWord = undeclaredFactWord(frame);
+  // The same pair for the fact layer's vocabularies and the control tier's levels: a newer peer's word
+  // is read on the way in, and this host may send only the words it declares.
+  const undeclaredWord = undeclaredFactWord(frame) ?? undeclaredTierLevel(frame);
   if (undeclaredWord !== null) {
     return refuse(
       'frame-malformed',
@@ -798,6 +860,24 @@ export function hostAgentProblem(agent: HostAgent): string | null {
   const byteCount = utf8ByteLength(JSON.stringify(agent));
   if (byteCount > MAX_AGENT_CATALOG_BYTES) {
     return `the catalog is ${byteCount} bytes as JSON, over the ${MAX_AGENT_CATALOG_BYTES} a hello gives it`;
+  }
+  return null;
+}
+
+/**
+ * Why a hello's `agents` list cannot ride, or null when it can: the schema a controller decodes it
+ * with, the tier levels this host may send, and the byte budget the catalog has, for the whole list.
+ * A host runs this before it puts the list in its configuration, beside `hostAgentProblem`.
+ */
+export function hostAgentsProblem(agents: readonly HostAgentEntry[]): string | null {
+  const shape = hostAgentsSchema.safeParse(agents);
+  if (!shape.success) return shape.error.issues.map(describeIssue).join('; ');
+  const undeclared = undeclaredEntryLevel(agents);
+  if (undeclared !== null)
+    return `${undeclared.member} "${undeclared.value}" is not a level this host declares`;
+  const byteCount = utf8ByteLength(JSON.stringify(agents));
+  if (byteCount > MAX_AGENT_CATALOG_BYTES) {
+    return `the runtimes list is ${byteCount} bytes as JSON, over the ${MAX_AGENT_CATALOG_BYTES} a hello gives it`;
   }
   return null;
 }
@@ -894,6 +974,45 @@ function undeclaredFactWord(frame: Frame): UndeclaredWord | null {
     default:
       return null;
   }
+}
+
+/**
+ * The first control-tier level on an outgoing frame that this host does not declare, else null: on a
+ * transition's `controlTier`, and on each `agents` entry of a hello or a configure answer.
+ */
+function undeclaredTierLevel(frame: Frame): UndeclaredWord | null {
+  if (frame.frame === 'control') {
+    return frame.payload.kind === 'link_hello'
+      ? undeclaredEntryLevel(frame.payload.configuration.agents)
+      : null;
+  }
+  const payload = frame.payload;
+  if (payload.kind === 'host_configure_result') return undeclaredEntryLevel(payload.configuration.agents);
+  if (payload.kind !== 'session_update') return null;
+  const body = payload.body as Record<string, unknown>;
+  if (body['update'] !== 'state_transition') return null;
+  const transition = body['transition'];
+  if (typeof transition !== 'object' || transition === null) return null;
+  const tier = (transition as { controlTier?: unknown }).controlTier;
+  if (typeof tier !== 'object' || tier === null) return null;
+  return wordOutside(
+    'transition.controlTier.level',
+    (tier as { level?: unknown }).level,
+    CONTROL_TIER_LEVELS,
+  );
+}
+
+/** The first undeclared tier level among a configuration's runtime entries, else null. */
+function undeclaredEntryLevel(agents: readonly HostAgentEntry[] | null | undefined): UndeclaredWord | null {
+  if (!Array.isArray(agents)) return null;
+  for (const [index, entry] of (agents as readonly unknown[]).entries()) {
+    const tier = (entry as { controlTier?: unknown } | null)?.controlTier;
+    if (typeof tier !== 'object' || tier === null) continue;
+    const level = (tier as { level?: unknown }).level;
+    const undeclared = wordOutside(`agents.${index}.controlTier.level`, level, CONTROL_TIER_LEVELS);
+    if (undeclared !== null) return undeclared;
+  }
+  return null;
 }
 
 /** The undeclared cost basis on one spend figure or any of its rows, else null. */

@@ -63,6 +63,7 @@ const EVERY_KEY = sessionNewRequest({
   systemPrompt: 'be brief',
   effort: 'high',
   permissionMode: 'bypassPermissions',
+  runtime: 'claude',
 });
 
 test('every declared wire key is one this narrowing knows how to carry', () => {
@@ -242,6 +243,37 @@ test('regression: a permission mode the SDK does not declare is refused, never d
   assert.equal(read.ok, false);
   assert.equal(read.ok ? '' : read.refusal.reason, 'frame-malformed');
   assert.match(read.ok ? '' : read.refusal.detail, /yolo/);
+});
+
+// ---------------------------------------------------------------------------
+// protocol 15: the runtime a session runs on.
+// ---------------------------------------------------------------------------
+
+test('a runtime this host cannot spawn is refused runtime-unavailable, naming it, before any other member is read', () => {
+  // The env lane here would refuse on its own (nothing is declared); the runtime is refused first.
+  const read = readSessionRequest(
+    sessionNewRequest({
+      runtime: 'example-runtime',
+      env: { extraAllowedKeys: ['NAS_X'], extraDeniedKeys: null, extraEnv: null },
+    }),
+  );
+  assert.equal(read.ok, false);
+  assert.equal(read.ok ? '' : read.refusal.reason, 'runtime-unavailable');
+  assert.match(read.ok ? '' : read.refusal.detail, /"example-runtime"/);
+  assert.match(read.ok ? '' : read.refusal.detail, /claude/);
+});
+
+test('null, absent and claude open as before: claude composes as the named runtime, null and absent compose nothing', () => {
+  const named = readSessionRequest(sessionNewRequest({ runtime: 'claude' }));
+  assert.equal(named.ok, true);
+  assert.deepEqual(named.ok ? named.value : null, { runtime: 'claude' });
+
+  const stated = readSessionRequest(sessionNewRequest({ runtime: null }));
+  assert.deepEqual(stated.ok ? stated.value : null, {}, 'a null runtime composes nothing');
+
+  const absent = readSessionRequest(sessionNewRequest());
+  assert.equal('runtime' in (absent.ok ? absent.value : {}), false, 'an absent runtime composes nothing');
+  assert.equal('runtime' in sessionNewRequest(), false, 'the builder leaves an unasked runtime out');
 });
 
 test('readSessionConfigure narrows the live change: asked members only, unknown values refused by name', () => {

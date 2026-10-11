@@ -16,7 +16,7 @@
  */
 import type { Refusal } from '../core/refusal.js';
 import { isRefusalReason } from '../core/refusal.js';
-import type { SessionTransition } from '../state/model.js';
+import type { ControlTier, SessionTransition } from '../state/model.js';
 
 /**
  * Bumped when a change is not backward-compatible. Exchanged in the hello handshake.
@@ -47,9 +47,13 @@ export const PROTOCOL_VERSION = 15;
  *
  * Version 15 adds the `agent_facts` update body (the facts a controller acts on, lifted out of the
  * agent's own messages into typed members), the `agent_fragment` delta body, and `runtime` on
- * `agent_message`. Each is a new body or an optional member, so a version-14 controller is still
- * spoken to: it reads the new bodies as open JSON it may ignore, and every frame it sends decodes
- * here unchanged. The narrowing of `session_new.request.env` that version 14 made (a key a
+ * `agent_message`. It also adds `agents` to the hello's configuration (each runtime this host can
+ * spawn, with its vocabularies and control tier), `runtime` on `session_new.request`, `controlTier`
+ * on a session's first transition into `ready`, `toolKind` and `runtime` on the decision request, and
+ * five refusal reasons for the runtime and endpoint a session names. Each is a new body, an optional
+ * member or a reason this host raises only for a member a version-14 controller never sends, so a
+ * version-14 controller is still spoken to: it reads the new bodies and members as open JSON it may
+ * ignore, and every frame it sends decodes here unchanged. The narrowing of `session_new.request.env` that version 14 made (a key a
  * controller places in the spawn environment must be one this host's operator declared, above the
  * floor) holds at every version this host negotiates.
  */
@@ -334,7 +338,10 @@ export function agentMessageDelta(
 // gets it as a vocabulary.
 // ---------------------------------------------------------------------------
 
-/** The runtime an `agent_message` with no `runtime` came from. */
+/**
+ * The runtime an `agent_message` with no `runtime` came from, and the one a `session_new` with no
+ * `runtime` runs on: the one runtime this host spawns.
+ */
 export const DEFAULT_RUNTIME = 'claude';
 
 /**
@@ -827,6 +834,12 @@ export interface SessionNewRequest {
    * string, a list of strings, or a preset object.
    */
   readonly systemPrompt: JsonValue | null;
+  /**
+   * The runtime the session runs on, by name (protocol 15). Null or absent is this host's default,
+   * `claude` (`DEFAULT_RUNTIME`). A runtime this host cannot spawn is refused `runtime-unavailable`
+   * before anything is reserved; the hello's `agents` lists the runtimes it can.
+   */
+  readonly runtime?: string | null;
 }
 
 /**
@@ -880,6 +893,9 @@ export function sessionNewRequest(asked: Partial<SessionNewRequest> = {}): Sessi
     systemPrompt: asked.systemPrompt ?? null,
     effort: asked.effort ?? null,
     permissionMode: asked.permissionMode ?? null,
+    // Added inside the window, so it is stated only when asked: an unstated runtime is omitted and
+    // reads as the host's default.
+    ...(asked.runtime === undefined ? {} : { runtime: asked.runtime }),
   };
 }
 
@@ -910,6 +926,7 @@ export const SESSION_NEW_REQUEST_KEYS = {
   systemPrompt: true,
   effort: true,
   permissionMode: true,
+  runtime: true,
 } as const satisfies Record<keyof SessionNewRequest, true>;
 
 /** The same, for the payload itself. Same argument, one level up. */
@@ -1945,13 +1962,45 @@ export interface HostAgent {
   readonly models: readonly HostModel[];
 }
 
+/** The most runtimes a hello lists: a list, not a catalogue. */
+export const MAX_AGENT_ENTRIES = 8;
+
+/**
+ * The words a runtime takes for its session controls: the permission modes and effort levels a
+ * `session_new` or `session_configure` may name for it, and whether it takes a thinking control.
+ */
+export interface HostAgentVocabularies {
+  readonly permissionModes: readonly string[];
+  readonly efforts: readonly string[];
+  readonly thinking: boolean;
+}
+
+/**
+ * One runtime this host can spawn sessions on, as the hello states it (protocol 15).
+ *
+ * `version` is the runtime's own version and `sdkVersion` the version of the library this host
+ * drives it through, null when there is none. `available: false` names a configured runtime that
+ * cannot run now, with `unavailableReason` saying why; a `session_new` naming it is refused
+ * `runtime-unavailable`. `controlTier` is the tier a session on it starts at.
+ */
+export interface HostAgentEntry {
+  readonly runtime: string;
+  readonly version: string;
+  readonly sdkVersion: string | null;
+  readonly models: readonly HostModel[];
+  readonly vocabularies: HostAgentVocabularies;
+  readonly controlTier: ControlTier;
+  readonly available: boolean;
+  readonly unavailableReason: string | null;
+}
+
 /**
  * How this host is configured, as values: the read half of `periscope config`.
  *
  * The `workspace:*` capability markers say which mode a host is in; these say what it is pointed
- * at. Every member but `agent` is `T | null` (absent is null, never undefined), and null means the
- * setting is not set on the host, not that the host declined to say. `agent` was added inside the
- * protocol window and is optional (see this file's header). `controllerUrl` is what the host
+ * at. Every member but `agent` and `agents` is `T | null` (absent is null, never undefined), and null
+ * means the setting is not set on the host, not that the host declined to say. `agent` and `agents`
+ * were added inside the protocol window and are optional (see this file's header). `controllerUrl` is what the host
  * dialled to deliver this frame, reported so a controller can show it beside the rest; nothing here
  * is an ask, so nothing here can be refused.
  */
@@ -1981,6 +2030,12 @@ export interface HostConfiguration {
    * release behind. Never settable.
    */
   readonly agent?: HostAgent | null;
+  /**
+   * The runtimes this host can spawn sessions on, one entry each (protocol 15), at most
+   * `MAX_AGENT_ENTRIES`. The Claude entry carries what `agent` carries, and the two come from the
+   * same read: null when `agent` is null, absent when it is absent. Never settable.
+   */
+  readonly agents?: readonly HostAgentEntry[] | null;
 }
 
 /** A `HostConfiguration` with nothing set: what a host composed without one reports. */

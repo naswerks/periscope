@@ -5,6 +5,8 @@ export type {
   CauseEvent,
   CauseKind,
   ControlEventName,
+  ControlTier,
+  ControlTierLevel,
   EntryLane,
   HookEventName,
   MessageEventName,
@@ -22,6 +24,7 @@ export {
   ACTIVITY_KINDS,
   CAUSE_KINDS,
   CONTROL_EVENTS,
+  CONTROL_TIER_LEVELS,
   HOOK_EVENTS,
   HOST_ACTIVITY_KINDS,
   MESSAGE_EVENTS,
@@ -48,7 +51,7 @@ export { SessionStateMachine } from './machine.js';
 export type { TransitionStoreOptions } from './store.js';
 export { TransitionStore } from './store.js';
 
-export type { CompactionListener, CompactionReport } from './observer.js';
+export type { CompactionListener, CompactionReport, SessionObserverOptions } from './observer.js';
 export { SessionObserver } from './observer.js';
 
 export { SessionStateReporter } from './reporter.js';

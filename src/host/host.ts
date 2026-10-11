@@ -39,7 +39,7 @@ import type { BackoffOptions } from '../control/backoff.js';
 import type { LinkHandlers } from '../control/link.js';
 import { ControllerLink } from '../control/link.js';
 import type { LinkTransition } from '../control/link-state.js';
-import { hostAgentProblem } from '../control/codec.js';
+import { hostAgentProblem, hostAgentsProblem } from '../control/codec.js';
 import type {
   HostAgent,
   HostConfiguration,
@@ -96,6 +96,7 @@ import type { McpServerOptions } from '../mcp/server.js';
 import type { SessionRequest } from '../sessions/registry.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { factLiftFor } from '../sessions/fact-lift.js';
+import { controlTierFor, runtimeOf } from '../sessions/runtimes.js';
 import type { HostedSession, SessionDegrade, Unsubscribe } from '../sessions/session.js';
 import { SessionStateMachine } from '../state/machine.js';
 import type { SessionTransition, TransitionWhere } from '../state/model.js';
@@ -114,7 +115,8 @@ import { listRepositoryDirectory, readRepositoryFile, readWorkspaceFile } from '
 import { homeDirectory, nodePathResolver } from './paths.js';
 import { isBypassMode, mergeMcpServers, readSessionConfigure, readSessionRequest } from './wire-request.js';
 import { mergePlugins, pluginDirsProblem } from './plugin-dirs.js';
-import { DEFAULT_RUNTIME, isDroppable } from '../control/frames.js';
+import { isDroppable } from '../control/frames.js';
+import { hostAgentEntries } from './claude-runtime.js';
 
 // ---------------------------------------------------------------------------
 // The per-session assembly.
@@ -267,7 +269,10 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     ticker,
     correlationId: options.correlationId ?? null,
   });
-  const observer = new SessionObserver(machine);
+  // The session's runtime picks what is attached to it: the tier its first `ready` states, the
+  // runtime its decision requests name, and the lift its facts come from.
+  const runtime = runtimeOf(options.request);
+  const observer = new SessionObserver(machine, { controlTier: controlTierFor(runtime) });
 
   // The gate records every outcome on the machine. That emission is what makes a deny, an outage and
   // an expiry visible off-box at all, so it is unconditional and the embedder's listener is extra.
@@ -276,6 +281,7 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     // The escalation body carries the controller's handle. This function is the one place that
     // holds both the handle and the gate, so it is where the two transports are tied together.
     sessionKey: options.sessionKey,
+    runtime,
     onOutcome: (outcome) => {
       recordGateOutcome(machine, outcome);
       options.onOutcome?.(outcome);
@@ -318,7 +324,7 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   // Before the first record. See this file's header: the forwarder subscribes to the machine, so
   // anything recorded ahead of this line is emitted to nobody. The lift is the session's runtime's,
   // so the facts it carries ride beside its messages.
-  const lift = factLiftFor(DEFAULT_RUNTIME);
+  const lift = factLiftFor(runtime);
   const detach = forwardSession({
     sessionKey: options.sessionKey,
     session,
@@ -730,7 +736,7 @@ export class PeriscopeHost {
    * The agent's catalog as the last read left it: undefined until a read settles (for good, on a
    * host composed without `agentCatalog`), null when the read gave nothing the hello can carry. Kept
    * apart from `#configuration` because a reconfigure rebuilds that from the file, which has no
-   * catalog in it.
+   * catalog in it. The hello's runtimes list is built from it each time, so the two never disagree.
    */
   #agent: HostAgent | null | undefined;
   /** The start whose catalog read is in flight; `stop()` clears it, so that read starts nothing. */
@@ -1888,18 +1894,28 @@ export class PeriscopeHost {
   /**
    * Put a catalog read's outcome into the configuration and the next hello, and report it. A catalog
    * the codec would refuse, or one past `MAX_AGENT_CATALOG_BYTES`, rides as null: a hello the link
-   * cannot encode is never sent at all, which would cost the controller the whole configuration.
+   * cannot encode is never sent at all, which would cost the controller the whole configuration. The
+   * runtimes list is built from the same catalog and held to the same checks, so one answer covers
+   * both: a list that cannot ride takes the catalog with it.
    */
   #stampAgent(catalog: AgentCatalog): void {
-    const problem = catalog.ok ? hostAgentProblem(catalog.agent) : catalog.detail;
+    const problem = catalog.ok
+      ? (hostAgentProblem(catalog.agent) ?? hostAgentsProblem(hostAgentEntries(catalog.agent)))
+      : catalog.detail;
     this.#agent = catalog.ok && problem === null ? catalog.agent : null;
     this.#configuration = this.#withAgent(this.#configuration);
     this.#link.announce?.(this.#linkCapabilities, this.#configuration, this.#pendingRestart);
     this.#report({ kind: 'agent-catalog', agent: this.#agent, detail: problem });
   }
 
+  /** The configuration with the catalog and the runtimes list it yields, both from `#agent`. */
   #withAgent(configuration: HostConfiguration): HostConfiguration {
-    return this.#agent === undefined ? configuration : { ...configuration, agent: this.#agent };
+    if (this.#agent === undefined) return configuration;
+    return {
+      ...configuration,
+      agent: this.#agent,
+      agents: this.#agent === null ? null : hostAgentEntries(this.#agent),
+    };
   }
 
   async #deliver(

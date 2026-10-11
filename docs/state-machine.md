@@ -51,8 +51,13 @@ two are not symmetric.
 ```
 { sessionId, seq, at, from, to, activity,
   cause: { kind, event, detail },        // kind: hook | sdk-message | control | timeout | process | refusal
-  where: { worktree, branch, cwd } }
+  where: { worktree, branch, cwd },
+  controlTier? }                         // the first transition into ready only
 ```
+
+- `controlTier` (`{ level, degrades }`) is stated on the session's first transition into `ready` and
+  on no other, never carried forward: the tier the session's runtime starts at, from the same
+  lookup the hello's runtimes list reads ([protocol.md](protocol.md), the control tier).
 
 - `cause` is compile-closed and required. `CauseEvent` is the union of the hook events, the message
   discriminators, `CONTROL_EVENTS`, `PROCESS_EVENTS`, `TIMEOUT_EVENTS` and `RefusalReason`; a

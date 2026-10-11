@@ -33,6 +33,7 @@ import assert from 'node:assert/strict';
 
 import { decode, encode } from '../control/codec.js';
 import {
+  MAX_AGENT_ENTRIES,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_MIN,
@@ -77,6 +78,7 @@ import type {
   ControlPayloadKind,
   Frame,
   HostAgent,
+  HostAgentEntry,
   SessionHandleFact,
   SessionPayload,
   SessionPayloadKind,
@@ -84,6 +86,7 @@ import type {
   TurnRecordFact,
   UsageSampleFact,
 } from '../control/frames.js';
+import type { RefusalReason } from '../core/refusal.js';
 import type { SessionTransition } from '../state/model.js';
 
 /** From dist/pins/ up to the package root, then into the corpus. */
@@ -205,6 +208,18 @@ const TRANSITION_OPEN_REFUSED: SessionTransition = {
   correlationId: 'session-1',
 };
 
+/** The ready transition, stating the session's control tier as its first `ready` does. */
+const TRANSITION_READY_WITH_TIER: SessionTransition = {
+  ...TRANSITION_READY,
+  controlTier: { level: 'intercepted', degrades: [] },
+};
+
+/** An open refused before any process existed, for one of the runtime and endpoint reasons. */
+const openRefused = (event: RefusalReason, detail: string): SessionTransition => ({
+  ...TRANSITION_OPEN_REFUSED,
+  cause: { kind: 'refusal', event, detail },
+});
+
 const REFUSAL = { reason: 'bulk-delivery-failed', detail: 'the controller answered 503' };
 
 /** A catalog with every member stated on one model and every nullable member null on the other. */
@@ -233,6 +248,34 @@ const AGENT: HostAgent = {
       supportsAdaptiveThinking: null,
     },
   ],
+};
+
+/** Claude's entry in the hello's runtimes list, over the catalog above. */
+const CLAUDE_ENTRY: HostAgentEntry = {
+  runtime: 'claude',
+  version: AGENT.claudeCodeVersion,
+  sdkVersion: AGENT.sdkVersion,
+  models: AGENT.models,
+  vocabularies: {
+    permissionModes: ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    thinking: true,
+  },
+  controlTier: { level: 'intercepted', degrades: [] },
+  available: true,
+  unavailableReason: null,
+};
+
+/** A configured runtime that cannot run now: every nullable member null, the reason stated. */
+const UNAVAILABLE_ENTRY: HostAgentEntry = {
+  runtime: 'example-runtime',
+  version: '1.0.0',
+  sdkVersion: null,
+  models: [],
+  vocabularies: { permissionModes: [], efforts: [], thinking: false },
+  controlTier: { level: 'intercepted-with-residual', degrades: ['example-degrade'] },
+  available: false,
+  unavailableReason: 'the binary is not on the path',
 };
 
 // The fact layer: one fact per kind, every member stated, the nullable ones null where a second
@@ -407,6 +450,61 @@ const AUTHORED = {
       name: 'session_update.agent-facts-compaction',
       frame: session(agentFactsUpdate(FACT_COMPACTION, null, AT)),
     },
+    {
+      name: 'session_update.state-transition-control-tier',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_WITH_TIER)),
+    },
+    // The open refusals for a session's runtime and endpoint. Each is the shape a controller reads; a
+    // vector is not a raise.
+    {
+      name: 'session_update.open-refused-runtime-unavailable',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'runtime-unavailable',
+            'runtime is "example-runtime"; this host spawns sessions on claude only, the one runtime its hello lists in agents',
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.open-refused-request-key-unsupported',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'request-key-unsupported',
+            'the named runtime does not honour the request key systemPrompt',
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.open-refused-endpoint-unknown',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused('endpoint-unknown', 'endpoint "example-endpoint" is not one this host declares'),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.open-refused-endpoint-incompatible',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused('endpoint-incompatible', 'endpoint "example-endpoint" does not carry runtime claude'),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.open-refused-model-endpoint-mismatch',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'model-endpoint-mismatch',
+            'model claude-example named for endpoint "example-endpoint", which is not marked as Anthropic\'s own route',
+          ),
+        ),
+      ),
+    },
   ],
   session_delta: [
     {
@@ -452,6 +550,10 @@ const AUTHORED = {
       ),
     },
     { name: 'session_new.minimal', frame: session(sessionNew(null)) },
+    {
+      name: 'session_new.runtime',
+      frame: session(sessionNew('/work/repo', { request: sessionNewRequest({ runtime: 'claude' }) })),
+    },
     {
       name: 'session_new.request-all-null',
       frame: session(
@@ -742,6 +844,16 @@ const AUTHORED = {
       ),
     },
     {
+      name: 'host_configure_result.agents',
+      frame: session(
+        hostConfigureResult(
+          'request-6',
+          { ...unsetHostConfiguration(), agent: AGENT, agents: [CLAUDE_ENTRY] },
+          [],
+        ),
+      ),
+    },
+    {
       name: 'host_configure_result.refused',
       frame: session(
         hostConfigureResult('request-6', unsetHostConfiguration(), [], {
@@ -899,6 +1011,36 @@ const AUTHORED = {
           agent: AGENT,
         },
         pendingRestart: ['PERISCOPE_DECISION_URL'],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    {
+      name: 'link_hello.agents',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: {
+          ...unsetHostConfiguration(),
+          agent: AGENT,
+          agents: [CLAUDE_ENTRY, UNAVAILABLE_ENTRY],
+        },
+        pendingRestart: [],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    {
+      name: 'link_hello.agents-unread',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: { ...unsetHostConfiguration(), agent: null, agents: null },
+        pendingRestart: [],
         protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
       }),
     },
@@ -1099,6 +1241,38 @@ const AUTHORED_MALFORMED: readonly AuthoredMalformed[] = [
     reason: 'frame-malformed',
   },
   {
+    name: 'refused.encode.undeclared-tier-level',
+    frame: session(
+      stateTransitionUpdate({
+        ...TRANSITION_READY,
+        controlTier: { level: 'a-level-this-host-does-not-declare' as 'none', degrades: [] },
+      }),
+    ),
+    reason: 'frame-malformed',
+  },
+  {
+    name: 'refused.encode.undeclared-agent-tier-level',
+    frame: control({
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: {
+        ...unsetHostConfiguration(),
+        agents: [
+          {
+            ...CLAUDE_ENTRY,
+            controlTier: { level: 'a-level-this-host-does-not-declare' as 'none', degrades: [] },
+          },
+        ],
+      },
+      pendingRestart: [],
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    }),
+    reason: 'frame-malformed',
+  },
+  {
     name: 'refused.encode.undeclared-configure-refusal',
     frame: {
       frame: 'session',
@@ -1188,6 +1362,57 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
     wire: sessionWire({
       kind: 'session_update',
       body: { update: 'agent_facts', sourceId: 'message-uuid-1' },
+    }),
+    expect: refused('frame-malformed'),
+  },
+  // The well-formed twin is `session_update.state-transition-control-tier`; only `degrades` differs.
+  {
+    name: 'refused.malformed-control-tier',
+    wire: sessionWire({
+      kind: 'session_update',
+      body: {
+        update: 'state_transition',
+        transition: {
+          ...TRANSITION_READY_WITH_TIER,
+          controlTier: { level: 'intercepted', degrades: 'none' },
+        },
+      },
+    }),
+    expect: refused('frame-malformed'),
+  },
+  // The well-formed twin is `link_hello.agents`; only the entry's `models` differs.
+  {
+    name: 'refused.malformed-agent-entry',
+    wire: controlWire({
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: {
+        ...unsetHostConfiguration(),
+        agent: AGENT,
+        agents: [{ ...CLAUDE_ENTRY, models: 'all' }],
+      },
+      pendingRestart: [],
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    }),
+    expect: refused('frame-malformed'),
+  },
+  {
+    name: 'refused.agents-past-bound',
+    wire: controlWire({
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: {
+        ...unsetHostConfiguration(),
+        agents: Array.from({ length: MAX_AGENT_ENTRIES + 1 }, () => UNAVAILABLE_ENTRY),
+      },
+      pendingRestart: [],
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
     }),
     expect: refused('frame-malformed'),
   },
@@ -1303,6 +1528,36 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
   asParsed(
     'session_update.agent-facts-members-unstated',
     sessionWire({ kind: 'session_update', body: { update: 'agent_facts', fact: { kind: 'usage_sample' } } }),
+  ),
+  // Tolerances: a control-tier level a newer peer adds, on a transition and on a runtime entry.
+  asParsed(
+    'session_update.state-transition-unknown-tier-level',
+    sessionWire({
+      kind: 'session_update',
+      body: {
+        update: 'state_transition',
+        transition: {
+          ...TRANSITION_READY,
+          controlTier: { level: 'a-level-from-a-newer-peer', degrades: [] },
+        },
+      },
+    }),
+  ),
+  asParsed(
+    'link_hello.agents-unknown-tier-level',
+    controlWire({
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: {
+        ...unsetHostConfiguration(),
+        agents: [{ ...CLAUDE_ENTRY, controlTier: { level: 'a-level-from-a-newer-peer', degrades: [] } }],
+      },
+      pendingRestart: [],
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    }),
   ),
   asParsed(
     'session_update.protocol-11-without-observed-at',

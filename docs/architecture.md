@@ -75,6 +75,8 @@ everything as arguments, so it is checkable without a socket or a process, and r
     the SDK's initialize request, and closes the agent on every path.
   - A failed read, or a catalog past the hello's bounds, rides as `agent: null`, reported as an
     `agent-catalog` event. It never fails a start.
+  - The hello's runtimes list, `agents`, is built from the same read, so it is null when `agent` is
+    null; a list past its own bounds takes the catalog with it.
   - A `stop()` before the read settles means the link never dials.
   - Every configure answer and later hello keep the catalog, though the file they are rebuilt from
     has none.

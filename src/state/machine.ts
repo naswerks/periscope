@@ -29,6 +29,7 @@ import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import type {
   AgedEntry,
+  ControlTier,
   OpenEntry,
   SessionActivity,
   SessionSnapshot,
@@ -70,6 +71,12 @@ export interface TransitionRequest {
   readonly where?: TransitionWhere | null;
   /** Overrides the clock. For a caller that already stamped the originating event. */
   readonly at?: string | null;
+  /**
+   * The session's control tier, stated on this transition alone. Supplied once, on the transition
+   * into `ready` when the agent reports itself; never carried forward, so every other transition
+   * leaves the member out.
+   */
+  readonly controlTier?: ControlTier | null;
 }
 
 export interface RejectedTransition {
@@ -225,6 +232,7 @@ export class SessionStateMachine {
       cause: request.cause,
       where: carried.where,
       correlationId: this.#correlationId,
+      ...carried.stated,
     };
     this.#current = transition;
 
@@ -242,7 +250,8 @@ export class SessionStateMachine {
 }
 
 /**
- * The four values a transition inherits from the one before it, resolved in one place.
+ * The four values a transition inherits from the one before it, and the members only its own request
+ * states, resolved in one place.
  *
  * They are lifted out of `#commit` deliberately. Each is a defaulting expression — "use what was
  * given, else what the last transition carried" — and a defaulting expression is still a branch in
@@ -260,6 +269,7 @@ function carryForward(
   sessionId: string | null;
   where: TransitionWhere;
   entry: EntryOp | null;
+  stated: { readonly controlTier?: ControlTier | null };
 } {
   return {
     at: request.at ?? clock(),
@@ -267,6 +277,8 @@ function carryForward(
     sessionId: request.sessionId ?? current?.sessionId ?? null,
     where: request.where ?? current?.where ?? initialWhere,
     entry: request.entry ?? null,
+    // Not inherited: a member the request does not state is left out of the record, not nulled.
+    stated: request.controlTier === undefined ? {} : { controlTier: request.controlTier },
   };
 }
 

@@ -9,8 +9,9 @@ removed export. The package version and the wire protocol version are separate n
 ## [Unreleased]
 
 Protocol 15; the window is `[14, 15]`, so a version-14 controller is still spoken to. Version 15
-adds bodies and an optional member, no payload kind: a version-14 controller reads the new bodies as
-open JSON it may ignore, and every frame it sends decodes unchanged.
+adds bodies, optional members and refusal reasons, no payload kind: a version-14 controller reads the
+new bodies as open JSON it may ignore, carries the new members unread, and never sends the member
+the new reasons answer; every frame it sends decodes unchanged.
 
 - Added: the fact layer. A `session_update` may carry an `agent_facts` body: one fact the agent
   reported, typed, right behind the message it came from. Six kinds: `session_handle` (the resumable
@@ -38,6 +39,29 @@ open JSON it may ignore, and every frame it sends decodes unchanged.
   On the main entry: `FactLift`, `FACT_LIFTS` and `factLiftFor` (the fact lift per runtime),
   `ForwardSessionOptions.lift`, which `composeSession` fills with Claude's, and
   `SessionObserver.onCompaction` with `CompactionReport`.
+- Added: `agents` on the hello's configuration and the configure answer, optional: one
+  `HostAgentEntry` per runtime the host can spawn (its versions, models, the permission modes and
+  effort levels it takes, whether it takes a thinking control, its control tier, and whether it is
+  available), at most `MAX_AGENT_ENTRIES`. This host lists Claude, from the same read as `agent`; the
+  two are null together.
+- Added: `runtime` on `session_new.request`, optional. Null, absent and `claude` open as before; any
+  other runtime is refused `runtime-unavailable` before anything is reserved. A composed session's
+  runtime picks its fact lift, its control tier and the runtime its decision requests name
+  (`SessionRequest.runtime`, read through `runtimeOf`).
+- Added: the control tier. A session's first transition into `ready` carries
+  `controlTier: { level, degrades }`, and each runtime entry carries the same; a Claude session is
+  `intercepted` with no degrades. Levels are `CONTROL_TIER_LEVELS`; an undeclared level is refused on
+  the way out and read on the way in.
+- Added: `toolKind` and `runtime` on the decision request, optional, beside the unchanged
+  `toolName`. Claude's tool names map to `shell`, `file_read`, `file_write`, `file_edit`, `mcp` or
+  `web`, and any other name to `other` (`TOOL_KINDS`).
+- Added refusal reasons: `runtime-unavailable`, `request-key-unsupported`, `endpoint-unknown`,
+  `endpoint-incompatible` and `model-endpoint-mismatch`. This host raises the first; a session on
+  Claude never meets the second, and no endpoint is declared for the other three to answer.
+- Added exports: `ControlTier`, `ControlTierLevel`, `CONTROL_TIER_LEVELS`, `HostAgentEntry`,
+  `HostAgentVocabularies`, `MAX_AGENT_ENTRIES`, `ToolKind` and `TOOL_KINDS`. On the main entry:
+  `CONTROL_TIERS`, `controlTierFor`, `runtimeOf`, `SessionObserverOptions` (the observer's tier),
+  `TransitionRequest.controlTier`, `SessionRequest.runtime` and `PermissionGateOptions.runtime`.
 - Changed: `agentMessageUpdate` and `agentMessageDelta` take an optional `runtime`.
 - Changed: the codec checks the members the new bodies declare, and only those. A count in a fact
   (tokens, a context window, turns, a duration) must be a non-negative whole number, or the frame is

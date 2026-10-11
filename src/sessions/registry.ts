@@ -151,6 +151,12 @@ export interface SessionRequest {
   readonly effort?: EffortLevel;
   /** The permission mode. Defaults to the SDK's own. See `CLI_PARITY_OPTION_KEYS`. */
   readonly permissionMode?: PermissionMode;
+  /**
+   * The runtime the session runs on, by name. Absent is `DEFAULT_RUNTIME`; read it with `runtimeOf`.
+   * It picks what the composer attaches to the session (its fact lift, its control tier, the runtime
+   * its decision requests name) and never reaches the agent process.
+   */
+  readonly runtime?: string;
 }
 
 /** How many sessions one host holds at once, live and opening together, unless told otherwise. */

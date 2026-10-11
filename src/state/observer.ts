@@ -16,7 +16,13 @@
  */
 import type { HookInput, SDKMessage } from '../host/agent-process.js';
 import type { Result } from '../core/result.js';
-import type { MessageEventName, SessionTransition, TransitionCause, TransitionWhere } from './model.js';
+import type {
+  ControlTier,
+  MessageEventName,
+  SessionTransition,
+  TransitionCause,
+  TransitionWhere,
+} from './model.js';
 import type { EntryOp, SessionStateMachine, TransitionRequest } from './machine.js';
 
 /**
@@ -54,6 +60,15 @@ export type CompactionListener = (report: CompactionReport) => void;
 /** What one compaction source states about the compaction, before it is known whether it moved it. */
 type CompactionFigures = Omit<CompactionReport, 'status'>;
 
+/** What an observer is told about its session at construction. */
+export interface SessionObserverOptions {
+  /**
+   * The control tier the session starts at, stated on its first transition into `ready`. The
+   * composer resolves it from the session's runtime; absent, the transition states none.
+   */
+  readonly controlTier?: ControlTier | null;
+}
+
 /**
  * Translates one session's SDK events into transitions on its machine.
  *
@@ -68,9 +83,11 @@ export class SessionObserver {
   /** Whether the agent has reported itself; only its first init message says the session is ready. */
   #reported = false;
   readonly #compactionListeners = new Set<CompactionListener>();
+  readonly #controlTier: ControlTier | null;
 
-  constructor(machine: SessionStateMachine) {
+  constructor(machine: SessionStateMachine, options: SessionObserverOptions = {}) {
     this.#machine = machine;
+    this.#controlTier = options.controlTier ?? null;
   }
 
   get machine(): SessionStateMachine {
@@ -179,6 +196,8 @@ export class SessionObserver {
             'system/init',
             `the agent reported itself: ${message.model} on CLI ${message.claude_code_version}`,
           ),
+          // The session's tier is stated once, here, where the session first says what it is.
+          ...(this.#controlTier === null ? {} : { controlTier: this.#controlTier }),
         },
       ];
     }
