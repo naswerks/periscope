@@ -1,0 +1,28 @@
+{
+  "expect": {
+    "encode": "refused",
+    "reason": "frame-malformed"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_update",
+      "body": {
+        "update": "agent_facts",
+        "fact": {
+          "kind": "a-kind-this-host-does-not-declare",
+          "runtime": "claude",
+          "handle": "agent-session-1"
+        },
+        "sourceId": "message-uuid-1",
+        "observedAt": "2000-01-01T00:00:00.000Z"
+      }
+    }
+  },
+  "name": "refused.encode.undeclared-fact-kind",
+  "protocolVersion": 15,
+  "wire": null
+}

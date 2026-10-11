@@ -48,6 +48,7 @@ export { SessionStateMachine } from './machine.js';
 export type { TransitionStoreOptions } from './store.js';
 export { TransitionStore } from './store.js';
 
+export type { CompactionListener, CompactionReport } from './observer.js';
 export { SessionObserver } from './observer.js';
 
 export { SessionStateReporter } from './reporter.js';

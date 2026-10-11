@@ -74,6 +74,9 @@ const MODE_MODULES = [
   'control/codec.ts',
   'control/frames.ts',
   'host/agent-process.ts',
+  // The Claude fact lift reports the mode the agent stated on its init inside the receipt it puts on
+  // the wire: evidence read off the agent's own message, as session.ts carries it. It sets nothing.
+  'host/claude-facts.ts',
   // composeSession reads the requested mode for the one exception to `permission-grant-shadows-settings`
   // (bypass) through `isBypassMode`; it never names a mode.
   'host/host.ts',

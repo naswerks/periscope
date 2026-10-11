@@ -1,0 +1,28 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_update",
+      "body": {
+        "update": "agent_message",
+        "message": {
+          "type": "turn.completed",
+          "usage": {
+            "input_tokens": 3
+          }
+        },
+        "observedAt": "2000-01-01T00:00:00.000Z",
+        "runtime": "example-runtime"
+      }
+    }
+  },
+  "name": "session_update.agent-message-with-runtime",
+  "protocolVersion": 15,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_message\",\"message\":{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":3}},\"observedAt\":\"2000-01-01T00:00:00.000Z\",\"runtime\":\"example-runtime\"}}}"
+}

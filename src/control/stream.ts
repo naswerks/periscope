@@ -37,8 +37,14 @@
  * Which lane a message rides is not decided here. `stream-routing.ts` declares it per
  * discriminator, `satisfies Record<MessageDiscriminator, …>` against the SDK's own union. This file
  * reads the table; it holds no judgement of its own about what matters.
+ *
+ * With a fact lift, the facts a message carries ride right behind it, before what it caused: the
+ * message, then its facts on the update lane, then its fragments on the delta lane, then its
+ * transitions. A compaction's fact rides right behind the transition that recorded it. Without one,
+ * the wire carries exactly the messages and the transitions.
  */
 import type { SDKMessage } from '../host/agent-process.js';
+import type { FactLift } from '../sessions/fact-lift.js';
 import type { HostedSession, SessionEnded, Unsubscribe } from '../sessions/session.js';
 import type { SessionObserver } from '../state/observer.js';
 import type { SessionTransition } from '../state/model.js';
@@ -47,7 +53,13 @@ import type { Result } from '../core/result.js';
 import type { Clock } from '../core/time.js';
 import { systemClock } from '../core/time.js';
 import type { JsonObject, SessionPayload } from './frames.js';
-import { agentMessageDelta, agentMessageUpdate, stateTransitionUpdate } from './frames.js';
+import {
+  agentFactsUpdate,
+  agentFragmentDelta,
+  agentMessageDelta,
+  agentMessageUpdate,
+  stateTransitionUpdate,
+} from './frames.js';
 import { laneFor } from './stream-routing.js';
 
 /**
@@ -85,6 +97,12 @@ export interface ForwardSessionOptions {
    * replays what it missed. Defaults to the system clock.
    */
   readonly clock?: Clock;
+  /**
+   * The session's fact lift (`factLiftFor`). With one, each message is followed on the wire by the
+   * facts and fragments it carries, stamped with the message's own instant, and each compaction the
+   * observer reports by its fact. Without one, nothing but messages and transitions is forwarded.
+   */
+  readonly lift?: FactLift;
 }
 
 /**
@@ -119,11 +137,24 @@ export function forwardSession(options: ForwardSessionOptions): Unsubscribe {
     for (const result of recorded) if (!result.ok) refused(result.refusal);
   };
 
+  const lift = options.lift;
+
   const dropMessages = session.onMessage((message: SDKMessage) => {
-    // The message first, then what it caused. See this file's header.
-    forwardMessage(message, clock(), emit);
+    // The message first, then the facts it carries, then what it caused. See this file's header.
+    const observedAt = clock();
+    forwardMessage(message, observedAt, emit);
+    if (lift !== undefined) forwardFacts(lift, message, observedAt, emit);
     reportRejected(observer.observeMessage(message));
   });
+
+  // The observer reports a compaction after recording its transition, so its fact follows the record.
+  const dropCompactions =
+    lift === undefined
+      ? (): void => undefined
+      : observer.onCompaction((report) => {
+          const observedAt = clock();
+          for (const fact of lift.fromCompaction(report)) emit(agentFactsUpdate(fact, null, observedAt));
+        });
 
   const dropEnd = session.onEnd((ended: SessionEnded) => {
     reportRejected([observer.ended({ kind: 'process', event: ended.cause, detail: ended.detail })]);
@@ -133,8 +164,29 @@ export function forwardSession(options: ForwardSessionOptions): Unsubscribe {
   return () => {
     dropMessages();
     dropEnd();
+    dropCompactions();
     dropTransitions();
   };
+}
+
+/**
+ * The facts and fragments one message carries, behind it. Each fact names the message it was lifted
+ * from by the message's own `uuid`, the id that message carries on the wire, so a consumer can join
+ * the two and ingest a re-sent fact once.
+ */
+function forwardFacts(
+  lift: FactLift,
+  message: SDKMessage,
+  observedAt: string,
+  emit: (payload: SessionPayload) => void,
+): void {
+  const lifted = lift.fromMessage(message);
+  const uuid = (message as { uuid?: unknown }).uuid;
+  const sourceId = typeof uuid === 'string' && uuid !== '' ? uuid : null;
+  for (const fact of lifted.facts) emit(agentFactsUpdate(fact, sourceId, observedAt));
+  for (const fragment of lifted.fragments) {
+    emit(agentFragmentDelta(fragment.runtime, fragment.channel, fragment.text, fragment.parentId));
+  }
 }
 
 /**

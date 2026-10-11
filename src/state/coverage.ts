@@ -315,7 +315,7 @@ export const MESSAGE_COVERAGE = {
   },
   'system/background_tasks_changed': {
     handling: 'declined',
-    note: "declined on the type's own instruction. It is a level signal with replace semantics whose docs say the payload carries ids only and must not be correlated with the edge stream — so consuming it would mean rebuilding the entry set from ids, losing every entry's age and opening cause. The edges (task_started / task_updated / task_notification) are wired instead, and an edge that goes missing surfaces as an open entry with an age, which is the useful signal rather than the one a rebuild would erase.",
+    note: "declined for the machine. It is a level signal with replace semantics: every running task's id, type, description and ambient flag, which the type's docs say must not be correlated with the edge stream. Moving the machine from it would mean rebuilding the entry set from the level, losing every entry's age and opening cause, so the edges (task_started / task_updated / task_notification) are wired instead, and an edge that goes missing surfaces as an open entry with an age. The fact lift reads it, and nothing here does: it is the level a `tasks` fact reports.",
   },
   'system/thinking_tokens': {
     handling: 'declined',

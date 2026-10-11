@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * Accept the current wire vectors and public API as the contracts baseline.
+ * Accept the current wire vectors, public API and replayed facts as the contracts baseline.
  *
  *   npm run contracts:update
  *
- * Builds, then runs the two contract pins with `PERISCOPE_UPDATE_CONTRACTS=1`, under which each pin
- * rewrites its files (`contracts/wire-vectors/*.json`, `contracts/public-api.txt`) before checking
- * them. The pins print what they changed; this script prints which files under `contracts/`
- * actually moved, and exits with the child's code so an authoring error still fails.
+ * Builds, then runs the two contract pins and the fact replay with `PERISCOPE_UPDATE_CONTRACTS=1`,
+ * under which each rewrites its files (`contracts/wire-vectors/*.json`, `contracts/public-api.txt`,
+ * `src/test-support/fixtures/*.facts.jsonl`) before checking them. They print what they changed;
+ * this script prints which of those files actually moved, and exits with the child's code so an
+ * authoring error still fails.
  *
  * Read the diff before committing it. That is the whole point of a baseline.
  */
@@ -20,7 +21,7 @@ const root = new URL('../', import.meta.url);
 const rootPath = fileURLToPath(root);
 const at = (relative) => fileURLToPath(new URL(relative, root));
 
-const TRACKED = ['contracts/public-api.txt', 'contracts/wire-vectors'];
+const TRACKED = ['contracts/public-api.txt', 'contracts/wire-vectors', 'src/test-support/fixtures'];
 
 /** `path -> sha256` for every tracked file, so a rewrite that changed nothing is reported as such. */
 function fingerprint() {
@@ -69,9 +70,17 @@ if (built !== 0) {
 }
 
 process.stdout.write('contracts: rewriting under PERISCOPE_UPDATE_CONTRACTS=1\n');
-const status = run(['--test', at('dist/pins/wire-vectors.test.js'), at('dist/pins/public-api.test.js')], {
-  PERISCOPE_UPDATE_CONTRACTS: '1',
-});
+const status = run(
+  [
+    '--test',
+    at('dist/pins/wire-vectors.test.js'),
+    at('dist/pins/public-api.test.js'),
+    at('dist/host/fact-replay.test.js'),
+  ],
+  {
+    PERISCOPE_UPDATE_CONTRACTS: '1',
+  },
+);
 
 const after = fingerprint();
 const written = [...after].filter(([path, digest]) => before.get(path) !== digest).map(([path]) => path);

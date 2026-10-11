@@ -25,3 +25,7 @@ export { SESSION_END_CAUSES, HostedSession } from './session.js';
 
 export type { SessionRegistryOptions, SessionRequest } from './registry.js';
 export { SessionRegistry } from './registry.js';
+
+// The fact lifts: one per runtime, each reading that runtime's messages into the wire's facts.
+export type { FactLift, LiftedFacts } from './fact-lift.js';
+export { FACT_LIFTS, factLiftFor } from './fact-lift.js';

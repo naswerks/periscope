@@ -88,18 +88,19 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[13, 14]`. Version 14 changes no shape: it narrows `session_new.request.env` (below), so a
-version-13 controller is still spoken to and every frame it sends still decodes. The narrowing holds
-at every version the host negotiates, 13 included. Version 13 added:
+`[14, 15]`. Version 15 adds:
 
-- `session_end` (below);
-- `workspace_read` and its answer, `workspace_read_result` (below);
-- the refusals `workspace-path-escape` and `workspace-read-failed`.
+- the `agent_facts` update body, the fact layer (below);
+- the `agent_fragment` delta body (below);
+- `runtime` on `agent_message`, optional (below).
 
-It adds no member to an existing kind. A version-12 controller sends neither ask, so it receives
-neither answer, and every frame it sends decodes here unchanged. `src/host/protocol-window.test.ts`
-holds both directions over a real link: every frame this host sends decodes with the protocol-12
-decoder v1.3.0 shipped, and a version-12 controller's `session_configure` decodes here and applies.
+It adds no payload kind and no required member to an existing body. A version-14 controller is
+still spoken to: it reads the new bodies as open JSON it may ignore, since every reader it has
+returns null for an `update` it does not know, and every frame it sends decodes here unchanged.
+Version 14 narrowed `session_new.request.env` (below), and the narrowing holds at every version the
+host negotiates. `src/host/protocol-window.test.ts` holds both directions over a real link: every
+frame this host sends, its facts and fragments included, decodes with the protocol-14 decoder v1.5.0
+shipped, and a version-14 controller's `session_configure` decodes here and applies.
 
 Two close reasons carry meaning. A close with code 1002 whose reason starts with `seq gap` is a
 replay request: the controller names the position it holds, and the host's next dial replays from
@@ -218,14 +219,21 @@ and both are pinned (`stream-replay.test.ts`).
 
 `MESSAGE_ROUTING` (`src/control/stream-routing.ts`) names the lane for every SDK message
 discriminator: delta, update or declined with a reason. `forwardSession` puts each message on its
-lane and then the transitions that message caused, message first, so a consumer never sees a state
-change referring to a message it does not have.
+lane, then the facts and fragments it carries (below), then the transitions that message caused,
+message first, so a consumer never sees a state change referring to a message it does not have, nor
+a fact whose message it does not have.
 
 `session_update.body` is an open JSON object read through typed readers: `readStateTransition`,
 `readAgentMessage`, `readWireRefusal` (`{ refusal, expected, received }`; `expected` is the seq the
-receiver will accept next on the refused party's own outbound lane). `wire_refusal` is a body
-member, not a payload kind, so a refusal rides the same fact lane it refuses. A controller carries
-unknown keys through and must not narrow the body.
+receiver will accept next on the refused party's own outbound lane), `readAgentFacts`.
+`wire_refusal` is a body member, not a payload kind, so a refusal rides the same fact lane it
+refuses. `session_delta.body` is open JSON in the same way, a `SessionDeltaBody` read through
+`readAgentMessage` and `readAgentFragment`. A controller carries unknown keys through and must not
+narrow the body. The codec checks the members the fact layer declares (below) and nothing else in a
+body.
+
+`agent_message` carries `runtime`, the runtime that emitted the message, from v15. Absent means
+`claude` (`DEFAULT_RUNTIME`): a Claude session's messages omit it, so their bodies are unchanged.
 
 A forwarded message's body, on either lane, carries `observedAt` (v12): the instant, ISO-8601 in
 UTC, this host took the message off the agent's stream. Date a message by it rather than by its
@@ -246,6 +254,96 @@ turn can be rendered as it happens; `thinking` is left at the SDK's own default,
 characters by default, 227 over 4 deltas with `summarized`, same prompt). It is opt-in because that
 prose costs tokens on the wire and puts reasoning text into transcripts and mirrors; whether a run is
 watched is not something the host can know, so it offers the knob instead of guessing a policy.
+
+## The fact layer
+
+A controller acts on a handful of facts: which session it can resume, what the agent says it is
+running with, what a turn cost, how full the context is, which tasks are running, and when the
+context was compacted. Each runtime reports them in its own message shapes. From v15 the host lifts
+them into typed members and puts each on the update lane as an `agent_facts` body,
+`{ update: 'agent_facts', fact, sourceId?, observedAt? }`, right behind the message it came from.
+The message still rides; a consumer that wants it whole still has it.
+
+| `fact.kind`      | What it states                                                                            | Claude's source                                              |
+| ---------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `session_handle` | `handle`: the runtime's own resumable id                                                  | `system/init.session_id`, when it first appears or changes   |
+| `agent_receipt`  | the version, model, approval mode, effort, skills, plugins, plugin errors and MCP servers | `system/init`, when any member differs from the last receipt |
+| `turn_record`    | `totals` and `turn`, each a `SpendFacts`, with `turnScope`, `numTurns`, `durationMs`      | each `result`                                                |
+| `usage_sample`   | `contextTokens`, `contextWindow`, `cacheTtl` and `mainThread` for one model call          | each main-thread `assistant` call, once per API message id   |
+| `tasks`          | `running`: every task running now, whole; each fact replaces the last                     | `background_tasks_changed` and the task edges, composed      |
+| `compaction`     | `status` (`started`, `ended`), `trigger`, `tokensBefore`, `tokensAfter`                   | the observer's compaction entry opening and closing          |
+
+Every fact carries `runtime`. `sourceId` is the id of the native message the fact was lifted from
+(Claude: the message's `uuid`, the same id its `agent_message` carries) and null for a fact lifted
+from a hook or the observer; ingest facts idempotently on it, so a replayed or re-sent fact lands
+once. `observedAt` is the instant the host took the source off the stream.
+
+**Reported, never derived.** Every figure is one the runtime reported, or null. Nothing is computed
+from another figure: `totals` is never summed from turns and `turn` is never differenced from
+totals. The one stated counting rule is Claude's `contextTokens`, the sum Claude Code itself counts
+a call's context by: input, cache reads and cache writes.
+
+`turn_record`:
+
+- `totals` is the runtime's running total for the session; `turn` is the figure for what
+  `turnScope` names: `turn` a whole turn, `step` one model step inside a turn. `turnScope` is null
+  exactly when `turn` is.
+- Claude's `totals` is the result's `total_cost_usd` in `USD`, with one row per `modelUsage` key.
+  Claude's `turn` is the result's own `usage`, which covers the turn's main loop and names no model:
+  the host files it under the model the latest `system/init` reported, as attribution, with no cost
+  and the basis `unreported`. With no init seen yet, `turn` and `turnScope` are null; the host never
+  invents a model key.
+- A `SpendFacts` is `{ cost, currency, costBasis, byModel }`. `currency` is an ISO 4217 code.
+  `ModelSpendFact.inputTokens` counts uncached input only, on every runtime: cache reads and cache
+  writes are counted apart.
+- `costBasis` on a row says where its cost came from: `list`, `managed`, `guessed`,
+  `provider-reported`, `catalogue-estimated`, `self-hosted` or `unreported` (`COST_BASES`). Claude's
+  `list` and `managed` are themselves, its `unknown` is `guessed`, and an absent basis is `list`, as
+  the SDK says to read it. A figure's own `costBasis` is a roll-up: the weakest row basis, `guessed`
+  over `managed` over `list`, and `list` with no rows. Every row keeps its exact basis, and a
+  controller prices rows.
+
+`usage_sample` states one main-thread model call: Claude's `contextTokens` is that call's input plus
+cache reads plus cache writes; `contextWindow` is the window the latest result reported for the
+call's model (a `modelUsage` key naming it exactly, with a bracketed selector such as `[1m]`, or
+through its canonical model), and null until a result has named one; `cacheTtl` is `1h` when the
+call wrote hour-long cache tokens, else `5m` when it wrote five-minute ones, else null. A call that
+arrives as several messages is sampled once, by its API message id.
+
+`tasks` is a level: `running` is every task running now, so each fact replaces the last. Claude's is
+composed from the level message and the task edges: the level replaces itself with its non-ambient
+entries; a non-ambient `task_started` of type `local_agent` adds an edge when its id is absent; a
+`task_notification` removes that edge and never a level entry; a `result` clears every edge; and
+`running` is the level, then the edges the level lacks, by id.
+
+`compaction` reports `started` when the observer's compaction entry opens and `ended` when it
+closes, with what the source that moved it stated: the compaction hooks state the trigger, the
+`compact_boundary` message the trigger and both token counts, the status message nothing.
+
+**Whole numbers.** `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
+`reasoningTokens`, `contextTokens`, `contextWindow`, `numTurns`, `durationMs`, `tokensBefore` and
+`tokensAfter` are non-negative integers on the wire; the codec refuses any other number there with
+`frame-malformed`. A cost is any non-negative number.
+
+**Vocabularies.** Every closed set a fact names is an exported array: `COST_BASES`, `TURN_SCOPES`,
+`RECEIPT_SOURCES`, `CACHE_TTLS`, `COMPACTION_STATUSES`, `COMPACTION_TRIGGERS`, `FRAGMENT_CHANNELS`.
+A word outside one is read on the way in, so a newer peer's added word survives, and refused on the
+way out: this host sends only the words it declares. A fact `kind` this build does not model decodes
+and reads as null through `readAgentFacts`.
+
+**Bounds.** A fact's lists hold at most `MAX_FACT_LIST_ENTRIES` entries, its free text at most
+`MAX_FACT_TEXT_LENGTH` characters and its words at most `MAX_FACT_WORD_LENGTH`; `MAX_FRAME_BYTES`
+stays the outer guard.
+
+Every member a fact declares is optional on the wire: a peer that omits one is read as not stating
+it. Only `fact` itself and its `kind` are required in an `agent_facts` body.
+
+**Fragments.** From v15 a streamed message's content also rides the delta lane as `agent_fragment`
+bodies, `{ update: 'agent_fragment', runtime, channel, text, parentId }`: one per content delta, on
+the channel `text`, `thinking` or `tool_input` (a tool's arguments as they stream, which is partial
+JSON and never prose). `parentId` names the tool call that spawned the subagent speaking, and is
+null on the main thread. The `agent_message` delta it came from still rides beside it. A fragment is
+a delta like any other: droppable, and never stored.
 
 ## Under load, and overnight
 
@@ -428,8 +526,9 @@ byte offset to start from) and `postUrl`. The locator namespace this package res
 agent CLI's own transcripts: `claude-transcript:{projectSlug}/{sessionId}`, where the prefix is
 `TRANSCRIPT_WHAT_PREFIX`, `projectSlug` is the directory name a `transcript_list_result` entry
 reports (opaque; the CLI's flattening of a path is not invertible) and `sessionId` is the entry's
-id. A locator outside the namespace is refused `bulk-target-invalid`. An embedder may add
-resolvers for other namespaces.
+id. It is the `claude` instance of the namespace `{runtime}-transcript:{...}`: a runtime's
+transcripts are addressed under that runtime's name. A locator outside the served instance is
+refused `bulk-target-invalid`. An embedder may add resolvers for other namespaces.
 
 The POST the host sends:
 
@@ -568,6 +667,9 @@ Over the link:
 - [ ] Budget frames against `MAX_FRAME_BYTES` minus 15, and bound every host-scoped ask so its answer
       fits.
 - [ ] A `session_delta` produces no durable content row.
+- [ ] An `agent_facts` ingest is idempotent on `sourceId`, and stores a fact's figures as reported:
+      a turn's spend read from `totals` is the difference of two totals the consumer holds, never a
+      figure the host sent.
 - [ ] The host's `ended` ends the controller's record of the session, the refused open included.
 
 ## Where things live
@@ -582,6 +684,8 @@ Over the link:
 | `src/control/link.ts`                                                | `ControllerLink`: the dial-out socket, admit then drain, backoff with jitter, heartbeat, the connect timeout, replay, acks, the version window                                        |
 | `src/control/link-state.ts`                                          | The link's own state machine and `LINK_CAUSES`                                                                                                                                        |
 | `src/control/stream-routing.ts`                                      | `MESSAGE_ROUTING`: the lane for each SDK message                                                                                                                                      |
+| `src/sessions/fact-lift.ts`                                          | `FACT_LIFTS`: the fact lift for each runtime, and `factLiftFor`                                                                                                                       |
+| `src/host/claude-facts.ts`                                           | The Claude lift: the fact layer read out of the agent's own messages                                                                                                                  |
 | `src/host/bulk-post.ts`                                              | The streamed outbound POST behind `bulk_request` and its origin bind                                                                                                                  |
 | `src/gate/decision.ts`                                               | The permission types the subpath re-exports                                                                                                                                           |
 | `src/host/wire-request.ts`                                           | The single narrowing from `session_new.request` and `session_configure` to local requests                                                                                             |

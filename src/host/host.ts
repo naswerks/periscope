@@ -95,6 +95,7 @@ import { deadlineOrderRefusal, permissionHooks } from '../gate/gate.js';
 import type { McpServerOptions } from '../mcp/server.js';
 import type { SessionRequest } from '../sessions/registry.js';
 import { SessionRegistry } from '../sessions/registry.js';
+import { factLiftFor } from '../sessions/fact-lift.js';
 import type { HostedSession, SessionDegrade, Unsubscribe } from '../sessions/session.js';
 import { SessionStateMachine } from '../state/machine.js';
 import type { SessionTransition, TransitionWhere } from '../state/model.js';
@@ -113,7 +114,7 @@ import { listRepositoryDirectory, readRepositoryFile, readWorkspaceFile } from '
 import { homeDirectory, nodePathResolver } from './paths.js';
 import { isBypassMode, mergeMcpServers, readSessionConfigure, readSessionRequest } from './wire-request.js';
 import { mergePlugins, pluginDirsProblem } from './plugin-dirs.js';
-import { isDroppable } from '../control/frames.js';
+import { DEFAULT_RUNTIME, isDroppable } from '../control/frames.js';
 
 // ---------------------------------------------------------------------------
 // The per-session assembly.
@@ -315,7 +316,9 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   const session = created.value;
 
   // Before the first record. See this file's header: the forwarder subscribes to the machine, so
-  // anything recorded ahead of this line is emitted to nobody.
+  // anything recorded ahead of this line is emitted to nobody. The lift is the session's runtime's,
+  // so the facts it carries ride beside its messages.
+  const lift = factLiftFor(DEFAULT_RUNTIME);
   const detach = forwardSession({
     sessionKey: options.sessionKey,
     session,
@@ -323,6 +326,7 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     sink: options.sink,
     clock,
     ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
+    ...(lift === null ? {} : { lift }),
   });
 
   observer.created(`a session was requested in ${options.cwd}`);

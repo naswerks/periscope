@@ -8,6 +8,42 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+Protocol 15; the window is `[14, 15]`, so a version-14 controller is still spoken to. Version 15
+adds bodies and an optional member, no payload kind: a version-14 controller reads the new bodies as
+open JSON it may ignore, and every frame it sends decodes unchanged.
+
+- Added: the fact layer. A `session_update` may carry an `agent_facts` body: one fact the agent
+  reported, typed, right behind the message it came from. Six kinds: `session_handle` (the resumable
+  id), `agent_receipt` (version, model, approval mode, effort, skills, plugins, plugin errors, MCP
+  servers), `turn_record` (the running total and the turn's own figure, each a `SpendFacts` with a
+  currency and a cost basis per model, and `turnScope`), `usage_sample` (one model call's context
+  and cache lifetime), `tasks` (every task running, whole) and `compaction`. Every figure is one the
+  agent reported, or null; nothing is summed or differenced. `sourceId` is the `uuid` of the message
+  a fact was lifted from, so an ingest can be idempotent on it. A Claude session sends each fact when
+  it changes: a re-sent identical init sends nothing, a call that arrives as several messages is
+  sampled once.
+- Added: `agent_fragment` deltas. Each streamed content delta also rides the delta lane as a
+  fragment on its channel (`text`, `thinking`, `tool_input`), with the tool call that spawned the
+  subagent speaking as `parentId`; the `agent_message` delta it came from still rides. A delta body
+  is read as a `SessionDeltaBody`.
+- Added: `runtime` on `agent_message`, optional. Absent means `claude` (`DEFAULT_RUNTIME`), and a
+  Claude session's messages omit it, so their bodies are unchanged. Transcript locators are the
+  namespace `{runtime}-transcript:{...}`; `claude-transcript:` is the instance this host serves.
+- Added exports: the fact types (`AgentFact` and its six arms, `AgentFactsUpdate`, `SpendFacts`,
+  `ModelSpendFact`, `RunningTaskEntry` and the receipt's parts), `AgentFragmentDelta`,
+  `SessionDeltaBody`, `agentFactsUpdate`, `readAgentFacts`, `agentFragmentDelta`,
+  `readAgentFragment`, the vocabularies `COST_BASES`, `TURN_SCOPES`, `RECEIPT_SOURCES`, `CACHE_TTLS`,
+  `COMPACTION_STATUSES`, `COMPACTION_TRIGGERS` and `FRAGMENT_CHANNELS`, the bounds
+  `MAX_FACT_LIST_ENTRIES`, `MAX_FACT_TEXT_LENGTH` and `MAX_FACT_WORD_LENGTH`, and `DEFAULT_RUNTIME`.
+  On the main entry: `FactLift`, `FACT_LIFTS` and `factLiftFor` (the fact lift per runtime),
+  `ForwardSessionOptions.lift`, which `composeSession` fills with Claude's, and
+  `SessionObserver.onCompaction` with `CompactionReport`.
+- Changed: `agentMessageUpdate` and `agentMessageDelta` take an optional `runtime`.
+- Changed: the codec checks the members the new bodies declare, and only those. A count in a fact
+  (tokens, a context window, turns, a duration) must be a non-negative whole number, or the frame is
+  refused `frame-malformed`; a vocabulary word a newer peer adds is read, and one this host does not
+  declare is refused on the way out. Every other body is open JSON, as before.
+
 ## [1.5.0] - 2026-10-10
 
 Protocol 14; the window is `[13, 14]`, so a version-13 controller is still spoken to. Protocol 14

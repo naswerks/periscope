@@ -5,6 +5,6 @@
   },
   "frame": null,
   "name": "refused.not-json",
-  "protocolVersion": 14,
+  "protocolVersion": 15,
   "wire": "not json at all"
 }

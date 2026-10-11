@@ -12,19 +12,29 @@ import { z } from 'zod';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import { isRefusalReason } from '../core/refusal.js';
-import type { Frame, HostAgent, JsonValue, WireRefusal } from './frames.js';
+import type { AgentFact, Frame, HostAgent, JsonObject, JsonValue, WireRefusal } from './frames.js';
 import {
+  CACHE_TTLS,
+  COMPACTION_STATUSES,
+  COMPACTION_TRIGGERS,
+  COST_BASES,
+  FRAGMENT_CHANNELS,
   MAX_AGENT_CATALOG_BYTES,
   MAX_AGENT_MODELS,
   MAX_BULK_RELEASES,
   MAX_CONFIGURATION_VALUE_LENGTH,
   MAX_CONFIGURE_ENTRIES,
+  MAX_FACT_LIST_ENTRIES,
+  MAX_FACT_TEXT_LENGTH,
+  MAX_FACT_WORD_LENGTH,
   MAX_FRAME_BYTES,
   MAX_PLUGIN_DIRS,
   MAX_REPOSITORY_ENTRIES,
   MAX_REPOSITORY_READ_BYTES,
   MAX_WORKSPACE_FILE_BYTES,
   MAX_WORKSPACE_READ_BYTES,
+  RECEIPT_SOURCES,
+  TURN_SCOPES,
 } from './frames.js';
 import { MAX_WORKSPACE_ID_LENGTH } from '../core/workspace-id.js';
 
@@ -132,6 +142,198 @@ const protocolRangeSchema = z.looseObject({
   max: z.number().int().min(1),
 });
 
+// ---------------------------------------------------------------------------
+// The fact layer's bodies (protocol 15).
+//
+// Every member a fact declares is `.nullable().optional()`: a peer that omits one is read as not
+// stating it, and an unknown key is carried. What these schemas refuse is a member that is present
+// with the wrong type, a count that is not a whole number or is negative, and text past its bound.
+// Each count is spelled out as `<member>: z.number().int()` so a reader of this file, or a generator
+// reading it, can see which members are whole numbers on the wire.
+//
+// A vocabulary member (a cost basis, a scope, a channel) is a bounded string here, so a newer peer's
+// added word is read rather than refused; `encode` refuses a word this host does not declare, so
+// nothing this host sends carries one. Tolerant in, strict out, as with refusal reasons.
+// ---------------------------------------------------------------------------
+
+const factWordSchema = z.string().max(MAX_FACT_WORD_LENGTH);
+const factTextSchema = z.string().max(MAX_FACT_TEXT_LENGTH);
+/** A fact's `kind` names which fact it is, so it is never empty. */
+const factKindSchema = z.string().min(1).max(MAX_FACT_WORD_LENGTH);
+
+const modelSpendFactSchema = z.looseObject({
+  model: factTextSchema.nullable().optional(),
+  canonicalModel: factTextSchema.nullable().optional(),
+  provider: factWordSchema.nullable().optional(),
+  inputTokens: z.number().int().nonnegative().nullable().optional(),
+  outputTokens: z.number().int().nonnegative().nullable().optional(),
+  cacheReadTokens: z.number().int().nonnegative().nullable().optional(),
+  cacheWriteTokens: z.number().int().nonnegative().nullable().optional(),
+  reasoningTokens: z.number().int().nonnegative().nullable().optional(),
+  cost: z.number().nonnegative().nullable().optional(),
+  costBasis: factWordSchema.nullable().optional(),
+  contextWindow: z.number().int().nonnegative().nullable().optional(),
+});
+
+const spendFactsSchema = z.looseObject({
+  cost: z.number().nonnegative().nullable().optional(),
+  currency: factWordSchema.nullable().optional(),
+  costBasis: factWordSchema.nullable().optional(),
+  byModel: z.array(modelSpendFactSchema).max(MAX_FACT_LIST_ENTRIES).nullable().optional(),
+});
+
+/** One schema per fact kind this build models, each holding the members that kind declares. */
+const FACT_SCHEMAS: Readonly<Record<AgentFact['kind'], z.ZodType>> = {
+  session_handle: z.looseObject({
+    runtime: factWordSchema.nullable().optional(),
+    handle: factTextSchema.nullable().optional(),
+  }),
+  agent_receipt: z.looseObject({
+    runtime: factWordSchema.nullable().optional(),
+    runtimeVersion: factWordSchema.nullable().optional(),
+    model: factTextSchema.nullable().optional(),
+    permissionMode: factWordSchema.nullable().optional(),
+    effort: factWordSchema.nullable().optional(),
+    skills: z.array(factTextSchema).max(MAX_FACT_LIST_ENTRIES).nullable().optional(),
+    plugins: z
+      .array(
+        z.looseObject({
+          name: factTextSchema.nullable().optional(),
+          version: factWordSchema.nullable().optional(),
+          path: factTextSchema.nullable().optional(),
+        }),
+      )
+      .max(MAX_FACT_LIST_ENTRIES)
+      .nullable()
+      .optional(),
+    pluginErrors: z
+      .array(
+        z.looseObject({
+          plugin: factTextSchema.nullable().optional(),
+          type: factWordSchema.nullable().optional(),
+          message: factTextSchema.nullable().optional(),
+          path: factTextSchema.nullable().optional(),
+        }),
+      )
+      .max(MAX_FACT_LIST_ENTRIES)
+      .nullable()
+      .optional(),
+    mcpServers: z
+      .array(
+        z.looseObject({
+          name: factTextSchema.nullable().optional(),
+          status: factWordSchema.nullable().optional(),
+        }),
+      )
+      .max(MAX_FACT_LIST_ENTRIES)
+      .nullable()
+      .optional(),
+    source: factWordSchema.nullable().optional(),
+  }),
+  turn_record: z.looseObject({
+    runtime: factWordSchema.nullable().optional(),
+    totals: spendFactsSchema.nullable().optional(),
+    turn: spendFactsSchema.nullable().optional(),
+    turnScope: factWordSchema.nullable().optional(),
+    numTurns: z.number().int().nonnegative().nullable().optional(),
+    durationMs: z.number().int().nonnegative().nullable().optional(),
+    sourceSessionId: factTextSchema.nullable().optional(),
+  }),
+  usage_sample: z.looseObject({
+    runtime: factWordSchema.nullable().optional(),
+    model: factTextSchema.nullable().optional(),
+    contextTokens: z.number().int().nonnegative().nullable().optional(),
+    contextWindow: z.number().int().nonnegative().nullable().optional(),
+    cacheTtl: factWordSchema.nullable().optional(),
+    mainThread: z.boolean().nullable().optional(),
+  }),
+  tasks: z.looseObject({
+    runtime: factWordSchema.nullable().optional(),
+    running: z
+      .array(
+        z.looseObject({
+          taskId: factTextSchema.nullable().optional(),
+          type: factWordSchema.nullable().optional(),
+          description: factTextSchema.nullable().optional(),
+        }),
+      )
+      .max(MAX_FACT_LIST_ENTRIES)
+      .nullable()
+      .optional(),
+  }),
+  compaction: z.looseObject({
+    runtime: factWordSchema.nullable().optional(),
+    status: factWordSchema.nullable().optional(),
+    trigger: factWordSchema.nullable().optional(),
+    tokensBefore: z.number().int().nonnegative().nullable().optional(),
+    tokensAfter: z.number().int().nonnegative().nullable().optional(),
+  }),
+};
+
+/**
+ * The `agent_facts` body. `fact` is required because it is what the body is: a body naming this
+ * update with no fact in it is malformed. A fact kind this build does not model is carried with only
+ * its `kind` checked, so a newer peer's added kind crosses intact.
+ */
+const agentFactsBodySchema = z.looseObject({
+  update: z.literal('agent_facts'),
+  fact: z.looseObject({ kind: factKindSchema }),
+  sourceId: factTextSchema.nullable().optional(),
+  observedAt: z.string().min(1).nullable().optional(),
+});
+
+const agentFragmentBodySchema = z.looseObject({
+  update: z.literal('agent_fragment'),
+  runtime: factWordSchema.nullable().optional(),
+  channel: factWordSchema.nullable().optional(),
+  text: z.string().nullable().optional(),
+  parentId: factTextSchema.nullable().optional(),
+});
+
+/** An `agent_message` body's one checked member: the runtime that emitted it. */
+const agentMessageRuntimeSchema = z.looseObject({ runtime: factWordSchema.nullable().optional() });
+
+type BodyCheckContext = Parameters<Parameters<typeof jsonObjectSchema.superRefine>[0]>[1];
+
+/** Carries one schema's issues onto the body being refined, each under its own path. */
+function carryIssues(
+  result: { success: boolean; error?: { issues: readonly z.core.$ZodIssue[] } },
+  prefix: readonly PropertyKey[],
+  ctx: BodyCheckContext,
+): void {
+  if (result.success) return;
+  for (const issue of result.error?.issues ?? []) {
+    ctx.addIssue({ code: 'custom', message: issue.message, path: [...prefix, ...issue.path] });
+  }
+}
+
+/**
+ * The checks a body earns by its `update`, for the bodies protocol 15 added shapes to. Every other
+ * body is open JSON, exactly as before.
+ */
+function checkBody(body: JsonObject, lane: 'update' | 'delta', ctx: BodyCheckContext): void {
+  const update = body['update'];
+  if (update === 'agent_message') {
+    carryIssues(agentMessageRuntimeSchema.safeParse(body), [], ctx);
+    return;
+  }
+  if (lane === 'update' && update === 'agent_facts') {
+    const parsed = agentFactsBodySchema.safeParse(body);
+    carryIssues(parsed, [], ctx);
+    if (!parsed.success) return;
+    const kind = parsed.data.fact.kind;
+    const schema = (FACT_SCHEMAS as Partial<Record<string, z.ZodType>>)[kind];
+    if (schema !== undefined) carryIssues(schema.safeParse(parsed.data.fact), ['fact'], ctx);
+    return;
+  }
+  if (lane === 'delta' && update === 'agent_fragment') {
+    carryIssues(agentFragmentBodySchema.safeParse(body), [], ctx);
+  }
+}
+
+const sessionUpdateBodySchema = jsonObjectSchema.superRefine((body, ctx) => checkBody(body, 'update', ctx));
+const sessionDeltaBodySchema = jsonObjectSchema.superRefine((body, ctx) => checkBody(body, 'delta', ctx));
+
 // `looseObject` throughout: unknown keys are carried, not stripped and not fatal.
 /** The members of one release ask, shared by the single kind and the bulk entries. */
 const workspaceReleaseEntryShape = {
@@ -154,8 +356,13 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
   // The body is validated as JSON rather than against the transition's shape: this edge exists to
   // keep malformed bytes out, and a newer peer's richer body must survive the crossing rather than
   // be rejected here. The typed union is what a consumer reads it back as.
-  z.looseObject({ kind: z.literal('session_update'), body: jsonObjectSchema }),
-  z.looseObject({ kind: z.literal('session_delta'), body: jsonObjectSchema }),
+  //
+  // The bodies protocol 15 added shapes to are checked for the members they declare, and only those:
+  // an `agent_facts` or `agent_fragment` body, and an `agent_message`'s `runtime` (`checkBody`).
+  // Every declared member is optional and every unknown key is carried, so a richer body still
+  // crosses; `state_transition`, `wire_refusal` and an `agent_message`'s `message` are not narrowed.
+  z.looseObject({ kind: z.literal('session_update'), body: sessionUpdateBodySchema }),
+  z.looseObject({ kind: z.literal('session_delta'), body: sessionDeltaBodySchema }),
   // Every added field is `.nullable()`, never `.optional()`, and that mirrors the type on purpose.
   // JSON has no `undefined`, so an optional field makes "the controller said nothing" and "the
   // controller said unset" the same value after a round trip, the distinction this whole file
@@ -516,6 +723,17 @@ export function encode(frame: Frame): Result<string> {
     );
   }
 
+  // The same pair for the fact layer's vocabularies: a newer peer's word is read on the way in, and
+  // this host may send only the words it declares.
+  const undeclaredWord = undeclaredFactWord(frame);
+  if (undeclaredWord !== null) {
+    return refuse(
+      'frame-malformed',
+      `${undeclaredWord.member} "${undeclaredWord.value}" is not a word this host declares — the wire ` +
+        `reads an unknown word on the way IN, but this host may not send one on the way OUT`,
+    );
+  }
+
   const shape = frameSchema.safeParse(frame);
   if (!shape.success) {
     return refuse(
@@ -623,6 +841,81 @@ function undeclaredRefusalReason(frame: Frame): string | null {
     if (refusal !== null && !isRefusalReason(refusal.reason)) return refusal.reason;
   }
   return null;
+}
+
+/** A vocabulary member holding a word outside its declared set: which member, and the word. */
+interface UndeclaredWord {
+  readonly member: string;
+  readonly value: string;
+}
+
+/** The fact kinds this host declares, for the outgoing check. */
+const DECLARED_FACT_KINDS: readonly string[] = Object.keys(FACT_SCHEMAS);
+
+/**
+ * The first fact-layer word on an outgoing frame that this host does not declare, else null: a fact
+ * kind, a cost basis (on a figure or on any of its rows), a turn scope, a receipt source, a cache
+ * lifetime, a compaction status or trigger, or a fragment channel. Null and absent are not words.
+ */
+function undeclaredFactWord(frame: Frame): UndeclaredWord | null {
+  if (frame.frame !== 'session') return null;
+  const payload = frame.payload;
+  if (payload.kind !== 'session_update' && payload.kind !== 'session_delta') return null;
+  const body = payload.body as Record<string, unknown>;
+
+  if (payload.kind === 'session_delta') {
+    if (body['update'] !== 'agent_fragment') return null;
+    return wordOutside('channel', body['channel'], FRAGMENT_CHANNELS);
+  }
+  if (body['update'] !== 'agent_facts') return null;
+
+  const fact = body['fact'];
+  if (typeof fact !== 'object' || fact === null) return null;
+  const members = fact as Record<string, unknown>;
+  const kind = wordOutside('fact.kind', members['kind'], DECLARED_FACT_KINDS);
+  if (kind !== null) return kind;
+
+  switch (members['kind']) {
+    case 'agent_receipt':
+      return wordOutside('fact.source', members['source'], RECEIPT_SOURCES);
+    case 'turn_record':
+      return (
+        wordOutside('fact.turnScope', members['turnScope'], TURN_SCOPES) ??
+        undeclaredBasis('fact.totals', members['totals']) ??
+        undeclaredBasis('fact.turn', members['turn'])
+      );
+    case 'usage_sample':
+      return wordOutside('fact.cacheTtl', members['cacheTtl'], CACHE_TTLS);
+    case 'compaction':
+      return (
+        wordOutside('fact.status', members['status'], COMPACTION_STATUSES) ??
+        wordOutside('fact.trigger', members['trigger'], COMPACTION_TRIGGERS)
+      );
+    default:
+      return null;
+  }
+}
+
+/** The undeclared cost basis on one spend figure or any of its rows, else null. */
+function undeclaredBasis(member: string, figure: unknown): UndeclaredWord | null {
+  if (typeof figure !== 'object' || figure === null) return null;
+  const spend = figure as { costBasis?: unknown; byModel?: unknown };
+  const own = wordOutside(`${member}.costBasis`, spend.costBasis, COST_BASES);
+  if (own !== null) return own;
+  if (!Array.isArray(spend.byModel)) return null;
+  for (const [index, row] of spend.byModel.entries()) {
+    const basis = (row as { costBasis?: unknown } | null)?.costBasis;
+    const undeclared = wordOutside(`${member}.byModel.${index}.costBasis`, basis, COST_BASES);
+    if (undeclared !== null) return undeclared;
+  }
+  return null;
+}
+
+/** A word present and outside `declared`, else null. */
+function wordOutside(member: string, value: unknown, declared: readonly string[]): UndeclaredWord | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && declared.includes(value)) return null;
+  return { member, value: typeof value === 'string' ? value : JSON.stringify(value) };
 }
 
 function describeIssue(issue: z.core.$ZodIssue): string {
