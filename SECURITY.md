@@ -216,6 +216,36 @@ disabled wholesale.
 > denied one. Run it on a machine that is not itself an agent session before treating any of this
 > as observed.
 
+## Model endpoints and the agent's own settings
+
+An endpoint is yours: you write it into the file `PERISCOPE_MODEL_ENDPOINTS` names, and nothing on the
+link can add or change one ([configuration](docs/configuration.md#model-endpoints)). Its credential is
+resolved when the host starts and held in the host's memory; a helper command's output is never
+logged. A session on the endpoint carries the credential as `ANTHROPIC_AUTH_TOKEN` in the agent's own
+environment, so the agent's sign-in is never the credential sent to a third party, and
+`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` keeps it out of the environments of the commands, hooks and stdio
+tool servers the agent starts. The agent's own process still holds it: a tool that reads another
+process's environment from the operating system is not stopped by the scrub. That is documented, not
+measured.
+
+Three settings files can change what the agent does, and the host treats each by whose it is:
+
+- **Managed settings** are read whatever `settingSources` says. They are the machine administrator's
+  file, and they can set the model route.
+- **The user tier** (`~/.claude/settings.json` in the agent home) is yours, and the host does not read
+  it. Its `env` can set the same variables an endpoint sets, for a session that asks for the `user`
+  tier; keep a vendor's route out of the user settings of a runner that declares endpoints.
+- **The repository tiers** (`.claude/settings.json` and `.claude/settings.local.json` in the session's
+  working directory) are the repository's, and a repository a session works in is not you. A session
+  that loads either tier is refused `settings-route-refused` before the agent starts when the file's
+  `env` names a key beneath the floor, naming the file and the key: otherwise a repository could set
+  the model route, its credentials or a proxy past every screen the host runs. The check reads the
+  files whether or not the agent trusts the folder, which only ever refuses more. It runs when a
+  session opens or resumes, and the agent reloads its settings files while it runs, so a session that
+  writes its own `.claude/settings.local.json` mid-session is caught at its next open or resume, not
+  before. Whether a reloaded `env` moves a running agent's model route is not documented and not
+  measured.
+
 ## The outbound-only posture
 
 There is no inbound port anywhere in this package. Periscope dials out to your controller over a
@@ -279,6 +309,15 @@ over the link and without a further credential:
   process exists, naming the keys. Declaring a name beneath the floor refuses start. An embedder may
   pass a shorter floor; the binary never does. What the host's own environment passes to a session
   is untouched by either screen: a proxy you set is still inherited.
+- **Choose a model endpoint, never write one.** `session_new.request.endpoint` names one of the
+  endpoints you declared (`PERISCOPE_MODEL_ENDPOINTS`), and the host then sets that endpoint's
+  address, credential and model variables in the agent's environment itself, after the controller's
+  lanes and never through the floor that screens them. A controller cannot add an endpoint, change
+  one, or learn its address or credential: neither is on the wire, `host_configure` does not take the
+  file's key, and the file and every credential file it names are in the protected set. On an
+  endpoint you did not mark as Anthropic's own route, a Claude model id, or an alias the endpoint does
+  not map, is refused (`model-endpoint-mismatch`), at the open and on a later switch, so a provider
+  that maps Claude ids to its own model never answers as Claude.
 - **Remove directories.** `workspace_release` deletes a worktree under the workspace root, and the
   controller can set that root through `host_configure` (a root change is refused only while a
   session is live or opening).

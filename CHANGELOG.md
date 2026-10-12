@@ -8,10 +8,13 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-11
+
 Protocol 15; the window is `[14, 15]`, so a version-14 controller is still spoken to. Version 15
 adds bodies, optional members and refusal reasons, no payload kind: a version-14 controller reads the
-new bodies as open JSON it may ignore, carries the new members unread, and never sends the member
-the new reasons answer; every frame it sends decodes unchanged.
+new bodies as open JSON it may ignore, carries the new members unread, never sends the members five
+of the new reasons answer, and reads the sixth, `settings-route-refused`, as it reads any reason it
+does not know; every frame it sends decodes unchanged.
 
 - Added: the fact layer. A `session_update` may carry an `agent_facts` body: one fact the agent
   reported, typed, right behind the message it came from. Six kinds: `session_handle` (the resumable
@@ -56,8 +59,43 @@ the new reasons answer; every frame it sends decodes unchanged.
   `toolName`. Claude's tool names map to `shell`, `file_read`, `file_write`, `file_edit`, `mcp` or
   `web`, and any other name to `other` (`TOOL_KINDS`).
 - Added refusal reasons: `runtime-unavailable`, `request-key-unsupported`, `endpoint-unknown`,
-  `endpoint-incompatible` and `model-endpoint-mismatch`. This host raises the first; a session on
-  Claude never meets the second, and no endpoint is declared for the other three to answer.
+  `endpoint-incompatible` and `model-endpoint-mismatch`. This host raises the first and the three
+  endpoint reasons (below); a session on Claude never meets the second.
+- Added: `endpoints` on the hello's configuration and the configure answer, optional: one
+  `HostEndpoint` per model endpoint the host's operator declared (its name, the wire API it speaks,
+  the runtimes that can reach it, and every model id a session may name on it, alias ids included),
+  at most `MAX_ENDPOINTS`, held to its own `MAX_ENDPOINT_CATALOG_BYTES` beside the catalog's budget.
+  An endpoint's address, its credential and whether it is Anthropic's own route never ride the wire.
+  Wire APIs are `ENDPOINT_WIRE_APIS`; an undeclared one is refused on the way out and read on the way
+  in.
+- Added: `endpoint` on `session_new.request`, optional. Null and absent take the runtime's own route.
+  For a declared endpoint the host sets, in the spawn environment, its address and credential
+  (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`), the model each mapped tier resolves to, its window,
+  `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` and `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, after the
+  controller's lanes and never through the floor that screens them. A name the operator did not
+  declare refuses `endpoint-unknown`; an endpoint that cannot carry the session's runtime,
+  `endpoint-incompatible`; and on an endpoint not marked as Anthropic's own route, a `claude-` model
+  id or an alias the endpoint does not map refuses `model-endpoint-mismatch`, at the open and on a
+  `session_configure` that switches to one.
+- Added: `PERISCOPE_MODEL_ENDPOINTS`, a config-file key never settable over the link, naming the
+  operator's endpoints file. Each entry: a name, a wire API, its runtimes, a base URL, a credential
+  read from an environment variable, a file or a helper command (an absolute executable, run with no
+  shell; a Windows batch file is refused), its models, the tiers it maps, its window in the vendor's
+  form, more variables, and `firstParty`. The file is read, checked and its credentials resolved at
+  start, and an entry this host could not honour refuses start by name. The file and every credential
+  file it names join the protected set.
+- Added: `settings-route-refused`. A session that loads the `project` or `local` settings tier is
+  refused before the agent starts when the repository's `.claude/settings.json` or
+  `.claude/settings.local.json` names, in its `env`, a key beneath the env floor; the detail names the
+  file and the keys.
+- Added exports: `EndpointWireApi`, `ENDPOINT_WIRE_APIS`, `HostEndpoint`, `MAX_ENDPOINTS`,
+  `MAX_ENDPOINT_MODELS` and `MAX_ENDPOINT_CATALOG_BYTES`. On the main entry: `ModelEndpoint`,
+  `ModelAliasTier`, `EndpointContextWindow`, `ModelEndpointsReading`, `ModelEndpointsReadOptions`,
+  `readModelEndpoints`, `PeriscopeHostOptions.endpoints`, `SessionRequest.endpoint`,
+  `SessionRequest.hostEnv`, `RUNTIME_WIRE_APIS`, `wireApisFor`, `spawnableRuntimes`, and the
+  `modelEndpointFiles` option of `credentialPaths`.
+- Changed: `composeSpawnEnv` takes an optional third input, the host's own variables, applied after
+  the policy's literals and before the host-session strip.
 - Added exports: `ControlTier`, `ControlTierLevel`, `CONTROL_TIER_LEVELS`, `HostAgentEntry`,
   `HostAgentVocabularies`, `MAX_AGENT_ENTRIES`, `ToolKind` and `TOOL_KINDS`. On the main entry:
   `CONTROL_TIERS`, `controlTierFor`, `runtimeOf`, `SessionObserverOptions` (the observer's tier),
