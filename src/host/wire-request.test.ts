@@ -24,6 +24,7 @@ import {
   readSessionRequest,
 } from './wire-request.js';
 import type { McpServerConfig } from './agent-process.js';
+import type { ModelEndpoint } from './model-endpoints.js';
 import { EXTRA_ENV_FLOOR, composeSpawnEnv } from '../sessions/spawn-env.js';
 import type { EnvSource } from '../sessions/spawn-env.js';
 import type { SessionNewEnv } from '../control/frames.js';
@@ -47,6 +48,20 @@ test('every field left null is left ABSENT, never passed through as null', () =>
   assert.deepEqual(Object.keys(read.ok ? read.value : {}), []);
 });
 
+/** One endpoint the operator declared, Anthropic's own route, so the request's Claude model may ride it. */
+const DECLARED_ENDPOINT: ModelEndpoint = {
+  name: 'example-endpoint',
+  wireApi: 'anthropic-messages',
+  runtimes: ['claude'],
+  baseUrl: 'https://gateway.example',
+  models: ['claude-fable-5'],
+  modelAliases: {},
+  contextWindow: null,
+  env: {},
+  firstParty: true,
+  authToken: () => 'example-token',
+};
+
 /** Every wire key at once, for the anti-drop check and its twin. */
 const EVERY_KEY = sessionNewRequest({
   resume: 'session-abc',
@@ -64,6 +79,7 @@ const EVERY_KEY = sessionNewRequest({
   effort: 'high',
   permissionMode: 'bypassPermissions',
   runtime: 'claude',
+  endpoint: 'example-endpoint',
 });
 
 test('every declared wire key is one this narrowing knows how to carry', () => {
@@ -72,7 +88,7 @@ test('every declared wire key is one this narrowing knows how to carry', () => {
   // make impossible. Driving every key at once and asserting each one lands is what catches it.
   const asked = EVERY_KEY;
 
-  const read = readSessionRequest(asked, EXTRA_ENV_FLOOR, ['NAS_X', 'NAS_Y']);
+  const read = readSessionRequest(asked, EXTRA_ENV_FLOOR, ['NAS_X', 'NAS_Y'], [DECLARED_ENDPOINT]);
   assert.equal(read.ok, true, read.ok ? '' : `${read.refusal.reason}: ${read.refusal.detail}`);
   const composed = read.ok ? (read.value as Record<string, unknown>) : {};
 
@@ -88,6 +104,7 @@ test('every declared wire key is one this narrowing knows how to carry', () => {
   assert.equal(composed['strictMcpConfig'], false);
   assert.equal(composed['effort'], 'high');
   assert.equal(composed['permissionMode'], 'bypassPermissions');
+  assert.equal(composed['endpoint'], 'example-endpoint');
   assert.deepEqual(composed['settingSources'], ['project']);
   assert.deepEqual(composed['env'], { extraAllowedKeys: ['NAS_X'], extraEnv: { NAS_Y: '1' } });
 });
@@ -614,4 +631,161 @@ test('control: extraDeniedKeys only removes keys, so it is never screened, a flo
   );
   assert.equal(read.ok, true, read.ok ? '' : read.refusal.detail);
   assert.deepEqual(read.ok ? read.value.env : null, { extraDeniedKeys: ['ANTHROPIC_BASE_URL', 'NAS_Z'] });
+});
+
+// ---------------------------------------------------------------------------
+// The endpoint a session names: chosen by name, never described.
+// ---------------------------------------------------------------------------
+
+/** An endpoint that is not Anthropic's own route, its tiers mapped to its own ids. */
+const OPEN_WEIGHT: ModelEndpoint = {
+  name: 'open-weight',
+  wireApi: 'anthropic-messages',
+  runtimes: ['claude'],
+  baseUrl: 'https://open-weight.example/anthropic',
+  models: ['open-model', 'open-model-small'],
+  modelAliases: { opus: 'open-model', sonnet: 'open-model', haiku: 'open-model-small' },
+  contextWindow: null,
+  env: {},
+  firstParty: false,
+  authToken: () => 'open-weight-token',
+};
+
+test('a request that names no endpoint composes none, whatever endpoints the host declares', () => {
+  const read = readSessionRequest(
+    sessionNewRequest({ model: 'claude-opus-5-5' }),
+    EXTRA_ENV_FLOOR,
+    [],
+    [OPEN_WEIGHT],
+  );
+  assert.equal(read.ok, true, read.ok ? '' : read.refusal.detail);
+  assert.equal(read.ok ? 'endpoint' in read.value : true, false);
+});
+
+test('a declared endpoint is composed by its name, and nothing it describes rides the request', () => {
+  const read = readSessionRequest(
+    sessionNewRequest({ endpoint: 'open-weight', model: 'open-model' }),
+    EXTRA_ENV_FLOOR,
+    [],
+    [OPEN_WEIGHT],
+  );
+  assert.equal(read.ok, true, read.ok ? '' : read.refusal.detail);
+  assert.deepEqual(read.ok ? read.value : null, { endpoint: 'open-weight', model: 'open-model' });
+});
+
+test('an endpoint the host does not declare is refused endpoint-unknown, naming it and the ones it declares', () => {
+  const read = readSessionRequest(
+    sessionNewRequest({ endpoint: 'elsewhere' }),
+    EXTRA_ENV_FLOOR,
+    [],
+    [OPEN_WEIGHT],
+  );
+  assert.equal(read.ok ? '' : read.refusal.reason, 'endpoint-unknown');
+  assert.match(
+    read.ok ? '' : read.refusal.detail,
+    /"elsewhere" is not one this host declares; .* are open-weight/,
+  );
+  const none = readSessionRequest(sessionNewRequest({ endpoint: 'elsewhere' }));
+  assert.match(none.ok ? '' : none.refusal.detail, /lists are none/);
+});
+
+test("an endpoint that cannot carry the runtime is refused endpoint-incompatible, for either of its one meaning's two causes", () => {
+  const excluded = readSessionRequest(
+    sessionNewRequest({ endpoint: 'open-weight' }),
+    EXTRA_ENV_FLOOR,
+    [],
+    [{ ...OPEN_WEIGHT, runtimes: ['example-runtime'] }],
+  );
+  assert.equal(excluded.ok ? '' : excluded.refusal.reason, 'endpoint-incompatible');
+  assert.match(
+    excluded.ok ? '' : excluded.refusal.detail,
+    /does not carry runtime claude; it carries example-runtime/,
+  );
+
+  const unspoken = readSessionRequest(
+    sessionNewRequest({ endpoint: 'open-weight' }),
+    EXTRA_ENV_FLOOR,
+    [],
+    [{ ...OPEN_WEIGHT, wireApi: 'openai-chat' }],
+  );
+  assert.equal(unspoken.ok ? '' : unspoken.refusal.reason, 'endpoint-incompatible');
+  assert.match(
+    unspoken.ok ? '' : unspoken.refusal.detail,
+    /speaks openai-chat, which runtime claude does not speak/,
+  );
+});
+
+test("regression: a Claude model id on an endpoint that is not Anthropic's own route is refused model-endpoint-mismatch, naming both", () => {
+  const read = readSessionRequest(
+    sessionNewRequest({ endpoint: 'open-weight', model: 'claude-opus-5-5' }),
+    EXTRA_ENV_FLOOR,
+    [],
+    [OPEN_WEIGHT],
+  );
+  assert.equal(read.ok ? '' : read.refusal.reason, 'model-endpoint-mismatch');
+  assert.match(read.ok ? '' : read.refusal.detail, /^model claude-opus-5-5 named for endpoint "open-weight"/);
+
+  // Twins: the same id on a first-party route opens, and the endpoint's own id opens.
+  const firstParty = readSessionRequest(
+    sessionNewRequest({ endpoint: 'open-weight', model: 'claude-opus-5-5' }),
+    EXTRA_ENV_FLOOR,
+    [],
+    [{ ...OPEN_WEIGHT, firstParty: true }],
+  );
+  assert.equal(firstParty.ok, true, firstParty.ok ? '' : firstParty.refusal.detail);
+  const own = readSessionRequest(
+    sessionNewRequest({ endpoint: 'open-weight', model: 'open-model' }),
+    EXTRA_ENV_FLOOR,
+    [],
+    [OPEN_WEIGHT],
+  );
+  assert.equal(own.ok, true, own.ok ? '' : own.refusal.detail);
+});
+
+test('an alias the endpoint does not map is refused model-endpoint-mismatch; a mapped one and no model open', () => {
+  const asked = (model: string | null) =>
+    readSessionRequest(
+      sessionNewRequest({ endpoint: 'open-weight', model }),
+      EXTRA_ENV_FLOOR,
+      [],
+      [OPEN_WEIGHT],
+    );
+  for (const model of ['default', 'opusplan', 'fable', 'best[1m]']) {
+    const read = asked(model);
+    assert.equal(read.ok ? '' : read.refusal.reason, 'model-endpoint-mismatch', `${model} opened`);
+  }
+  for (const model of ['opus', 'sonnet[1m]', 'haiku', null]) {
+    const read = asked(model);
+    assert.equal(read.ok, true, `${String(model)}: ${read.ok ? '' : read.refusal.detail}`);
+  }
+});
+
+test("the variables an endpoint sets refuse on both of a controller's lanes: undeclared, and beneath the floor when declared", () => {
+  // The names the host's own lane sets for an endpoint. A controller may set none of them itself.
+  const names = [
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_AUTH_TOKEN',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'ANTHROPIC_DEFAULT_FABLE_MODEL',
+    'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
+    'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+    'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS',
+    'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB',
+  ];
+  for (const name of names) {
+    for (const env of [
+      { extraAllowedKeys: [name], extraDeniedKeys: null, extraEnv: null },
+      { extraAllowedKeys: null, extraDeniedKeys: null, extraEnv: { [name]: '1' } },
+    ]) {
+      const undeclared = readSessionRequest(sessionNewRequest({ env }));
+      assert.equal(undeclared.ok ? '' : undeclared.refusal.reason, 'env-key-refused', `${name} undeclared`);
+      if (name.startsWith('ANTHROPIC_')) {
+        const declared = readSessionRequest(sessionNewRequest({ env }), EXTRA_ENV_FLOOR, [name]);
+        assert.equal(declared.ok ? '' : declared.refusal.reason, 'env-key-refused', `${name} declared`);
+        assert.match(declared.ok ? '' : declared.refusal.detail, /beneath this host's floor/);
+      }
+    }
+  }
 });

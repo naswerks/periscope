@@ -104,13 +104,14 @@ the decision deadline.
 - The vocabulary is owned locally, never received. The wire carries no policy in either direction;
   the embedder chooses tool families and protected paths at construction.
 - Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
-  workspace, with `credentialPaths(env, { agentHome })` as the protected set and the home directory
+  workspace, with `credentialPaths(env, { agentHome, modelEndpointFiles })` as the protected set and the home directory
   the shell scan expands from `homeDirectory(env)`. That set, stated once (`src/host/paths.ts`): the
   host's own config directory (`PERISCOPE_CONFIG_DIR` or `~/.periscope`, which holds the token
   cache, the paired credential and the config file); the agent CLI's token cache and configuration
   file (`.credentials.json` and `.claude.json`) in `~/.claude`, in `CLAUDE_CONFIG_DIR` when set and
   in the effective agent home, plus `~/.claude.json`; and `~/.aws`, `~/.config/gcloud`, `~/.azure`,
-  `~/.ssh`. The rest of the CLI's home (its settings, skills and tool output) is the agent's to read.
+  `~/.ssh`; and the model endpoints file (`PERISCOPE_MODEL_ENDPOINTS`) with every credential file it
+  names. The rest of the CLI's home (its settings, skills and tool output) is the agent's to read.
   The host's own cache location derives from the same function, so the two cannot disagree about
   what is protected. The repository and workspace read doors honour the same set.
 - Shell commands are parsed before they are judged (`src/gate/command.ts`, `src/gate/shell.ts`):

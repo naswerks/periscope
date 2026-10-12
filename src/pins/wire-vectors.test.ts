@@ -34,6 +34,7 @@ import assert from 'node:assert/strict';
 import { decode, encode } from '../control/codec.js';
 import {
   MAX_AGENT_ENTRIES,
+  MAX_ENDPOINTS,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_MIN,
@@ -79,6 +80,7 @@ import type {
   Frame,
   HostAgent,
   HostAgentEntry,
+  HostEndpoint,
   SessionHandleFact,
   SessionPayload,
   SessionPayloadKind,
@@ -280,6 +282,14 @@ const UNAVAILABLE_ENTRY: HostAgentEntry = {
 
 // The fact layer: one fact per kind, every member stated, the nullable ones null where a second
 // variant shows it.
+
+/** One endpoint as a hello lists it: name, wire API, runtimes, and its models with the alias ids. */
+const ENDPOINT: HostEndpoint = {
+  name: 'example-endpoint',
+  wireApi: 'anthropic-messages',
+  runtimes: ['claude'],
+  models: ['example-model[1m]', 'example-model', 'opus', 'sonnet', 'haiku'],
+};
 
 const FACT_SESSION_HANDLE: SessionHandleFact = {
   kind: 'session_handle',
@@ -505,6 +515,17 @@ const AUTHORED = {
         ),
       ),
     },
+    {
+      name: 'session_update.open-refused-settings-route-refused',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'settings-route-refused',
+            "/work/repo/.claude/settings.json (the project tier) names ANTHROPIC_BASE_URL in its env, beneath this host's floor",
+          ),
+        ),
+      ),
+    },
   ],
   session_delta: [
     {
@@ -553,6 +574,14 @@ const AUTHORED = {
     {
       name: 'session_new.runtime',
       frame: session(sessionNew('/work/repo', { request: sessionNewRequest({ runtime: 'claude' }) })),
+    },
+    {
+      name: 'session_new.endpoint',
+      frame: session(
+        sessionNew('/work/repo', {
+          request: sessionNewRequest({ endpoint: 'example-endpoint', model: 'opus' }),
+        }),
+      ),
     },
     {
       name: 'session_new.request-all-null',
@@ -854,6 +883,12 @@ const AUTHORED = {
       ),
     },
     {
+      name: 'host_configure_result.endpoints',
+      frame: session(
+        hostConfigureResult('request-6', { ...unsetHostConfiguration(), endpoints: [ENDPOINT] }, []),
+      ),
+    },
+    {
       name: 'host_configure_result.refused',
       frame: session(
         hostConfigureResult('request-6', unsetHostConfiguration(), [], {
@@ -1027,6 +1062,19 @@ const AUTHORED = {
           agent: AGENT,
           agents: [CLAUDE_ENTRY, UNAVAILABLE_ENTRY],
         },
+        pendingRestart: [],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    {
+      name: 'link_hello.endpoints',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: { ...unsetHostConfiguration(), endpoints: [ENDPOINT] },
         pendingRestart: [],
         protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
       }),
@@ -1273,6 +1321,23 @@ const AUTHORED_MALFORMED: readonly AuthoredMalformed[] = [
     reason: 'frame-malformed',
   },
   {
+    name: 'refused.encode.undeclared-wire-api',
+    frame: control({
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: {
+        ...unsetHostConfiguration(),
+        endpoints: [{ ...ENDPOINT, wireApi: 'a-wire-api-this-host-does-not-declare' as 'openai-chat' }],
+      },
+      pendingRestart: [],
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    }),
+    reason: 'frame-malformed',
+  },
+  {
     name: 'refused.encode.undeclared-configure-refusal',
     frame: {
       frame: 'session',
@@ -1410,6 +1475,41 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
       configuration: {
         ...unsetHostConfiguration(),
         agents: Array.from({ length: MAX_AGENT_ENTRIES + 1 }, () => UNAVAILABLE_ENTRY),
+      },
+      pendingRestart: [],
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    }),
+    expect: refused('frame-malformed'),
+  },
+  // The well-formed twin is `link_hello.endpoints`; only the entry's `models` differs.
+  {
+    name: 'refused.malformed-endpoint-entry',
+    wire: controlWire({
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: { ...unsetHostConfiguration(), endpoints: [{ ...ENDPOINT, models: 'all' }] },
+      pendingRestart: [],
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    }),
+    expect: refused('frame-malformed'),
+  },
+  {
+    name: 'refused.endpoints-past-bound',
+    wire: controlWire({
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: {
+        ...unsetHostConfiguration(),
+        endpoints: Array.from({ length: MAX_ENDPOINTS + 1 }, (_, index) => ({
+          ...ENDPOINT,
+          name: `endpoint-${index}`,
+        })),
       },
       pendingRestart: [],
       protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
@@ -1554,6 +1654,23 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
       configuration: {
         ...unsetHostConfiguration(),
         agents: [{ ...CLAUDE_ENTRY, controlTier: { level: 'a-level-from-a-newer-peer', degrades: [] } }],
+      },
+      pendingRestart: [],
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    }),
+  ),
+  // Tolerance: a wire API a newer peer adds, on an endpoint entry.
+  asParsed(
+    'link_hello.endpoints-unknown-wire-api',
+    controlWire({
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: {
+        ...unsetHostConfiguration(),
+        endpoints: [{ ...ENDPOINT, wireApi: 'a-wire-api-from-a-newer-peer' }],
       },
       pendingRestart: [],
       protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },

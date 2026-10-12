@@ -17,6 +17,7 @@ import type {
   Frame,
   HostAgent,
   HostAgentEntry,
+  HostEndpoint,
   JsonObject,
   JsonValue,
   WireRefusal,
@@ -26,6 +27,7 @@ import {
   COMPACTION_STATUSES,
   COMPACTION_TRIGGERS,
   COST_BASES,
+  ENDPOINT_WIRE_APIS,
   FRAGMENT_CHANNELS,
   MAX_AGENT_CATALOG_BYTES,
   MAX_AGENT_ENTRIES,
@@ -33,6 +35,9 @@ import {
   MAX_BULK_RELEASES,
   MAX_CONFIGURATION_VALUE_LENGTH,
   MAX_CONFIGURE_ENTRIES,
+  MAX_ENDPOINT_CATALOG_BYTES,
+  MAX_ENDPOINT_MODELS,
+  MAX_ENDPOINTS,
   MAX_FACT_LIST_ENTRIES,
   MAX_FACT_TEXT_LENGTH,
   MAX_FACT_WORD_LENGTH,
@@ -163,6 +168,18 @@ const hostAgentEntrySchema = z.looseObject({
 
 const hostAgentsSchema = z.array(hostAgentEntrySchema).max(MAX_AGENT_ENTRIES);
 
+// One model endpoint the operator declared (protocol 15). The entry is new, so its own members are
+// required; the list that carries it is the optional member. The wire API is a bounded word here, so a
+// newer peer's added API is read; `encode` refuses an API this host does not declare.
+const hostEndpointSchema = z.looseObject({
+  name: z.string().min(1).max(MAX_FACT_WORD_LENGTH),
+  wireApi: z.string().min(1).max(MAX_FACT_WORD_LENGTH),
+  runtimes: z.array(z.string().min(1).max(MAX_FACT_WORD_LENGTH)).max(MAX_AGENT_ENTRIES),
+  models: z.array(agentModelTextSchema).max(MAX_ENDPOINT_MODELS).nullable(),
+});
+
+const hostEndpointsSchema = z.array(hostEndpointSchema).max(MAX_ENDPOINTS);
+
 const hostConfigurationSchema = z.looseObject({
   repositoryRoot: configurationValueSchema,
   workspaceRoot: configurationValueSchema,
@@ -176,6 +193,7 @@ const hostConfigurationSchema = z.looseObject({
   agent: hostAgentSchema.nullable().optional(),
   // Protocol 15, optional for the same reason.
   agents: hostAgentsSchema.nullable().optional(),
+  endpoints: hostEndpointsSchema.nullable().optional(),
 });
 
 /** The key names a hello or a configure result lists as pending: config keys, so short and few. */
@@ -487,6 +505,9 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
         // Protocol 15, and optional: a controller one release behind omits it. A runtime's name is
         // a word; whether this host can spawn it is the host's question, answered by name.
         runtime: z.string().min(1).max(MAX_FACT_WORD_LENGTH).nullable().optional(),
+        // Protocol 15, optional for the same reason. An endpoint's name is a word; whether this host's
+        // operator declared it is the host's question, answered by name.
+        endpoint: z.string().min(1).max(MAX_FACT_WORD_LENGTH).nullable().optional(),
       })
       .nullable(),
   }),
@@ -785,9 +806,9 @@ export function encode(frame: Frame): Result<string> {
     );
   }
 
-  // The same pair for the fact layer's vocabularies and the control tier's levels: a newer peer's word
-  // is read on the way in, and this host may send only the words it declares.
-  const undeclaredWord = undeclaredFactWord(frame) ?? undeclaredTierLevel(frame);
+  // The same pair for the fact layer's vocabularies, the control tier's levels and the endpoints' wire
+  // APIs: a newer peer's word is read on the way in, and this host may send only the words it declares.
+  const undeclaredWord = undeclaredFactWord(frame) ?? undeclaredTierLevel(frame) ?? undeclaredWireApi(frame);
   if (undeclaredWord !== null) {
     return refuse(
       'frame-malformed',
@@ -878,6 +899,24 @@ export function hostAgentsProblem(agents: readonly HostAgentEntry[]): string | n
   const byteCount = utf8ByteLength(JSON.stringify(agents));
   if (byteCount > MAX_AGENT_CATALOG_BYTES) {
     return `the runtimes list is ${byteCount} bytes as JSON, over the ${MAX_AGENT_CATALOG_BYTES} a hello gives it`;
+  }
+  return null;
+}
+
+/**
+ * Why a hello's `endpoints` list cannot ride, or null when it can: the schema a controller decodes it
+ * with, the wire APIs this host may send, and the endpoints' own byte budget. The list is the
+ * operator's configuration, so a host runs this before it starts and refuses a list that fails.
+ */
+export function hostEndpointsProblem(endpoints: readonly HostEndpoint[]): string | null {
+  const shape = hostEndpointsSchema.safeParse(endpoints);
+  if (!shape.success) return shape.error.issues.map(describeIssue).join('; ');
+  const undeclared = undeclaredEndpointApi(endpoints);
+  if (undeclared !== null)
+    return `${undeclared.member} "${undeclared.value}" is not a wire API this host declares`;
+  const byteCount = utf8ByteLength(JSON.stringify(endpoints));
+  if (byteCount > MAX_ENDPOINT_CATALOG_BYTES) {
+    return `the endpoints list is ${byteCount} bytes as JSON, over the ${MAX_ENDPOINT_CATALOG_BYTES} a hello gives it`;
   }
   return null;
 }
@@ -1010,6 +1049,30 @@ function undeclaredEntryLevel(agents: readonly HostAgentEntry[] | null | undefin
     if (typeof tier !== 'object' || tier === null) continue;
     const level = (tier as { level?: unknown }).level;
     const undeclared = wordOutside(`agents.${index}.controlTier.level`, level, CONTROL_TIER_LEVELS);
+    if (undeclared !== null) return undeclared;
+  }
+  return null;
+}
+
+/** The first wire API on an outgoing hello's or configure answer's endpoints that this host does not declare, else null. */
+function undeclaredWireApi(frame: Frame): UndeclaredWord | null {
+  if (frame.frame === 'control') {
+    return frame.payload.kind === 'link_hello'
+      ? undeclaredEndpointApi(frame.payload.configuration.endpoints)
+      : null;
+  }
+  const payload = frame.payload;
+  return payload.kind === 'host_configure_result'
+    ? undeclaredEndpointApi(payload.configuration.endpoints)
+    : null;
+}
+
+/** The first undeclared wire API among a configuration's endpoints, else null. */
+function undeclaredEndpointApi(endpoints: readonly HostEndpoint[] | null | undefined): UndeclaredWord | null {
+  if (!Array.isArray(endpoints)) return null;
+  for (const [index, entry] of (endpoints as readonly unknown[]).entries()) {
+    const api = (entry as { wireApi?: unknown } | null)?.wireApi;
+    const undeclared = wordOutside(`endpoints.${index}.wireApi`, api, ENDPOINT_WIRE_APIS);
     if (undeclared !== null) return undeclared;
   }
   return null;

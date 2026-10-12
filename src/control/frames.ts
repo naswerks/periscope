@@ -47,13 +47,16 @@ export const PROTOCOL_VERSION = 15;
  *
  * Version 15 adds the `agent_facts` update body (the facts a controller acts on, lifted out of the
  * agent's own messages into typed members), the `agent_fragment` delta body, and `runtime` on
- * `agent_message`. It also adds `agents` to the hello's configuration (each runtime this host can
- * spawn, with its vocabularies and control tier), `runtime` on `session_new.request`, `controlTier`
- * on a session's first transition into `ready`, `toolKind` and `runtime` on the decision request, and
- * five refusal reasons for the runtime and endpoint a session names. Each is a new body, an optional
- * member or a reason this host raises only for a member a version-14 controller never sends, so a
- * version-14 controller is still spoken to: it reads the new bodies and members as open JSON it may
- * ignore, and every frame it sends decodes here unchanged. The narrowing of `session_new.request.env` that version 14 made (a key a
+ * `agent_message`. It also adds `agents` and `endpoints` to the hello's configuration (each runtime
+ * this host can spawn, with its vocabularies and control tier, and each model endpoint its operator
+ * declared), `runtime` and `endpoint` on `session_new.request`, `controlTier` on a session's first
+ * transition into `ready`, `toolKind` and `runtime` on the decision request, five refusal reasons for
+ * the runtime and endpoint a session names, and `settings-route-refused` for a repository's settings
+ * file that names a key beneath the env floor. Each is a new body, an optional member or a reason.
+ * Five of the reasons answer only a member a version-14 controller never sends; the sixth answers a
+ * repository's file, and reaches such a controller as a reason it reads tolerantly, as it reads any
+ * reason it does not know. So a version-14 controller is still spoken to: it reads the new bodies and
+ * members as open JSON it may ignore, and every frame it sends decodes here unchanged. The narrowing of `session_new.request.env` that version 14 made (a key a
  * controller places in the spawn environment must be one this host's operator declared, above the
  * floor) holds at every version this host negotiates.
  */
@@ -840,6 +843,15 @@ export interface SessionNewRequest {
    * before anything is reserved; the hello's `agents` lists the runtimes it can.
    */
   readonly runtime?: string | null;
+  /**
+   * The model endpoint the session's model traffic goes to, by the name the hello's `endpoints` lists
+   * (protocol 15). Null or absent is the runtime's own default route. The host applies the endpoint's
+   * address, credential and model variables itself; a controller names an endpoint and never writes
+   * one. Refused before anything is reserved: `endpoint-unknown` for a name the operator did not
+   * declare, `endpoint-incompatible` for an endpoint that cannot carry the session's runtime, and
+   * `model-endpoint-mismatch` for a Claude model on an endpoint that is not Anthropic's own route.
+   */
+  readonly endpoint?: string | null;
 }
 
 /**
@@ -893,9 +905,10 @@ export function sessionNewRequest(asked: Partial<SessionNewRequest> = {}): Sessi
     systemPrompt: asked.systemPrompt ?? null,
     effort: asked.effort ?? null,
     permissionMode: asked.permissionMode ?? null,
-    // Added inside the window, so it is stated only when asked: an unstated runtime is omitted and
-    // reads as the host's default.
+    // Added inside the window, so each is stated only when asked: an unstated runtime or endpoint is
+    // omitted and reads as the host's default.
     ...(asked.runtime === undefined ? {} : { runtime: asked.runtime }),
+    ...(asked.endpoint === undefined ? {} : { endpoint: asked.endpoint }),
   };
 }
 
@@ -927,6 +940,7 @@ export const SESSION_NEW_REQUEST_KEYS = {
   effort: true,
   permissionMode: true,
   runtime: true,
+  endpoint: true,
 } as const satisfies Record<keyof SessionNewRequest, true>;
 
 /** The same, for the payload itself. Same argument, one level up. */
@@ -1995,12 +2009,51 @@ export interface HostAgentEntry {
 }
 
 /**
+ * The wire APIs a model endpoint can speak (protocol 15): Anthropic's Messages API, and OpenAI's
+ * Responses and Chat Completions APIs. A runtime speaks one or more of them, and an endpoint is
+ * reachable only by the runtimes that speak its API.
+ */
+export const ENDPOINT_WIRE_APIS = ['anthropic-messages', 'openai-responses', 'openai-chat'] as const;
+
+export type EndpointWireApi = (typeof ENDPOINT_WIRE_APIS)[number];
+
+/** The most model endpoints a hello lists: a list, not a catalogue. */
+export const MAX_ENDPOINTS = 8;
+
+/** The most model ids one endpoint lists, its alias ids included. */
+export const MAX_ENDPOINT_MODELS = 32;
+
+/**
+ * The most bytes the endpoints list may take on the hello, as JSON. Held apart from the catalog's
+ * budget, because the two fail differently: a catalog that cannot ride is read at start and rides as
+ * null, while the endpoints are the operator's configuration, refused at start when they would not
+ * fit. With every other bound on the hello filled, the whole still fits `MAX_FRAME_BYTES`.
+ */
+export const MAX_ENDPOINT_CATALOG_BYTES = 8 * 1024;
+
+/**
+ * One model endpoint this host's operator declared, as the hello states it (protocol 15).
+ *
+ * `name` is what `session_new.request.endpoint` takes; `wireApi` is the API the endpoint speaks;
+ * `runtimes` lists the runtimes that can reach it, each of which speaks that API; `models` is every
+ * model id a session may name on it, alias ids included. The endpoint's address, its credential and
+ * whether it is Anthropic's own route stay with the host, and none of them is on the wire.
+ */
+export interface HostEndpoint {
+  readonly name: string;
+  readonly wireApi: EndpointWireApi;
+  readonly runtimes: readonly string[];
+  readonly models: readonly string[] | null;
+}
+
+/**
  * How this host is configured, as values: the read half of `periscope config`.
  *
  * The `workspace:*` capability markers say which mode a host is in; these say what it is pointed
- * at. Every member but `agent` and `agents` is `T | null` (absent is null, never undefined), and null
- * means the setting is not set on the host, not that the host declined to say. `agent` and `agents`
- * were added inside the protocol window and are optional (see this file's header). `controllerUrl` is what the host
+ * at. Every member but `agent`, `agents` and `endpoints` is `T | null` (absent is null, never
+ * undefined), and null means the setting is not set on the host, not that the host declined to say.
+ * `agent`, `agents` and `endpoints` were added inside the protocol window and are optional (see this
+ * file's header). `controllerUrl` is what the host
  * dialled to deliver this frame, reported so a controller can show it beside the rest; nothing here
  * is an ask, so nothing here can be refused.
  */
@@ -2036,6 +2089,13 @@ export interface HostConfiguration {
    * same read: null when `agent` is null, absent when it is absent. Never settable.
    */
   readonly agents?: readonly HostAgentEntry[] | null;
+  /**
+   * The model endpoints this host's operator declared (protocol 15), at most `MAX_ENDPOINTS`, held to
+   * `MAX_ENDPOINT_CATALOG_BYTES` as JSON. Absent when the operator declared none, and from a host one
+   * release behind. Never settable: the operator's configuration is the only place an endpoint comes
+   * from.
+   */
+  readonly endpoints?: readonly HostEndpoint[] | null;
 }
 
 /** A `HostConfiguration` with nothing set: what a host composed without one reports. */

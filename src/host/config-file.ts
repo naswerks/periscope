@@ -42,6 +42,7 @@ export const CONFIG_KEYS = [
   'PERISCOPE_AGENT_HOME',
   'PERISCOPE_PLUGIN_DIRS',
   'PERISCOPE_CONTROLLER_ENV_KEYS',
+  'PERISCOPE_MODEL_ENDPOINTS',
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -51,9 +52,10 @@ export type ConfigKey = (typeof CONFIG_KEYS)[number];
  * and where its control plane is. The two URLs are written to the file and never applied to
  * the live link: the host dials what it dialled until its next start, and names the keys as pending
  * in its answer and in every hello until then. Never the host id (a paired credential outranks it
- * anyway), the default workspace key (a start-up posture, screened at boot), or the names a
+ * anyway), the default workspace key (a start-up posture, screened at boot), the names a
  * controller may place in a spawn's environment (a controller able to write that list would declare
- * its own keys).
+ * its own keys), or the file of model endpoints (a controller able to point it elsewhere would choose
+ * the address and the credential a session's model calls use).
  */
 export const WIRE_CONFIGURABLE_KEYS = [
   'PERISCOPE_WORKSPACE_ROOT',

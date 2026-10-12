@@ -436,6 +436,18 @@ export const REFUSAL_REASONS = [
   'endpoint-unknown',
   'endpoint-incompatible',
   'model-endpoint-mismatch',
+
+  // A repository's own agent settings, read when the session's directory is known. The agent CLI
+  // applies a settings file's `env` to itself after every screen this host runs, so a key there would
+  // reach the agent's environment past them.
+  //
+  //   settings-route-refused    A repository-tier settings file the session loads
+  //                             (`.claude/settings.json` for the `project` tier,
+  //                             `.claude/settings.local.json` for `local`) names in its `env` a key
+  //                             beneath the extended env floor: the model route and its credentials,
+  //                             a proxy, the certificates trusted, the loader. Refused before the agent
+  //                             starts; the detail names each file and its keys.
+  'settings-route-refused',
 ] as const;
 
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];

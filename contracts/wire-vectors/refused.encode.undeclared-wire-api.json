@@ -1,0 +1,51 @@
+{
+  "expect": {
+    "encode": "refused",
+    "reason": "frame-malformed"
+  },
+  "frame": {
+    "frame": "control",
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "link_hello",
+      "protocolVersion": 15,
+      "hostId": "host-1",
+      "capabilities": [],
+      "cursors": [],
+      "configuration": {
+        "repositoryRoot": null,
+        "workspaceRoot": null,
+        "branchScheme": null,
+        "transcriptsRoot": null,
+        "controllerUrl": null,
+        "decisionUrl": null,
+        "agentHome": null,
+        "plugins": [],
+        "endpoints": [
+          {
+            "name": "example-endpoint",
+            "wireApi": "a-wire-api-this-host-does-not-declare",
+            "runtimes": [
+              "claude"
+            ],
+            "models": [
+              "example-model[1m]",
+              "example-model",
+              "opus",
+              "sonnet",
+              "haiku"
+            ]
+          }
+        ]
+      },
+      "pendingRestart": [],
+      "protocolRange": {
+        "min": 14,
+        "max": 15
+      }
+    }
+  },
+  "name": "refused.encode.undeclared-wire-api",
+  "protocolVersion": 15,
+  "wire": null
+}

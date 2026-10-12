@@ -88,6 +88,16 @@ export type {
 } from './host/index.js';
 export { PeriscopeHost, composeSession, readAgentCatalog } from './host/index.js';
 
+// The model endpoints an operator declares, read the way the binary reads them.
+export type {
+  EndpointContextWindow,
+  ModelAliasTier,
+  ModelEndpoint,
+  ModelEndpointsReadOptions,
+  ModelEndpointsReading,
+} from './host/index.js';
+export { readModelEndpoints } from './host/index.js';
+
 // Identity — the pure flows, plus the two impure halves that live in `host/` by the same rule as
 // everything else that touches the machine.
 export * from './identity/index.js';

@@ -10,8 +10,10 @@
  * Protocol 15 adds bodies such a controller receives as open JSON (the `agent_facts` update and the
  * `agent_fragment` delta), so what is read here is that traffic, the new bodies and the members
  * protocol 12 added included. It also adds members such a controller carries without reading: the
- * hello's `agents`, a first `ready` transition's `controlTier`, and `toolKind` and `runtime` on the
- * decision request, whose body that release's `DecisionRequest` describes (`V14_DECISION_REQUEST`).
+ * hello's `agents` and `endpoints`, a first `ready` transition's `controlTier`, and `toolKind` and
+ * `runtime` on the decision request, whose body that release's `DecisionRequest` describes
+ * (`V14_DECISION_REQUEST`). And it adds `endpoint` to `session_new.request`, which such a controller
+ * never sends: its request opens on the runtime's own route.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,6 +38,7 @@ import { tempDir } from '../test-support/temp-dir.js';
 import { peerOn, waitFor } from '../test-support/ws-peer.js';
 import type { HookInput, SDKMessage } from './agent-process.js';
 import { PeriscopeHost } from './host.js';
+import type { ModelEndpoint } from './model-endpoints.js';
 import { readSessionConfigure } from './wire-request.js';
 
 // ---------------------------------------------------------------------------
@@ -191,6 +194,28 @@ const CLAUDE_ENTRY = {
   unavailableReason: null,
 };
 
+/** An endpoint this build's host declares; a protocol-14 controller carries the hello's list unread. */
+const ENDPOINT: ModelEndpoint = {
+  name: 'example-endpoint',
+  wireApi: 'anthropic-messages',
+  runtimes: ['claude'],
+  baseUrl: 'https://endpoint.example/anthropic',
+  models: ['example-model'],
+  modelAliases: { opus: 'example-model', sonnet: 'example-model', haiku: 'example-model' },
+  contextWindow: null,
+  env: {},
+  firstParty: false,
+  authToken: () => 'example-token',
+};
+
+/** What the hello's endpoints list states for `ENDPOINT`. */
+const ENDPOINT_ENTRY = {
+  name: 'example-endpoint',
+  wireApi: 'anthropic-messages',
+  runtimes: ['claude'],
+  models: ['example-model', 'opus', 'sonnet', 'haiku'],
+};
+
 interface Sent {
   readonly kind: string;
   readonly raw: string;
@@ -223,6 +248,7 @@ test('a controller on protocol 14 decodes every frame a host of this build sends
     protectedPaths: [],
     registry: new SessionRegistry({ baseEnv: {}, homeDir: cwd, startProcess: agents.start }),
     agentCatalog: () => Promise.resolve({ ok: true, agent: AGENT }),
+    endpoints: [ENDPOINT],
   });
 
   try {
@@ -371,6 +397,16 @@ test('a controller on protocol 14 decodes every frame a host of this build sends
       [CLAUDE_ENTRY],
       'the configure answer carries the runtimes list',
     );
+    assert.deepEqual(
+      helloConfiguration['endpoints'],
+      [ENDPOINT_ENTRY],
+      'the hello carries the endpoints list',
+    );
+    assert.deepEqual(
+      (answer?.payload['configuration'] as Record<string, unknown>)['endpoints'],
+      [ENDPOINT_ENTRY],
+      'the configure answer carries the endpoints list',
+    );
     const ready = read
       .filter((one) => one.kind === 'session_update')
       .map((one) => readStateTransition(bodyOf(one) as JsonObject))
@@ -405,11 +441,23 @@ test('a controller on protocol 14 is read in turn: its configure, effort include
     decide: allow,
     protectedPaths: [],
     registry: new SessionRegistry({ baseEnv: {}, homeDir: cwd, startProcess: agents.start }),
+    endpoints: [ENDPOINT],
   });
 
   try {
     host.start();
     await waitFor(() => host.link.negotiatedVersion === 14, 'the welcome at 14', TIMEOUT_MS);
+    // The first hello, sent with no catalog read, carries the endpoints, and the protocol-14 decoder
+    // reads it.
+    const firstHello = sentFrames(peer.raw).find((one) => one.kind === 'link_hello');
+    assert.ok(firstHello !== undefined, 'the hello was captured');
+    assert.ok(
+      V14.safeParse(JSON.parse(firstHello.raw)).success,
+      'a protocol-14 controller refuses the hello',
+    );
+    assert.deepEqual((firstHello.payload['configuration'] as Record<string, unknown>)['endpoints'], [
+      ENDPOINT_ENTRY,
+    ]);
     peer.send('session-1', 1, sessionNew(cwd));
     await waitFor(() => agents.started.length === 1, 'the session to start', TIMEOUT_MS);
     const agent = agents.started[0]!;
@@ -459,6 +507,9 @@ test('a controller on protocol 14 is read in turn: its configure, effort include
     peer.send('session-2', 1, openedFromV14 as SessionNew);
     await waitFor(() => agents.started.length === 2, 'the protocol-14 open to start a session', TIMEOUT_MS);
     assert.equal(agents.started[1]?.request.effort, 'high');
+    // It names no endpoint, so it takes the runtime's own route on a host that declares one.
+    assert.equal('ANTHROPIC_BASE_URL' in (agents.started[1]?.request.env ?? {}), false);
+    assert.equal('ANTHROPIC_AUTH_TOKEN' in (agents.started[1]?.request.env ?? {}), false);
   } finally {
     host.stop();
     await peer.close();

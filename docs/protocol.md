@@ -94,18 +94,23 @@ the open `capabilities` list needs no version bump; a new hello member does. The
 - the `agent_fragment` delta body (below);
 - `runtime` on `agent_message`, optional (below);
 - `agents` on the hello's `configuration`, optional: the runtimes the host can spawn (below);
-- `runtime` on `session_new.request`, optional (below);
+- `endpoints` on the hello's `configuration`, optional: the model endpoints the host's operator
+  declared (below);
+- `runtime` and `endpoint` on `session_new.request`, optional (below);
 - `controlTier` on a session's first transition into `ready`, optional (below);
 - `toolKind` and `runtime` on the decision request, optional (below);
-- five refusal reasons for the runtime and the model endpoint a session names (below).
+- five refusal reasons for the runtime and the model endpoint a session names, and
+  `settings-route-refused` for a repository's settings file that names a key beneath the env floor
+  (below).
 
 It adds no payload kind and no required member to an existing body. A version-14 controller is
 still spoken to: it reads the new bodies as open JSON it may ignore, since every reader it has
-returns null for an `update` it does not know, carries the new members unread, and never sends the
-member the new reasons answer; every frame it sends decodes here unchanged. Version 14 narrowed
+returns null for an `update` it does not know, carries the new members unread, never sends the
+members five of the new reasons answer, and reads the sixth, `settings-route-refused`, as it reads any
+reason it does not know; every frame it sends decodes here unchanged. Version 14 narrowed
 `session_new.request.env` (below), and the narrowing holds at every version the host negotiates.
 `src/host/protocol-window.test.ts` holds both directions over a real link: every frame this host
-sends, its facts, fragments, runtimes list and tier included, decodes with the protocol-14 decoder
+sends, its facts, fragments, runtimes list, endpoints list and tier included, decodes with the protocol-14 decoder
 v1.5.0 shipped, and the decision request it posts reads as that release's `DecisionRequest`; a
 version-14 controller's `session_new` and `session_configure` decode here and apply.
 
@@ -162,6 +167,28 @@ This host lists one runtime, Claude, built from the same catalog read `agent` ca
 is null when `agent` is null and absent when it is absent. The whole list is held to
 `MAX_AGENT_CATALOG_BYTES` as JSON, and a list that cannot ride takes the catalog with it: both ride
 null, named once. A `host_configure_result` carries the same `agents`.
+
+From v15, `configuration.endpoints` lists the model endpoints the host's operator declared, one
+`HostEndpoint` each, at most `MAX_ENDPOINTS`, and is optional:
+
+- `name`: what `session_new.request.endpoint` names it by.
+- `wireApi`: the API the endpoint speaks, one of `ENDPOINT_WIRE_APIS` (`anthropic-messages`,
+  `openai-responses`, `openai-chat`). A wire API a newer peer adds is read; the host sends only the
+  ones it declares.
+- `runtimes`: the runtimes that can reach it. Each speaks the endpoint's wire API (Claude speaks
+  `anthropic-messages`), and the host refuses at start an endpoint naming one that does not, so a
+  controller filters its picker on `runtimes` with no table of its own.
+- `models`: every model id a session may name on it, at most `MAX_ENDPOINT_MODELS`: the endpoint's
+  own ids, as the agent sends them (a `[1m]` suffix included where the endpoint declares one), and
+  the alias ids (`opus`, `sonnet`, `haiku`, `fable`) the endpoint maps to them.
+
+An endpoint's address, its credential, and whether it is Anthropic's own route stay with the host,
+and none of them is on the wire. The list is the operator's configuration (`PERISCOPE_MODEL_ENDPOINTS`,
+[configuration](configuration.md)), so it is absent when none is declared, and it is held to its own
+`MAX_ENDPOINT_CATALOG_BYTES` of JSON beside the catalog's budget: the host refuses at start a list past
+it, rather than letting it push the runtimes list out of the hello. With every bound on the hello
+filled, the hello still fits `MAX_FRAME_BYTES` (`src/control/codec-endpoints.test.ts`). A
+`host_configure_result` carries the same `endpoints`.
 
 ## The credential on the three transports
 
@@ -427,8 +454,8 @@ certificates trusted, the model endpoint, provider and credentials, every proxy)
 
 `session_new.request` carries `resume`, `fork`, `settingSources`, `plugins`, `mcpServers`,
 `strictMcpConfig`, `includePartialMessages`, `thinking`, `forwardSubagentText`, `env`, `model`,
-`systemPrompt`, `effort` and `permissionMode` (the SDK's own vocabularies), and from v15 `runtime`,
-which is optional. The narrowing site from
+`systemPrompt`, `effort` and `permissionMode` (the SDK's own vocabularies), and from v15 `runtime`
+and `endpoint`, which are optional. The narrowing site from
 a wire request to a local one is `src/host/wire-request.ts`; the members of the in-process API that
 have no JSON form are structurally absent.
 
@@ -463,6 +490,33 @@ settings, plugins or agent frontmatter is loaded. In-process tool descriptors ar
 naming the runtime and what the host offers. The hello's `agents` is the list a controller picks
 from.
 
+`endpoint` names the model endpoint the session's model traffic goes to, by a name the hello's
+`endpoints` lists. Null or absent is the runtime's own route. A controller names an endpoint and
+never describes one: the host sets the endpoint's address, credential and model variables in the
+agent's environment itself, from its operator's configuration, after the controller's own `env` lanes
+and never through the floor that screens them. Refused before anything is reserved, each with one
+meaning:
+
+- `endpoint-unknown`: a name the operator did not declare. The detail names it and the endpoints the
+  hello lists.
+- `endpoint-incompatible`: the endpoint cannot carry the session's runtime, because its `runtimes`
+  exclude it or it speaks a wire API the runtime does not.
+- `model-endpoint-mismatch`: on an endpoint the operator did not mark as Anthropic's own route, a
+  `model` beginning `claude-`, or an alias the endpoint does not map (`default`, `best`, `opusplan`,
+  an unmapped `fable`, each with or without `[1m]`), which the agent resolves to a Claude model id. A
+  provider that maps Claude ids to its own model would answer in its place while the run reads, and
+  is priced, as the Claude model it named. The detail names the model and the endpoint. A session
+  that names no model is not refused; every such endpoint maps `opus`, `sonnet` and `haiku`.
+
+A session whose `settingSources` include `project` or `local` loads the repository's own
+`.claude/settings.json` or `.claude/settings.local.json` from its working directory, and the agent
+applies a settings file's `env` to itself after every screen the host runs. So the host reads those
+files when the session's directory is known, and a file whose `env` names a key beneath the floor
+(`EXTRA_ENV_FLOOR`, its names and its patterns, matched case-insensitively) refuses the session
+`settings-route-refused`, the detail naming each file and its keys. A file the host can read neither
+as strict JSON nor with its comments and trailing commas removed carries nothing the agent would
+apply, and passes, as does a missing one; the user tier is the operator's own file and is not read.
+
 `env` is `{ extraAllowedKeys, extraDeniedKeys, extraEnv }`, each nullable: names of the host's own
 environment to re-admit into the spawn (the credential-shaped deny list still wins), names to deny,
 and values to set outright after the allow-list has run. The two lanes that add a key are screened:
@@ -481,12 +535,12 @@ A `session_new` the host will not honour answers on the wire as a `session_updat
 transition `spawning` to `ended` with cause kind `refusal` and the reason as its event, `seq: 1`,
 `sessionId: null` in the body and the controller's handle on the frame. Every refusal on the open
 path rides it (`permission-grant-shadows-settings`, `workspace-provision-failed`,
-`resume-cwd-not-honoured`, `runtime-unavailable`, an unusable key); the consumer's job is to end its record of the session and
+`resume-cwd-not-honoured`, `runtime-unavailable`, the three endpoint reasons, `settings-route-refused`, an unusable key); the consumer's job is to end its record of the session and
 show the cause. A `session_prompt` that arrives while its session is still opening is held, then delivered,
 refused or withdrawn; it is never dropped.
 
 A `session_configure` that fails answers on the session's own state lane, as a transition from its
-state to the same state with cause kind `refusal`. There are two reasons:
+state to the same state with cause kind `refusal`. There are three reasons:
 
 - **`session-configure-failed`:** the agent refused a control. The detail names the member and
   carries the agent's text; the members before it were applied, and the ones after it were not.
@@ -494,6 +548,8 @@ state to the same state with cause kind `refusal`. There are two reasons:
   that refusal arrives this way ([gate.md](gate.md)).
 - **`frame-malformed`:** the host refused a value, such as an unknown mode or effort level, or a
   fixed thinking budget.
+- **`model-endpoint-mismatch`:** a switch, on a session opened on an endpoint not marked as
+  Anthropic's own route, to a model the open would have refused there. Nothing was applied.
 
 A configure for a handle this host does not hold, or for a session still opening, is reported on the
 host's own trace only.
@@ -655,24 +711,25 @@ learn it before it can answer with it. Count the entries in the file; never carr
 
 The reasons a controller meets most, and what each is not:
 
-| reason                                                                                  | names                                                                                                                                                                                        |
-| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frame-not-json`, `frame-malformed`, `frame-too-large`                                  | the codec's three; the last names the bulk lane                                                                                                                                              |
-| `seq-gap`, `seq-regressed`                                                              | the receiver's inbound lane; the refusal's `expected` is where to resume                                                                                                                     |
-| `link-unauthorized`                                                                     | the peer refused this host's identity at the door; terminal, never retried. Not `link-send-failed`, which names a transport that faltered                                                    |
-| `session-unknown`                                                                       | a handle that does not and never will exist, or a held turn over the bound                                                                                                                   |
-| `session-configure-failed`                                                              | the agent refused one of a `session_configure`'s controls; the detail names the member, and the members before it were applied. Not `frame-malformed`, which is the host refusing a value    |
-| `permission-decision-unavailable`, `permission-decision-unrecognised`                   | an outage, and a decision this build does not know; neither is an allow                                                                                                                      |
-| `transcript-path-escape`                                                                | a caller-supplied name that failed one of the discovery jail's three layers; the refusal names the layer                                                                                     |
-| `bulk-target-not-controller`, `bulk-target-invalid`                                     | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                              |
-| `resume-cwd-not-honoured`                                                               | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                             |
-| `runtime-unavailable`                                                                   | a `session_new` naming a runtime the host cannot spawn: unknown, or listed `available: false`; the detail names it and what the host offers                                                  |
-| `request-key-unsupported`                                                               | a `session_new` member the named runtime does not honour; the detail names the key. Every member is Claude's own, so a session on Claude never meets it                                      |
-| `endpoint-unknown`, `endpoint-incompatible`, `model-endpoint-mismatch`                  | a model endpoint the host's operator did not declare; one whose runtimes or wire API exclude the session's runtime; a `claude-` model id for an endpoint not marked as Anthropic's own route |
-| `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed` | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                        |
-| `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force`        |
-| `repository-path-escape`, `repository-read-failed`                                      | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                         |
-| `workspace-path-escape`, `workspace-read-failed`                                        | the same two over a workspace's directory; the second also names an unusable key, an offset inside a character or past the end, and a file larger than the read serves                       |
+| reason                                                                                  | names                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frame-not-json`, `frame-malformed`, `frame-too-large`                                  | the codec's three; the last names the bulk lane                                                                                                                                                                                                                       |
+| `seq-gap`, `seq-regressed`                                                              | the receiver's inbound lane; the refusal's `expected` is where to resume                                                                                                                                                                                              |
+| `link-unauthorized`                                                                     | the peer refused this host's identity at the door; terminal, never retried. Not `link-send-failed`, which names a transport that faltered                                                                                                                             |
+| `session-unknown`                                                                       | a handle that does not and never will exist, or a held turn over the bound                                                                                                                                                                                            |
+| `session-configure-failed`                                                              | the agent refused one of a `session_configure`'s controls; the detail names the member, and the members before it were applied. Not `frame-malformed`, which is the host refusing a value                                                                             |
+| `permission-decision-unavailable`, `permission-decision-unrecognised`                   | an outage, and a decision this build does not know; neither is an allow                                                                                                                                                                                               |
+| `transcript-path-escape`                                                                | a caller-supplied name that failed one of the discovery jail's three layers; the refusal names the layer                                                                                                                                                              |
+| `bulk-target-not-controller`, `bulk-target-invalid`                                     | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                                                                                                       |
+| `resume-cwd-not-honoured`                                                               | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                                                                                                      |
+| `runtime-unavailable`                                                                   | a `session_new` naming a runtime the host cannot spawn: unknown, or listed `available: false`; the detail names it and what the host offers                                                                                                                           |
+| `request-key-unsupported`                                                               | a `session_new` member the named runtime does not honour; the detail names the key. Every member is Claude's own, so a session on Claude never meets it                                                                                                               |
+| `endpoint-unknown`, `endpoint-incompatible`, `model-endpoint-mismatch`                  | a model endpoint the host's operator did not declare; one whose runtimes or wire API exclude the session's runtime; a `claude-` model id, or an alias the endpoint does not map, on an endpoint not marked as Anthropic's own route, at the open or on a later switch |
+| `settings-route-refused`                                                                | a repository settings file the session loads names a key beneath the env floor in its `env`; the detail names the file and the keys. Not `env-key-refused`, which is the controller's own lanes                                                                       |
+| `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed` | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                                                                                                 |
+| `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force`                                                                                 |
+| `repository-path-escape`, `repository-read-failed`                                      | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                                                                                                  |
+| `workspace-path-escape`, `workspace-read-failed`                                        | the same two over a workspace's directory; the second also names an unusable key, an offset inside a character or past the end, and a file larger than the read serves                                                                                                |
 
 `protocol_version_rejected` is not a refusal reason but a link cause: the windows did not overlap,
 and the link's state reports it.
@@ -757,7 +814,9 @@ Over the link:
 | `src/host/bulk-post.ts`                                              | The streamed outbound POST behind `bulk_request` and its origin bind                                                                                                                  |
 | `src/gate/decision.ts`                                               | The permission types the subpath re-exports, and `TOOL_KINDS`                                                                                                                         |
 | `src/gate/tool-kind.ts`                                              | Claude's map from a tool name to its `toolKind`                                                                                                                                       |
-| `src/sessions/runtimes.ts`                                           | `CONTROL_TIERS`, the tier per runtime, and `runtimeOf`, the runtime a session request names                                                                                           |
+| `src/sessions/runtimes.ts`                                           | `CONTROL_TIERS`, the tier per runtime; `RUNTIME_WIRE_APIS`, the wire APIs each runtime speaks; and `runtimeOf`, the runtime a session request names                                   |
+| `src/host/model-endpoints.ts`                                        | The operator's model endpoints: the file read and checked at start, the hello's entries, the variables a session on one is spawned with, and the model rule                           |
+| `src/host/repository-settings.ts`                                    | The repository's own settings tiers, read before a session that loads them starts                                                                                                     |
 | `src/host/claude-runtime.ts`                                         | Claude's entry in the hello's `agents`                                                                                                                                                |
 | `src/host/wire-request.ts`                                           | The single narrowing from `session_new.request` and `session_configure` to local requests                                                                                             |
 | `contracts/wire-vectors/`                                            | The byte-level contract                                                                                                                                                               |
