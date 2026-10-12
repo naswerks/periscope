@@ -11,10 +11,17 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { hostAgentProblem } from '../control/codec.js';
-import type { HostAgent, HostConfiguration, HostModel, SessionPayload } from '../control/frames.js';
+import { hostAgentProblem, hostAgentsProblem } from '../control/codec.js';
+import type {
+  HostAgent,
+  HostAgentEntry,
+  HostConfiguration,
+  HostModel,
+  SessionPayload,
+} from '../control/frames.js';
 import {
   MAX_AGENT_CATALOG_BYTES,
+  MAX_AGENT_ENTRIES,
   MAX_AGENT_MODELS,
   hostConfigure,
   unsetHostConfiguration,
@@ -29,6 +36,7 @@ import { readAgentCatalogWith } from './agent-process.js';
 import type { HostEvent, HostLink } from './host.js';
 import { PeriscopeHost } from './host.js';
 import { agentSdkFacts } from './package-facts.js';
+import { EFFORT_LEVELS, PERMISSION_MODES } from './wire-request.js';
 
 const at = (path: string): string => fileURLToPath(new URL(path, import.meta.url));
 
@@ -364,5 +372,122 @@ test('a configure answer and the hello after it keep the catalog, though the fil
   const configuration = (answer.payload as unknown as { configuration: HostConfiguration }).configuration;
   assert.deepEqual(configuration.agent, AGENT, 'the answer dropped the catalog');
   assert.deepEqual(link.announced?.agent, AGENT, 'the next hello dropped the catalog');
+  host.stop();
+});
+
+// --- the runtimes list ------------------------------------------------------
+
+/** What the hello's list states for Claude over `agent`: the same read, with what this host adds. */
+const claudeEntryOver = (agent: HostAgent): HostAgentEntry => ({
+  runtime: 'claude',
+  version: agent.claudeCodeVersion,
+  sdkVersion: agent.sdkVersion,
+  models: agent.models,
+  vocabularies: {
+    permissionModes: ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    thinking: true,
+  },
+  controlTier: { level: 'intercepted', degrades: [] },
+  available: true,
+  unavailableReason: null,
+});
+
+test('the first hello lists Claude in agents from the same read as agent, with its vocabularies and tier', async () => {
+  const { host, link } = hostWith(() => Promise.resolve({ ok: true, agent: AGENT }));
+  host.start();
+  await drain();
+  await drain();
+
+  assert.deepEqual(link.announced?.agent, AGENT);
+  assert.deepEqual(link.announced?.agents, [claudeEntryOver(AGENT)]);
+  // The vocabularies are the ones this host narrows a request to, not a second copy of them.
+  const [entry] = link.announced?.agents ?? [];
+  assert.deepEqual(entry?.vocabularies.permissionModes, [...PERMISSION_MODES]);
+  assert.deepEqual(entry?.vocabularies.efforts, [...EFFORT_LEVELS]);
+  host.stop();
+});
+
+test('a read with nothing the hello can carry gives agents null beside agent null, whatever failed', async () => {
+  const cases: [string, () => Promise<AgentCatalog>][] = [
+    ['a failed read', () => Promise.resolve({ ok: false, detail: 'the agent did not answer within 20ms' })],
+    ['a throwing read', () => Promise.reject(new Error('boom'))],
+    [
+      'an oversized catalog',
+      () => Promise.resolve({ ok: true, agent: { ...AGENT, models: models(MAX_AGENT_MODELS + 1, 'short') } }),
+    ],
+  ];
+  for (const [what, read] of cases) {
+    const { host, link } = hostWith(read);
+    host.start();
+    await drain();
+    await drain();
+    assert.equal(link.announced?.agent, null, `${what}: agent`);
+    assert.equal(link.announced?.agents, null, `${what}: agents`);
+    host.stop();
+  }
+});
+
+test('one answer covers both: a catalog that fits while its runtimes list does not takes the catalog with it', async () => {
+  // The longest description for which the catalog fits its budget; the list, a little larger for the
+  // members it adds, then does not.
+  let length = 0;
+  while (hostAgentProblem({ ...AGENT, models: models(MAX_AGENT_MODELS, 'x'.repeat(length + 1)) }) === null) {
+    length += 1;
+  }
+  const edge: HostAgent = { ...AGENT, models: models(MAX_AGENT_MODELS, 'x'.repeat(length)) };
+  assert.equal(hostAgentProblem(edge), null, 'the catalog itself fits');
+  assert.match(hostAgentsProblem([claudeEntryOver(edge)]) ?? '', /runtimes list is \d+ bytes/);
+
+  const { host, link, events } = hostWith(() => Promise.resolve({ ok: true, agent: edge }));
+  host.start();
+  await drain();
+  await drain();
+  assert.equal(link.announced?.agent, null);
+  assert.equal(link.announced?.agents, null);
+  const reported = events.find((event) => event.kind === 'agent-catalog');
+  assert.match(reported?.kind === 'agent-catalog' ? (reported.detail ?? '') : '', /runtimes list/);
+  host.stop();
+});
+
+test('the runtimes list is bounded in count, in its tier levels and in bytes, each named', () => {
+  const entry = claudeEntryOver(AGENT);
+  assert.equal(hostAgentsProblem([entry]), null);
+  assert.equal(
+    hostAgentsProblem(Array.from({ length: MAX_AGENT_ENTRIES }, () => entry)),
+    null,
+    'the bound is inclusive',
+  );
+  assert.match(hostAgentsProblem(Array.from({ length: MAX_AGENT_ENTRIES + 1 }, () => entry)) ?? '', /8/);
+  assert.match(
+    hostAgentsProblem([
+      { ...entry, controlTier: { level: 'a-level-this-host-does-not-declare' as 'none', degrades: [] } },
+    ]) ?? '',
+    /not a level this host declares/,
+  );
+});
+
+test('a configure answer and the hello after it keep agents beside agent', async () => {
+  const { host, link } = hostWith(() => Promise.resolve({ ok: true, agent: AGENT }), { reconfigure: true });
+  host.start();
+  await drain();
+  await drain();
+
+  link.handlers?.onSessionFrame({
+    frame: 'session',
+    sessionId: 'host-channel',
+    seq: 1,
+    at: '2000-01-01T00:00:00.000Z',
+    payload: hostConfigure('request-1', [{ key: 'PERISCOPE_BRANCH_SCHEME', value: '{key}' }]),
+  });
+
+  const answer = link.sent.find((entry) => entry.payload.kind === 'host_configure_result');
+  const configuration = (answer?.payload as unknown as { configuration: HostConfiguration }).configuration;
+  assert.deepEqual(configuration.agents, [claudeEntryOver(AGENT)], 'the answer dropped the runtimes list');
+  assert.deepEqual(
+    link.announced?.agents,
+    [claudeEntryOver(AGENT)],
+    'the next hello dropped the runtimes list',
+  );
   host.stop();
 });

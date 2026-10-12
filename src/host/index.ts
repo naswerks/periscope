@@ -66,6 +66,27 @@ export {
   periscopeCredentialDir,
   tokenCachePath,
 } from './paths.js';
+// The model endpoints the operator declares: read and checked at start, offered in the hello by name,
+// applied to a session that names one.
+export type {
+  EndpointContextWindow,
+  ModelAliasTier,
+  ModelEndpoint,
+  ModelEndpointsReadOptions,
+  ModelEndpointsReading,
+} from './model-endpoints.js';
+export {
+  AGENT_MODEL_ALIASES,
+  MODEL_ALIAS_TIERS,
+  endpointModelProblem,
+  endpointSpawnEnv,
+  hostEndpointsOf,
+  readModelEndpoints,
+} from './model-endpoints.js';
+
+// The repository's own settings tiers, read before a session that loads them starts.
+export { settingsRouteRefusal } from './repository-settings.js';
+
 export type { ConfigFileReading, ConfigKey } from './config-file.js';
 export {
   CONFIG_KEYS,

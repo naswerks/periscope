@@ -45,6 +45,7 @@ import { PairedHostCredential, TokenCredential, identityPosture } from '../ident
 import { SessionRegistry } from '../sessions/registry.js';
 import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import { readConfigFile } from '../host/config-file.js';
+import { readModelEndpoints } from '../host/model-endpoints.js';
 import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
 import { MAX_PLUGIN_DIRS } from '../control/frames.js';
 import { writeLinkState } from '../host/link-state-file.js';
@@ -144,6 +145,8 @@ interface Config {
   readonly pluginDirs: string | null;
   /** The names a controller may place in a spawn's environment. Empty = none. */
   readonly controllerEnvKeys: readonly string[];
+  /** The file of model endpoints the operator declares. Null = none. */
+  readonly modelEndpoints: string | null;
 }
 
 function readConfig(env: NodeJS.ProcessEnv): Config | string {
@@ -184,6 +187,12 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     if (problem !== null) return problem;
   }
 
+  const modelEndpoints = env['PERISCOPE_MODEL_ENDPOINTS'];
+  if (modelEndpoints !== undefined && modelEndpoints !== '') {
+    const problem = configValueProblem('PERISCOPE_MODEL_ENDPOINTS', modelEndpoints);
+    if (problem !== null) return problem;
+  }
+
   const configuredHostId = env['PERISCOPE_HOST_ID'];
   return {
     controllerUrl,
@@ -201,6 +210,7 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     agentHome: env['PERISCOPE_AGENT_HOME'] ?? null,
     pluginDirs: env['PERISCOPE_PLUGIN_DIRS'] ?? null,
     controllerEnvKeys: parseControllerEnvKeys(controllerEnvKeys),
+    modelEndpoints: modelEndpoints === undefined || modelEndpoints === '' ? null : modelEndpoints,
   };
 }
 
@@ -376,6 +386,12 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
   if (pluginProblem !== null) return refuse(`PERISCOPE_PLUGIN_DIRS: ${pluginProblem}`);
 
   const raw = views.raw;
+
+  // The model endpoints, read, checked and their credentials resolved now: an entry this host could
+  // not honour would refuse every session that named it, so it refuses start instead, by name. An
+  // `env` credential is read from the process environment as received.
+  const endpoints = config.modelEndpoints === null ? null : readModelEndpoints(config.modelEndpoints, raw);
+  if (typeof endpoints === 'string') return refuse(`PERISCOPE_MODEL_ENDPOINTS: ${endpoints}`);
   // The posture line leads the output and the credential lines follow it: the one-line summary
   // first, then the detail. The credential is read before the summary can be composed, so its
   // lines are held until the summary has printed.
@@ -438,6 +454,16 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     null,
   );
   for (const line of held) log(...line);
+  if (endpoints !== null) {
+    log(
+      'endpoints',
+      `${endpoints.endpoints.length} model endpoint(s) declared` +
+        (endpoints.endpoints.length === 0
+          ? ''
+          : `: ${endpoints.endpoints.map((one) => one.name).join(', ')}`),
+      null,
+    );
+  }
 
   const workspaces = workspacesFor(config);
   const agentHome =
@@ -559,7 +585,10 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     }),
     // Derived, never spelled out here: `credentialPaths` is the one source both this and the token
     // cache's own location come from, so they cannot disagree about what is protected.
-    protectedPaths: credentialPaths(raw, { agentHome }),
+    protectedPaths: credentialPaths(raw, {
+      agentHome,
+      ...(endpoints === null ? {} : { modelEndpointFiles: endpoints.files }),
+    }),
     // The home the shell check expands `~` and `$HOME` to, from the same environment as the set above.
     home: homeDirectory(raw),
     // The discovery door: read-only, jailed. The root is derived here because reading the
@@ -587,6 +616,9 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     // What a controller may place in a spawn's environment: the operator's declaration, never the
     // controller's. Nothing declared means both lanes refuse every key.
     controllerEnvKeys: config.controllerEnvKeys,
+    // The operator's model endpoints: offered in the hello by name, applied by this host to a session
+    // that names one. Omitted when none are declared, so the hello lists none.
+    ...(endpoints === null ? {} : { endpoints: endpoints.endpoints }),
     overriddenByEnvironment: overriddenByEnvironment(raw),
     // The configure seam: validates, writes the config file, rebuilds the provider. It reads
     // the raw environment because the file fills absences in it, and only this file may read that.

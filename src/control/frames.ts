@@ -16,7 +16,7 @@
  */
 import type { Refusal } from '../core/refusal.js';
 import { isRefusalReason } from '../core/refusal.js';
-import type { SessionTransition } from '../state/model.js';
+import type { ControlTier, SessionTransition } from '../state/model.js';
 
 /**
  * Bumped when a change is not backward-compatible. Exchanged in the hello handshake.
@@ -35,7 +35,7 @@ import type { SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -45,15 +45,22 @@ export const PROTOCOL_VERSION = 14;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 14 narrows `session_new.request.env` and changes no shape. A key a controller places in
- * the spawn environment, by `extraEnv` or `extraAllowedKeys`, must be one this host's operator
- * declared, and the floor beneath it now covers both lanes and the agent's model-route, proxy and
- * certificate families; anything else refuses `env-key-refused`. A version-13 controller is still
- * spoken to, and every frame it sends still decodes. The narrowing holds at every version this
- * host negotiates, 13 included: one that held only at 14 would be one a controller opts out of by
- * asking for 13.
+ * Version 15 adds the `agent_facts` update body (the facts a controller acts on, lifted out of the
+ * agent's own messages into typed members), the `agent_fragment` delta body, and `runtime` on
+ * `agent_message`. It also adds `agents` and `endpoints` to the hello's configuration (each runtime
+ * this host can spawn, with its vocabularies and control tier, and each model endpoint its operator
+ * declared), `runtime` and `endpoint` on `session_new.request`, `controlTier` on a session's first
+ * transition into `ready`, `toolKind` and `runtime` on the decision request, five refusal reasons for
+ * the runtime and endpoint a session names, and `settings-route-refused` for a repository's settings
+ * file that names a key beneath the env floor. Each is a new body, an optional member or a reason.
+ * Five of the reasons answer only a member a version-14 controller never sends; the sixth answers a
+ * repository's file, and reaches such a controller as a reason it reads tolerantly, as it reads any
+ * reason it does not know. So a version-14 controller is still spoken to: it reads the new bodies and
+ * members as open JSON it may ignore, and every frame it sends decodes here unchanged. The narrowing of `session_new.request.env` that version 14 made (a key a
+ * controller places in the spawn environment must be one this host's operator declared, above the
+ * floor) holds at every version this host negotiates.
  */
-export const PROTOCOL_VERSION_MIN = 13;
+export const PROTOCOL_VERSION_MIN = 14;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {
@@ -77,16 +84,21 @@ export const MAX_FRAME_BYTES = 64 * 1024;
 /**
  * What a session update carries. ACP: `session/update`, whose payload is likewise a union.
  *
- * Three members. A later kind of update adds a member here rather than a new payload kind, which
+ * Four members. A later kind of update adds a member here rather than a new payload kind, which
  * keeps `session_update` meaning "a settled fact about this session" (the non-droppable lane)
  * instead of splitting one idea across several discriminators.
  *
- * `WireRefusalUpdate` is the third, and it is a body member rather than a new payload kind for
- * exactly that reason. A host-side refusal that the controller must act on is a settled fact about
- * the session, so it belongs on the non-droppable lane beside a transition. Adding a kind would
- * also have meant a dispatcher change on both ends for a frame that carries no new idea.
+ * `WireRefusalUpdate` is a body member rather than a new payload kind for exactly that reason. A
+ * host-side refusal that the controller must act on is a settled fact about the session, so it
+ * belongs on the non-droppable lane beside a transition. Adding a kind would also have meant a
+ * dispatcher change on both ends for a frame that carries no new idea.
+ *
+ * `AgentFactsUpdate` is the fourth: one fact the agent reported (its resumable handle, its receipt,
+ * its spend, its context use, its running tasks, a compaction) lifted out of its own message into a
+ * typed member, riding beside the message it came from.
  */
-export type SessionUpdateBody = StateTransitionUpdate | AgentMessageUpdate | WireRefusalUpdate;
+export type SessionUpdateBody =
+  StateTransitionUpdate | AgentMessageUpdate | WireRefusalUpdate | AgentFactsUpdate;
 
 /**
  * A declared state transition. The reason this lane is not droppable: losing one is not a repaint
@@ -119,6 +131,12 @@ export interface AgentMessageUpdate {
    * missed. Absent from a host one release behind; read it with `readObservedAt`.
    */
   readonly observedAt?: string | null;
+  /**
+   * The runtime that emitted the message (protocol 15). Absent means `claude` (`DEFAULT_RUNTIME`):
+   * a Claude session's messages omit it, so their bodies are unchanged, and a session on any other
+   * runtime names it here, the discriminator for reading `message`.
+   */
+  readonly runtime?: string | null;
 }
 
 /**
@@ -162,13 +180,19 @@ export function readStateTransition(body: JsonObject): SessionTransition | null 
  * Build the update carrying an agent message. The only supported way to put one on the wire.
  *
  * `observedAt` is omitted when not given, so a caller that has no instant to state writes the same
- * body a host one release behind does.
+ * body a host one release behind does. `runtime` is omitted the same way, which is how a Claude
+ * session's message is written.
  */
-export function agentMessageUpdate(message: JsonObject, observedAt?: string | null): SessionUpdate {
+export function agentMessageUpdate(
+  message: JsonObject,
+  observedAt?: string | null,
+  runtime?: string | null,
+): SessionUpdate {
   const body: AgentMessageUpdate = {
     update: 'agent_message',
     message,
     ...(observedAt === undefined ? {} : { observedAt }),
+    ...(runtime === undefined ? {} : { runtime }),
   };
   return { kind: 'session_update', body: body as unknown as JsonObject };
 }
@@ -262,11 +286,23 @@ export function readWireRefusal(body: JsonObject): WireRefusalUpdate | null {
  *
  * This is stated here rather than left to the consumer because it is inherited by whoever renders
  * these frames; the symptom is a whole turn appearing in one lump.
+ *
+ * `body` is open JSON for the reason `SessionUpdate.body` is, and is read as a `SessionDeltaBody`
+ * through its `update` discriminator.
  */
 export interface SessionDelta {
   readonly kind: 'session_delta';
   readonly body: JsonObject;
 }
+
+/**
+ * What a session delta carries: one message verbatim, or one fragment of a message lifted out of it.
+ *
+ * Both ride together. The fragment states what a consumer renders (text, thinking prose, a tool's
+ * arguments as they arrive) without reading the runtime's own streaming shape; the message beside it
+ * is unchanged.
+ */
+export type SessionDeltaBody = AgentMessageUpdate | AgentFragmentDelta;
 
 /**
  * Build a delta carrying one message verbatim.
@@ -276,13 +312,330 @@ export interface SessionDelta {
  * that had to parse two shapes for one idea would have been handed the drift this package's
  * vocabulary rules exist to prevent.
  */
-export function agentMessageDelta(message: JsonObject, observedAt?: string | null): SessionDelta {
-  const body: AgentMessageUpdate = {
+export function agentMessageDelta(
+  message: JsonObject,
+  observedAt?: string | null,
+  runtime?: string | null,
+): SessionDelta {
+  const body: SessionDeltaBody = {
     update: 'agent_message',
     message,
     ...(observedAt === undefined ? {} : { observedAt }),
+    ...(runtime === undefined ? {} : { runtime }),
   };
   return { kind: 'session_delta', body: body as unknown as JsonObject };
+}
+
+// ---------------------------------------------------------------------------
+// The fact layer: what the agent reported, lifted into typed members.
+//
+// A controller acts on a handful of facts: which session it can resume, what the agent says it is
+// running with, what a turn cost, how full the context is, which tasks are running, and when the
+// context was compacted. Each runtime reports them in its own message shapes. These members state
+// them once, typed, so a controller reads one shape whatever the runtime, and the native message
+// still rides beside them for whoever wants it whole.
+//
+// Every figure is reported, never derived: a member the runtime did not report is null, and nothing
+// here is computed from another figure (a total is never summed from turns, a turn is never
+// differenced from totals). Every closed set is an exported array, so a reader in another language
+// gets it as a vocabulary.
+// ---------------------------------------------------------------------------
+
+/**
+ * The runtime an `agent_message` with no `runtime` came from, and the one a `session_new` with no
+ * `runtime` runs on: the one runtime this host spawns.
+ */
+export const DEFAULT_RUNTIME = 'claude';
+
+/**
+ * Where a cost figure came from: a runtime's own price list (`list`), a rate the operator set
+ * (`managed`), a guess at a default model's rate (`guessed`), the provider's own figure
+ * (`provider-reported`), an estimate from a model catalogue (`catalogue-estimated`), a model its
+ * operator serves itself (`self-hosted`), or no cost reported at all (`unreported`).
+ */
+export const COST_BASES = [
+  'list',
+  'managed',
+  'guessed',
+  'provider-reported',
+  'catalogue-estimated',
+  'self-hosted',
+  'unreported',
+] as const;
+
+export type CostBasis = (typeof COST_BASES)[number];
+
+/** What a `turn_record`'s `turn` covers: a whole turn, or one model step inside a turn. */
+export const TURN_SCOPES = ['turn', 'step'] as const;
+
+export type TurnScope = (typeof TURN_SCOPES)[number];
+
+/** Who composed an `agent_receipt`: the runtime's own report, or this host from its own delivery. */
+export const RECEIPT_SOURCES = ['runtime', 'host'] as const;
+
+export type ReceiptSource = (typeof RECEIPT_SOURCES)[number];
+
+/** The lifetime a model call wrote the prompt cache for. */
+export const CACHE_TTLS = ['5m', '1h'] as const;
+
+export type CacheTtl = (typeof CACHE_TTLS)[number];
+
+/** A compaction began, or it finished. */
+export const COMPACTION_STATUSES = ['started', 'ended'] as const;
+
+export type CompactionStatus = (typeof COMPACTION_STATUSES)[number];
+
+/** Who asked for a compaction: a person (`manual`) or the runtime on its own (`auto`). */
+export const COMPACTION_TRIGGERS = ['manual', 'auto'] as const;
+
+export type CompactionTrigger = (typeof COMPACTION_TRIGGERS)[number];
+
+/** What a fragment carries: reply text, thinking prose, or a tool's arguments as they stream. */
+export const FRAGMENT_CHANNELS = ['text', 'thinking', 'tool_input'] as const;
+
+export type FragmentChannel = (typeof FRAGMENT_CHANNELS)[number];
+
+/** The most entries any list in an `agent_facts` body carries: skills, plugins, servers, models, tasks. */
+export const MAX_FACT_LIST_ENTRIES = 256;
+
+/** The longest free-text member of an `agent_facts` body: a name, an id, a path, a description. */
+export const MAX_FACT_TEXT_LENGTH = 1000;
+
+/** The longest word a fact or a fragment carries: a runtime, a mode, a vocabulary value, a version. */
+export const MAX_FACT_WORD_LENGTH = 64;
+
+/** One model's part of a spend figure, as the runtime reported it. */
+export interface ModelSpendFact {
+  /** The model the runtime keyed the figure by, aliases and provider-specific ids included. */
+  readonly model: string;
+  /** The id the runtime priced against, when it says. */
+  readonly canonicalModel: string | null;
+  /** Which API served the model, when the runtime says. */
+  readonly provider: string | null;
+  /** Uncached input only, on every runtime: cache reads and cache writes are counted apart. */
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
+  /** Reasoning tokens, already counted inside `outputTokens`; null when the runtime did not say. */
+  readonly reasoningTokens: number | null;
+  /** In the enclosing figure's `currency`; null when the runtime reported no cost for the model. */
+  readonly cost: number | null;
+  readonly costBasis: CostBasis;
+  /** The context window the model served with; null when not reported. */
+  readonly contextWindow: number | null;
+}
+
+/**
+ * A spend figure: a cost in a currency, where the cost came from, and its parts per model.
+ *
+ * `costBasis` is the basis of `cost`. Where a runtime reports a basis for each model, it is a roll-up
+ * of the rows' bases: the weakest of them. Each row keeps the basis it was reported with, and a
+ * consumer that prices money reads the rows.
+ */
+export interface SpendFacts {
+  /** Null when the runtime reported no cost. */
+  readonly cost: number | null;
+  /** An ISO 4217 code; null when no cost was reported. */
+  readonly currency: string | null;
+  readonly costBasis: CostBasis;
+  readonly byModel: readonly ModelSpendFact[];
+}
+
+/** A plugin the runtime says it loaded. */
+export interface ReceiptPlugin {
+  readonly name: string;
+  readonly version: string | null;
+  readonly path: string | null;
+}
+
+/** A plugin the runtime says it could not load, and why. */
+export interface ReceiptPluginError {
+  readonly plugin: string;
+  readonly type: string;
+  readonly message: string;
+  readonly path: string | null;
+}
+
+/** An MCP server the runtime connected to, or tried to, with the status in the runtime's own word. */
+export interface ReceiptMcpServer {
+  readonly name: string;
+  readonly status: string;
+}
+
+/** One task the runtime says is running. */
+export interface RunningTaskEntry {
+  readonly taskId: string;
+  readonly type: string;
+  readonly description: string | null;
+}
+
+/** The runtime's own resumable id for the session. A resume or a fork reports a new one. */
+export interface SessionHandleFact {
+  readonly kind: 'session_handle';
+  readonly runtime: string;
+  readonly handle: string;
+}
+
+/**
+ * What the runtime says it is running with: its version, model, approval mode and effort, and the
+ * skills, plugins and MCP servers it loaded. `permissionMode` and `effort` are the runtime's own words.
+ */
+export interface AgentReceiptFact {
+  readonly kind: 'agent_receipt';
+  readonly runtime: string;
+  readonly runtimeVersion: string | null;
+  readonly model: string | null;
+  readonly permissionMode: string | null;
+  readonly effort: string | null;
+  readonly skills: readonly string[] | null;
+  readonly plugins: readonly ReceiptPlugin[] | null;
+  readonly pluginErrors: readonly ReceiptPluginError[] | null;
+  readonly mcpServers: readonly ReceiptMcpServer[] | null;
+  readonly source: ReceiptSource;
+}
+
+/**
+ * Spend as the runtime reported it when a turn or a step ended.
+ *
+ * `totals` is the runtime's running total for the session; `turn` is the figure for what `turnScope`
+ * names. Either may be null, and neither is ever computed from the other: a consumer that wants a
+ * turn's share of a running total differences two totals itself. `turnScope` is null exactly when
+ * `turn` is.
+ */
+export interface TurnRecordFact {
+  readonly kind: 'turn_record';
+  readonly runtime: string;
+  readonly totals: SpendFacts | null;
+  readonly turn: SpendFacts | null;
+  readonly turnScope: TurnScope | null;
+  readonly numTurns: number | null;
+  readonly durationMs: number | null;
+  /** The runtime's session id as the record states it. */
+  readonly sourceSessionId: string | null;
+}
+
+/**
+ * How full one model call's context was, under the runtime's own counting rule, and the cache
+ * lifetime the call wrote. `mainThread` is false for a call a subagent made in its own context.
+ */
+export interface UsageSampleFact {
+  readonly kind: 'usage_sample';
+  readonly runtime: string;
+  readonly model: string | null;
+  readonly contextTokens: number | null;
+  readonly contextWindow: number | null;
+  readonly cacheTtl: CacheTtl | null;
+  readonly mainThread: boolean;
+}
+
+/** Every task the runtime says is running, whole: each one replaces the last. */
+export interface TasksFact {
+  readonly kind: 'tasks';
+  readonly runtime: string;
+  readonly running: readonly RunningTaskEntry[];
+}
+
+/** A compaction began or finished, with what its source reported. */
+export interface CompactionFact {
+  readonly kind: 'compaction';
+  readonly runtime: string;
+  readonly status: CompactionStatus;
+  readonly trigger: CompactionTrigger | null;
+  readonly tokensBefore: number | null;
+  readonly tokensAfter: number | null;
+}
+
+/** One fact, tagged by `kind`. */
+export type AgentFact =
+  SessionHandleFact | AgentReceiptFact | TurnRecordFact | UsageSampleFact | TasksFact | CompactionFact;
+
+/** The fact kinds this build reads; a newer peer's other kinds cross the wire and read as null here. */
+const AGENT_FACT_KINDS: ReadonlySet<string> = new Set<AgentFact['kind']>([
+  'session_handle',
+  'agent_receipt',
+  'turn_record',
+  'usage_sample',
+  'tasks',
+  'compaction',
+]);
+
+/**
+ * One fact the agent reported, on the update lane (protocol 15).
+ *
+ * `sourceId` is the id of the native message the fact was lifted from (Claude: the message's
+ * `uuid`, the id that message carries on its own `agent_message`), and null for a fact lifted from a
+ * hook or from the observer. A consumer's ingest is idempotent on it, so a replayed or re-sent fact
+ * lands once. `observedAt` is the instant this host took the source off the agent's stream.
+ */
+export interface AgentFactsUpdate {
+  readonly update: 'agent_facts';
+  readonly fact: AgentFact;
+  readonly sourceId?: string | null;
+  readonly observedAt?: string | null;
+}
+
+/** Build the update carrying one fact. The only supported way to put one on the wire. */
+export function agentFactsUpdate(
+  fact: AgentFact,
+  sourceId: string | null,
+  observedAt?: string | null,
+): SessionUpdate {
+  const body: AgentFactsUpdate = {
+    update: 'agent_facts',
+    fact,
+    sourceId,
+    ...(observedAt === undefined ? {} : { observedAt }),
+  };
+  return { kind: 'session_update', body: body as unknown as JsonObject };
+}
+
+/**
+ * Read a fact back out, or null when the body is some other kind of update or carries a fact kind
+ * this build does not model. Null rather than a throw, for the reason `readStateTransition` gives.
+ */
+export function readAgentFacts(body: JsonObject): AgentFactsUpdate | null {
+  const update = body as { update?: unknown; fact?: unknown };
+  if (update.update !== 'agent_facts') return null;
+  const fact = update.fact as { kind?: unknown; runtime?: unknown } | null | undefined;
+  if (typeof fact !== 'object' || fact === null || Array.isArray(fact)) return null;
+  if (typeof fact.kind !== 'string' || !AGENT_FACT_KINDS.has(fact.kind)) return null;
+  if (typeof fact.runtime !== 'string') return null;
+  return body as unknown as AgentFactsUpdate;
+}
+
+/**
+ * One fragment of a streaming message, on the delta lane (protocol 15): a piece of the reply text, of
+ * the thinking prose, or of a tool's arguments. `parentId` names the tool call that spawned the
+ * subagent speaking, and is null on the main thread. Superseded by the message that settles it, like
+ * every delta.
+ */
+export interface AgentFragmentDelta {
+  readonly update: 'agent_fragment';
+  readonly runtime: string;
+  readonly channel: FragmentChannel;
+  readonly text: string;
+  readonly parentId: string | null;
+}
+
+/** Build the delta carrying one fragment. The only supported way to put one on the wire. */
+export function agentFragmentDelta(
+  runtime: string,
+  channel: FragmentChannel,
+  text: string,
+  parentId: string | null,
+): SessionDelta {
+  const body: AgentFragmentDelta = { update: 'agent_fragment', runtime, channel, text, parentId };
+  return { kind: 'session_delta', body: body as unknown as JsonObject };
+}
+
+/** Read a fragment back out, or null when the body is some other kind of delta. */
+export function readAgentFragment(body: JsonObject): AgentFragmentDelta | null {
+  const delta = body as { update?: unknown; runtime?: unknown; channel?: unknown; text?: unknown };
+  if (delta.update !== 'agent_fragment') return null;
+  if (typeof delta.runtime !== 'string' || typeof delta.channel !== 'string') return null;
+  if (typeof delta.text !== 'string') return null;
+  return body as unknown as AgentFragmentDelta;
 }
 
 /*
@@ -484,6 +837,21 @@ export interface SessionNewRequest {
    * string, a list of strings, or a preset object.
    */
   readonly systemPrompt: JsonValue | null;
+  /**
+   * The runtime the session runs on, by name (protocol 15). Null or absent is this host's default,
+   * `claude` (`DEFAULT_RUNTIME`). A runtime this host cannot spawn is refused `runtime-unavailable`
+   * before anything is reserved; the hello's `agents` lists the runtimes it can.
+   */
+  readonly runtime?: string | null;
+  /**
+   * The model endpoint the session's model traffic goes to, by the name the hello's `endpoints` lists
+   * (protocol 15). Null or absent is the runtime's own default route. The host applies the endpoint's
+   * address, credential and model variables itself; a controller names an endpoint and never writes
+   * one. Refused before anything is reserved: `endpoint-unknown` for a name the operator did not
+   * declare, `endpoint-incompatible` for an endpoint that cannot carry the session's runtime, and
+   * `model-endpoint-mismatch` for a Claude model on an endpoint that is not Anthropic's own route.
+   */
+  readonly endpoint?: string | null;
 }
 
 /**
@@ -537,6 +905,10 @@ export function sessionNewRequest(asked: Partial<SessionNewRequest> = {}): Sessi
     systemPrompt: asked.systemPrompt ?? null,
     effort: asked.effort ?? null,
     permissionMode: asked.permissionMode ?? null,
+    // Added inside the window, so each is stated only when asked: an unstated runtime or endpoint is
+    // omitted and reads as the host's default.
+    ...(asked.runtime === undefined ? {} : { runtime: asked.runtime }),
+    ...(asked.endpoint === undefined ? {} : { endpoint: asked.endpoint }),
   };
 }
 
@@ -567,6 +939,8 @@ export const SESSION_NEW_REQUEST_KEYS = {
   systemPrompt: true,
   effort: true,
   permissionMode: true,
+  runtime: true,
+  endpoint: true,
 } as const satisfies Record<keyof SessionNewRequest, true>;
 
 /** The same, for the payload itself. Same argument, one level up. */
@@ -1090,6 +1464,10 @@ export const TRANSCRIPT_PAGE_SIZE = 100;
  * The bulk-lane locator namespace for a transcript read: `claude-transcript:{projectSlug}/{sessionId}`.
  * A `bulk_request.what` that a host resolves to the agent CLI's own transcript files starts with
  * this prefix; the slug is the CLI's flattened project directory name and is opaque.
+ *
+ * It is the one instance of the namespace `{runtime}-transcript:{...}`: a runtime's transcripts are
+ * addressed under that runtime's name, so a locator says whose files it reads. This host serves the
+ * `claude` instance and refuses every other prefix `bulk-target-invalid`.
  */
 export const TRANSCRIPT_WHAT_PREFIX = 'claude-transcript:';
 
@@ -1598,13 +1976,84 @@ export interface HostAgent {
   readonly models: readonly HostModel[];
 }
 
+/** The most runtimes a hello lists: a list, not a catalogue. */
+export const MAX_AGENT_ENTRIES = 8;
+
+/**
+ * The words a runtime takes for its session controls: the permission modes and effort levels a
+ * `session_new` or `session_configure` may name for it, and whether it takes a thinking control.
+ */
+export interface HostAgentVocabularies {
+  readonly permissionModes: readonly string[];
+  readonly efforts: readonly string[];
+  readonly thinking: boolean;
+}
+
+/**
+ * One runtime this host can spawn sessions on, as the hello states it (protocol 15).
+ *
+ * `version` is the runtime's own version and `sdkVersion` the version of the library this host
+ * drives it through, null when there is none. `available: false` names a configured runtime that
+ * cannot run now, with `unavailableReason` saying why; a `session_new` naming it is refused
+ * `runtime-unavailable`. `controlTier` is the tier a session on it starts at.
+ */
+export interface HostAgentEntry {
+  readonly runtime: string;
+  readonly version: string;
+  readonly sdkVersion: string | null;
+  readonly models: readonly HostModel[];
+  readonly vocabularies: HostAgentVocabularies;
+  readonly controlTier: ControlTier;
+  readonly available: boolean;
+  readonly unavailableReason: string | null;
+}
+
+/**
+ * The wire APIs a model endpoint can speak (protocol 15): Anthropic's Messages API, and OpenAI's
+ * Responses and Chat Completions APIs. A runtime speaks one or more of them, and an endpoint is
+ * reachable only by the runtimes that speak its API.
+ */
+export const ENDPOINT_WIRE_APIS = ['anthropic-messages', 'openai-responses', 'openai-chat'] as const;
+
+export type EndpointWireApi = (typeof ENDPOINT_WIRE_APIS)[number];
+
+/** The most model endpoints a hello lists: a list, not a catalogue. */
+export const MAX_ENDPOINTS = 8;
+
+/** The most model ids one endpoint lists, its alias ids included. */
+export const MAX_ENDPOINT_MODELS = 32;
+
+/**
+ * The most bytes the endpoints list may take on the hello, as JSON. Held apart from the catalog's
+ * budget, because the two fail differently: a catalog that cannot ride is read at start and rides as
+ * null, while the endpoints are the operator's configuration, refused at start when they would not
+ * fit. With every other bound on the hello filled, the whole still fits `MAX_FRAME_BYTES`.
+ */
+export const MAX_ENDPOINT_CATALOG_BYTES = 8 * 1024;
+
+/**
+ * One model endpoint this host's operator declared, as the hello states it (protocol 15).
+ *
+ * `name` is what `session_new.request.endpoint` takes; `wireApi` is the API the endpoint speaks;
+ * `runtimes` lists the runtimes that can reach it, each of which speaks that API; `models` is every
+ * model id a session may name on it, alias ids included. The endpoint's address, its credential and
+ * whether it is Anthropic's own route stay with the host, and none of them is on the wire.
+ */
+export interface HostEndpoint {
+  readonly name: string;
+  readonly wireApi: EndpointWireApi;
+  readonly runtimes: readonly string[];
+  readonly models: readonly string[] | null;
+}
+
 /**
  * How this host is configured, as values: the read half of `periscope config`.
  *
  * The `workspace:*` capability markers say which mode a host is in; these say what it is pointed
- * at. Every member but `agent` is `T | null` (absent is null, never undefined), and null means the
- * setting is not set on the host, not that the host declined to say. `agent` was added inside the
- * protocol window and is optional (see this file's header). `controllerUrl` is what the host
+ * at. Every member but `agent`, `agents` and `endpoints` is `T | null` (absent is null, never
+ * undefined), and null means the setting is not set on the host, not that the host declined to say.
+ * `agent`, `agents` and `endpoints` were added inside the protocol window and are optional (see this
+ * file's header). `controllerUrl` is what the host
  * dialled to deliver this frame, reported so a controller can show it beside the rest; nothing here
  * is an ask, so nothing here can be refused.
  */
@@ -1634,6 +2083,19 @@ export interface HostConfiguration {
    * release behind. Never settable.
    */
   readonly agent?: HostAgent | null;
+  /**
+   * The runtimes this host can spawn sessions on, one entry each (protocol 15), at most
+   * `MAX_AGENT_ENTRIES`. The Claude entry carries what `agent` carries, and the two come from the
+   * same read: null when `agent` is null, absent when it is absent. Never settable.
+   */
+  readonly agents?: readonly HostAgentEntry[] | null;
+  /**
+   * The model endpoints this host's operator declared (protocol 15), at most `MAX_ENDPOINTS`, held to
+   * `MAX_ENDPOINT_CATALOG_BYTES` as JSON. Absent when the operator declared none, and from a host one
+   * release behind. Never settable: the operator's configuration is the only place an endpoint comes
+   * from.
+   */
+  readonly endpoints?: readonly HostEndpoint[] | null;
 }
 
 /** A `HostConfiguration` with nothing set: what a host composed without one reports. */

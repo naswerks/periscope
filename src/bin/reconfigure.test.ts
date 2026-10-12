@@ -348,3 +348,31 @@ test('regression: PERISCOPE_CONTROLLER_ENV_KEYS over the wire refuses config-key
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('regression: PERISCOPE_MODEL_ENDPOINTS over the wire refuses config-key-unknown and writes nothing', async () => {
+  // A controller able to point this key at a file of its own would choose the address and the
+  // credential a session's model calls use; the operator's file is the only place it comes from.
+  const { env, dir } = await scratchEnv();
+  try {
+    const outcome = reconfigureHost(
+      env,
+      [{ key: 'PERISCOPE_MODEL_ENDPOINTS', value: join(dir, 'endpoints.json') }],
+      false,
+    );
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) assert.equal(outcome.refusal.reason, 'config-key-unknown');
+    assert.equal(await fileBytes(dir), null, 'nothing was written');
+
+    // Control: a wire-settable key in the same shape is written.
+    const root = await mkdtemp(join(tmpdir(), 'periscope-reconfigure-root-'));
+    try {
+      const applied = reconfigureHost(env, [{ key: 'PERISCOPE_WORKSPACE_ROOT', value: root }], false);
+      assert.equal(applied.ok, true, applied.ok ? '' : applied.refusal.detail);
+      assert.notEqual(await fileBytes(dir), null, 'the control was written');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

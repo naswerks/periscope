@@ -151,6 +151,26 @@ export interface SessionRequest {
   readonly effort?: EffortLevel;
   /** The permission mode. Defaults to the SDK's own. See `CLI_PARITY_OPTION_KEYS`. */
   readonly permissionMode?: PermissionMode;
+  /**
+   * The runtime the session runs on, by name. Absent is `DEFAULT_RUNTIME`; read it with `runtimeOf`.
+   * It picks what the composer attaches to the session (its fact lift, its control tier, the runtime
+   * its decision requests name) and never reaches the agent process.
+   */
+  readonly runtime?: string;
+  /**
+   * The model endpoint the session's model traffic goes to, by its declared name. Absent is the
+   * runtime's own default route. It names the route and never reaches the agent process; the route's
+   * variables arrive through `hostEnv`, which `PeriscopeHost` composes from this name and its
+   * operator's configuration.
+   */
+  readonly endpoint?: string;
+  /**
+   * Variables this host sets in the spawn environment itself: a model endpoint's address, credential
+   * and model variables. Applied after `env`'s literals and before the host-session strip, and never
+   * screened by the floor that screens a controller's lanes. No `session_new` member produces it; it
+   * is the host's own, composed from its operator's configuration.
+   */
+  readonly hostEnv?: Readonly<Record<string, string>>;
 }
 
 /** How many sessions one host holds at once, live and opening together, unless told otherwise. */
@@ -266,7 +286,7 @@ export class SessionRegistry {
     const session = new HostedSession(
       this.#startProcess({
         cwd: cwd.value,
-        env: composeSpawnEnv(this.#baseEnv, request.env ?? {}),
+        env: composeSpawnEnv(this.#baseEnv, request.env ?? {}, request.hostEnv ?? {}),
         settingSources,
         plugins: request.plugins ?? null,
         hooks: request.hooks ?? null,

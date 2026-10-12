@@ -100,6 +100,7 @@ export function configValueProblem(key: string, value: string): string | null {
     case 'PERISCOPE_WORKSPACE_ROOT':
     case 'PERISCOPE_REPOSITORY_ROOT':
     case 'PERISCOPE_AGENT_HOME':
+    case 'PERISCOPE_MODEL_ENDPOINTS':
       return isAbsolutePath(value) ? null : `${key} must be an absolute path — got '${value}'`;
     case 'PERISCOPE_BRANCH_SCHEME':
       return value.includes('{key}')

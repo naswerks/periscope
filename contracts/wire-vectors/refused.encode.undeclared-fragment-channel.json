@@ -1,0 +1,25 @@
+{
+  "expect": {
+    "encode": "refused",
+    "reason": "frame-malformed"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_delta",
+      "body": {
+        "update": "agent_fragment",
+        "runtime": "claude",
+        "channel": "a-channel-this-host-does-not-declare",
+        "text": "x",
+        "parentId": null
+      }
+    }
+  },
+  "name": "refused.encode.undeclared-fragment-channel",
+  "protocolVersion": 15,
+  "wire": null
+}

@@ -1,0 +1,94 @@
+{
+  "decoded": {
+    "frame": "control",
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "link_hello",
+      "protocolVersion": 15,
+      "hostId": "host-1",
+      "capabilities": [],
+      "cursors": [],
+      "configuration": {
+        "repositoryRoot": null,
+        "workspaceRoot": null,
+        "branchScheme": null,
+        "transcriptsRoot": null,
+        "controllerUrl": null,
+        "decisionUrl": null,
+        "agentHome": null,
+        "plugins": [],
+        "agents": [
+          {
+            "runtime": "claude",
+            "version": "2.1.284",
+            "sdkVersion": "0.3.284",
+            "models": [
+              {
+                "value": "alias-1",
+                "resolvedModel": "model-id-1",
+                "displayName": "Model One",
+                "description": "The first model",
+                "supportedEffortLevels": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "supportsFastMode": true,
+                "supportsAutoMode": false,
+                "supportsAdaptiveThinking": true
+              },
+              {
+                "value": "model-id-2",
+                "resolvedModel": null,
+                "displayName": "Model Two",
+                "description": null,
+                "supportedEffortLevels": [],
+                "supportsFastMode": null,
+                "supportsAutoMode": null,
+                "supportsAdaptiveThinking": null
+              }
+            ],
+            "vocabularies": {
+              "permissionModes": [
+                "default",
+                "acceptEdits",
+                "bypassPermissions",
+                "plan",
+                "dontAsk",
+                "auto"
+              ],
+              "efforts": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "thinking": true
+            },
+            "controlTier": {
+              "level": "a-level-from-a-newer-peer",
+              "degrades": []
+            },
+            "available": true,
+            "unavailableReason": null
+          }
+        ]
+      },
+      "pendingRestart": [],
+      "protocolRange": {
+        "min": 14,
+        "max": 15
+      }
+    }
+  },
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": null,
+  "name": "link_hello.agents-unknown-tier-level",
+  "protocolVersion": 15,
+  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_hello\",\"protocolVersion\":15,\"hostId\":\"host-1\",\"capabilities\":[],\"cursors\":[],\"configuration\":{\"repositoryRoot\":null,\"workspaceRoot\":null,\"branchScheme\":null,\"transcriptsRoot\":null,\"controllerUrl\":null,\"decisionUrl\":null,\"agentHome\":null,\"plugins\":[],\"agents\":[{\"runtime\":\"claude\",\"version\":\"2.1.284\",\"sdkVersion\":\"0.3.284\",\"models\":[{\"value\":\"alias-1\",\"resolvedModel\":\"model-id-1\",\"displayName\":\"Model One\",\"description\":\"The first model\",\"supportedEffortLevels\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"],\"supportsFastMode\":true,\"supportsAutoMode\":false,\"supportsAdaptiveThinking\":true},{\"value\":\"model-id-2\",\"resolvedModel\":null,\"displayName\":\"Model Two\",\"description\":null,\"supportedEffortLevels\":[],\"supportsFastMode\":null,\"supportsAutoMode\":null,\"supportsAdaptiveThinking\":null}],\"vocabularies\":{\"permissionModes\":[\"default\",\"acceptEdits\",\"bypassPermissions\",\"plan\",\"dontAsk\",\"auto\"],\"efforts\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"],\"thinking\":true},\"controlTier\":{\"level\":\"a-level-from-a-newer-peer\",\"degrades\":[]},\"available\":true,\"unavailableReason\":null}]},\"pendingRestart\":[],\"protocolRange\":{\"min\":14,\"max\":15}}}"
+}

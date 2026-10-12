@@ -39,12 +39,13 @@ import type { BackoffOptions } from '../control/backoff.js';
 import type { LinkHandlers } from '../control/link.js';
 import { ControllerLink } from '../control/link.js';
 import type { LinkTransition } from '../control/link-state.js';
-import { hostAgentProblem } from '../control/codec.js';
+import { hostAgentProblem, hostAgentsProblem, hostEndpointsProblem } from '../control/codec.js';
 import type {
   HostAgent,
   HostConfiguration,
   HostConfigure,
   HostConfigureEntry,
+  HostEndpoint,
   SessionFrame,
   SessionList,
   SessionNew,
@@ -95,6 +96,8 @@ import { deadlineOrderRefusal, permissionHooks } from '../gate/gate.js';
 import type { McpServerOptions } from '../mcp/server.js';
 import type { SessionRequest } from '../sessions/registry.js';
 import { SessionRegistry } from '../sessions/registry.js';
+import { factLiftFor } from '../sessions/fact-lift.js';
+import { controlTierFor, runtimeOf } from '../sessions/runtimes.js';
 import type { HostedSession, SessionDegrade, Unsubscribe } from '../sessions/session.js';
 import { SessionStateMachine } from '../state/machine.js';
 import type { SessionTransition, TransitionWhere } from '../state/model.js';
@@ -113,7 +116,11 @@ import { listRepositoryDirectory, readRepositoryFile, readWorkspaceFile } from '
 import { homeDirectory, nodePathResolver } from './paths.js';
 import { isBypassMode, mergeMcpServers, readSessionConfigure, readSessionRequest } from './wire-request.js';
 import { mergePlugins, pluginDirsProblem } from './plugin-dirs.js';
+import { settingsRouteRefusal } from './repository-settings.js';
+import type { ModelEndpoint } from './model-endpoints.js';
+import { endpointModelProblem, endpointSpawnEnv, hostEndpointsOf } from './model-endpoints.js';
 import { isDroppable } from '../control/frames.js';
+import { hostAgentEntries } from './claude-runtime.js';
 
 // ---------------------------------------------------------------------------
 // The per-session assembly.
@@ -266,7 +273,10 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     ticker,
     correlationId: options.correlationId ?? null,
   });
-  const observer = new SessionObserver(machine);
+  // The session's runtime picks what is attached to it: the tier its first `ready` states, the
+  // runtime its decision requests name, and the lift its facts come from.
+  const runtime = runtimeOf(options.request);
+  const observer = new SessionObserver(machine, { controlTier: controlTierFor(runtime) });
 
   // The gate records every outcome on the machine. That emission is what makes a deny, an outage and
   // an expiry visible off-box at all, so it is unconditional and the embedder's listener is extra.
@@ -275,6 +285,7 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     // The escalation body carries the controller's handle. This function is the one place that
     // holds both the handle and the gate, so it is where the two transports are tied together.
     sessionKey: options.sessionKey,
+    runtime,
     onOutcome: (outcome) => {
       recordGateOutcome(machine, outcome);
       options.onOutcome?.(outcome);
@@ -315,7 +326,9 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   const session = created.value;
 
   // Before the first record. See this file's header: the forwarder subscribes to the machine, so
-  // anything recorded ahead of this line is emitted to nobody.
+  // anything recorded ahead of this line is emitted to nobody. The lift is the session's runtime's,
+  // so the facts it carries ride beside its messages.
+  const lift = factLiftFor(runtime);
   const detach = forwardSession({
     sessionKey: options.sessionKey,
     session,
@@ -323,6 +336,7 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     sink: options.sink,
     clock,
     ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
+    ...(lift === null ? {} : { lift }),
   });
 
   observer.created(`a session was requested in ${options.cwd}`);
@@ -481,6 +495,16 @@ export interface PeriscopeHostOptions {
    * whatever is declared. The binary reads `PERISCOPE_CONTROLLER_ENV_KEYS`.
    */
   readonly controllerEnvKeys?: readonly string[];
+  /**
+   * The model endpoints this host's operator declared. The hello lists each by name, wire API,
+   * runtimes and models; a `session_new` names one in `request.endpoint`, and the host then sets the
+   * endpoint's address, credential and model variables in the spawn environment itself, after the
+   * controller's lanes and beside the floor, never through it. Omitted, the hello lists none and every
+   * named endpoint is refused `endpoint-unknown`. The binary reads them from the file
+   * `PERISCOPE_MODEL_ENDPOINTS` names (`readModelEndpoints`). A list the hello could not carry is a
+   * construction error.
+   */
+  readonly endpoints?: readonly ModelEndpoint[];
   /**
    * How many sessions this host holds at once, live and opening together; a `session_new` past it
    * refuses `session-cap-reached`. Defaults to `DEFAULT_MAX_SESSIONS`. Ignored when a `registry` is
@@ -726,9 +750,17 @@ export class PeriscopeHost {
    * The agent's catalog as the last read left it: undefined until a read settles (for good, on a
    * host composed without `agentCatalog`), null when the read gave nothing the hello can carry. Kept
    * apart from `#configuration` because a reconfigure rebuilds that from the file, which has no
-   * catalog in it.
+   * catalog in it. The hello's runtimes list is built from it each time, so the two never disagree.
    */
   #agent: HostAgent | null | undefined;
+  /** The endpoints as the hello lists them, or null when this host was composed with none. */
+  readonly #hostEndpoints: readonly HostEndpoint[] | null;
+  /**
+   * The endpoint each live session runs on, by the controller's handle: a session with none is absent.
+   * A `session_configure` reads it, so a switch to a model the endpoint must not be sent is refused
+   * as the open would have refused it.
+   */
+  readonly #endpointOf = new Map<string, ModelEndpoint>();
   /** The start whose catalog read is in flight; `stop()` clears it, so that read starts nothing. */
   #pendingStart: object | null = null;
 
@@ -738,7 +770,19 @@ export class PeriscopeHost {
     this.#transcriptsRoot = options.transcriptsRoot;
     this.#bulk = options.bulk;
     this.#linkCapabilities = options.linkCapabilities ?? [];
-    this.#configuration = options.configuration ?? unsetHostConfiguration();
+    this.#hostEndpoints = options.endpoints === undefined ? null : hostEndpointsOf(options.endpoints);
+    if (this.#hostEndpoints !== null) {
+      // A list the hello cannot carry would cost the controller the whole configuration, and one that
+      // names an endpoint twice would leave a session's name meaning two things; both are the
+      // embedder's to fix, and the binary refuses either at start before it gets here.
+      const problem = hostEndpointsProblem(this.#hostEndpoints);
+      if (problem !== null) throw new Error(`PeriscopeHostOptions.endpoints: ${problem}`);
+      const names = this.#hostEndpoints.map((endpoint) => endpoint.name.toLowerCase());
+      if (new Set(names).size !== names.length) {
+        throw new Error('PeriscopeHostOptions.endpoints: an endpoint name is declared twice');
+      }
+    }
+    this.#configuration = this.#withAgent(options.configuration ?? unsetHostConfiguration());
     this.#pluginDirs = options.pluginDirs ?? [];
     this.#overriddenByEnvironment = options.overriddenByEnvironment ?? [];
     this.#pendingRestart = options.pendingRestart ?? [];
@@ -777,7 +821,9 @@ export class PeriscopeHost {
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.ticker === undefined ? {} : { ticker: options.ticker }),
         ...(options.linkCapabilities === undefined ? {} : { capabilities: options.linkCapabilities }),
-        ...(options.configuration === undefined ? {} : { configuration: options.configuration }),
+        ...(options.configuration === undefined && options.endpoints === undefined
+          ? {}
+          : { configuration: this.#configuration }),
         ...(options.pendingRestart === undefined ? {} : { pendingRestart: options.pendingRestart }),
         ...(options.linkTimings?.heartbeatIntervalMs === undefined
           ? {}
@@ -902,6 +948,17 @@ export class PeriscopeHost {
         if (!composed.ok) return this.#refuse(frame.sessionId, composed.refusal);
         const change = readSessionConfigure(payload);
         if (!change.ok) return this.#refuseConfigure(frame.sessionId, composed.value, change.refusal);
+        // A session on an endpoint keeps the open's model rule for its whole life: a switch to a model
+        // the endpoint must not be sent is refused here, before the agent hears of it.
+        const endpoint = this.#endpointOf.get(frame.sessionId);
+        const mismatch = endpoint === undefined ? null : endpointModelProblem(change.value.model, endpoint);
+        if (mismatch !== null) {
+          return this.#refuseConfigure(
+            frame.sessionId,
+            composed.value,
+            refusal('model-endpoint-mismatch', mismatch),
+          );
+        }
         void composed.value.session.configure(change.value).catch((error: unknown) => {
           this.#refuseConfigure(
             frame.sessionId,
@@ -1107,8 +1164,19 @@ export class PeriscopeHost {
       opening.request,
       this.#options.extraEnvFloor,
       this.#options.controllerEnvKeys,
+      this.#options.endpoints,
     );
     if (!requested.ok) return this.#refuseOpen(sessionKey, null, requested.refusal);
+
+    // The endpoint's variables, which this host sets itself from its operator's configuration: composed
+    // here, after the screen above has read the controller's own lanes, so the floor and the
+    // declaration never see them. The screen checked the name; this looks up what it names.
+    const endpointName = requested.value.endpoint;
+    const endpoint =
+      endpointName === undefined
+        ? null
+        : (this.#options.endpoints?.find((one) => one.name === endpointName) ?? null);
+    const hostEnv = endpoint === null ? undefined : endpointSpawnEnv(endpoint);
 
     const provider = this.#workspaces;
 
@@ -1218,6 +1286,16 @@ export class PeriscopeHost {
       if (!released.ok) this.#refuse(sessionKey, released.refusal);
     };
 
+    // The repository's own settings tiers, read now that the session's directory is known. The agent
+    // CLI applies a settings file's `env` to itself after every screen this host runs, so a key beneath
+    // the floor there would re-route the session past them; refused by name before anything starts.
+    const settingsRefused = settingsRouteRefusal(
+      cwd,
+      requested.value.settingSources ?? [],
+      this.#options.extraEnvFloor,
+    );
+    if (settingsRefused !== null) return giveBack(settingsRefused);
+
     const tools = this.#toolServer(sessionKey);
     if (!tools.ok) return giveBack(tools.refusal);
 
@@ -1295,6 +1373,7 @@ export class PeriscopeHost {
         ...requested.value,
         ...(servers.value === null ? {} : { mcpServers: servers.value }),
         ...(plugins === undefined ? {} : { plugins }),
+        ...(hostEnv === undefined ? {} : { hostEnv }),
       },
       ...(this.#options.clock === undefined ? {} : { clock: this.#options.clock }),
       ...(this.#options.ticker === undefined ? {} : { ticker: this.#options.ticker }),
@@ -1308,6 +1387,7 @@ export class PeriscopeHost {
     if (!composed.ok) return giveBack(composed.refusal);
 
     this.#sessions.set(sessionKey, composed.value);
+    if (endpoint !== null) this.#endpointOf.set(sessionKey, endpoint);
     composed.value.machine.onTransition((transition) =>
       this.#report({ kind: 'transition', sessionKey, transition }),
     );
@@ -1332,6 +1412,7 @@ export class PeriscopeHost {
     const composed = this.#sessions.get(sessionKey);
     if (composed === undefined) return;
     this.#sessions.delete(sessionKey);
+    this.#endpointOf.delete(sessionKey);
     composed.detach();
     this.#link.forgetSession(sessionKey);
     // Released at the key the workspace was provisioned at: for an aliased session the two
@@ -1884,18 +1965,33 @@ export class PeriscopeHost {
   /**
    * Put a catalog read's outcome into the configuration and the next hello, and report it. A catalog
    * the codec would refuse, or one past `MAX_AGENT_CATALOG_BYTES`, rides as null: a hello the link
-   * cannot encode is never sent at all, which would cost the controller the whole configuration.
+   * cannot encode is never sent at all, which would cost the controller the whole configuration. The
+   * runtimes list is built from the same catalog and held to the same checks, so one answer covers
+   * both: a list that cannot ride takes the catalog with it.
    */
   #stampAgent(catalog: AgentCatalog): void {
-    const problem = catalog.ok ? hostAgentProblem(catalog.agent) : catalog.detail;
+    const problem = catalog.ok
+      ? (hostAgentProblem(catalog.agent) ?? hostAgentsProblem(hostAgentEntries(catalog.agent)))
+      : catalog.detail;
     this.#agent = catalog.ok && problem === null ? catalog.agent : null;
     this.#configuration = this.#withAgent(this.#configuration);
     this.#link.announce?.(this.#linkCapabilities, this.#configuration, this.#pendingRestart);
     this.#report({ kind: 'agent-catalog', agent: this.#agent, detail: problem });
   }
 
+  /**
+   * The configuration with the catalog and the runtimes list it yields, both from `#agent`, and the
+   * endpoints, which ride whatever the catalog read did.
+   */
   #withAgent(configuration: HostConfiguration): HostConfiguration {
-    return this.#agent === undefined ? configuration : { ...configuration, agent: this.#agent };
+    const endpoints = this.#hostEndpoints === null ? {} : { endpoints: this.#hostEndpoints };
+    if (this.#agent === undefined) return { ...configuration, ...endpoints };
+    return {
+      ...configuration,
+      agent: this.#agent,
+      agents: this.#agent === null ? null : hostAgentEntries(this.#agent),
+      ...endpoints,
+    };
   }
 
   async #deliver(

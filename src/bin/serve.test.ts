@@ -759,3 +759,98 @@ test('control: the same session on a host that declared the key starts, and the 
     assert.equal(run.agents.started.length, 1, 'a declared key must let the session start');
     assert.equal(run.agents.started[0]?.request.env['CLAUDE_CODE_ENABLE_TODO_TOOLS'], '1');
   }));
+
+// --- the operator's model endpoints ----------------------------------------------------------------
+
+/** One endpoint in its vendor's documented form, its credential read from the process environment. */
+const ENDPOINT_ENTRY = {
+  name: 'deepseek',
+  wireApi: 'anthropic-messages',
+  runtimes: ['claude'],
+  baseUrl: 'https://api.deepseek.example/anthropic',
+  credential: { env: 'EXAMPLE_ENDPOINT_KEY' },
+  models: ['deepseek-flash[1m]', 'deepseek-flash'],
+  modelAliases: { opus: 'deepseek-flash[1m]', sonnet: 'deepseek-flash[1m]', haiku: 'deepseek-flash' },
+  contextWindow: { autoCompactWindow: 786432 },
+};
+
+test('an endpoints file the host could not honour refuses start by name, before anything dials', () =>
+  inDir(async (dir) => {
+    const path = join(dir, 'endpoints.json');
+    await writeFile(
+      path,
+      JSON.stringify({ endpoints: [{ ...ENDPOINT_ENTRY, runtimes: ['codex'] }] }),
+      'utf8',
+    );
+    const raw = rawEnv(dir, { EXAMPLE_ENDPOINT_KEY: 'example-secret' });
+    const run = serve({ raw, merged: mergedEnv(raw, { PERISCOPE_MODEL_ENDPOINTS: path }) });
+
+    assert.match(refused(run), /^PERISCOPE_MODEL_ENDPOINTS: .*runtime "codex", which this host cannot spawn/);
+    assert.deepEqual(run.exitCodes, [1]);
+    assert.equal(run.link.handlers, null, 'a host refusing its own configuration must not dial');
+
+    const relative = serve({ raw, merged: mergedEnv(raw, { PERISCOPE_MODEL_ENDPOINTS: 'endpoints.json' }) });
+    assert.match(refused(relative), /PERISCOPE_MODEL_ENDPOINTS must be an absolute path/);
+  }));
+
+test('a missing endpoint credential refuses start naming the variable, never a value', () =>
+  inDir(async (dir) => {
+    const path = join(dir, 'endpoints.json');
+    await writeFile(path, JSON.stringify({ endpoints: [ENDPOINT_ENTRY] }), 'utf8');
+    const raw = rawEnv(dir);
+    const run = serve({ raw, merged: mergedEnv(raw, { PERISCOPE_MODEL_ENDPOINTS: path }) });
+    assert.match(refused(run), /credential variable EXAMPLE_ENDPOINT_KEY, which is unset or empty/);
+  }));
+
+test('declared endpoints reach the host: the trace names them, a session on one carries its credential, and the file is protected', () =>
+  inDir(async (dir) => {
+    const path = join(dir, 'endpoints.json');
+    await writeFile(path, JSON.stringify({ endpoints: [ENDPOINT_ENTRY] }), 'utf8');
+    const raw = rawEnv(dir, { EXAMPLE_ENDPOINT_KEY: 'example-secret' });
+    const run = serve({ raw, merged: mergedEnv(raw, { PERISCOPE_MODEL_ENDPOINTS: path }) });
+    assert.equal(run.outcome.ok, true, refused(run));
+
+    assert.ok(
+      run.out.some((line) => line.includes('[endpoints] 1 model endpoint(s) declared: deepseek')),
+      run.out.join('\n'),
+    );
+    assert.ok(!run.out.join('\n').includes('example-secret'), 'the credential reached the trace');
+
+    run.link.deliver(
+      'handle-1',
+      sessionNew(dir, { request: sessionNewRequest({ endpoint: 'deepseek', model: 'opus' }) }),
+    );
+    await settle();
+    assert.equal(run.agents.started.length, 1, run.out.join('\n'));
+    assert.equal(run.agents.started[0]?.request.env['ANTHROPIC_AUTH_TOKEN'], 'example-secret');
+    assert.equal(
+      run.agents.started[0]?.request.env['EXAMPLE_ENDPOINT_KEY'],
+      undefined,
+      'the source variable reached the agent',
+    );
+
+    // The session's own gate refuses a read of the endpoints file: the composition root put it in the
+    // protected set.
+    let answer: unknown = null;
+    for (const matcher of run.agents.started[0]?.request.hooks?.PreToolUse ?? []) {
+      for (const hook of matcher.hooks) {
+        answer = await hook(
+          {
+            hook_event_name: 'PreToolUse',
+            session_id: 'agent-1',
+            cwd: dir,
+            tool_name: 'Read',
+            tool_input: { file_path: path },
+            tool_use_id: 'toolu_1',
+          } as never,
+          'toolu_1',
+          { signal: new AbortController().signal },
+        );
+      }
+    }
+    const decision = (
+      answer as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } }
+    ).hookSpecificOutput;
+    assert.equal(decision?.permissionDecision, 'deny');
+    assert.match(decision?.permissionDecisionReason ?? '', /credential-path-denied/);
+  }));

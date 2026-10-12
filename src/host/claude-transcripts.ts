@@ -304,6 +304,9 @@ export async function tailTranscript(
  * The bulk-lane resolver for transcript reads: `claude-transcript:{slug}/{sessionId}` to a jailed
  * absolute path. A locator outside the namespace is refused as an invalid bulk target so an
  * embedder composing several resolvers can tell "not mine" from "mine and malformed".
+ *
+ * `claude-transcript:` is the `claude` instance of the `{runtime}-transcript:` namespace: another
+ * runtime's transcripts are addressed under that runtime's name, and this resolver is not theirs.
  */
 export function claudeTranscriptResolver(root: string): (what: string, sessionKey: string) => Result<string> {
   return (what: string): Result<string> => {

@@ -85,7 +85,7 @@ import { PeriscopeHost, composeSession } from './host.js';
 import type { SessionDegrade } from '../sessions/session.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import type { FakeAgents } from '../test-support/fake-agent.js';
-import { fakeAgents, settle } from '../test-support/fake-agent.js';
+import { fakeAgents, initMessage, settle } from '../test-support/fake-agent.js';
 import { tempDir } from '../test-support/temp-dir.js';
 
 const AT = Date.UTC(2026, 7, 4);
@@ -3021,4 +3021,42 @@ test('control: a provider that cannot locate a workspace by key refuses the read
   await answered(link, 'workspace_read_result', 'the refusal');
   assert.equal(workspaceReads(link)[0]?.refusal?.reason, 'workspace-read-failed');
   assert.match(workspaceReads(link)[0]?.refusal?.detail ?? '', /cannot locate a workspace by its key/);
+});
+
+test('regression: a session_new naming a runtime this host cannot spawn is refused runtime-unavailable on the wire, before any process exists', async () => {
+  const { link, processes } = hostOver();
+  link.deliver(
+    'handle-1',
+    sessionNew('C:/work', { request: sessionNewRequest({ runtime: 'example-runtime' }) }),
+  );
+  await settle();
+
+  assert.equal(
+    processes.started.length,
+    0,
+    'a runtime this host cannot spawn must refuse before a process exists',
+  );
+  const ended = link.transitions().find((transition) => transition.to === 'ended');
+  assert.equal(ended?.cause.kind, 'refusal');
+  assert.equal(ended?.cause.event, 'runtime-unavailable');
+  assert.match(ended?.cause.detail ?? '', /"example-runtime"/);
+});
+
+test("a session_new naming claude opens on Claude, and the session's first ready states Claude's tier", async () => {
+  const { link, processes } = hostOver();
+  link.deliver('handle-1', sessionNew('C:/work', { request: sessionNewRequest({ runtime: 'claude' }) }));
+  await settle();
+
+  const agent = processes.started[0];
+  assert.ok(agent !== undefined, 'a session on claude must start');
+  agent.emit(initMessage('agent-1'));
+  await settle();
+  const ready = link.transitions().filter((transition) => transition.to === 'ready');
+  assert.equal(ready.length, 1);
+  assert.deepEqual(ready[0]?.controlTier, { level: 'intercepted', degrades: [] });
+  assert.equal(
+    link.transitions().filter((transition) => 'controlTier' in transition).length,
+    1,
+    'only the first ready states the tier',
+  );
 });

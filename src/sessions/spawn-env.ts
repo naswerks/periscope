@@ -364,16 +364,26 @@ export function redactProxyCredential(value: string): string {
 }
 
 /**
- * The environment for a spawned agent: the declared subset of `baseEnv`, then the embedder's
- * literals, then the host-session strip.
+ * The environment for a spawned agent: the declared subset of `baseEnv`, then the policy's literals,
+ * then the host's own literals, then the host-session strip.
+ *
+ * `hostEnv` is what this host sets itself for the session, from its operator's configuration (a
+ * model endpoint's address, credential and model variables). It is applied after `policy.extraEnv`,
+ * so a controller's literal never overrides it, and it never passes through the floor or the
+ * declaration that screen a controller's lanes: those screens are about what a controller may set,
+ * and these values have no controller as their author.
  *
  * The strip runs last on purpose. It is the one rule that cannot be widened away, so the property
  * "a spawned agent is never told it is a continuation of this process" holds no matter what a later
- * change does to the declared set or what an embedder passes.
+ * change does to the declared set or what an embedder or the host passes.
  *
  * Returns a fresh object every call and never mutates `baseEnv`.
  */
-export function composeSpawnEnv(baseEnv: EnvSource, policy: SpawnEnvPolicy = {}): Record<string, string> {
+export function composeSpawnEnv(
+  baseEnv: EnvSource,
+  policy: SpawnEnvPolicy = {},
+  hostEnv: Readonly<Record<string, string>> = {},
+): Record<string, string> {
   const env: Record<string, string> = {};
 
   for (const key of Object.keys(baseEnv)) {
@@ -386,6 +396,10 @@ export function composeSpawnEnv(baseEnv: EnvSource, policy: SpawnEnvPolicy = {})
   }
 
   for (const [key, value] of Object.entries(policy.extraEnv ?? {})) {
+    env[key] = value;
+  }
+
+  for (const [key, value] of Object.entries(hostEnv)) {
     env[key] = value;
   }
 

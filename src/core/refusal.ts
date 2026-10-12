@@ -410,6 +410,44 @@ export const REFUSAL_REASONS = [
   //                             the default branch (or no default branch exists to judge by). Nothing
   //                             was removed: the check runs before the directory goes.
   'branch-not-merged',
+
+  // The runtime a session runs on, and the model endpoint it reaches. Each is refused before
+  // anything is reserved, by a name that says which of the two a controller got wrong.
+  //
+  //   runtime-unavailable       A session_new naming a runtime this host cannot spawn: one it does
+  //                             not know, or one its hello lists with `available: false` (the binary
+  //                             absent or off its pinned version, the sign-in missing). The detail
+  //                             names the runtime and the ones this host offers.
+  //   request-key-unsupported   A session_new member the named runtime does not honour; the detail
+  //                             names the key. Refused rather than dropped, because a key silently
+  //                             ignored starts a session its controller believes it configured. Every
+  //                             member is Claude's own, so a session on Claude never meets it.
+  //   endpoint-unknown          A session_new naming a model endpoint this host's operator did not
+  //                             declare.
+  //   endpoint-incompatible     The named endpoint cannot carry the session's runtime: its runtimes
+  //                             exclude it, or it speaks a wire API the runtime does not.
+  //   model-endpoint-mismatch   A model id beginning `claude-` named for an endpoint the operator did
+  //                             not mark as Anthropic's own route. A provider that maps Claude ids to
+  //                             its own model would answer in its place, while the run reads and is
+  //                             priced as the Claude model it named. The detail names the model and
+  //                             the endpoint.
+  'runtime-unavailable',
+  'request-key-unsupported',
+  'endpoint-unknown',
+  'endpoint-incompatible',
+  'model-endpoint-mismatch',
+
+  // A repository's own agent settings, read when the session's directory is known. The agent CLI
+  // applies a settings file's `env` to itself after every screen this host runs, so a key there would
+  // reach the agent's environment past them.
+  //
+  //   settings-route-refused    A repository-tier settings file the session loads
+  //                             (`.claude/settings.json` for the `project` tier,
+  //                             `.claude/settings.local.json` for `local`) names in its `env` a key
+  //                             beneath the extended env floor: the model route and its credentials,
+  //                             a proxy, the certificates trusted, the loader. Refused before the agent
+  //                             starts; the detail names each file and its keys.
+  'settings-route-refused',
 ] as const;
 
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];

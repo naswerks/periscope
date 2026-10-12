@@ -60,12 +60,14 @@ import type {
 } from '../host/agent-process.js';
 import type { Refusal, RefusalReason } from '../core/refusal.js';
 import { refusal } from '../core/refusal.js';
+import { DEFAULT_RUNTIME } from '../control/frames.js';
 import { HOOK_TIMEOUT_EVENT } from '../state/model.js';
 import type { Decider, DecisionRequest } from './decision.js';
 import { describeRaw, readDecision } from './decision.js';
 import type { GateOutcome } from './outcome.js';
 import { EscalationUnavailable } from './escalate.js';
 import type { LocalGate } from './local.js';
+import { claudeToolKind } from './tool-kind.js';
 
 /** Told about every outcome — allows, denials, outages, expiries. Never only the interesting ones. */
 export type OutcomeListener = (outcome: GateOutcome) => void;
@@ -89,6 +91,11 @@ export interface PermissionGateOptions {
    * silent. Every construction site already has the value. See `DecisionRequest.sessionKey`.
    */
   readonly sessionKey: string;
+  /**
+   * The runtime the session runs on, carried onto every decision request beside `sessionKey`.
+   * Absent is `DEFAULT_RUNTIME`.
+   */
+  readonly runtime?: string;
   /**
    * The host's own gate, consulted before anything is asked of anyone. Optional; absent means the
    * gate behaves exactly as it did without it.
@@ -210,6 +217,7 @@ export function permissionHooks(options: PermissionGateOptions): HookRegistratio
   const decisionTimeoutMs = options.decisionTimeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS;
   const holdAfterMs = options.holdAfterMs ?? DEFAULT_HOLD_AFTER_MS;
   const matcherTimeoutSeconds = options.matcherTimeoutSeconds ?? DEFAULT_MATCHER_TIMEOUT_SECONDS;
+  const runtime = options.runtime ?? DEFAULT_RUNTIME;
 
   // The two-deadline invariant, enforced where it still can be. A pair where the matcher expires
   // first would still block the tool — the CLI is fail-closed — but this handler would never learn
@@ -254,6 +262,7 @@ export function permissionHooks(options: PermissionGateOptions): HookRegistratio
         held,
         options.localGate,
         options.sessionKey,
+        runtime,
       );
     } catch (error) {
       // The fail-open hole, closed. Anything at all that escaped above — a bug in this file, a
@@ -261,7 +270,8 @@ export function permissionHooks(options: PermissionGateOptions): HookRegistratio
       // refusal rather than an absent hook.
       outcome = {
         kind: 'refused',
-        request: readRequest(input, options.sessionKey) ?? unreadableRequest(options.sessionKey),
+        request:
+          readRequest(input, options.sessionKey, runtime) ?? unreadableRequest(options.sessionKey, runtime),
         held: held.value,
         refusal: refusal('permission-decision-unavailable', `the gate itself failed: ${String(error)}`),
       };
@@ -322,14 +332,15 @@ async function decide(
   held: { value: boolean },
   localGate: LocalGate | undefined,
   sessionKey: string,
+  runtime: string,
 ): Promise<TerminalOutcome> {
-  const request = readRequest(input, sessionKey);
+  const request = readRequest(input, sessionKey, runtime);
   if (request === null) {
     // The gate cannot say which tool this is, so it cannot authorize it. Blocking is the only
     // answer that does not amount to permitting an unidentified call.
     return {
       kind: 'refused',
-      request: unreadableRequest(sessionKey),
+      request: unreadableRequest(sessionKey, runtime),
       held: false,
       refusal: refusal(
         'permission-decision-unavailable',
@@ -517,7 +528,7 @@ function terminal(request: DecisionRequest, held: boolean, answered: unknown): T
 }
 
 /** Everything unknown, for an input that could not be read at all. Never a thrown alternative. */
-function unreadableRequest(sessionKey: string): DecisionRequest {
+function unreadableRequest(sessionKey: string, runtime: string): DecisionRequest {
   return {
     toolName: '(unnamed tool)',
     toolUseId: '(no tool_use_id)',
@@ -531,6 +542,9 @@ function unreadableRequest(sessionKey: string): DecisionRequest {
     cwd: '',
     agentId: null,
     agentType: null,
+    // A tool this code cannot name is a kind it cannot name either.
+    toolKind: 'other',
+    runtime,
   };
 }
 
@@ -547,12 +561,13 @@ function unreadableRequest(sessionKey: string): DecisionRequest {
  * code cannot read names a tool it cannot name, and asking a decider to authorize "(unnamed tool)"
  * would get a decision about nothing. An unnameable call is not an authorizable one.
  */
-function readRequest(input: HookInput, sessionKey: string): DecisionRequest | null {
+function readRequest(input: HookInput, sessionKey: string, runtime: string): DecisionRequest | null {
   try {
     const anyInput = input as Partial<Record<string, unknown>>;
     const text = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+    const toolName = text(anyInput['tool_name']) ?? '(unnamed tool)';
     return {
-      toolName: text(anyInput['tool_name']) ?? '(unnamed tool)',
+      toolName,
       toolUseId: text(anyInput['tool_use_id']) ?? '(no tool_use_id)',
       toolInput: anyInput['tool_input'],
       sessionId: text(anyInput['session_id']) ?? '',
@@ -564,6 +579,10 @@ function readRequest(input: HookInput, sessionKey: string): DecisionRequest | nu
       // subagent one.
       agentId: text(anyInput['agent_id']),
       agentType: text(anyInput['agent_type']),
+      // Read from the name by Claude's map, the tool names this hook carries; never left out.
+      toolKind: claudeToolKind(toolName),
+      // Supplied by the composer, like `sessionKey`: the session's runtime, not the agent's input.
+      runtime,
     };
   } catch {
     return null;

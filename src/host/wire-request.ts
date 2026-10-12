@@ -18,13 +18,17 @@
  *
  * Nothing here can produce `sessionStore`, `sessionStoreFlush`, `spawn`, `onStderr` or `hooks`.
  * They have no JSON form, so the wire type has no member for them and this file has nothing to read.
- * That is the boundary, and it is structural rather than a check somebody remembered to write.
+ * Nor can it produce `hostEnv`, the variables the host sets itself: the request this file returns has
+ * no such member. That is the boundary, and it is structural rather than a check somebody remembered
+ * to write.
  */
 import { EXTRA_ENV_FLOOR, envKeysBeneathFloor, envKeysUndeclared } from '../sessions/spawn-env.js';
 import type { JsonObject, SessionNewEnv, SessionNewRequest } from '../control/frames.js';
+import { DEFAULT_RUNTIME } from '../control/frames.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import type { SessionRequest } from '../sessions/registry.js';
+import { wireApisFor } from '../sessions/runtimes.js';
 import type { SpawnEnvPolicy } from '../sessions/spawn-env.js';
 import type {
   EffortLevel,
@@ -35,9 +39,11 @@ import type {
   ThinkingConfig,
 } from './agent-process.js';
 import type { SessionConfigure } from '../control/frames.js';
+import type { ModelEndpoint } from './model-endpoints.js';
+import { endpointModelProblem } from './model-endpoints.js';
 
-/** What a controller may ask for, minus the two the composer supplies itself. */
-export type ComposableRequest = Omit<SessionRequest, 'cwd' | 'hooks'>;
+/** What a controller may ask for, minus the three the composer supplies itself. */
+export type ComposableRequest = Omit<SessionRequest, 'cwd' | 'hooks' | 'hostEnv'>;
 
 /**
  * The three tiers the SDK understands, as data.
@@ -189,15 +195,32 @@ function namedInLanes(
  * `controllerEnvKeys` is what this host's operator declared a controller may place in the spawn
  * environment; it defaults to nothing, so a request whose `env` adds any key is refused unless the
  * operator declared that key.
+ *
+ * `endpoints` are the model endpoints this host's operator declared; a request may name one, and
+ * nothing it carries can describe one.
  */
 export function readSessionRequest(
   request: SessionNewRequest | null,
   extraEnvFloor: readonly string[] = EXTRA_ENV_FLOOR,
   controllerEnvKeys: readonly string[] = [],
+  endpoints: readonly ModelEndpoint[] = [],
 ): Result<ComposableRequest> {
   if (request === null) return ok({});
 
+  // The runtime first: every other member is read as that runtime's own, so a session on a runtime
+  // this host cannot spawn is refused before any of them is. Null or absent is the host's default and
+  // composes nothing; the composer reads the default through `runtimeOf`.
+  const runtime = request.runtime ?? null;
+  if (runtime !== null && runtime !== DEFAULT_RUNTIME) {
+    return refuse<ComposableRequest>(
+      'runtime-unavailable',
+      `runtime is ${JSON.stringify(runtime)}; this host spawns sessions on ${DEFAULT_RUNTIME} only, the ` +
+        `one runtime its hello lists in agents`,
+    );
+  }
+
   const composed: Record<string, unknown> = {};
+  if (runtime !== null) composed['runtime'] = runtime;
 
   if (request.resume !== null) composed['resume'] = request.resume;
   if (request.fork !== null) composed['fork'] = request.fork;
@@ -317,6 +340,40 @@ export function readSessionRequest(
     const servers = readMcpServers(request.mcpServers);
     if (!servers.ok) return refuse<ComposableRequest>(servers.refusal.reason, servers.refusal.detail);
     composed['mcpServers'] = servers.value;
+  }
+
+  // The endpoint last, read against the runtime the session runs on and the model it names: a name
+  // the operator did not declare, an endpoint that cannot carry this runtime, and a model this endpoint
+  // must not be sent are each refused by name before anything is reserved. Null or absent is the
+  // runtime's own route.
+  const endpointName = request.endpoint ?? null;
+  if (endpointName !== null) {
+    const endpoint = endpoints.find((one) => one.name === endpointName);
+    if (endpoint === undefined) {
+      return refuse<ComposableRequest>(
+        'endpoint-unknown',
+        `endpoint ${JSON.stringify(endpointName)} is not one this host declares; the endpoints its hello ` +
+          `lists are ${endpoints.length === 0 ? 'none' : endpoints.map((one) => one.name).join(', ')}`,
+      );
+    }
+    const sessionRuntime = runtime ?? DEFAULT_RUNTIME;
+    if (!endpoint.runtimes.includes(sessionRuntime)) {
+      return refuse<ComposableRequest>(
+        'endpoint-incompatible',
+        `endpoint "${endpoint.name}" does not carry runtime ${sessionRuntime}; it carries ` +
+          endpoint.runtimes.join(', '),
+      );
+    }
+    if (!wireApisFor(sessionRuntime).includes(endpoint.wireApi)) {
+      return refuse<ComposableRequest>(
+        'endpoint-incompatible',
+        `endpoint "${endpoint.name}" speaks ${endpoint.wireApi}, which runtime ${sessionRuntime} does not ` +
+          `speak`,
+      );
+    }
+    const mismatch = endpointModelProblem(request.model, endpoint);
+    if (mismatch !== null) return refuse<ComposableRequest>('model-endpoint-mismatch', mismatch);
+    composed['endpoint'] = endpointName;
   }
 
   return ok(composed as ComposableRequest);

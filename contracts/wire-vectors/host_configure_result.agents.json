@@ -1,0 +1,122 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "host_configure_result",
+      "requestId": "request-6",
+      "configuration": {
+        "repositoryRoot": null,
+        "workspaceRoot": null,
+        "branchScheme": null,
+        "transcriptsRoot": null,
+        "controllerUrl": null,
+        "decisionUrl": null,
+        "agentHome": null,
+        "plugins": [],
+        "agent": {
+          "claudeCodeVersion": "2.1.284",
+          "sdkVersion": "0.3.284",
+          "models": [
+            {
+              "value": "alias-1",
+              "resolvedModel": "model-id-1",
+              "displayName": "Model One",
+              "description": "The first model",
+              "supportedEffortLevels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supportsFastMode": true,
+              "supportsAutoMode": false,
+              "supportsAdaptiveThinking": true
+            },
+            {
+              "value": "model-id-2",
+              "resolvedModel": null,
+              "displayName": "Model Two",
+              "description": null,
+              "supportedEffortLevels": [],
+              "supportsFastMode": null,
+              "supportsAutoMode": null,
+              "supportsAdaptiveThinking": null
+            }
+          ]
+        },
+        "agents": [
+          {
+            "runtime": "claude",
+            "version": "2.1.284",
+            "sdkVersion": "0.3.284",
+            "models": [
+              {
+                "value": "alias-1",
+                "resolvedModel": "model-id-1",
+                "displayName": "Model One",
+                "description": "The first model",
+                "supportedEffortLevels": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "supportsFastMode": true,
+                "supportsAutoMode": false,
+                "supportsAdaptiveThinking": true
+              },
+              {
+                "value": "model-id-2",
+                "resolvedModel": null,
+                "displayName": "Model Two",
+                "description": null,
+                "supportedEffortLevels": [],
+                "supportsFastMode": null,
+                "supportsAutoMode": null,
+                "supportsAdaptiveThinking": null
+              }
+            ],
+            "vocabularies": {
+              "permissionModes": [
+                "default",
+                "acceptEdits",
+                "bypassPermissions",
+                "plan",
+                "dontAsk",
+                "auto"
+              ],
+              "efforts": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "thinking": true
+            },
+            "controlTier": {
+              "level": "intercepted",
+              "degrades": []
+            },
+            "available": true,
+            "unavailableReason": null
+          }
+        ]
+      },
+      "overriddenByEnvironment": [],
+      "pendingRestart": [],
+      "refusal": null
+    }
+  },
+  "name": "host_configure_result.agents",
+  "protocolVersion": 15,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"host_configure_result\",\"requestId\":\"request-6\",\"configuration\":{\"repositoryRoot\":null,\"workspaceRoot\":null,\"branchScheme\":null,\"transcriptsRoot\":null,\"controllerUrl\":null,\"decisionUrl\":null,\"agentHome\":null,\"plugins\":[],\"agent\":{\"claudeCodeVersion\":\"2.1.284\",\"sdkVersion\":\"0.3.284\",\"models\":[{\"value\":\"alias-1\",\"resolvedModel\":\"model-id-1\",\"displayName\":\"Model One\",\"description\":\"The first model\",\"supportedEffortLevels\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"],\"supportsFastMode\":true,\"supportsAutoMode\":false,\"supportsAdaptiveThinking\":true},{\"value\":\"model-id-2\",\"resolvedModel\":null,\"displayName\":\"Model Two\",\"description\":null,\"supportedEffortLevels\":[],\"supportsFastMode\":null,\"supportsAutoMode\":null,\"supportsAdaptiveThinking\":null}]},\"agents\":[{\"runtime\":\"claude\",\"version\":\"2.1.284\",\"sdkVersion\":\"0.3.284\",\"models\":[{\"value\":\"alias-1\",\"resolvedModel\":\"model-id-1\",\"displayName\":\"Model One\",\"description\":\"The first model\",\"supportedEffortLevels\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"],\"supportsFastMode\":true,\"supportsAutoMode\":false,\"supportsAdaptiveThinking\":true},{\"value\":\"model-id-2\",\"resolvedModel\":null,\"displayName\":\"Model Two\",\"description\":null,\"supportedEffortLevels\":[],\"supportsFastMode\":null,\"supportsAutoMode\":null,\"supportsAdaptiveThinking\":null}],\"vocabularies\":{\"permissionModes\":[\"default\",\"acceptEdits\",\"bypassPermissions\",\"plan\",\"dontAsk\",\"auto\"],\"efforts\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\"],\"thinking\":true},\"controlTier\":{\"level\":\"intercepted\",\"degrades\":[]},\"available\":true,\"unavailableReason\":null}]},\"overriddenByEnvironment\":[],\"pendingRestart\":[],\"refusal\":null}}"
+}

@@ -224,3 +224,14 @@ test('PERISCOPE_CONTROLLER_ENV_KEYS is a config-file key and never settable over
     'PERISCOPE_CONTROLLER_ENV_KEYS must not be settable over the wire',
   );
 });
+
+test('PERISCOPE_MODEL_ENDPOINTS is a config-file key and never settable over the wire', () => {
+  // The file of model endpoints is the operator's: it names the address and the credential a
+  // session's model calls use.
+  assert.ok((CONFIG_KEYS as readonly string[]).includes('PERISCOPE_MODEL_ENDPOINTS'));
+  assert.equal(
+    (WIRE_CONFIGURABLE_KEYS as readonly string[]).includes('PERISCOPE_MODEL_ENDPOINTS'),
+    false,
+    'PERISCOPE_MODEL_ENDPOINTS must not be settable over the wire',
+  );
+});

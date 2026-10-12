@@ -525,6 +525,11 @@ test('the recorded hazards never reach a spawn — not by inheritance, not by a 
   const forced = composeSpawnEnv(base, { extraEnv: Object.fromEntries(hazards.map((k) => [k, '1'])) });
   for (const key of hazards) assert.equal(key in forced, false, `${key} survived being set explicitly`);
 
+  // 4. Set by the host itself, through the lane its own configuration rides — the strip runs after
+  //    that lane too.
+  const hosted = composeSpawnEnv(base, {}, Object.fromEntries(hazards.map((k) => [k, '1'])));
+  for (const key of hazards) assert.equal(key in hosted, false, `${key} survived being set by the host`);
+
   assert.equal(plain['PATH'], 'value-of-PATH', 'and the rest of the environment is untouched');
 });
 
@@ -746,6 +751,35 @@ test('a declaration is exact names compared case-insensitively, and an empty one
   assert.deepEqual(envKeysUndeclared(['https_proxy', 'NAS_Y'], ['HTTPS_PROXY']), ['NAS_Y']);
   assert.deepEqual(envKeysUndeclared(['NAS_Y'], []), ['NAS_Y']);
   assert.deepEqual(envKeysUndeclared(['NAS_YY'], ['NAS_Y']), ['NAS_YY'], 'a declaration is not a prefix');
+});
+
+test("control: the floor never touches the host's own lane; a model route and a proxy the host sets reach the spawn", () => {
+  // The variables a model endpoint needs are every one beneath the floor, which is right for a
+  // controller's lanes and would refuse every endpoint session if it screened this one.
+  const route = {
+    ANTHROPIC_BASE_URL: 'https://endpoint.example/anthropic',
+    ANTHROPIC_AUTH_TOKEN: 'endpoint-credential',
+    HTTPS_PROXY: 'http://proxy.example.com:8080',
+  };
+  assert.deepEqual(
+    envKeysBeneathFloor(Object.keys(route)),
+    Object.keys(route),
+    'the control is not beneath the floor',
+  );
+  const env = composeSpawnEnv({ PATH: 'p' }, {}, route);
+  for (const [key, value] of Object.entries(route))
+    assert.equal(env[key], value, `${key} did not reach the spawn`);
+  assert.equal(env['PATH'], 'p');
+});
+
+test("the host's own lane is applied after the policy's literals, so a controller's value never overrides it", () => {
+  const env = composeSpawnEnv(
+    { PATH: 'p' },
+    { extraEnv: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000', CI: '1' } },
+    { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '786432' },
+  );
+  assert.equal(env['CLAUDE_CODE_AUTO_COMPACT_WINDOW'], '786432');
+  assert.equal(env['CI'], '1', "the policy's other literals still land");
 });
 
 test('control: the floor never touches inheritance; a proxy and a certificate directory the host set still reach every spawn', () => {

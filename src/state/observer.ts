@@ -16,7 +16,13 @@
  */
 import type { HookInput, SDKMessage } from '../host/agent-process.js';
 import type { Result } from '../core/result.js';
-import type { MessageEventName, SessionTransition, TransitionCause, TransitionWhere } from './model.js';
+import type {
+  ControlTier,
+  MessageEventName,
+  SessionTransition,
+  TransitionCause,
+  TransitionWhere,
+} from './model.js';
 import type { EntryOp, SessionStateMachine, TransitionRequest } from './machine.js';
 
 /**
@@ -35,6 +41,35 @@ const COMPACTION_ENTRY = 'compaction';
 const REQUEST_ENTRY = 'request';
 
 /**
+ * A compaction began or finished, as the source that moved the compaction entry reported it.
+ *
+ * `started` when a source opens the entry while it is closed, `ended` when one closes it while it is
+ * open; a second source reporting the same moment moves nothing and reports nothing. The figures are
+ * the moving source's own and null where it carries none: the two hooks carry the trigger, the
+ * boundary message carries the trigger and the token counts, the status message carries neither.
+ */
+export interface CompactionReport {
+  readonly status: 'started' | 'ended';
+  readonly trigger: 'manual' | 'auto' | null;
+  readonly tokensBefore: number | null;
+  readonly tokensAfter: number | null;
+}
+
+export type CompactionListener = (report: CompactionReport) => void;
+
+/** What one compaction source states about the compaction, before it is known whether it moved it. */
+type CompactionFigures = Omit<CompactionReport, 'status'>;
+
+/** What an observer is told about its session at construction. */
+export interface SessionObserverOptions {
+  /**
+   * The control tier the session starts at, stated on its first transition into `ready`. The
+   * composer resolves it from the session's runtime; absent, the transition states none.
+   */
+  readonly controlTier?: ControlTier | null;
+}
+
+/**
  * Translates one session's SDK events into transitions on its machine.
  *
  * Per session because it holds the one correlation the SDK does not give for free: a background
@@ -47,9 +82,12 @@ export class SessionObserver {
   readonly #taskEntries = new Map<string, string>();
   /** Whether the agent has reported itself; only its first init message says the session is ready. */
   #reported = false;
+  readonly #compactionListeners = new Set<CompactionListener>();
+  readonly #controlTier: ControlTier | null;
 
-  constructor(machine: SessionStateMachine) {
+  constructor(machine: SessionStateMachine, options: SessionObserverOptions = {}) {
     this.#machine = machine;
+    this.#controlTier = options.controlTier ?? null;
   }
 
   get machine(): SessionStateMachine {
@@ -108,9 +146,30 @@ export class SessionObserver {
   // The SDK message stream
   // -------------------------------------------------------------------------
 
+  /**
+   * Told each time a compaction begins or finishes, after the transition that records it. A report
+   * names a moment the compaction entry moved; it adds nothing to the record and moves no state.
+   */
+  onCompaction(listener: CompactionListener): () => void {
+    this.#compactionListeners.add(listener);
+    return () => this.#compactionListeners.delete(listener);
+  }
+
   /** Every message the agent emits. Returns what it recorded — often nothing, by the table. */
   observeMessage(message: SDKMessage): Result<SessionTransition>[] {
-    return this.#requestsFor(message).map((request) => this.#machine.record(request));
+    const figures = messageCompactionFigures(message);
+    const wasCompacting = figures !== null && this.#isOpen(COMPACTION_ENTRY);
+    const recorded = this.#requestsFor(message).map((request) => this.#machine.record(request));
+    if (figures !== null) this.#reportCompaction(wasCompacting, figures);
+    return recorded;
+  }
+
+  /** A report when the compaction entry moved across one source's records, and nothing otherwise. */
+  #reportCompaction(wasCompacting: boolean, figures: CompactionFigures): void {
+    const compacting = this.#isOpen(COMPACTION_ENTRY);
+    if (compacting === wasCompacting) return;
+    const report: CompactionReport = { status: compacting ? 'started' : 'ended', ...figures };
+    for (const listener of this.#compactionListeners) listener(report);
   }
 
   #requestsFor(message: SDKMessage): TransitionRequest[] {
@@ -137,6 +196,8 @@ export class SessionObserver {
             'system/init',
             `the agent reported itself: ${message.model} on CLI ${message.claude_code_version}`,
           ),
+          // The session's tier is stated once, here, where the session first says what it is.
+          ...(this.#controlTier === null ? {} : { controlTier: this.#controlTier }),
         },
       ];
     }
@@ -273,7 +334,11 @@ export class SessionObserver {
 
   /** One hook firing. Returns what it recorded, so a caller can assert on it. */
   observeHook(input: HookInput): Result<SessionTransition>[] {
-    return this.#hookRequests(input).map((request) => this.#machine.record(request));
+    const figures = hookCompactionFigures(input);
+    const wasCompacting = figures !== null && this.#isOpen(COMPACTION_ENTRY);
+    const recorded = this.#hookRequests(input).map((request) => this.#machine.record(request));
+    if (figures !== null) this.#reportCompaction(wasCompacting, figures);
+    return recorded;
   }
 
   #hookRequests(input: HookInput): TransitionRequest[] {
@@ -506,6 +571,30 @@ export class SessionObserver {
 
 const elicitationEntry = (elicitationId: string | undefined, server: string): string =>
   `elicitation:${elicitationId ?? server}`;
+
+/** What a compaction-source message states about the compaction, or null for any other message. */
+function messageCompactionFigures(message: SDKMessage): CompactionFigures | null {
+  if (message.type === 'system' && message.subtype === 'status') {
+    return { trigger: null, tokensBefore: null, tokensAfter: null };
+  }
+  if (message.type === 'system' && message.subtype === 'compact_boundary') {
+    const metadata = message.compact_metadata;
+    return {
+      trigger: metadata.trigger,
+      tokensBefore: metadata.pre_tokens,
+      tokensAfter: metadata.post_tokens ?? null,
+    };
+  }
+  return null;
+}
+
+/** What a compaction hook states about the compaction, or null for any other hook. */
+function hookCompactionFigures(input: HookInput): CompactionFigures | null {
+  if (input.hook_event_name === 'PreCompact' || input.hook_event_name === 'PostCompact') {
+    return { trigger: input.trigger, tokensBefore: null, tokensAfter: null };
+  }
+  return null;
+}
 
 /**
  * `SDKStatus` -> the request/compaction lanes. Null is the exit, not an absence of information.

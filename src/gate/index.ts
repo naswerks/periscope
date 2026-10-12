@@ -1,6 +1,6 @@
 /** The PreToolUse hook and the permission decision path. */
-export type { Decider, Decision, DecisionReading, DecisionRequest } from './decision.js';
-export { describeRaw, readDecision } from './decision.js';
+export type { Decider, Decision, DecisionReading, DecisionRequest, ToolKind } from './decision.js';
+export { TOOL_KINDS, describeRaw, readDecision } from './decision.js';
 
 export type { GateOutcome } from './outcome.js';
 export { gateTransitions, recordGateOutcome } from './outcome.js';

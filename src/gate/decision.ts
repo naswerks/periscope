@@ -29,9 +29,25 @@ export type Decision =
   | { readonly behavior: 'allow'; readonly updatedInput?: Record<string, unknown> }
   | { readonly behavior: 'deny'; readonly message: string; readonly interrupt?: boolean };
 
+/**
+ * What kind of thing a tool call does, whatever the runtime calls the tool: runs a command, reads,
+ * writes or edits a file, calls an MCP server's tool, reaches the web, or anything else. A decider
+ * can hold a policy per kind across runtimes; `toolName` still says exactly which tool it is.
+ */
+export const TOOL_KINDS = ['shell', 'file_read', 'file_write', 'file_edit', 'mcp', 'web', 'other'] as const;
+
+export type ToolKind = (typeof TOOL_KINDS)[number];
+
 /** What a decider is asked about. Everything the hook knows, in this package's own terms. */
 export interface DecisionRequest {
   readonly toolName: string;
+  /**
+   * The kind of call this is (protocol 15), read from `toolName` by the runtime's own map. A name the
+   * map does not know is `other`, never left out. Absent from a host one release behind.
+   */
+  readonly toolKind?: ToolKind | null;
+  /** The runtime the session runs on (protocol 15). Absent from a host one release behind. */
+  readonly runtime?: string | null;
   readonly toolUseId: string;
   readonly toolInput: unknown;
   /**

@@ -116,7 +116,7 @@ export function homeDirectory(env: NodeJS.ProcessEnv = process.env): string | nu
  */
 export function credentialPaths(
   env: NodeJS.ProcessEnv = process.env,
-  options: { readonly agentHome?: string | null } = {},
+  options: { readonly agentHome?: string | null; readonly modelEndpointFiles?: readonly string[] } = {},
 ): string[] {
   const home = homeDirectory(env);
   const paths: string[] = [];
@@ -163,6 +163,15 @@ export function credentialPaths(
   // nothing else.
   const agentHome = options.agentHome ?? env['PERISCOPE_AGENT_HOME'] ?? null;
   if (typeof agentHome === 'string' && agentHome.trim() !== '') cliHome(agentHome);
+
+  // The model endpoints file and every credential file it names: the address and the key a session's
+  // model calls use. The composition root passes the files it read; a caller with nothing else gets
+  // the endpoints file the environment names.
+  const endpointsFile = env['PERISCOPE_MODEL_ENDPOINTS'];
+  const endpointFiles =
+    options.modelEndpointFiles ??
+    (typeof endpointsFile === 'string' && endpointsFile.trim() !== '' ? [endpointsFile.trim()] : []);
+  for (const file of endpointFiles) add(file);
 
   return paths;
 }

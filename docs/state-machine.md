@@ -51,8 +51,13 @@ two are not symmetric.
 ```
 { sessionId, seq, at, from, to, activity,
   cause: { kind, event, detail },        // kind: hook | sdk-message | control | timeout | process | refusal
-  where: { worktree, branch, cwd } }
+  where: { worktree, branch, cwd },
+  controlTier? }                         // the first transition into ready only
 ```
+
+- `controlTier` (`{ level, degrades }`) is stated on the session's first transition into `ready` and
+  on no other, never carried forward: the tier the session's runtime starts at, from the same
+  lookup the hello's runtimes list reads ([protocol.md](protocol.md), the control tier).
 
 - `cause` is compile-closed and required. `CauseEvent` is the union of the hook events, the message
   discriminators, `CONTROL_EVENTS`, `PROCESS_EVENTS`, `TIMEOUT_EVENTS` and `RefusalReason`; a
@@ -144,7 +149,9 @@ pinned to match. An event absent from the table is a gap, not a default.
 The table answers "does this move the machine". `MESSAGE_ROUTING` (`src/control/stream-routing.ts`)
 answers "does this go on the wire". They disagree in both directions on purpose (`assistant` is
 declined here and forwarded there; `session_state_changed` is wired here and declined there) and
-must never be merged.
+must never be merged. The fact lift is a third reader with rows of its own: it reads messages this
+table declines (`assistant`, `system/background_tasks_changed`, `stream_event`) for the facts they
+carry, and they still move nothing here ([protocol.md](protocol.md), the fact layer).
 
 The runtime wins over the types. Four wired events are measured not to fire under an SDK-hosted
 session: `SessionStart` (take the start receipt from `system/init`), `PermissionRequest` and
@@ -163,15 +170,15 @@ which sessions are interesting; a host that judges gets rebuilt per product. Do 
 
 ## Where things live
 
-| Path                                | What                                                                                           |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `src/state/model.ts`                | States, activities, the closed cause vocabularies, `SessionTransition`, `OpenEntry`            |
-| `src/state/machine.ts`              | `SessionStateMachine`: derive from the last transition; `record`, `onTransition`, `onRejected` |
-| `src/state/observer.ts`             | The one translation site from SDK hooks and messages to transition requests                    |
-| `src/state/store.ts`                | `TransitionStore`, the bounded in-memory ring that retains rejections and drops its oldest     |
-| `src/persistence/transition-log.ts` | The durable append-only log; `markAbandoned`; the cause-survives-or-refuse decoder             |
-| `src/state/coverage.ts`             | `HOOK_COVERAGE` and `MESSAGE_COVERAGE`, wired or declined with reasons                         |
-| `src/state/reporter.ts`             | Enumeration of this host's sessions                                                            |
-| `src/host/hooks.ts`                 | `observationHooks()`, derived from the table, and `mergeHooks()`                               |
-| `src/host/git-facts.ts`             | Read-only `where`, including the linked-worktree `.git` file                                   |
-| `src/pins/state-record.test.ts`     | The no-suppressing-branch structural pin                                                       |
+| Path                                | What                                                                                                   |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `src/state/model.ts`                | States, activities, the closed cause vocabularies, `SessionTransition`, `OpenEntry`                    |
+| `src/state/machine.ts`              | `SessionStateMachine`: derive from the last transition; `record`, `onTransition`, `onRejected`         |
+| `src/state/observer.ts`             | The one translation site from SDK hooks and messages to transition requests, and the compaction report |
+| `src/state/store.ts`                | `TransitionStore`, the bounded in-memory ring that retains rejections and drops its oldest             |
+| `src/persistence/transition-log.ts` | The durable append-only log; `markAbandoned`; the cause-survives-or-refuse decoder                     |
+| `src/state/coverage.ts`             | `HOOK_COVERAGE` and `MESSAGE_COVERAGE`, wired or declined with reasons                                 |
+| `src/state/reporter.ts`             | Enumeration of this host's sessions                                                                    |
+| `src/host/hooks.ts`                 | `observationHooks()`, derived from the table, and `mergeHooks()`                                       |
+| `src/host/git-facts.ts`             | Read-only `where`, including the linked-worktree `.git` file                                           |
+| `src/pins/state-record.test.ts`     | The no-suppressing-branch structural pin                                                               |

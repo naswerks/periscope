@@ -1,14 +1,19 @@
 /**
- * The window's promise, checked against the peer it is made to: a controller on protocol 13 reads
+ * The window's promise, checked against the peer it is made to: a controller on protocol 14 reads
  * everything this host sends it, and this host reads everything that controller sends.
  *
- * `V13` below is that controller's decoder: the protocol-13 schemas transcribed from the codec the
- * v1.4.0 tag ships (`git show v1.4.0:src/control/codec.ts`), cut to the kinds this file reads, with
+ * `V14` below is that controller's decoder: the protocol-14 schemas transcribed from the codec the
+ * v1.5.0 tag ships (`git show v1.5.0:src/control/codec.ts`), cut to the kinds this file reads, with
  * that release's bounds written as numbers. It describes a released peer, so it never changes to
  * follow this build; an edit here that turns a test green changes the contract rather than fixing
- * it. The frames it reads are the bytes a real link carried, from a host the peer welcomed at 13.
- * Protocol 14 changes no shape, so what is read here is the traffic such a controller receives, the
- * members protocol 12 added included.
+ * it. The frames it reads are the bytes a real link carried, from a host the peer welcomed at 14.
+ * Protocol 15 adds bodies such a controller receives as open JSON (the `agent_facts` update and the
+ * `agent_fragment` delta), so what is read here is that traffic, the new bodies and the members
+ * protocol 12 added included. It also adds members such a controller carries without reading: the
+ * hello's `agents` and `endpoints`, a first `ready` transition's `controlTier`, and `toolKind` and
+ * `runtime` on the decision request, whose body that release's `DecisionRequest` describes
+ * (`V14_DECISION_REQUEST`). And it adds `endpoint` to `session_new.request`, which such a controller
+ * never sends: its request opens on the runtime's own route.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,120 +21,139 @@ import { rm } from 'node:fs/promises';
 import { z } from 'zod';
 
 import { decode } from '../control/codec.js';
-import type { HostAgent, JsonObject, JsonValue, SessionConfigure } from '../control/frames.js';
+import type { HostAgent, JsonObject, JsonValue, SessionConfigure, SessionNew } from '../control/frames.js';
 import {
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_MIN,
   hostConfigure,
   readObservedAt,
+  readStateTransition,
   sessionNew,
   unsetHostConfiguration,
 } from '../control/frames.js';
+import type { DecisionRequest } from '../gate/decision.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { fakeAgents, initMessage } from '../test-support/fake-agent.js';
 import { tempDir } from '../test-support/temp-dir.js';
 import { peerOn, waitFor } from '../test-support/ws-peer.js';
 import type { HookInput, SDKMessage } from './agent-process.js';
 import { PeriscopeHost } from './host.js';
+import type { ModelEndpoint } from './model-endpoints.js';
 import { readSessionConfigure } from './wire-request.js';
 
 // ---------------------------------------------------------------------------
-// The protocol-13 decoder, as v1.4.0 shipped it.
+// The protocol-14 decoder, as v1.5.0 shipped it.
 // ---------------------------------------------------------------------------
 
-const V13_MAX_CONFIGURATION_VALUE_LENGTH = 1000;
-const V13_MAX_PLUGIN_DIRS = 8;
-const V13_MAX_CONFIGURE_ENTRIES = 8;
-const V13_MAX_AGENT_MODELS = 32;
+const V14_MAX_CONFIGURATION_VALUE_LENGTH = 1000;
+const V14_MAX_PLUGIN_DIRS = 8;
+const V14_MAX_CONFIGURE_ENTRIES = 8;
+const V14_MAX_AGENT_MODELS = 32;
 
-const v13JsonValue: z.ZodType<JsonValue> = z.lazy(() =>
+const v14JsonValue: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
     z.string(),
     z.number(),
     z.boolean(),
     z.null(),
-    z.array(v13JsonValue),
-    z.record(z.string(), v13JsonValue),
+    z.array(v14JsonValue),
+    z.record(z.string(), v14JsonValue),
   ]),
 );
-const v13JsonObject = z.record(z.string(), v13JsonValue);
-const v13Refusal = z.looseObject({ reason: z.string().min(1), detail: z.string() });
-const v13SessionCursor = z.looseObject({ sessionId: z.string().min(1), seq: z.number().int().nonnegative() });
-const v13ConfigurationValue = z.string().max(V13_MAX_CONFIGURATION_VALUE_LENGTH).nullable();
-const v13HostPlugin = z.looseObject({
+const v14JsonObject = z.record(z.string(), v14JsonValue);
+const v14Refusal = z.looseObject({ reason: z.string().min(1), detail: z.string() });
+const v14SessionCursor = z.looseObject({ sessionId: z.string().min(1), seq: z.number().int().nonnegative() });
+const v14ConfigurationValue = z.string().max(V14_MAX_CONFIGURATION_VALUE_LENGTH).nullable();
+const v14HostPlugin = z.looseObject({
   name: z.string().min(1).max(200),
   version: z.string().max(64).nullable(),
-  path: z.string().min(1).max(V13_MAX_CONFIGURATION_VALUE_LENGTH),
+  path: z.string().min(1).max(V14_MAX_CONFIGURATION_VALUE_LENGTH),
 });
-const v13AgentModelText = z.string().min(1).max(200);
-const v13HostModel = z.looseObject({
-  value: v13AgentModelText,
-  resolvedModel: v13AgentModelText.nullable(),
+const v14AgentModelText = z.string().min(1).max(200);
+const v14HostModel = z.looseObject({
+  value: v14AgentModelText,
+  resolvedModel: v14AgentModelText.nullable(),
   displayName: z.string().max(200),
-  description: z.string().max(V13_MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
+  description: z.string().max(V14_MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
   supportedEffortLevels: z.array(z.string().min(1).max(32)).max(16),
   supportsFastMode: z.boolean().nullable(),
   supportsAutoMode: z.boolean().nullable(),
   supportsAdaptiveThinking: z.boolean().nullable(),
 });
-const v13HostAgent = z.looseObject({
+const v14HostAgent = z.looseObject({
   claudeCodeVersion: z.string().min(1).max(64),
   sdkVersion: z.string().min(1).max(64),
-  models: z.array(v13HostModel).max(V13_MAX_AGENT_MODELS),
+  models: z.array(v14HostModel).max(V14_MAX_AGENT_MODELS),
 });
-const v13HostConfiguration = z.looseObject({
-  repositoryRoot: v13ConfigurationValue,
-  workspaceRoot: v13ConfigurationValue,
-  branchScheme: v13ConfigurationValue,
-  transcriptsRoot: v13ConfigurationValue,
-  controllerUrl: v13ConfigurationValue,
-  decisionUrl: v13ConfigurationValue,
-  agentHome: v13ConfigurationValue,
-  plugins: z.array(v13HostPlugin).max(V13_MAX_PLUGIN_DIRS),
-  agent: v13HostAgent.nullable().optional(),
+const v14HostConfiguration = z.looseObject({
+  repositoryRoot: v14ConfigurationValue,
+  workspaceRoot: v14ConfigurationValue,
+  branchScheme: v14ConfigurationValue,
+  transcriptsRoot: v14ConfigurationValue,
+  controllerUrl: v14ConfigurationValue,
+  decisionUrl: v14ConfigurationValue,
+  agentHome: v14ConfigurationValue,
+  plugins: z.array(v14HostPlugin).max(V14_MAX_PLUGIN_DIRS),
+  agent: v14HostAgent.nullable().optional(),
 });
-const v13PendingRestart = z.array(z.string().min(1).max(64)).max(V13_MAX_CONFIGURE_ENTRIES);
-const v13ProtocolRange = z.looseObject({ min: z.number().int().min(1), max: z.number().int().min(1) });
+const v14PendingRestart = z.array(z.string().min(1).max(64)).max(V14_MAX_CONFIGURE_ENTRIES);
+const v14ProtocolRange = z.looseObject({ min: z.number().int().min(1), max: z.number().int().min(1) });
 
-const v13SessionPayload = z.discriminatedUnion('kind', [
-  z.looseObject({ kind: z.literal('session_update'), body: v13JsonObject }),
-  z.looseObject({ kind: z.literal('session_delta'), body: v13JsonObject }),
+const v14SessionPayload = z.discriminatedUnion('kind', [
+  z.looseObject({ kind: z.literal('session_update'), body: v14JsonObject }),
+  z.looseObject({ kind: z.literal('session_delta'), body: v14JsonObject }),
   z.looseObject({
     kind: z.literal('host_configure_result'),
     requestId: z.string().min(1),
-    configuration: v13HostConfiguration,
+    configuration: v14HostConfiguration,
     overriddenByEnvironment: z.array(z.string()),
-    pendingRestart: v13PendingRestart,
-    refusal: v13Refusal.nullable(),
+    pendingRestart: v14PendingRestart,
+    refusal: v14Refusal.nullable(),
   }),
 ]);
 
-const v13ControlPayload = z.discriminatedUnion('kind', [
+const v14ControlPayload = z.discriminatedUnion('kind', [
   z.looseObject({
     kind: z.literal('link_hello'),
     protocolVersion: z.number().int(),
     hostId: z.string().min(1),
     capabilities: z.array(z.string()),
-    cursors: z.array(v13SessionCursor),
-    configuration: v13HostConfiguration,
-    pendingRestart: v13PendingRestart,
-    protocolRange: v13ProtocolRange,
+    cursors: z.array(v14SessionCursor),
+    configuration: v14HostConfiguration,
+    pendingRestart: v14PendingRestart,
+    protocolRange: v14ProtocolRange,
   }),
 ]);
 
-const V13 = z.discriminatedUnion('frame', [
+const V14 = z.discriminatedUnion('frame', [
   z.looseObject({
     frame: z.literal('session'),
     sessionId: z.string().min(1),
     seq: z.number().int().positive(),
     at: z.string().min(1),
-    payload: v13SessionPayload,
+    payload: v14SessionPayload,
   }),
-  z.looseObject({ frame: z.literal('control'), at: z.string().min(1), payload: v13ControlPayload }),
+  z.looseObject({ frame: z.literal('control'), at: z.string().min(1), payload: v14ControlPayload }),
 ]);
 
-/** The kinds `V13` models: everything this file's host is driven to send, bar the link's own chatter. */
-const V13_KINDS = ['link_hello', 'session_update', 'session_delta', 'host_configure_result'];
+/** The kinds `V14` models: everything this file's host is driven to send, bar the link's own chatter. */
+const V14_KINDS = ['link_hello', 'session_update', 'session_delta', 'host_configure_result'];
+
+/**
+ * The decision request a protocol-14 controller's decision endpoint reads: `DecisionRequest` as
+ * v1.5.0 declares it (`git show v1.5.0:src/gate/decision.ts`), every member required, unknown keys
+ * carried. The body rides HTTP, not the link, so this is the shape rather than a codec.
+ */
+const V14_DECISION_REQUEST = z.looseObject({
+  toolName: z.string(),
+  toolUseId: z.string(),
+  toolInput: z.unknown(),
+  sessionId: z.string(),
+  sessionKey: z.string(),
+  cwd: z.string(),
+  agentId: z.string().nullable(),
+  agentType: z.string().nullable(),
+});
 
 // ---------------------------------------------------------------------------
 
@@ -154,6 +178,44 @@ const allow = async (): Promise<unknown> => ({ behavior: 'allow' });
 
 const TIMEOUT_MS = 3_000;
 
+/** What the hello's runtimes list states for Claude over `AGENT`. */
+const CLAUDE_ENTRY = {
+  runtime: 'claude',
+  version: AGENT.claudeCodeVersion,
+  sdkVersion: AGENT.sdkVersion,
+  models: AGENT.models,
+  vocabularies: {
+    permissionModes: ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    thinking: true,
+  },
+  controlTier: { level: 'intercepted', degrades: [] },
+  available: true,
+  unavailableReason: null,
+};
+
+/** An endpoint this build's host declares; a protocol-14 controller carries the hello's list unread. */
+const ENDPOINT: ModelEndpoint = {
+  name: 'example-endpoint',
+  wireApi: 'anthropic-messages',
+  runtimes: ['claude'],
+  baseUrl: 'https://endpoint.example/anthropic',
+  models: ['example-model'],
+  modelAliases: { opus: 'example-model', sonnet: 'example-model', haiku: 'example-model' },
+  contextWindow: null,
+  env: {},
+  firstParty: false,
+  authToken: () => 'example-token',
+};
+
+/** What the hello's endpoints list states for `ENDPOINT`. */
+const ENDPOINT_ENTRY = {
+  name: 'example-endpoint',
+  wireApi: 'anthropic-messages',
+  runtimes: ['claude'],
+  models: ['example-model', 'opus', 'sonnet', 'haiku'],
+};
+
 interface Sent {
   readonly kind: string;
   readonly raw: string;
@@ -171,29 +233,41 @@ function bodyOf(sent: Sent): Record<string, unknown> {
   return (sent.payload['body'] ?? {}) as Record<string, unknown>;
 }
 
-test('a controller on protocol 13 decodes every frame a host of this build sends it', async () => {
-  const peer = await peerOn({ welcomeVersion: 13, ack: true });
+test('a controller on protocol 14 decodes every frame a host of this build sends it', async () => {
+  const peer = await peerOn({ welcomeVersion: 14, ack: true });
   const cwd = await tempDir('protocol-window');
   const agents = fakeAgents();
+  const decided: DecisionRequest[] = [];
   const host = new PeriscopeHost({
     controllerUrl: peer.url,
     hostId: 'host-1',
-    decide: allow,
+    decide: async (request) => {
+      decided.push(request);
+      return allow();
+    },
     protectedPaths: [],
     registry: new SessionRegistry({ baseEnv: {}, homeDir: cwd, startProcess: agents.start }),
     agentCatalog: () => Promise.resolve({ ok: true, agent: AGENT }),
+    endpoints: [ENDPOINT],
   });
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 13, 'the welcome at 13', TIMEOUT_MS);
+    await waitFor(() => host.link.negotiatedVersion === 14, 'the welcome at 14', TIMEOUT_MS);
 
     // A session, driven through each member protocol 12 added on the way out: a forwarded message
     // with its instant, a transition caused by a model switch and one by a refusal with no fallback.
+    // And through the bodies protocol 15 added: the facts an init carries, and a streamed fragment.
     peer.send('session-1', 1, sessionNew(cwd));
     await waitFor(() => agents.started.length === 1, 'the session to start', TIMEOUT_MS);
     const agent = agents.started[0]!;
     agent.emit(initMessage('agent-1'));
+    agent.emit({
+      type: 'stream_event',
+      uuid: 'delta-1',
+      parent_tool_use_id: null,
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } },
+    } as unknown as SDKMessage);
     const switched = agent.request.hooks?.PostModelSwitch?.[0]?.hooks[0];
     assert.ok(switched !== undefined, 'the composed session observes PostModelSwitch');
     await waitFor(
@@ -231,6 +305,21 @@ test('a controller on protocol 13 decodes every frame a host of this build sends
       uuid: 'refusal-1',
     } as unknown as SDKMessage);
 
+    // A tool call through the gate, so a decision request is posted the way a decider receives it.
+    const toolCall = {
+      hook_event_name: 'PreToolUse',
+      session_id: 'agent-1',
+      transcript_path: '',
+      cwd,
+      tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+      tool_use_id: 'toolu_1',
+    } as unknown as HookInput;
+    for (const matcher of agent.request.hooks?.PreToolUse ?? []) {
+      for (const hook of matcher.hooks)
+        await hook(toolCall, 'toolu_1', { signal: new AbortController().signal });
+    }
+
     // A host-scoped answer, whose configuration carries the catalog. No seam is composed, so it is
     // refused, and the refusal answer still carries the whole configuration.
     peer.send(
@@ -249,11 +338,16 @@ test('a controller on protocol 13 decodes every frame a host of this build sends
       'the refusal transition',
       TIMEOUT_MS,
     );
+    await waitFor(
+      () => sentFrames(peer.raw).some((sent) => bodyOf(sent)['update'] === 'agent_fragment'),
+      'the streamed fragment',
+      TIMEOUT_MS,
+    );
 
     const sent = sentFrames(peer.raw);
-    const read = sent.filter((one) => V13_KINDS.includes(one.kind));
+    const read = sent.filter((one) => V14_KINDS.includes(one.kind));
     const refused = read.flatMap((one) => {
-      const decoded = V13.safeParse(JSON.parse(one.raw));
+      const decoded = V14.safeParse(JSON.parse(one.raw));
       return decoded.success
         ? []
         : [`${one.kind}: ${decoded.error.issues.map((issue) => issue.message).join('; ')}`];
@@ -261,7 +355,7 @@ test('a controller on protocol 13 decodes every frame a host of this build sends
     assert.deepEqual(
       refused,
       [],
-      `a protocol-13 controller refuses what this host sent:\n  ${refused.join('\n  ')}`,
+      `a protocol-14 controller refuses what this host sent:\n  ${refused.join('\n  ')}`,
     );
 
     // What was read carries protocol 12's members, so the green above is about them too.
@@ -280,6 +374,56 @@ test('a controller on protocol 13 decodes every frame a host of this build sends
       read.some((one) => one.raw.includes('"PostModelSwitch"')),
       'a transition caused by a model switch was sent',
     );
+    // The bodies protocol 15 added were among what the protocol-14 decoder read, so the green above
+    // covers them too.
+    const facts = read.filter(
+      (one) => one.kind === 'session_update' && bodyOf(one)['update'] === 'agent_facts',
+    );
+    assert.deepEqual(
+      facts.map((one) => (bodyOf(one)['fact'] as Record<string, unknown>)['kind']),
+      ['session_handle', 'agent_receipt'],
+      'the init carried its facts',
+    );
+    assert.ok(
+      read.some((one) => one.kind === 'session_delta' && bodyOf(one)['update'] === 'agent_fragment'),
+      'a streamed fragment was sent',
+    );
+
+    // The members protocol 15 added to the hello, the configure answer and a transition were among
+    // what the protocol-14 decoder read, so the green above covers them too.
+    assert.deepEqual(helloConfiguration['agents'], [CLAUDE_ENTRY], 'the hello carries the runtimes list');
+    assert.deepEqual(
+      (answer?.payload['configuration'] as Record<string, unknown>)['agents'],
+      [CLAUDE_ENTRY],
+      'the configure answer carries the runtimes list',
+    );
+    assert.deepEqual(
+      helloConfiguration['endpoints'],
+      [ENDPOINT_ENTRY],
+      'the hello carries the endpoints list',
+    );
+    assert.deepEqual(
+      (answer?.payload['configuration'] as Record<string, unknown>)['endpoints'],
+      [ENDPOINT_ENTRY],
+      'the configure answer carries the endpoints list',
+    );
+    const ready = read
+      .filter((one) => one.kind === 'session_update')
+      .map((one) => readStateTransition(bodyOf(one) as JsonObject))
+      .find((transition) => transition?.to === 'ready');
+    assert.deepEqual(
+      ready?.controlTier,
+      { level: 'intercepted', degrades: [] },
+      'the first ready states the tier',
+    );
+
+    // The decision request a protocol-14 endpoint reads, with the two members it carries unread.
+    assert.equal(decided.length, 1, 'the tool call was not asked about');
+    const body = JSON.parse(JSON.stringify(decided[0])) as Record<string, unknown>;
+    const asV14 = V14_DECISION_REQUEST.safeParse(body);
+    assert.ok(asV14.success, asV14.success ? '' : asV14.error.message);
+    assert.equal(body['toolKind'], 'shell');
+    assert.equal(body['runtime'], 'claude');
   } finally {
     host.stop();
     await peer.close();
@@ -287,8 +431,8 @@ test('a controller on protocol 13 decodes every frame a host of this build sends
   }
 });
 
-test('a controller on protocol 13 is read in turn: its configure, effort included, applies what it asks', async () => {
-  const peer = await peerOn({ welcomeVersion: 13, ack: true });
+test('a controller on protocol 14 is read in turn: its configure, effort included, applies what it asks', async () => {
+  const peer = await peerOn({ welcomeVersion: 14, ack: true });
   const cwd = await tempDir('protocol-window');
   const agents = fakeAgents();
   const host = new PeriscopeHost({
@@ -297,31 +441,75 @@ test('a controller on protocol 13 is read in turn: its configure, effort include
     decide: allow,
     protectedPaths: [],
     registry: new SessionRegistry({ baseEnv: {}, homeDir: cwd, startProcess: agents.start }),
+    endpoints: [ENDPOINT],
   });
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 13, 'the welcome at 13', TIMEOUT_MS);
+    await waitFor(() => host.link.negotiatedVersion === 14, 'the welcome at 14', TIMEOUT_MS);
+    // The first hello, sent with no catalog read, carries the endpoints, and the protocol-14 decoder
+    // reads it.
+    const firstHello = sentFrames(peer.raw).find((one) => one.kind === 'link_hello');
+    assert.ok(firstHello !== undefined, 'the hello was captured');
+    assert.ok(
+      V14.safeParse(JSON.parse(firstHello.raw)).success,
+      'a protocol-14 controller refuses the hello',
+    );
+    assert.deepEqual((firstHello.payload['configuration'] as Record<string, unknown>)['endpoints'], [
+      ENDPOINT_ENTRY,
+    ]);
     peer.send('session-1', 1, sessionNew(cwd));
     await waitFor(() => agents.started.length === 1, 'the session to start', TIMEOUT_MS);
     const agent = agents.started[0]!;
     agent.emit(initMessage('agent-1'));
 
-    // The shape a protocol-13 controller sends: the effort member protocol 12 added, applied after
+    // The shape a protocol-14 controller sends: the effort member protocol 12 added, applied after
     // the model.
-    const fromV13 = {
+    const fromV14 = {
       kind: 'session_configure',
       model: 'model-b',
       permissionMode: null,
       thinking: null,
       effort: 'max',
     };
-    peer.send('session-1', 2, fromV13 as SessionConfigure);
+    peer.send('session-1', 2, fromV14 as SessionConfigure);
     await waitFor(() => agent.configured.length === 2, 'the configure to apply', TIMEOUT_MS);
     assert.deepEqual(agent.configured, [
       { setter: 'setModel', value: 'model-b' },
       { setter: 'setEffort', value: 'max' },
     ]);
+
+    // The `session_new` a protocol-14 controller sends: a request with every member that release
+    // declares and no `runtime`, which opens on this host's default runtime as it always did.
+    const openedFromV14 = {
+      kind: 'session_new',
+      cwd,
+      workspaceKey: null,
+      correlationId: null,
+      gate: null,
+      request: {
+        resume: null,
+        fork: null,
+        settingSources: null,
+        plugins: null,
+        mcpServers: null,
+        strictMcpConfig: null,
+        includePartialMessages: null,
+        thinking: null,
+        forwardSubagentText: null,
+        env: null,
+        model: null,
+        systemPrompt: null,
+        effort: 'high',
+        permissionMode: null,
+      },
+    };
+    peer.send('session-2', 1, openedFromV14 as SessionNew);
+    await waitFor(() => agents.started.length === 2, 'the protocol-14 open to start a session', TIMEOUT_MS);
+    assert.equal(agents.started[1]?.request.effort, 'high');
+    // It names no endpoint, so it takes the runtime's own route on a host that declares one.
+    assert.equal('ANTHROPIC_BASE_URL' in (agents.started[1]?.request.env ?? {}), false);
+    assert.equal('ANTHROPIC_AUTH_TOKEN' in (agents.started[1]?.request.env ?? {}), false);
   } finally {
     host.stop();
     await peer.close();
@@ -335,13 +523,13 @@ test('a hello from a host one release behind, catalog and all, decodes on this b
     at: '2000-01-01T00:00:00.000Z',
     payload: {
       kind: 'link_hello',
-      protocolVersion: 13,
+      protocolVersion: 14,
       hostId: 'host-1',
       capabilities: [],
       cursors: [],
       configuration: { ...unsetHostConfiguration(), agent: AGENT },
       pendingRestart: [],
-      protocolRange: { min: 12, max: 13 },
+      protocolRange: { min: 13, max: 14 },
     },
   });
   const decoded = decode(wire);
@@ -368,37 +556,54 @@ test('an effort a controller names that the SDK does not is refused by name, not
 
 // The frozen decoder is only evidence if it can refuse. A released peer's shape that accepted
 // anything would pass every frame above whatever this host sent.
-test('control: the protocol-13 decoder refuses what a version-13 controller refuses', () => {
+test('control: the protocol-14 decoder refuses what a version-14 controller refuses', () => {
   const hello = (configuration: Record<string, unknown>): unknown => ({
     frame: 'control',
     at: '2000-01-01T00:00:00.000Z',
     payload: {
       kind: 'link_hello',
-      protocolVersion: 13,
+      protocolVersion: 14,
       hostId: 'host-1',
       capabilities: [],
       cursors: [],
       configuration,
       pendingRestart: [],
-      protocolRange: { min: 12, max: 13 },
+      protocolRange: { min: 13, max: 14 },
     },
   });
   const { plugins: _plugins, ...version10 } = unsetHostConfiguration();
 
   assert.equal(
-    V13.safeParse(hello({ ...unsetHostConfiguration(), agent: AGENT })).success,
+    V14.safeParse(hello({ ...unsetHostConfiguration(), agent: AGENT })).success,
     true,
-    'a protocol-13 hello',
+    'a protocol-14 hello',
   );
   assert.equal(
-    V13.safeParse(hello({ ...unsetHostConfiguration(), agent: { ...AGENT, models: 'all' } })).success,
+    V14.safeParse(hello({ ...unsetHostConfiguration(), agent: { ...AGENT, models: 'all' } })).success,
     false,
     'a catalog whose models are not a list: the member protocol 12 added is checked',
   );
   assert.equal(
-    V13.safeParse(hello({ ...unsetHostConfiguration(), plugins: 'loop' })).success,
+    V14.safeParse(hello({ ...unsetHostConfiguration(), plugins: 'loop' })).success,
     false,
     'a member whose type changed',
   );
-  assert.equal(V13.safeParse(hello(version10)).success, false, 'a protocol-10 hello, which has no plugins');
+  assert.equal(V14.safeParse(hello(version10)).success, false, 'a protocol-10 hello, which has no plugins');
+});
+
+// The same for the decision request's shape: it must refuse a body a protocol-14 endpoint refuses.
+test('control: the protocol-14 decision request refuses a body with no sessionKey', () => {
+  const request = {
+    toolName: 'Bash',
+    toolUseId: 'toolu_1',
+    toolInput: { command: 'ls' },
+    sessionId: 'agent-1',
+    sessionKey: 'session-1',
+    cwd: '/w',
+    agentId: null,
+    agentType: null,
+  };
+  assert.equal(V14_DECISION_REQUEST.safeParse(request).success, true, 'a protocol-14 decision request');
+  const { sessionKey: _sessionKey, ...unkeyed } = request;
+  assert.equal(V14_DECISION_REQUEST.safeParse(unkeyed).success, false, 'a request with no controller handle');
 });

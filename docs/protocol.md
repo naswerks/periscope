@@ -88,18 +88,31 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[13, 14]`. Version 14 changes no shape: it narrows `session_new.request.env` (below), so a
-version-13 controller is still spoken to and every frame it sends still decodes. The narrowing holds
-at every version the host negotiates, 13 included. Version 13 added:
+`[14, 15]`. Version 15 adds:
 
-- `session_end` (below);
-- `workspace_read` and its answer, `workspace_read_result` (below);
-- the refusals `workspace-path-escape` and `workspace-read-failed`.
+- the `agent_facts` update body, the fact layer (below);
+- the `agent_fragment` delta body (below);
+- `runtime` on `agent_message`, optional (below);
+- `agents` on the hello's `configuration`, optional: the runtimes the host can spawn (below);
+- `endpoints` on the hello's `configuration`, optional: the model endpoints the host's operator
+  declared (below);
+- `runtime` and `endpoint` on `session_new.request`, optional (below);
+- `controlTier` on a session's first transition into `ready`, optional (below);
+- `toolKind` and `runtime` on the decision request, optional (below);
+- five refusal reasons for the runtime and the model endpoint a session names, and
+  `settings-route-refused` for a repository's settings file that names a key beneath the env floor
+  (below).
 
-It adds no member to an existing kind. A version-12 controller sends neither ask, so it receives
-neither answer, and every frame it sends decodes here unchanged. `src/host/protocol-window.test.ts`
-holds both directions over a real link: every frame this host sends decodes with the protocol-12
-decoder v1.3.0 shipped, and a version-12 controller's `session_configure` decodes here and applies.
+It adds no payload kind and no required member to an existing body. A version-14 controller is
+still spoken to: it reads the new bodies as open JSON it may ignore, since every reader it has
+returns null for an `update` it does not know, carries the new members unread, never sends the
+members five of the new reasons answer, and reads the sixth, `settings-route-refused`, as it reads any
+reason it does not know; every frame it sends decodes here unchanged. Version 14 narrowed
+`session_new.request.env` (below), and the narrowing holds at every version the host negotiates.
+`src/host/protocol-window.test.ts` holds both directions over a real link: every frame this host
+sends, its facts, fragments, runtimes list, endpoints list and tier included, decodes with the protocol-14 decoder
+v1.5.0 shipped, and the decision request it posts reads as that release's `DecisionRequest`; a
+version-14 controller's `session_new` and `session_configure` decode here and apply.
 
 Two close reasons carry meaning. A close with code 1002 whose reason starts with `seq gap` is a
 replay request: the controller names the position it holds, and the host's next dial replays from
@@ -134,6 +147,48 @@ are `MAX_AGENT_MODELS` entries and `MAX_AGENT_CATALOG_BYTES` of JSON. A hello pa
 - **Absent:** the host was composed without a catalog read, or runs one release behind.
 
 A `host_configure_result` carries the same `agent`.
+
+From v15, `configuration.agents` lists the runtimes the host can spawn sessions on, one
+`HostAgentEntry` each, at most `MAX_AGENT_ENTRIES`, and is optional:
+
+- `runtime`: the name a `session_new` names it by (`claude`).
+- `version` and `sdkVersion`: the runtime's own version, and the version of the library the host
+  drives it through, null when there is none. Claude's are `agent`'s `claudeCodeVersion` and
+  `sdkVersion`.
+- `models`: the models it offers, each a `HostModel` as above.
+- `vocabularies`: `{ permissionModes, efforts, thinking }`, the words a `session_new` or
+  `session_configure` may name for it, and whether it takes a thinking control.
+- `controlTier`: the tier a session on it starts at (below).
+- `available` and `unavailableReason`: a configured runtime that cannot run now (its binary absent
+  or off its pinned version, its sign-in missing) is listed `available: false` with the reason, and a
+  `session_new` naming it is refused `runtime-unavailable`. Claude is always available.
+
+This host lists one runtime, Claude, built from the same catalog read `agent` carries, so `agents`
+is null when `agent` is null and absent when it is absent. The whole list is held to
+`MAX_AGENT_CATALOG_BYTES` as JSON, and a list that cannot ride takes the catalog with it: both ride
+null, named once. A `host_configure_result` carries the same `agents`.
+
+From v15, `configuration.endpoints` lists the model endpoints the host's operator declared, one
+`HostEndpoint` each, at most `MAX_ENDPOINTS`, and is optional:
+
+- `name`: what `session_new.request.endpoint` names it by.
+- `wireApi`: the API the endpoint speaks, one of `ENDPOINT_WIRE_APIS` (`anthropic-messages`,
+  `openai-responses`, `openai-chat`). A wire API a newer peer adds is read; the host sends only the
+  ones it declares.
+- `runtimes`: the runtimes that can reach it. Each speaks the endpoint's wire API (Claude speaks
+  `anthropic-messages`), and the host refuses at start an endpoint naming one that does not, so a
+  controller filters its picker on `runtimes` with no table of its own.
+- `models`: every model id a session may name on it, at most `MAX_ENDPOINT_MODELS`: the endpoint's
+  own ids, as the agent sends them (a `[1m]` suffix included where the endpoint declares one), and
+  the alias ids (`opus`, `sonnet`, `haiku`, `fable`) the endpoint maps to them.
+
+An endpoint's address, its credential, and whether it is Anthropic's own route stay with the host,
+and none of them is on the wire. The list is the operator's configuration (`PERISCOPE_MODEL_ENDPOINTS`,
+[configuration](configuration.md)), so it is absent when none is declared, and it is held to its own
+`MAX_ENDPOINT_CATALOG_BYTES` of JSON beside the catalog's budget: the host refuses at start a list past
+it, rather than letting it push the runtimes list out of the hello. With every bound on the hello
+filled, the hello still fits `MAX_FRAME_BYTES` (`src/control/codec-endpoints.test.ts`). A
+`host_configure_result` carries the same `endpoints`.
 
 ## The credential on the three transports
 
@@ -218,14 +273,21 @@ and both are pinned (`stream-replay.test.ts`).
 
 `MESSAGE_ROUTING` (`src/control/stream-routing.ts`) names the lane for every SDK message
 discriminator: delta, update or declined with a reason. `forwardSession` puts each message on its
-lane and then the transitions that message caused, message first, so a consumer never sees a state
-change referring to a message it does not have.
+lane, then the facts and fragments it carries (below), then the transitions that message caused,
+message first, so a consumer never sees a state change referring to a message it does not have, nor
+a fact whose message it does not have.
 
 `session_update.body` is an open JSON object read through typed readers: `readStateTransition`,
 `readAgentMessage`, `readWireRefusal` (`{ refusal, expected, received }`; `expected` is the seq the
-receiver will accept next on the refused party's own outbound lane). `wire_refusal` is a body
-member, not a payload kind, so a refusal rides the same fact lane it refuses. A controller carries
-unknown keys through and must not narrow the body.
+receiver will accept next on the refused party's own outbound lane), `readAgentFacts`.
+`wire_refusal` is a body member, not a payload kind, so a refusal rides the same fact lane it
+refuses. `session_delta.body` is open JSON in the same way, a `SessionDeltaBody` read through
+`readAgentMessage` and `readAgentFragment`. A controller carries unknown keys through and must not
+narrow the body. The codec checks the members the fact layer declares (below) and nothing else in a
+body.
+
+`agent_message` carries `runtime`, the runtime that emitted the message, from v15. Absent means
+`claude` (`DEFAULT_RUNTIME`): a Claude session's messages omit it, so their bodies are unchanged.
 
 A forwarded message's body, on either lane, carries `observedAt` (v12): the instant, ISO-8601 in
 UTC, this host took the message off the agent's stream. Date a message by it rather than by its
@@ -246,6 +308,119 @@ turn can be rendered as it happens; `thinking` is left at the SDK's own default,
 characters by default, 227 over 4 deltas with `summarized`, same prompt). It is opt-in because that
 prose costs tokens on the wire and puts reasoning text into transcripts and mirrors; whether a run is
 watched is not something the host can know, so it offers the knob instead of guessing a policy.
+
+## The fact layer
+
+A controller acts on a handful of facts: which session it can resume, what the agent says it is
+running with, what a turn cost, how full the context is, which tasks are running, and when the
+context was compacted. Each runtime reports them in its own message shapes. From v15 the host lifts
+them into typed members and puts each on the update lane as an `agent_facts` body,
+`{ update: 'agent_facts', fact, sourceId?, observedAt? }`, right behind the message it came from.
+The message still rides; a consumer that wants it whole still has it.
+
+| `fact.kind`      | What it states                                                                            | Claude's source                                              |
+| ---------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `session_handle` | `handle`: the runtime's own resumable id                                                  | `system/init.session_id`, when it first appears or changes   |
+| `agent_receipt`  | the version, model, approval mode, effort, skills, plugins, plugin errors and MCP servers | `system/init`, when any member differs from the last receipt |
+| `turn_record`    | `totals` and `turn`, each a `SpendFacts`, with `turnScope`, `numTurns`, `durationMs`      | each `result`                                                |
+| `usage_sample`   | `contextTokens`, `contextWindow`, `cacheTtl` and `mainThread` for one model call          | each main-thread `assistant` call, once per API message id   |
+| `tasks`          | `running`: every task running now, whole; each fact replaces the last                     | `background_tasks_changed` and the task edges, composed      |
+| `compaction`     | `status` (`started`, `ended`), `trigger`, `tokensBefore`, `tokensAfter`                   | the observer's compaction entry opening and closing          |
+
+Every fact carries `runtime`. `sourceId` is the id of the native message the fact was lifted from
+(Claude: the message's `uuid`, the same id its `agent_message` carries) and null for a fact lifted
+from a hook or the observer; ingest facts idempotently on it, so a replayed or re-sent fact lands
+once. `observedAt` is the instant the host took the source off the stream.
+
+**Reported, never derived.** Every figure is one the runtime reported, or null. Nothing is computed
+from another figure: `totals` is never summed from turns and `turn` is never differenced from
+totals. The one stated counting rule is Claude's `contextTokens`, the sum Claude Code itself counts
+a call's context by: input, cache reads and cache writes.
+
+`turn_record`:
+
+- `totals` is the runtime's running total for the session; `turn` is the figure for what
+  `turnScope` names: `turn` a whole turn, `step` one model step inside a turn. `turnScope` is null
+  exactly when `turn` is.
+- Claude's `totals` is the result's `total_cost_usd` in `USD`, with one row per `modelUsage` key.
+  Claude's `turn` is the result's own `usage`, which covers the turn's main loop and names no model:
+  the host files it under the model the latest `system/init` reported, as attribution, with no cost
+  and the basis `unreported`. With no init seen yet, `turn` and `turnScope` are null; the host never
+  invents a model key.
+- A `SpendFacts` is `{ cost, currency, costBasis, byModel }`. `currency` is an ISO 4217 code.
+  `ModelSpendFact.inputTokens` counts uncached input only, on every runtime: cache reads and cache
+  writes are counted apart.
+- `costBasis` on a row says where its cost came from: `list`, `managed`, `guessed`,
+  `provider-reported`, `catalogue-estimated`, `self-hosted` or `unreported` (`COST_BASES`). Claude's
+  `list` and `managed` are themselves, its `unknown` is `guessed`, and an absent basis is `list`, as
+  the SDK says to read it. A figure's own `costBasis` is a roll-up: the weakest row basis, `guessed`
+  over `managed` over `list`, and `list` with no rows. Every row keeps its exact basis, and a
+  controller prices rows.
+
+`usage_sample` states one main-thread model call: Claude's `contextTokens` is that call's input plus
+cache reads plus cache writes; `contextWindow` is the window the latest result reported for the
+call's model (a `modelUsage` key naming it exactly, with a bracketed selector such as `[1m]`, or
+through its canonical model), and null until a result has named one; `cacheTtl` is `1h` when the
+call wrote hour-long cache tokens, else `5m` when it wrote five-minute ones, else null. A call that
+arrives as several messages is sampled once, by its API message id.
+
+`tasks` is a level: `running` is every task running now, so each fact replaces the last. Claude's is
+composed from the level message and the task edges: the level replaces itself with its non-ambient
+entries; a non-ambient `task_started` of type `local_agent` adds an edge when its id is absent; a
+`task_notification` removes that edge and never a level entry; a `result` clears every edge; and
+`running` is the level, then the edges the level lacks, by id.
+
+`compaction` reports `started` when the observer's compaction entry opens and `ended` when it
+closes, with what the source that moved it stated: the compaction hooks state the trigger, the
+`compact_boundary` message the trigger and both token counts, the status message nothing.
+
+**Whole numbers.** `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
+`reasoningTokens`, `contextTokens`, `contextWindow`, `numTurns`, `durationMs`, `tokensBefore` and
+`tokensAfter` are non-negative integers on the wire; the codec refuses any other number there with
+`frame-malformed`. A cost is any non-negative number.
+
+**Vocabularies.** Every closed set a fact names is an exported array: `COST_BASES`, `TURN_SCOPES`,
+`RECEIPT_SOURCES`, `CACHE_TTLS`, `COMPACTION_STATUSES`, `COMPACTION_TRIGGERS`, `FRAGMENT_CHANNELS`.
+A word outside one is read on the way in, so a newer peer's added word survives, and refused on the
+way out: this host sends only the words it declares. A fact `kind` this build does not model decodes
+and reads as null through `readAgentFacts`.
+
+**Bounds.** A fact's lists hold at most `MAX_FACT_LIST_ENTRIES` entries, its free text at most
+`MAX_FACT_TEXT_LENGTH` characters and its words at most `MAX_FACT_WORD_LENGTH`; `MAX_FRAME_BYTES`
+stays the outer guard.
+
+Every member a fact declares is optional on the wire: a peer that omits one is read as not stating
+it. Only `fact` itself and its `kind` are required in an `agent_facts` body.
+
+**Fragments.** From v15 a streamed message's content also rides the delta lane as `agent_fragment`
+bodies, `{ update: 'agent_fragment', runtime, channel, text, parentId }`: one per content delta, on
+the channel `text`, `thinking` or `tool_input` (a tool's arguments as they stream, which is partial
+JSON and never prose). `parentId` names the tool call that spawned the subagent speaking, and is
+null on the main thread. The `agent_message` delta it came from still rides beside it. A fragment is
+a delta like any other: droppable, and never stored.
+
+## The control tier
+
+How much of a session's tool use the host can see and stop is stated as its control tier,
+`ControlTier { level, degrades }`, from v15. `level` is one of `CONTROL_TIER_LEVELS`, strongest
+first:
+
+- `intercepted`: every tool call reaches the gate before it runs, and the gate's answer holds;
+- `intercepted-with-residual`: the same, except for the paths `degrades` names;
+- `cooperative`: the agent reports its calls and asks, but nothing stops one it does not ask about;
+- `none`: the session is observed and driven, and no call is held for a decision.
+
+`degrades` names the paths that fall below the level, each a word, and is empty when none does.
+The tier rides `controlTier` on the session's first transition into `ready`, the one where the agent
+reports itself, and on no other transition; and in each `HostAgentEntry` of the hello. Both come
+from one lookup per runtime, so they cannot differ. A Claude session is
+`{ level: 'intercepted', degrades: [] }`: every tool call reaches the `PreToolUse` gate under every
+permission mode. The tier is stated, never negotiated, and the host decides nothing by it.
+
+A level outside `CONTROL_TIER_LEVELS` is read on the way in, so a newer peer's added level survives,
+and refused on the way out. The codec checks a transition's `controlTier` and nothing else in it.
+Its level and each degrade are at most `MAX_FACT_WORD_LENGTH` characters, with at most
+`MAX_FACT_LIST_ENTRIES` degrades.
 
 ## Under load, and overnight
 
@@ -279,7 +454,8 @@ certificates trusted, the model endpoint, provider and credentials, every proxy)
 
 `session_new.request` carries `resume`, `fork`, `settingSources`, `plugins`, `mcpServers`,
 `strictMcpConfig`, `includePartialMessages`, `thinking`, `forwardSubagentText`, `env`, `model`,
-`systemPrompt`, `effort` and `permissionMode` (the SDK's own vocabularies). The narrowing site from
+`systemPrompt`, `effort` and `permissionMode` (the SDK's own vocabularies), and from v15 `runtime`
+and `endpoint`, which are optional. The narrowing site from
 a wire request to a local one is `src/host/wire-request.ts`; the members of the in-process API that
 have no JSON form are structurally absent.
 
@@ -308,6 +484,39 @@ on: only what the controller declared exists, and nothing from the machine's `.m
 settings, plugins or agent frontmatter is loaded. In-process tool descriptors are the embedder's
 (`PeriscopeHostOptions.tools`) and have no wire lane; the `periscope` binary registers none.
 
+`runtime` names the runtime the session runs on. Null or absent is the host's default, `claude`
+(`DEFAULT_RUNTIME`); `claude` itself opens exactly as null does. Any other name is refused
+`runtime-unavailable` before anything is reserved and before any other member is read, the detail
+naming the runtime and what the host offers. The hello's `agents` is the list a controller picks
+from.
+
+`endpoint` names the model endpoint the session's model traffic goes to, by a name the hello's
+`endpoints` lists. Null or absent is the runtime's own route. A controller names an endpoint and
+never describes one: the host sets the endpoint's address, credential and model variables in the
+agent's environment itself, from its operator's configuration, after the controller's own `env` lanes
+and never through the floor that screens them. Refused before anything is reserved, each with one
+meaning:
+
+- `endpoint-unknown`: a name the operator did not declare. The detail names it and the endpoints the
+  hello lists.
+- `endpoint-incompatible`: the endpoint cannot carry the session's runtime, because its `runtimes`
+  exclude it or it speaks a wire API the runtime does not.
+- `model-endpoint-mismatch`: on an endpoint the operator did not mark as Anthropic's own route, a
+  `model` beginning `claude-`, or an alias the endpoint does not map (`default`, `best`, `opusplan`,
+  an unmapped `fable`, each with or without `[1m]`), which the agent resolves to a Claude model id. A
+  provider that maps Claude ids to its own model would answer in its place while the run reads, and
+  is priced, as the Claude model it named. The detail names the model and the endpoint. A session
+  that names no model is not refused; every such endpoint maps `opus`, `sonnet` and `haiku`.
+
+A session whose `settingSources` include `project` or `local` loads the repository's own
+`.claude/settings.json` or `.claude/settings.local.json` from its working directory, and the agent
+applies a settings file's `env` to itself after every screen the host runs. So the host reads those
+files when the session's directory is known, and a file whose `env` names a key beneath the floor
+(`EXTRA_ENV_FLOOR`, its names and its patterns, matched case-insensitively) refuses the session
+`settings-route-refused`, the detail naming each file and its keys. A file the host can read neither
+as strict JSON nor with its comments and trailing commas removed carries nothing the agent would
+apply, and passes, as does a missing one; the user tier is the operator's own file and is not read.
+
 `env` is `{ extraAllowedKeys, extraDeniedKeys, extraEnv }`, each nullable: names of the host's own
 environment to re-admit into the spawn (the credential-shaped deny list still wins), names to deny,
 and values to set outright after the allow-list has run. The two lanes that add a key are screened:
@@ -326,12 +535,12 @@ A `session_new` the host will not honour answers on the wire as a `session_updat
 transition `spawning` to `ended` with cause kind `refusal` and the reason as its event, `seq: 1`,
 `sessionId: null` in the body and the controller's handle on the frame. Every refusal on the open
 path rides it (`permission-grant-shadows-settings`, `workspace-provision-failed`,
-`resume-cwd-not-honoured`, an unusable key); the consumer's job is to end its record of the session and
+`resume-cwd-not-honoured`, `runtime-unavailable`, the three endpoint reasons, `settings-route-refused`, an unusable key); the consumer's job is to end its record of the session and
 show the cause. A `session_prompt` that arrives while its session is still opening is held, then delivered,
 refused or withdrawn; it is never dropped.
 
 A `session_configure` that fails answers on the session's own state lane, as a transition from its
-state to the same state with cause kind `refusal`. There are two reasons:
+state to the same state with cause kind `refusal`. There are three reasons:
 
 - **`session-configure-failed`:** the agent refused a control. The detail names the member and
   carries the agent's text; the members before it were applied, and the ones after it were not.
@@ -339,6 +548,8 @@ state to the same state with cause kind `refusal`. There are two reasons:
   that refusal arrives this way ([gate.md](gate.md)).
 - **`frame-malformed`:** the host refused a value, such as an unknown mode or effort level, or a
   fixed thinking budget.
+- **`model-endpoint-mismatch`:** a switch, on a session opened on an endpoint not marked as
+  Anthropic's own route, to a model the open would have refused there. Nothing was applied.
 
 A configure for a handle this host does not hold, or for a session still opening, is reported on the
 host's own trace only.
@@ -428,8 +639,9 @@ byte offset to start from) and `postUrl`. The locator namespace this package res
 agent CLI's own transcripts: `claude-transcript:{projectSlug}/{sessionId}`, where the prefix is
 `TRANSCRIPT_WHAT_PREFIX`, `projectSlug` is the directory name a `transcript_list_result` entry
 reports (opaque; the CLI's flattening of a path is not invertible) and `sessionId` is the entry's
-id. A locator outside the namespace is refused `bulk-target-invalid`. An embedder may add
-resolvers for other namespaces.
+id. It is the `claude` instance of the namespace `{runtime}-transcript:{...}`: a runtime's
+transcripts are addressed under that runtime's name. A locator outside the served instance is
+refused `bulk-target-invalid`. An embedder may add resolvers for other namespaces.
 
 The POST the host sends:
 
@@ -470,6 +682,14 @@ bearer as `Authorization` when it has one, and a JSON body that is a `DecisionRe
 | `cwd`        | the directory the call runs in                                                                                                                                                              |
 | `agentId`    | the subagent this call came from, or null on the main thread                                                                                                                                |
 | `agentType`  | the agent type when one is set, or null; present on the main thread too, so branch on `agentId`                                                                                             |
+| `toolKind`   | from v15: what kind of call this is, one of `TOOL_KINDS` (`shell`, `file_read`, `file_write`, `file_edit`, `mcp`, `web`, `other`), read from `toolName` by the runtime's map                |
+| `runtime`    | from v15: the runtime the session runs on (`claude`)                                                                                                                                        |
+
+`toolName` stays the tool's own name; `toolKind` lets a decider hold one policy per kind across
+runtimes. Claude's map: `Bash` and `PowerShell` are `shell`; `Read`, `Grep`, `Glob` and
+`NotebookRead` are `file_read`; `Write` is `file_write`; `Edit`, `MultiEdit` and `NotebookEdit` are
+`file_edit`; every `mcp__{server}__{tool}` is `mcp`; `WebFetch` and `WebSearch` are `web`; any other
+name is `other`, stated and never left out. Both members are absent from a host one release behind.
 
 The answer is the `Decision` above, as JSON, within the session's `decisionTimeoutMs`
 (`DEFAULT_DECISION_TIMEOUT_MS`, 50 s); a controller that holds a decision for a person keeps its
@@ -491,21 +711,25 @@ learn it before it can answer with it. Count the entries in the file; never carr
 
 The reasons a controller meets most, and what each is not:
 
-| reason                                                                                  | names                                                                                                                                                                                     |
-| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frame-not-json`, `frame-malformed`, `frame-too-large`                                  | the codec's three; the last names the bulk lane                                                                                                                                           |
-| `seq-gap`, `seq-regressed`                                                              | the receiver's inbound lane; the refusal's `expected` is where to resume                                                                                                                  |
-| `link-unauthorized`                                                                     | the peer refused this host's identity at the door; terminal, never retried. Not `link-send-failed`, which names a transport that faltered                                                 |
-| `session-unknown`                                                                       | a handle that does not and never will exist, or a held turn over the bound                                                                                                                |
-| `session-configure-failed`                                                              | the agent refused one of a `session_configure`'s controls; the detail names the member, and the members before it were applied. Not `frame-malformed`, which is the host refusing a value |
-| `permission-decision-unavailable`, `permission-decision-unrecognised`                   | an outage, and a decision this build does not know; neither is an allow                                                                                                                   |
-| `transcript-path-escape`                                                                | a caller-supplied name that failed one of the discovery jail's three layers; the refusal names the layer                                                                                  |
-| `bulk-target-not-controller`, `bulk-target-invalid`                                     | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                           |
-| `resume-cwd-not-honoured`                                                               | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                          |
-| `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed` | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                     |
-| `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force`     |
-| `repository-path-escape`, `repository-read-failed`                                      | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                      |
-| `workspace-path-escape`, `workspace-read-failed`                                        | the same two over a workspace's directory; the second also names an unusable key, an offset inside a character or past the end, and a file larger than the read serves                    |
+| reason                                                                                  | names                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frame-not-json`, `frame-malformed`, `frame-too-large`                                  | the codec's three; the last names the bulk lane                                                                                                                                                                                                                       |
+| `seq-gap`, `seq-regressed`                                                              | the receiver's inbound lane; the refusal's `expected` is where to resume                                                                                                                                                                                              |
+| `link-unauthorized`                                                                     | the peer refused this host's identity at the door; terminal, never retried. Not `link-send-failed`, which names a transport that faltered                                                                                                                             |
+| `session-unknown`                                                                       | a handle that does not and never will exist, or a held turn over the bound                                                                                                                                                                                            |
+| `session-configure-failed`                                                              | the agent refused one of a `session_configure`'s controls; the detail names the member, and the members before it were applied. Not `frame-malformed`, which is the host refusing a value                                                                             |
+| `permission-decision-unavailable`, `permission-decision-unrecognised`                   | an outage, and a decision this build does not know; neither is an allow                                                                                                                                                                                               |
+| `transcript-path-escape`                                                                | a caller-supplied name that failed one of the discovery jail's three layers; the refusal names the layer                                                                                                                                                              |
+| `bulk-target-not-controller`, `bulk-target-invalid`                                     | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                                                                                                       |
+| `resume-cwd-not-honoured`                                                               | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                                                                                                      |
+| `runtime-unavailable`                                                                   | a `session_new` naming a runtime the host cannot spawn: unknown, or listed `available: false`; the detail names it and what the host offers                                                                                                                           |
+| `request-key-unsupported`                                                               | a `session_new` member the named runtime does not honour; the detail names the key. Every member is Claude's own, so a session on Claude never meets it                                                                                                               |
+| `endpoint-unknown`, `endpoint-incompatible`, `model-endpoint-mismatch`                  | a model endpoint the host's operator did not declare; one whose runtimes or wire API exclude the session's runtime; a `claude-` model id, or an alias the endpoint does not map, on an endpoint not marked as Anthropic's own route, at the open or on a later switch |
+| `settings-route-refused`                                                                | a repository settings file the session loads names a key beneath the env floor in its `env`; the detail names the file and the keys. Not `env-key-refused`, which is the controller's own lanes                                                                       |
+| `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed` | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                                                                                                 |
+| `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force`                                                                                 |
+| `repository-path-escape`, `repository-read-failed`                                      | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                                                                                                  |
+| `workspace-path-escape`, `workspace-read-failed`                                        | the same two over a workspace's directory; the second also names an unusable key, an offset inside a character or past the end, and a file larger than the read serves                                                                                                |
 
 `protocol_version_rejected` is not a refusal reason but a link cause: the windows did not overlap,
 and the link's state reports it.
@@ -568,6 +792,9 @@ Over the link:
 - [ ] Budget frames against `MAX_FRAME_BYTES` minus 15, and bound every host-scoped ask so its answer
       fits.
 - [ ] A `session_delta` produces no durable content row.
+- [ ] An `agent_facts` ingest is idempotent on `sourceId`, and stores a fact's figures as reported:
+      a turn's spend read from `totals` is the difference of two totals the consumer holds, never a
+      figure the host sent.
 - [ ] The host's `ended` ends the controller's record of the session, the refused open included.
 
 ## Where things live
@@ -582,10 +809,17 @@ Over the link:
 | `src/control/link.ts`                                                | `ControllerLink`: the dial-out socket, admit then drain, backoff with jitter, heartbeat, the connect timeout, replay, acks, the version window                                        |
 | `src/control/link-state.ts`                                          | The link's own state machine and `LINK_CAUSES`                                                                                                                                        |
 | `src/control/stream-routing.ts`                                      | `MESSAGE_ROUTING`: the lane for each SDK message                                                                                                                                      |
+| `src/sessions/fact-lift.ts`                                          | `FACT_LIFTS`: the fact lift for each runtime, and `factLiftFor`                                                                                                                       |
+| `src/host/claude-facts.ts`                                           | The Claude lift: the fact layer read out of the agent's own messages                                                                                                                  |
 | `src/host/bulk-post.ts`                                              | The streamed outbound POST behind `bulk_request` and its origin bind                                                                                                                  |
-| `src/gate/decision.ts`                                               | The permission types the subpath re-exports                                                                                                                                           |
+| `src/gate/decision.ts`                                               | The permission types the subpath re-exports, and `TOOL_KINDS`                                                                                                                         |
+| `src/gate/tool-kind.ts`                                              | Claude's map from a tool name to its `toolKind`                                                                                                                                       |
+| `src/sessions/runtimes.ts`                                           | `CONTROL_TIERS`, the tier per runtime; `RUNTIME_WIRE_APIS`, the wire APIs each runtime speaks; and `runtimeOf`, the runtime a session request names                                   |
+| `src/host/model-endpoints.ts`                                        | The operator's model endpoints: the file read and checked at start, the hello's entries, the variables a session on one is spawned with, and the model rule                           |
+| `src/host/repository-settings.ts`                                    | The repository's own settings tiers, read before a session that loads them starts                                                                                                     |
+| `src/host/claude-runtime.ts`                                         | Claude's entry in the hello's `agents`                                                                                                                                                |
 | `src/host/wire-request.ts`                                           | The single narrowing from `session_new.request` and `session_configure` to local requests                                                                                             |
 | `contracts/wire-vectors/`                                            | The byte-level contract                                                                                                                                                               |
 | `src/pins/wire-vectors.test.ts`, `src/pins/protocol-closure.test.ts` | The corpus check; the proof that the subpath reaches no `host/` file and no `node:` builtin                                                                                           |
-| `src/host/protocol-window.test.ts`                                   | The window's two directions over a real link: this host's frames through the protocol-12 decoder v1.3.0 shipped, and a version-12 controller's frames through this build              |
+| `src/host/protocol-window.test.ts`                                   | The window's two directions over a real link: this host's frames through the protocol-14 decoder v1.5.0 shipped, and a version-14 controller's frames through this build              |
 | `examples/minimal-controller/`, `examples/test-controller/`          | The smallest controller that accepts a host, and the reference controller that drives every ask                                                                                       |

@@ -11,16 +11,30 @@
  * catch-all `"./*"`. A third subpath re-opens the boundary and is a decision, not a refactor.
  */
 export type {
+  AgentFact,
+  AgentFactsUpdate,
+  AgentFragmentDelta,
   AgentMessageUpdate,
+  AgentReceiptFact,
   BulkDelivered,
   BulkFailed,
   BulkRequest,
+  CacheTtl,
+  CompactionFact,
+  CompactionStatus,
+  CompactionTrigger,
   ControlFrame,
   ControlPayload,
   ControlPayloadKind,
+  CostBasis,
+  EndpointWireApi,
+  FragmentChannel,
   Frame,
   HostAgent,
+  HostAgentEntry,
+  HostAgentVocabularies,
   HostConfiguration,
+  HostEndpoint,
   HostModel,
   HostPlugin,
   HostConfigure,
@@ -34,14 +48,22 @@ export type {
   LinkPing,
   LinkPong,
   LinkWelcome,
+  ModelSpendFact,
   ProtocolRange,
   ReadRefusal,
+  ReceiptMcpServer,
+  ReceiptPlugin,
+  ReceiptPluginError,
+  ReceiptSource,
+  RunningTaskEntry,
   SessionCancel,
   SessionConfigure,
   SessionEnd,
   SessionCursor,
   SessionDelta,
+  SessionDeltaBody,
   SessionFrame,
+  SessionHandleFact,
   SessionList,
   SessionListEntry,
   SessionListResult,
@@ -55,13 +77,18 @@ export type {
   SessionPrompt,
   SessionUpdate,
   SessionUpdateBody,
+  SpendFacts,
   StateTransitionUpdate,
+  TasksFact,
   TranscriptFailed,
   TranscriptList,
   TranscriptListEntry,
   TranscriptListResult,
   TranscriptTail,
   TranscriptTailResult,
+  TurnRecordFact,
+  TurnScope,
+  UsageSampleFact,
   WireRefusal,
   WireRefusalUpdate,
   RepositoryEntry,
@@ -91,6 +118,8 @@ export type {
   AgedEntry,
   CauseEvent,
   CauseKind,
+  ControlTier,
+  ControlTierLevel,
   EntryLane,
   HookEventName,
   OpenEntry,
@@ -104,6 +133,7 @@ export type {
 export {
   ACTIVITY_KINDS,
   CAUSE_KINDS,
+  CONTROL_TIER_LEVELS,
   HOOK_EVENTS,
   HOST_ACTIVITY_KINDS,
   SDK_ACTIVITY_KINDS,
@@ -115,10 +145,24 @@ export {
 } from './state/model.js';
 
 export {
+  CACHE_TTLS,
+  COMPACTION_STATUSES,
+  COMPACTION_TRIGGERS,
+  COST_BASES,
+  DEFAULT_RUNTIME,
   DROPPABLE_KINDS,
+  ENDPOINT_WIRE_APIS,
+  FRAGMENT_CHANNELS,
   MAX_AGENT_CATALOG_BYTES,
+  MAX_AGENT_ENTRIES,
   MAX_AGENT_MODELS,
   MAX_CONFIGURATION_VALUE_LENGTH,
+  MAX_ENDPOINT_CATALOG_BYTES,
+  MAX_ENDPOINT_MODELS,
+  MAX_ENDPOINTS,
+  MAX_FACT_LIST_ENTRIES,
+  MAX_FACT_TEXT_LENGTH,
+  MAX_FACT_WORD_LENGTH,
   MAX_PLUGIN_DIRS,
   MAX_BULK_RELEASES,
   MAX_CONFIGURE_ENTRIES,
@@ -129,9 +173,13 @@ export {
   MAX_WORKSPACE_READ_BYTES,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_MIN,
+  RECEIPT_SOURCES,
   TRANSCRIPT_PAGE_SIZE,
   TRANSCRIPT_WHAT_PREFIX,
+  TURN_SCOPES,
   WORKSPACE_PAGE_SIZE,
+  agentFactsUpdate,
+  agentFragmentDelta,
   agentMessageDelta,
   agentMessageUpdate,
   bulkDelivered,
@@ -141,6 +189,8 @@ export {
   isControlFrame,
   isDroppable,
   isSessionFrame,
+  readAgentFacts,
+  readAgentFragment,
   readAgentMessage,
   readObservedAt,
   readRefusal,
@@ -210,13 +260,13 @@ export type { Result } from './core/result.js';
 // re-exports of the Agent SDK's own types (`host/session-store.ts`), and `readTurnSpend` is a
 // runtime function in `host/telemetry.ts`. Routing any of the three through here would either drag
 // `host/` into this closure or make the wire subpath import the Agent SDK — contradicting this
-// file's own header claim that it does not. Whether the wire should grow its own session/spend
-// types, independent of the SDK's, is a wire-vocabulary decision and belongs to whoever designs
-// the API. It is deliberately not taken here.
+// file's own header claim that it does not. The wire's own spend and session facts are the fact
+// layer's types above (`SpendFacts`, `AgentFact`), which name no SDK type; the reader that fills
+// them from the SDK's messages stays in `host/`.
 // ---------------------------------------------------------------------------
 
-export type { Decider, Decision, DecisionReading, DecisionRequest } from './gate/decision.js';
-export { describeRaw, readDecision } from './gate/decision.js';
+export type { Decider, Decision, DecisionReading, DecisionRequest, ToolKind } from './gate/decision.js';
+export { TOOL_KINDS, describeRaw, readDecision } from './gate/decision.js';
 
 export type { EscalationOptions, EscalationResponse, EscalationTransport } from './gate/escalate.js';
 

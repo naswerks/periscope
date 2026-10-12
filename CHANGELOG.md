@@ -8,6 +8,104 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-11
+
+Protocol 15; the window is `[14, 15]`, so a version-14 controller is still spoken to. Version 15
+adds bodies, optional members and refusal reasons, no payload kind: a version-14 controller reads the
+new bodies as open JSON it may ignore, carries the new members unread, never sends the members five
+of the new reasons answer, and reads the sixth, `settings-route-refused`, as it reads any reason it
+does not know; every frame it sends decodes unchanged.
+
+- Added: the fact layer. A `session_update` may carry an `agent_facts` body: one fact the agent
+  reported, typed, right behind the message it came from. Six kinds: `session_handle` (the resumable
+  id), `agent_receipt` (version, model, approval mode, effort, skills, plugins, plugin errors, MCP
+  servers), `turn_record` (the running total and the turn's own figure, each a `SpendFacts` with a
+  currency and a cost basis per model, and `turnScope`), `usage_sample` (one model call's context
+  and cache lifetime), `tasks` (every task running, whole) and `compaction`. Every figure is one the
+  agent reported, or null; nothing is summed or differenced. `sourceId` is the `uuid` of the message
+  a fact was lifted from, so an ingest can be idempotent on it. A Claude session sends each fact when
+  it changes: a re-sent identical init sends nothing, a call that arrives as several messages is
+  sampled once.
+- Added: `agent_fragment` deltas. Each streamed content delta also rides the delta lane as a
+  fragment on its channel (`text`, `thinking`, `tool_input`), with the tool call that spawned the
+  subagent speaking as `parentId`; the `agent_message` delta it came from still rides. A delta body
+  is read as a `SessionDeltaBody`.
+- Added: `runtime` on `agent_message`, optional. Absent means `claude` (`DEFAULT_RUNTIME`), and a
+  Claude session's messages omit it, so their bodies are unchanged. Transcript locators are the
+  namespace `{runtime}-transcript:{...}`; `claude-transcript:` is the instance this host serves.
+- Added exports: the fact types (`AgentFact` and its six arms, `AgentFactsUpdate`, `SpendFacts`,
+  `ModelSpendFact`, `RunningTaskEntry` and the receipt's parts), `AgentFragmentDelta`,
+  `SessionDeltaBody`, `agentFactsUpdate`, `readAgentFacts`, `agentFragmentDelta`,
+  `readAgentFragment`, the vocabularies `COST_BASES`, `TURN_SCOPES`, `RECEIPT_SOURCES`, `CACHE_TTLS`,
+  `COMPACTION_STATUSES`, `COMPACTION_TRIGGERS` and `FRAGMENT_CHANNELS`, the bounds
+  `MAX_FACT_LIST_ENTRIES`, `MAX_FACT_TEXT_LENGTH` and `MAX_FACT_WORD_LENGTH`, and `DEFAULT_RUNTIME`.
+  On the main entry: `FactLift`, `FACT_LIFTS` and `factLiftFor` (the fact lift per runtime),
+  `ForwardSessionOptions.lift`, which `composeSession` fills with Claude's, and
+  `SessionObserver.onCompaction` with `CompactionReport`.
+- Added: `agents` on the hello's configuration and the configure answer, optional: one
+  `HostAgentEntry` per runtime the host can spawn (its versions, models, the permission modes and
+  effort levels it takes, whether it takes a thinking control, its control tier, and whether it is
+  available), at most `MAX_AGENT_ENTRIES`. This host lists Claude, from the same read as `agent`; the
+  two are null together.
+- Added: `runtime` on `session_new.request`, optional. Null, absent and `claude` open as before; any
+  other runtime is refused `runtime-unavailable` before anything is reserved. A composed session's
+  runtime picks its fact lift, its control tier and the runtime its decision requests name
+  (`SessionRequest.runtime`, read through `runtimeOf`).
+- Added: the control tier. A session's first transition into `ready` carries
+  `controlTier: { level, degrades }`, and each runtime entry carries the same; a Claude session is
+  `intercepted` with no degrades. Levels are `CONTROL_TIER_LEVELS`; an undeclared level is refused on
+  the way out and read on the way in.
+- Added: `toolKind` and `runtime` on the decision request, optional, beside the unchanged
+  `toolName`. Claude's tool names map to `shell`, `file_read`, `file_write`, `file_edit`, `mcp` or
+  `web`, and any other name to `other` (`TOOL_KINDS`).
+- Added refusal reasons: `runtime-unavailable`, `request-key-unsupported`, `endpoint-unknown`,
+  `endpoint-incompatible` and `model-endpoint-mismatch`. This host raises the first and the three
+  endpoint reasons (below); a session on Claude never meets the second.
+- Added: `endpoints` on the hello's configuration and the configure answer, optional: one
+  `HostEndpoint` per model endpoint the host's operator declared (its name, the wire API it speaks,
+  the runtimes that can reach it, and every model id a session may name on it, alias ids included),
+  at most `MAX_ENDPOINTS`, held to its own `MAX_ENDPOINT_CATALOG_BYTES` beside the catalog's budget.
+  An endpoint's address, its credential and whether it is Anthropic's own route never ride the wire.
+  Wire APIs are `ENDPOINT_WIRE_APIS`; an undeclared one is refused on the way out and read on the way
+  in.
+- Added: `endpoint` on `session_new.request`, optional. Null and absent take the runtime's own route.
+  For a declared endpoint the host sets, in the spawn environment, its address and credential
+  (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`), the model each mapped tier resolves to, its window,
+  `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` and `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, after the
+  controller's lanes and never through the floor that screens them. A name the operator did not
+  declare refuses `endpoint-unknown`; an endpoint that cannot carry the session's runtime,
+  `endpoint-incompatible`; and on an endpoint not marked as Anthropic's own route, a `claude-` model
+  id or an alias the endpoint does not map refuses `model-endpoint-mismatch`, at the open and on a
+  `session_configure` that switches to one.
+- Added: `PERISCOPE_MODEL_ENDPOINTS`, a config-file key never settable over the link, naming the
+  operator's endpoints file. Each entry: a name, a wire API, its runtimes, a base URL, a credential
+  read from an environment variable, a file or a helper command (an absolute executable, run with no
+  shell; a Windows batch file is refused), its models, the tiers it maps, its window in the vendor's
+  form, more variables, and `firstParty`. The file is read, checked and its credentials resolved at
+  start, and an entry this host could not honour refuses start by name. The file and every credential
+  file it names join the protected set.
+- Added: `settings-route-refused`. A session that loads the `project` or `local` settings tier is
+  refused before the agent starts when the repository's `.claude/settings.json` or
+  `.claude/settings.local.json` names, in its `env`, a key beneath the env floor; the detail names the
+  file and the keys.
+- Added exports: `EndpointWireApi`, `ENDPOINT_WIRE_APIS`, `HostEndpoint`, `MAX_ENDPOINTS`,
+  `MAX_ENDPOINT_MODELS` and `MAX_ENDPOINT_CATALOG_BYTES`. On the main entry: `ModelEndpoint`,
+  `ModelAliasTier`, `EndpointContextWindow`, `ModelEndpointsReading`, `ModelEndpointsReadOptions`,
+  `readModelEndpoints`, `PeriscopeHostOptions.endpoints`, `SessionRequest.endpoint`,
+  `SessionRequest.hostEnv`, `RUNTIME_WIRE_APIS`, `wireApisFor`, `spawnableRuntimes`, and the
+  `modelEndpointFiles` option of `credentialPaths`.
+- Changed: `composeSpawnEnv` takes an optional third input, the host's own variables, applied after
+  the policy's literals and before the host-session strip.
+- Added exports: `ControlTier`, `ControlTierLevel`, `CONTROL_TIER_LEVELS`, `HostAgentEntry`,
+  `HostAgentVocabularies`, `MAX_AGENT_ENTRIES`, `ToolKind` and `TOOL_KINDS`. On the main entry:
+  `CONTROL_TIERS`, `controlTierFor`, `runtimeOf`, `SessionObserverOptions` (the observer's tier),
+  `TransitionRequest.controlTier`, `SessionRequest.runtime` and `PermissionGateOptions.runtime`.
+- Changed: `agentMessageUpdate` and `agentMessageDelta` take an optional `runtime`.
+- Changed: the codec checks the members the new bodies declare, and only those. A count in a fact
+  (tokens, a context window, turns, a duration) must be a non-negative whole number, or the frame is
+  refused `frame-malformed`; a vocabulary word a newer peer adds is read, and one this host does not
+  declare is refused on the way out. Every other body is open JSON, as before.
+
 ## [1.5.0] - 2026-10-10
 
 Protocol 14; the window is `[13, 14]`, so a version-13 controller is still spoken to. Protocol 14

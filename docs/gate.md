@@ -104,13 +104,14 @@ the decision deadline.
 - The vocabulary is owned locally, never received. The wire carries no policy in either direction;
   the embedder chooses tool families and protected paths at construction.
 - Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
-  workspace, with `credentialPaths(env, { agentHome })` as the protected set and the home directory
+  workspace, with `credentialPaths(env, { agentHome, modelEndpointFiles })` as the protected set and the home directory
   the shell scan expands from `homeDirectory(env)`. That set, stated once (`src/host/paths.ts`): the
   host's own config directory (`PERISCOPE_CONFIG_DIR` or `~/.periscope`, which holds the token
   cache, the paired credential and the config file); the agent CLI's token cache and configuration
   file (`.credentials.json` and `.claude.json`) in `~/.claude`, in `CLAUDE_CONFIG_DIR` when set and
   in the effective agent home, plus `~/.claude.json`; and `~/.aws`, `~/.config/gcloud`, `~/.azure`,
-  `~/.ssh`. The rest of the CLI's home (its settings, skills and tool output) is the agent's to read.
+  `~/.ssh`; and the model endpoints file (`PERISCOPE_MODEL_ENDPOINTS`) with every credential file it
+  names. The rest of the CLI's home (its settings, skills and tool output) is the agent's to read.
   The host's own cache location derives from the same function, so the two cannot disagree about
   what is protected. The repository and workspace read doors honour the same set.
 - Shell commands are parsed before they are judged (`src/gate/command.ts`, `src/gate/shell.ts`):
@@ -187,7 +188,15 @@ body: a 500 with a parseable body must never impersonate a human "no". An `Escal
 keeps its own detail so an outage says which lane failed.
 
 `DecisionRequest` carries `sessionKey`, the controller's handle for the session, so a decision can
-be correlated without re-deriving it from transport state. The POST presents a credential per
+be correlated without re-deriving it from transport state. It also carries `toolKind`, one of
+`TOOL_KINDS`, read from `toolName` by Claude's map (`src/gate/tool-kind.ts`), and `runtime`, the
+session's runtime, which the composer passes in beside `sessionKey` (`PermissionGateOptions.runtime`).
+A decider can hold one policy per kind across runtimes; `toolName` is unchanged and still says
+exactly which tool it is. The map names the shell, file and web tools and every `mcp__` tool; a tool
+it does not name is `other`, whatever its input carries, and never left without a kind. Both are
+filled where the hook input becomes a request (`readRequest`), so the local gate, an in-process
+decider and the escalated body see the same request; an input the gate cannot read is refused with
+a request that states `other`. The POST presents a credential per
 request (`EscalationOptions.credential`, resolved at call time), and a refusing credential is an
 outage, the deliberate opposite of the link's posture: a prompt that cannot be delivered is
 retried; a gate that cannot authenticate must not proceed. Resolving per request makes this lane a
@@ -232,7 +241,8 @@ stream of them as the gate working, never as a credential problem.
 | Path                                       | What                                                                                                              |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `src/gate/gate.ts`                         | `permissionHooks()`: registration, the fail-closed wrappers, both deadlines, the hold                             |
-| `src/gate/decision.ts`                     | `Decision` (the SDK's `PermissionResult`) and `readDecision`, the total parser                                    |
+| `src/gate/decision.ts`                     | `Decision` (the SDK's `PermissionResult`) and `readDecision`, the total parser; `TOOL_KINDS`                      |
+| `src/gate/tool-kind.ts`                    | `claudeToolKind`: Claude's map from a tool name to its kind                                                       |
 | `src/gate/outcome.ts`                      | `GateOutcome` (`holding`, `allow`, `deny`, `refused`, `expired`) to transitions, pure; `recordGateOutcome`        |
 | `src/gate/escalate.ts`                     | `escalatingDecider()`: status before body, `EscalationUnavailable`; the HTTP lane the link does not carry         |
 | `src/gate/local.ts`                        | `localGate()`: the host's own offline refusal; pure, synchronous, total                                           |

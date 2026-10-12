@@ -12,7 +12,7 @@ A setting arrives one of three ways, and the order is the rule:
 2. **The config file** (`<config dir>/config.json`) fills absences. `periscope config <key> <value>`
    writes one key, `periscope config --unset <key>` removes it, `periscope config` lists the file and
    marks every value the environment is currently overriding. On Windows this is the way to set a
-   value that should outlive the shell. Only the ten keys marked "config-file key" below may live
+   value that should outlive the shell. Only the eleven keys marked "config-file key" below may live
    in the file; a value the host would refuse at start (an `https:` controller address, a `ws:`
    decision address, a relative root) is refused by `periscope config` before it is written.
 3. **The controller, over the link** (`host_configure`) writes seven of those keys to the file; see
@@ -82,6 +82,7 @@ workspace provider live, except while a session is open or opening.
 | `PERISCOPE_AGENT_HOME`               | The agent's home: the folder the agent CLI keeps its state in. Transcripts are read from `<home>/projects` (derived, reported in the hello, never set on its own). Default: the CLI's own, `<user home>/.claude`. Must be absolute. Config-file key.                                                                                                                                                                                                                                                                                                                                                      |
 | `PERISCOPE_PLUGIN_DIRS`              | Plugin directories every session loads, a path list in the platform's delimiter (`;` on Windows, `:` elsewhere), at most `MAX_PLUGIN_DIRS`. Each is a plugin root: absolute, present, carrying `.claude-plugin/plugin.json` with a `name`; refused by name at start and at every open otherwise. The manifests' names and versions ride the hello as `configuration.plugins`. A controller's own `session_new.request.plugins` are added after these. Config-file key.                                                                                                                                    |
 | `PERISCOPE_CONTROLLER_ENV_KEYS`      | The names a controller may place in a session's environment through `session_new.request.env`: `extraEnv` sets one, `extraAllowedKeys` re-admits one this host holds. Comma-separated, matched case-insensitively. Unset declares nothing, and then a `session_new` whose `env` adds any key refuses `env-key-refused`. A name beneath the floor (the model route and its credentials, the proxies, the certificates trusted; `SECURITY.md` lists it) or one that is not a variable name refuses start, because no controller could set it. Read at start. Config-file key; never settable over the link. |
+| `PERISCOPE_MODEL_ENDPOINTS`          | The absolute path of the model endpoints file ([model endpoints](#model-endpoints)). Read, checked and its credentials resolved at start; a file this host could not honour refuses start. The file and every credential file it names join the gate's protected set. Config-file key; never settable over the link.                                                                                                                                                                                                                                                                                      |
 | `PERISCOPE_CONFIG_DIR`               | The directory holding the token cache, the paired credential and the config file. Default `<home>/.periscope`, where home is `USERPROFILE` or `HOME`. The whole directory is in the gate's protected set. Deliberately not a config-file key.                                                                                                                                                                                                                                                                                                                                                             |
 | `PERISCOPE_PAIR_URL`                 | Where `periscope pair` redeems a code when no `--controller` is given. Default: the origin of `PERISCOPE_DECISION_URL` plus the controller's pair route.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `PERISCOPE_MACHINE_LABEL`            | The label sent with a pair request when no `--label` is given, shown in the controller's listings. Default: the hostname.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -99,8 +100,9 @@ workspace provider live, except while a session is open or opening.
 | `PERISCOPE_UPDATE_CONTRACTS`         | Tests only. Set by `npm run contracts:update` while it re-approves the snapshots under `contracts/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 The agent CLI's token cache and configuration file in `CLAUDE_CONFIG_DIR`, when set, and in
-`PERISCOPE_AGENT_HOME`, when it is not the default, are added to the gate's protected paths; the full
-set is listed in [the gate](gate.md).
+`PERISCOPE_AGENT_HOME`, when it is not the default, are added to the gate's protected paths, and so are
+the model endpoints file and every credential file it names; the full set is listed in
+[the gate](gate.md).
 
 ## What a controller can set over the link
 
@@ -113,7 +115,9 @@ effective values plus the keys its environment shadows. The two addresses are wr
 applied to the live link: the host keeps dialling what it dialled, names them as pending in its
 answer and in every hello, and the next start reads the file. The host id is never settable over the
 link, and neither are the names a controller may place in a session's environment
-(`PERISCOPE_CONTROLLER_ENV_KEYS`): a controller able to write that list would declare its own. A controller can also list one directory or read the head of one text file under the
+(`PERISCOPE_CONTROLLER_ENV_KEYS`): a controller able to write that list would declare its own. Nor is
+the model endpoints file (`PERISCOPE_MODEL_ENDPOINTS`): a controller able to point it elsewhere would
+choose where a session's model calls go, and with which credential. A controller can also list one directory or read the head of one text file under the
 repository root (`repository_list` / `repository_read`), jailed to that root and to the protected
 set, bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
 a time, by the workspace's key (`workspace_read`), under the same jail and protected set. [The wire
@@ -182,6 +186,146 @@ or later.
 environment adds them. A controller sets it through `session_new.request.env.extraEnv` on a host
 that declares it (`periscope config PERISCOPE_CONTROLLER_ENV_KEYS CLAUDE_CODE_ENABLE_TODO_TOOLS`).
 
+## Model endpoints
+
+An operator can point sessions at model endpoints other than the agent CLI's own route: an
+open-weight vendor's Anthropic-format endpoint, a gateway, a model server on the machine. The
+operator declares each endpoint by name in one file; the hello lists the names; a controller names
+one in `session_new.request.endpoint`; and the host sets the endpoint's address, credential and model
+variables in the agent's environment itself. A controller chooses an endpoint and can never write
+one: none of the variables below is reachable from its own `env` lanes, and `host_configure` cannot
+touch the file.
+
+`PERISCOPE_MODEL_ENDPOINTS` names the file, by absolute path. It holds one JSON object with an
+`endpoints` list of at most `MAX_ENDPOINTS` entries. Two entries, each in the form its vendor's own
+Claude Code guide documents, one credential read from an environment variable and one from a
+helper command:
+
+```json
+{
+  "endpoints": [
+    {
+      "name": "deepseek",
+      "wireApi": "anthropic-messages",
+      "runtimes": ["claude"],
+      "baseUrl": "https://api.deepseek.com/anthropic",
+      "credential": { "env": "DEEPSEEK_API_KEY" },
+      "models": ["deepseek-flash[1m]", "deepseek-flash"],
+      "modelAliases": {
+        "opus": "deepseek-flash[1m]",
+        "sonnet": "deepseek-flash[1m]",
+        "haiku": "deepseek-flash"
+      },
+      "contextWindow": { "autoCompactWindow": 786432 }
+    },
+    {
+      "name": "zai",
+      "wireApi": "anthropic-messages",
+      "runtimes": ["claude"],
+      "baseUrl": "https://api.z.ai/api/anthropic",
+      "credential": {
+        "helper": {
+          "command": "C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\python.exe",
+          "args": [
+            "-IBm",
+            "azure.cli",
+            "keyvault",
+            "secret",
+            "show",
+            "--vault-name",
+            "<your-vault>",
+            "--name",
+            "<your-secret>",
+            "--query",
+            "value",
+            "-o",
+            "tsv"
+          ]
+        }
+      },
+      "models": ["GLM-5.3", "glm-5.3-flash"],
+      "modelAliases": { "opus": "GLM-5.3", "sonnet": "GLM-5.3", "haiku": "glm-5.3-flash" },
+      "contextWindow": { "autoCompactWindow": 1000000 },
+      "env": { "API_TIMEOUT_MS": "3000000" }
+    }
+  ]
+}
+```
+
+| Member          | Meaning                                                                                                                                                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`          | What a `session_new` names the endpoint by, and what the hello lists. Letters, digits, `.`, `_` and `-`, at most 64; unique in the file, ignoring case.                                                                               |
+| `wireApi`       | The API the endpoint speaks: `anthropic-messages`, `openai-responses` or `openai-chat`.                                                                                                                                               |
+| `runtimes`      | The runtimes that may reach it. Each must speak `wireApi`; Claude, the one runtime this host spawns, speaks `anthropic-messages`.                                                                                                     |
+| `baseUrl`       | Where the agent's model calls go, as an `http` or `https` URL. Never in the hello.                                                                                                                                                    |
+| `credential`    | Exactly one of `{ "env": NAME }`, `{ "file": PATH }` or `{ "helper": { "command": PATH, "args": [...] } }` (below). Required.                                                                                                         |
+| `models`        | The model ids a session may name on the endpoint, as the agent sends them, a `[1m]` suffix included where the vendor documents one.                                                                                                   |
+| `modelAliases`  | The model each tier (`opus`, `sonnet`, `haiku`, `fable`) resolves to on the endpoint, each one of `models`. The hello lists the mapped tiers as model ids too.                                                                        |
+| `contextWindow` | Optional. `{ "autoCompactWindow": N }` (100000 to 1000000 tokens), or `{ "maxContextTokens": N }`, in the form the vendor documents; never both.                                                                                      |
+| `env`           | Optional. Up to 32 more variables for sessions on the endpoint, such as `API_TIMEOUT_MS`, `CLAUDE_CODE_EFFORT_LEVEL` or `CLAUDE_CODE_SUBAGENT_MODEL`. Not a variable the members set, and not one the host strips from every session. |
+| `firstParty`    | Optional, default `false`. `true` marks Anthropic's own route, where a Claude model id may be named. Never in the hello.                                                                                                              |
+
+**Credentials** are resolved once, at start, and held in memory: a rotated key takes a restart.
+
+- `env` reads the variable from the host's own process environment, never from the config file. The
+  agent never sees that variable; it sees the value as `ANTHROPIC_AUTH_TOKEN`.
+- `file` reads an absolute path, trimmed, one line.
+- `helper` runs an absolute path to an executable with its arguments, with no shell, for at most 30
+  seconds, and takes the one line it prints. Its output is never logged or repeated: a failure names
+  the endpoint and how the command ended (its exit code, a timeout), never what it printed. On
+  Windows a `.cmd` or `.bat` is refused, because Node runs a batch file only through a shell and this
+  host never builds a shell command from configuration: name the program the batch file runs. The
+  Azure CLI's `az.cmd` runs its own `python.exe` with `-IBm azure.cli`, as the example shows.
+
+The endpoints file and every `file` credential join the gate's protected set, so no session can read
+them.
+
+**An endpoint not marked `firstParty`** must map `opus`, `sonnet` and `haiku`, and may list no
+`claude-` id: the agent resolves an unmapped tier to a Claude model id, its own background calls on
+`haiku` included, and a provider that maps Claude ids answers with its own model while the run reads,
+and is priced, as Claude. On such an endpoint a session naming a `claude-` id, or an alias the
+endpoint does not map (`default`, `best`, `opusplan`, an unmapped `fable`, with or without `[1m]`), is
+refused `model-endpoint-mismatch`, at the open and on a later `session_configure`. A session that
+names no model is not refused; every such endpoint maps the three tiers the agent works on.
+
+**The window.** Vendors document one of two forms. A `[1m]` suffix on a model id tells the agent the
+model holds a million tokens, and `autoCompactWindow` says where it compacts; `maxContextTokens` tells
+it the window of an id it does not know. A `[1m]` id beside `maxContextTokens` is refused, because
+the suffix overrides the stated window.
+
+**What a session on an endpoint is spawned with**, after the controller's own literals, so none of
+them can be overridden from the link:
+
+- `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`: the address and the credential, so the agent's own
+  sign-in is never the credential sent to the endpoint;
+- `ANTHROPIC_DEFAULT_OPUS_MODEL`, `_SONNET_`, `_HAIKU_` and `_FABLE_` for each mapped tier;
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW` or `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, from `contextWindow`;
+- `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, so the agent sends no pre-release request field an
+  endpoint may refuse;
+- `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, which keeps the credential out of the environments of the
+  commands, hooks and stdio tool servers the agent starts;
+- the entry's `env`.
+
+Nothing else is set or blanked: no other model-route variable reaches a session, because the host's
+inherited environment carries none and the floor refuses them on the controller's lanes. A user-tier
+Claude settings file (`<home>/.claude/settings.json`) still loads for a session that asks for the `user`
+tier, and its `env` can set the same variables: keep a vendor route out of the user settings of a
+runner that declares endpoints. The catalog read at start runs on the agent's own route, so the
+hello's `agent` and `agents` list Claude's models; an endpoint's models come from `models` alone.
+
+An endpoint that answers every call with a rate-limit or balance error makes the agent retry each call
+for minutes before it fails; `CLAUDE_CODE_MAX_RETRIES` in the entry's `env` lowers that.
+
+**A repository's own settings.** A session whose `settingSources` include `project` or `local` has the
+agent read the repository's `.claude/settings.json` or `.claude/settings.local.json` from its
+directory and apply each file's `env` to itself. The host reads the same files when the session's
+directory is known, and a file whose `env` names a key beneath the floor (the names and patterns
+`SECURITY.md` lists, matched case-insensitively) refuses the session `settings-route-refused`, naming
+each file and its keys. A file read neither as strict JSON nor with its comments and trailing commas
+removed passes, as the agent skips it; so does a missing file. The check runs when a session opens or
+resumes, and the agent reloads its settings files while it runs, so a file a session writes for itself
+is caught at its next open or resume.
+
 ## What the host prints
 
 Every line of output is `<ISO timestamp> [channel] message`, with a detail after a dash when there
@@ -197,7 +341,9 @@ is one. The first lines of a host with no identity configured look like this:
 ```
 
 The `[agent]` line comes from the model catalog the host reads before it dials (below). When the read
-fails it says `the hello carries no model catalog` with the reason, and the host dials anyway.
+fails it says `the hello carries no model catalog` with the reason, and the host dials anyway. A host
+that declares model endpoints prints `[endpoints] 2 model endpoint(s) declared: deepseek, zai`, names
+only.
 
 A paired host prints `[credential] paired as <hostId> - the paired credential is presented on every
 dial` instead; a host on a signed-in token prints its first `[credential]` line (`cache-hit`,
@@ -234,7 +380,12 @@ With the reason on stderr and a non-zero exit, when:
 - `PERISCOPE_PLUGIN_DIRS` names more than `MAX_PLUGIN_DIRS` directories, or one that is absent or
   carries no readable manifest;
 - `PERISCOPE_CONTROLLER_ENV_KEYS` names something that is not a variable name, or a name beneath the
-  floor, which no declaration can open.
+  floor, which no declaration can open;
+- `PERISCOPE_MODEL_ENDPOINTS` is not an absolute path, or names a file that cannot be read, is not
+  JSON, or declares an endpoint this host could not honour: a name declared twice, an unknown wire
+  API, a runtime it cannot spawn or one that does not speak the endpoint's API, a credential it cannot
+  resolve, a `firstParty` that is not `true` or `false`, an unmapped tier or a Claude id on an endpoint
+  that is not first-party, a window in both forms, or a list past what the hello carries.
 
 After start-up, one link event is fatal: `credential_rejected`. The controller or its identity
 provider has refused the host's material, so the process stops its sessions, prints the remedy
