@@ -24,6 +24,8 @@ import type {
   TransitionWhere,
 } from './model.js';
 import type { EntryOp, SessionStateMachine, TransitionRequest } from './machine.js';
+import type { CodexMessage } from '../host/codex-wire.js';
+import { CodexArmState, codexRequestsFor } from './codex-observer.js';
 
 /**
  * How this observer keys a permission entry. `PermissionRequest` carries no tool_use_id — see below.
@@ -53,6 +55,11 @@ export interface CompactionReport {
   readonly trigger: 'manual' | 'auto' | null;
   readonly tokensBefore: number | null;
   readonly tokensAfter: number | null;
+  /**
+   * The native id of what reported the compaction, where the source has one: a Codex compaction is
+   * an item, and its fact names the item. Absent for Claude, whose sources are hooks and messages.
+   */
+  readonly sourceId?: string;
 }
 
 export type CompactionListener = (report: CompactionReport) => void;
@@ -84,6 +91,8 @@ export class SessionObserver {
   #reported = false;
   readonly #compactionListeners = new Set<CompactionListener>();
   readonly #controlTier: ControlTier | null;
+  /** What the Codex lane remembers; untouched on a Claude session. */
+  readonly #codex = new CodexArmState();
 
   constructor(machine: SessionStateMachine, options: SessionObserverOptions = {}) {
     this.#machine = machine;
@@ -161,6 +170,34 @@ export class SessionObserver {
     const wasCompacting = figures !== null && this.#isOpen(COMPACTION_ENTRY);
     const recorded = this.#requestsFor(message).map((request) => this.#machine.record(request));
     if (figures !== null) this.#reportCompaction(wasCompacting, figures);
+    return recorded;
+  }
+
+  /**
+   * Every message a Codex process yields: Codex's lane, translated by `codex-observer.ts` and recorded
+   * here, so its first `ready` carries the tier and its compaction is reported like any other. Returns
+   * what it recorded.
+   */
+  observeCodexMessage(message: CodexMessage): Result<SessionTransition>[] {
+    const outcome = codexRequestsFor(message, this.#codex, {
+      state: this.#machine.state,
+      controlTier: this.#controlTier,
+      isOpen: (entryId) => this.#isOpen(entryId),
+    });
+    if (outcome.requests.some((request) => request.to === 'ready')) this.#reported = true;
+    const recorded = outcome.requests.map((request) => this.#machine.record(request));
+    if (outcome.compaction !== null) {
+      // Codex states neither the trigger nor the token counts. This host never asks for a
+      // compaction, so one it sees was the runtime's own.
+      const report: CompactionReport = {
+        status: outcome.compaction.status,
+        trigger: 'auto',
+        tokensBefore: null,
+        tokensAfter: null,
+        sourceId: outcome.compaction.itemId,
+      };
+      for (const listener of this.#compactionListeners) listener(report);
+    }
     return recorded;
   }
 

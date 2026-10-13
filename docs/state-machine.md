@@ -28,6 +28,10 @@ gave one init and two gave two. Only the first records `ready`. A later one reco
 refreshes the session's facts instead (the model, the permission mode, the inventories), which is
 how a model switch reaches them; the id stays.
 
+A Codex session reports itself with `thread/started`, which makes it `ready` and carries the
+thread id as the session id; a turn is `turn/started` to `working` and `turn/completed` to `idle`,
+`interrupted` or `errored` by its status. The arm that reads them is `src/state/codex-observer.ts`.
+
 Two notes for a consumer of the `ended` edge:
 
 - A refused open is emitted as `spawning` to `ended` with cause `{ kind: 'refusal', event: <reason> }`.
@@ -50,7 +54,7 @@ two are not symmetric.
 
 ```
 { sessionId, seq, at, from, to, activity,
-  cause: { kind, event, detail },        // kind: hook | sdk-message | control | timeout | process | refusal
+  cause: { kind, event, detail },        // kind: hook | sdk-message | control | timeout | process | refusal | agent-event
   where: { worktree, branch, cwd },
   controlTier? }                         // the first transition into ready only
 ```
@@ -60,11 +64,15 @@ two are not symmetric.
   lookup the hello's runtimes list reads ([protocol.md](protocol.md), the control tier).
 
 - `cause` is compile-closed and required. `CauseEvent` is the union of the hook events, the message
-  discriminators, `CONTROL_EVENTS`, `PROCESS_EVENTS`, `TIMEOUT_EVENTS` and `RefusalReason`; a
-  transition that cannot name its cause does not compile.
+  discriminators, `CONTROL_EVENTS`, `PROCESS_EVENTS`, `TIMEOUT_EVENTS`, `AGENT_EVENTS` and
+  `RefusalReason`; a transition that cannot name its cause does not compile.
 - `refusal` is the sixth kind because a denial and an outage cannot be told apart with five: a deny
   is `control/permission_denied`, an outage is `refusal/permission-decision-unavailable`, different
   in kind and in event, never only in prose. `detail` is for people and is never branched on.
+- `agent-event` is the seventh: an event a runtime other than Claude reported in its own vocabulary,
+  named `{runtime}:{native name}`. Codex's are `codex:` and the notification's method, one per
+  notification `CODEX_COVERAGE` wires (`AGENT_EVENTS`); an item's kind rides `detail`, never the
+  name. A hook event such a runtime reports in Claude's spelling keeps the kind `hook`.
 - `kind` and `event` are validated independently, never as a pair: `nameable()`
   (`src/state/machine.ts`) accepts `{ kind: 'hook', event: 'permission_denied' }` although it is
   incoherent. Coherence is the author's job, stated at `CONTROL_EVENTS`.
@@ -162,6 +170,12 @@ again on Claude Code 2.1.284: a turn whose Bash call the hook denied fired `User
 and not observed" is a question and "declined" closes one, and each says "measured not to fire" at
 the row. Re-measure before relying on any of the four (`agent-controls.live.test.ts`).
 
+`src/state/codex-coverage.ts` does the same for Codex: `CODEX_COVERAGE` lists every notification,
+server request and item kind the pinned app-server declares, wired or declined with a reason, an
+experimental one declined as such. `pins/codex-coverage.test.ts` holds it to
+`contracts/codex-protocol-names.json` in both directions, holds `AGENT_EVENTS` equal to the wired
+notifications, and drives every wired one through a real machine.
+
 ## The reporter is not a roster
 
 `SessionStateReporter` enumerates this host's sessions with state, activity and open-entry ages:
@@ -178,6 +192,8 @@ which sessions are interesting; a host that judges gets rebuilt per product. Do 
 | `src/state/store.ts`                | `TransitionStore`, the bounded in-memory ring that retains rejections and drops its oldest             |
 | `src/persistence/transition-log.ts` | The durable append-only log; `markAbandoned`; the cause-survives-or-refuse decoder                     |
 | `src/state/coverage.ts`             | `HOOK_COVERAGE` and `MESSAGE_COVERAGE`, wired or declined with reasons                                 |
+| `src/state/codex-coverage.ts`       | `CODEX_COVERAGE`, every Codex notification, server request and item kind, wired or declined            |
+| `src/state/codex-observer.ts`       | The Codex arm: its messages to transition requests and the compaction report                           |
 | `src/state/reporter.ts`             | Enumeration of this host's sessions                                                                    |
 | `src/host/hooks.ts`                 | `observationHooks()`, derived from the table, and `mergeHooks()`                                       |
 | `src/host/git-facts.ts`             | Read-only `where`, including the linked-worktree `.git` file                                           |

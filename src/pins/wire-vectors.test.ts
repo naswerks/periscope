@@ -216,6 +216,18 @@ const TRANSITION_READY_WITH_TIER: SessionTransition = {
   controlTier: { level: 'intercepted', degrades: [] },
 };
 
+/** A Codex thread's first `ready`: caused by the runtime's own notification, at tier none. */
+const TRANSITION_READY_AGENT_EVENT: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'thread-1',
+  cause: {
+    kind: 'agent-event',
+    event: 'codex:thread/started',
+    detail: 'the thread reported itself on Codex 0.162.1',
+  },
+  controlTier: { level: 'none', degrades: [] },
+};
+
 /** An open refused before any process existed, for one of the runtime and endpoint reasons. */
 const openRefused = (event: RefusalReason, detail: string): SessionTransition => ({
   ...TRANSITION_OPEN_REFUSED,
@@ -264,6 +276,33 @@ const CLAUDE_ENTRY: HostAgentEntry = {
     thinking: true,
   },
   controlTier: { level: 'intercepted', degrades: [] },
+  available: true,
+  unavailableReason: null,
+};
+
+/** Codex's entry: no SDK, its own efforts (`none` among them), and no control until the gate. */
+const CODEX_ENTRY: HostAgentEntry = {
+  runtime: 'codex',
+  version: '0.162.1',
+  sdkVersion: null,
+  models: [
+    {
+      value: 'example-codex-model',
+      resolvedModel: null,
+      displayName: 'Example Codex Model',
+      description: 'A model the app-server lists',
+      supportedEffortLevels: ['low', 'medium', 'high', 'none'],
+      supportsFastMode: null,
+      supportsAutoMode: null,
+      supportsAdaptiveThinking: null,
+    },
+  ],
+  vocabularies: {
+    permissionModes: ['default', 'dontAsk', 'bypassPermissions'],
+    efforts: ['low', 'medium', 'high', 'none'],
+    thinking: true,
+  },
+  controlTier: { level: 'none', degrades: [] },
   available: true,
   unavailableReason: null,
 };
@@ -526,6 +565,45 @@ const AUTHORED = {
         ),
       ),
     },
+    // Codex: an open refused because the binary is not the pinned release, naming the path, the
+    // version found and the version pinned; and one naming a member that is Claude's alone.
+    {
+      name: 'session_update.open-refused-codex-unavailable',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'runtime-unavailable',
+            'runtime codex is listed unavailable: the Codex binary /opt/codex/bin/codex is Codex 0.163.0; ' +
+              'this host is pinned to Codex 0.162.1',
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.open-refused-codex-request-key',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'request-key-unsupported',
+            "settingSources: Claude's settings tiers, which runtime codex does not load",
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.state-transition-agent-event',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_AGENT_EVENT)),
+    },
+    {
+      name: 'session_update.agent-message-codex',
+      frame: session(
+        agentMessageUpdate(
+          { method: 'thread/started', params: { thread: { id: 'thread-1', cliVersion: '0.162.1' } } },
+          AT,
+          'codex',
+        ),
+      ),
+    },
   ],
   session_delta: [
     {
@@ -541,6 +619,19 @@ const AUTHORED = {
     {
       name: 'session_delta.agent-fragment-subagent-tool-input',
       frame: session(agentFragmentDelta('claude', 'tool_input', '{"command":"ls', 'toolu_1')),
+    },
+    {
+      name: 'session_delta.agent-message-codex',
+      frame: session(
+        agentMessageDelta(
+          {
+            method: 'item/agentMessage/delta',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'Hel' },
+          },
+          AT,
+          'codex',
+        ),
+      ),
     },
   ],
   session_new: [
@@ -580,6 +671,18 @@ const AUTHORED = {
       frame: session(
         sessionNew('/work/repo', {
           request: sessionNewRequest({ endpoint: 'example-endpoint', model: 'opus' }),
+        }),
+      ),
+    },
+    {
+      name: 'session_new.codex-runtime-default-prompt',
+      frame: session(
+        sessionNew('/work/repo', {
+          request: sessionNewRequest({
+            runtime: 'codex',
+            effort: 'none',
+            systemPrompt: { type: 'preset', preset: 'runtime-default', append: 'Answer briefly.' },
+          }),
         }),
       ),
     },
@@ -1077,6 +1180,38 @@ const AUTHORED = {
         configuration: { ...unsetHostConfiguration(), endpoints: [ENDPOINT] },
         pendingRestart: [],
         protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    {
+      name: 'link_hello.agents-codex',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: { ...unsetHostConfiguration(), agent: AGENT, agents: [CLAUDE_ENTRY, CODEX_ENTRY] },
+        pendingRestart: [],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    // A hello from a host one release behind, as such a host sends it: it decodes here unchanged.
+    {
+      name: 'link_hello.protocol-15',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: 15,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: {
+          ...unsetHostConfiguration(),
+          agent: AGENT,
+          agents: [CLAUDE_ENTRY],
+          endpoints: [ENDPOINT],
+        },
+        pendingRestart: [],
+        protocolRange: { min: 14, max: 15 },
       }),
     },
     {

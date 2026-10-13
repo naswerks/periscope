@@ -18,7 +18,10 @@ hosts is a live conversation you can steer mid-turn, not a job you collect at th
 port and carries no opinion about what a session _means_: it emits what happened, and the
 controller decides what to do about it. The agent it hosts is Claude Code, through the Claude Agent
 SDK, behind a seam whose own vocabulary names no agent; the agent's hook and message names ride
-the wire as `cause.event`, and the transcript locator is `claude-transcript:`.
+the wire as `cause.event`, and the transcript locator is `claude-transcript:`. A host can also offer
+Codex, through Codex's app-server, when its operator points it at a Codex binary and a home of the
+runner's own ([configuration](docs/configuration.md#codex)); a Codex session runs with no gate, and
+the hello says so.
 
 ## Run a host
 
@@ -130,6 +133,7 @@ anything. The figure for a release is in [`CHANGELOG.md`](CHANGELOG.md).
 | -------------------------------- | ------------------------------------- |
 | `@anthropic-ai/claude-agent-sdk` | **0.3.284**, pinned exactly, no caret |
 | Claude Code CLI                  | **2.1.284** (bundled with that SDK)   |
+| Codex app-server                 | **0.162.1**, pinned, when configured  |
 | Node                             | 22 or later; CI proves 22 and 24      |
 
 The SDK is pre-1.0, so the SHA-256 of its installed type definitions is kept in

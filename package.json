@@ -41,6 +41,7 @@
     "!src/pins/",
     "!src/test-support/",
     "contracts/wire-vectors/",
+    "contracts/codex-protocol-names.json",
     "docs/",
     "examples/",
     "README.md",

@@ -42,12 +42,18 @@
  * message, then its facts on the update lane, then its fragments on the delta lane, then its
  * transitions. A compaction's fact rides right behind the transition that recorded it. Without one,
  * the wire carries exactly the messages and the transitions.
+ *
+ * What differs per runtime is bound in one place (`MessageBinding`): which lane a message rides and
+ * with what body, which native id its facts name, and how the observer reads it. Claude's binding is
+ * `CLAUDE_MESSAGE_BINDING`, and `forwardSession` forwards with it; a session on another runtime is
+ * forwarded by `forwardNativeSession` with that runtime's own.
  */
 import type { SDKMessage } from '../host/agent-process.js';
 import type { FactLift } from '../sessions/fact-lift.js';
 import type { HostedSession, SessionEnded, Unsubscribe } from '../sessions/session.js';
 import type { SessionObserver } from '../state/observer.js';
 import type { SessionTransition } from '../state/model.js';
+import type { AgentFact } from './frames.js';
 import type { Refusal } from '../core/refusal.js';
 import type { Result } from '../core/result.js';
 import type { Clock } from '../core/time.js';
@@ -70,7 +76,7 @@ export interface FrameSink {
   send(sessionId: string, payload: SessionPayload): Result<void>;
 }
 
-export interface ForwardSessionOptions {
+export interface ForwardSessionOptions<M = SDKMessage> {
   /**
    * The frame's routing key: the controller's handle for this session, not the agent's own id.
    *
@@ -80,7 +86,7 @@ export interface ForwardSessionOptions {
    * id would make exactly the frames that explain a failure unsendable.
    */
   readonly sessionKey: string;
-  readonly session: HostedSession;
+  readonly session: HostedSession<M>;
   /** The session's own observer. Already attached to its machine; this does not create one. */
   readonly observer: SessionObserver;
   readonly sink: FrameSink;
@@ -102,8 +108,42 @@ export interface ForwardSessionOptions {
    * facts and fragments it carries, stamped with the message's own instant, and each compaction the
    * observer reports by its fact. Without one, nothing but messages and transitions is forwarded.
    */
-  readonly lift?: FactLift;
+  readonly lift?: FactLift<M>;
 }
+
+/** How one runtime's messages reach the wire and the session's machine. */
+export interface MessageBinding<M> {
+  /** The runtime a forwarded message names. Absent, it names none, which a consumer reads as Claude. */
+  readonly runtime?: string;
+  /** The lane a message rides and the body it rides as, or null for a message the wire declines. */
+  route(message: M): { readonly lane: 'update' | 'delta'; readonly body: JsonObject } | null;
+  /** The native id a fact lifted from this message names, or null. */
+  sourceIdOf(message: M, fact: AgentFact): string | null;
+  /** Record what this message caused, on the session's own observer. */
+  observe(observer: SessionObserver, message: M): readonly Result<SessionTransition>[];
+}
+
+/**
+ * Claude's binding. The lane is `MESSAGE_ROUTING`'s and the body is the SDK message itself; every
+ * fact a message carries names that message's `uuid`, the id its `agent_message` carries; the
+ * observer reads the message on its SDK lane.
+ */
+export const CLAUDE_MESSAGE_BINDING: MessageBinding<SDKMessage> = {
+  route(message) {
+    const lane = laneFor(message);
+    // Cast rather than copy: the message arrived as JSON and the codec is where bytes and types meet,
+    // so re-validating it here would be a second wire edge. A message that genuinely cannot serialize
+    // is refused by `encode` under its own name and reaches `onRefusal` like any other refusal.
+    return lane === 'declined' ? null : { lane, body: message as unknown as JsonObject };
+  },
+  sourceIdOf(message) {
+    const uuid = (message as { uuid?: unknown }).uuid;
+    return typeof uuid === 'string' && uuid !== '' ? uuid : null;
+  },
+  observe(observer, message) {
+    return observer.observeMessage(message);
+  },
+};
 
 /**
  * Start forwarding. Returns the unsubscribe, which is idempotent.
@@ -113,6 +153,18 @@ export interface ForwardSessionOptions {
  * and a trace whose last row is whatever happened to arrive last is not a trace of an ending.
  */
 export function forwardSession(options: ForwardSessionOptions): Unsubscribe {
+  return forwardWith(options, CLAUDE_MESSAGE_BINDING);
+}
+
+/** Start forwarding a session on a runtime other than Claude, through that runtime's binding. */
+export function forwardNativeSession<M>(
+  options: ForwardSessionOptions<M>,
+  binding: MessageBinding<M>,
+): Unsubscribe {
+  return forwardWith(options, binding);
+}
+
+function forwardWith<M>(options: ForwardSessionOptions<M>, binding: MessageBinding<M>): Unsubscribe {
   const { sessionKey, session, observer, sink } = options;
   const clock = options.clock ?? systemClock;
 
@@ -139,12 +191,12 @@ export function forwardSession(options: ForwardSessionOptions): Unsubscribe {
 
   const lift = options.lift;
 
-  const dropMessages = session.onMessage((message: SDKMessage) => {
+  const dropMessages = session.onMessage((message: M) => {
     // The message first, then the facts it carries, then what it caused. See this file's header.
     const observedAt = clock();
-    forwardMessage(message, observedAt, emit);
-    if (lift !== undefined) forwardFacts(lift, message, observedAt, emit);
-    reportRejected(observer.observeMessage(message));
+    forwardMessage(binding, message, observedAt, emit);
+    if (lift !== undefined) forwardFacts(binding, lift, message, observedAt, emit);
+    reportRejected(binding.observe(observer, message));
   });
 
   // The observer reports a compaction after recording its transition, so its fact follows the record.
@@ -153,11 +205,16 @@ export function forwardSession(options: ForwardSessionOptions): Unsubscribe {
       ? (): void => undefined
       : observer.onCompaction((report) => {
           const observedAt = clock();
-          for (const fact of lift.fromCompaction(report)) emit(agentFactsUpdate(fact, null, observedAt));
+          for (const fact of lift.fromCompaction(report)) {
+            emit(agentFactsUpdate(fact, report.sourceId ?? null, observedAt));
+          }
         });
 
   const dropEnd = session.onEnd((ended: SessionEnded) => {
-    reportRejected([observer.ended({ kind: 'process', event: ended.cause, detail: ended.detail })]);
+    // A runtime that reports its own end (a Codex thread that closed) has already recorded it.
+    if (observer.machine.state !== 'ended') {
+      reportRejected([observer.ended({ kind: 'process', event: ended.cause, detail: ended.detail })]);
+    }
     dropMessages();
   });
 
@@ -174,16 +231,16 @@ export function forwardSession(options: ForwardSessionOptions): Unsubscribe {
  * from by the message's own `uuid`, the id that message carries on the wire, so a consumer can join
  * the two and ingest a re-sent fact once.
  */
-function forwardFacts(
-  lift: FactLift,
-  message: SDKMessage,
+function forwardFacts<M>(
+  binding: MessageBinding<M>,
+  lift: FactLift<M>,
+  message: M,
   observedAt: string,
   emit: (payload: SessionPayload) => void,
 ): void {
   const lifted = lift.fromMessage(message);
-  const uuid = (message as { uuid?: unknown }).uuid;
-  const sourceId = typeof uuid === 'string' && uuid !== '' ? uuid : null;
-  for (const fact of lifted.facts) emit(agentFactsUpdate(fact, sourceId, observedAt));
+  for (const fact of lifted.facts)
+    emit(agentFactsUpdate(fact, binding.sourceIdOf(message, fact), observedAt));
   for (const fragment of lifted.fragments) {
     emit(agentFragmentDelta(fragment.runtime, fragment.channel, fragment.text, fragment.parentId));
   }
@@ -198,17 +255,18 @@ function forwardFacts(
  * but a consumer will see a turn whose largest tool result never arrived, so the refusal has to
  * reach someone. It does, through `onRefusal`.
  */
-function forwardMessage(
-  message: SDKMessage,
+function forwardMessage<M>(
+  binding: MessageBinding<M>,
+  message: M,
   observedAt: string,
   emit: (payload: SessionPayload) => void,
 ): void {
-  const lane = laneFor(message);
-  if (lane === 'declined') return;
-
-  // Cast rather than copy: the message arrived as JSON and the codec is where bytes and types meet,
-  // so re-validating it here would be a second wire edge. A message that genuinely cannot serialize
-  // is refused by `encode` under its own name and reaches `onRefusal` like any other refusal.
-  const body = message as unknown as JsonObject;
-  emit(lane === 'delta' ? agentMessageDelta(body, observedAt) : agentMessageUpdate(body, observedAt));
+  const routed = binding.route(message);
+  if (routed === null) return;
+  const { lane, body } = routed;
+  emit(
+    lane === 'delta'
+      ? agentMessageDelta(body, observedAt, binding.runtime)
+      : agentMessageUpdate(body, observedAt, binding.runtime),
+  );
 }

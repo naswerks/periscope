@@ -23,7 +23,13 @@
  * to write.
  */
 import { EXTRA_ENV_FLOOR, envKeysBeneathFloor, envKeysUndeclared } from '../sessions/spawn-env.js';
-import type { JsonObject, SessionNewEnv, SessionNewRequest } from '../control/frames.js';
+import type {
+  HostAgentEntry,
+  HostAgentVocabularies,
+  JsonObject,
+  SessionNewEnv,
+  SessionNewRequest,
+} from '../control/frames.js';
 import { DEFAULT_RUNTIME } from '../control/frames.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
@@ -31,7 +37,6 @@ import type { SessionRequest } from '../sessions/registry.js';
 import { wireApisFor } from '../sessions/runtimes.js';
 import type { SpawnEnvPolicy } from '../sessions/spawn-env.js';
 import type {
-  EffortLevel,
   McpServerConfig,
   PermissionMode,
   SdkPluginConfig,
@@ -106,6 +111,55 @@ export const PERMISSION_MODES: readonly string[] = [
 ];
 
 /**
+ * The permission modes a Codex session admits: three of the six, by name. Named here, in the one
+ * module that holds the mode vocabulary, beside the map that reads each one as Codex's own words: one
+ * table in one place, so a later gate over this runtime changes a row and nothing else.
+ */
+export const CODEX_PERMISSION_MODES = ['default', 'dontAsk', 'bypassPermissions'] as const;
+
+export type CodexPermissionMode = (typeof CODEX_PERMISSION_MODES)[number];
+
+/**
+ * Each admitted mode as Codex's own approval policy and sandbox, with the reviewer pinned to the
+ * client so no approval is ever handed to a Codex sub-agent.
+ *
+ * - `default`: asks on request in a workspace-write sandbox. With no sandbox backend on Windows every
+ *   command and every patch raises an approval.
+ * - `dontAsk`: never asks, in a workspace-write sandbox. With no backend on Windows, commands and
+ *   patches outside the roots are forbidden.
+ * - `bypassPermissions`: never asks, full access.
+ *
+ * The other three are refused by name: `acceptEdits` because workspace-write already applies patches
+ * inside the roots, so it would be `default` or a lie; `plan` because it needs experimental API;
+ * `auto` because it would hand approvals to a reviewing agent.
+ */
+export const CODEX_MODE_MAP = {
+  default: {
+    approvalPolicy: 'on-request',
+    sandbox: 'workspace-write',
+    sandboxPolicy: { type: 'workspaceWrite' },
+  },
+  dontAsk: { approvalPolicy: 'never', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite' } },
+  bypassPermissions: {
+    approvalPolicy: 'never',
+    sandbox: 'danger-full-access',
+    sandboxPolicy: { type: 'dangerFullAccess' },
+  },
+} as const satisfies Readonly<
+  Record<
+    CodexPermissionMode,
+    { readonly approvalPolicy: string; readonly sandbox: string; readonly sandboxPolicy: JsonObject }
+  >
+>;
+
+/** The reviewer every thread and turn names: the client, never a reviewing agent. */
+export const CODEX_APPROVALS_REVIEWER = 'user';
+
+export function isCodexPermissionMode(mode: string): mode is CodexPermissionMode {
+  return (CODEX_PERMISSION_MODES as readonly string[]).includes(mode);
+}
+
+/**
  * The one mode under which a granting gate and loaded operator settings are NOT two authorities: the
  * mode already allows everything the grant would, and a hook deny survives every mode. Named here, in
  * the one module that holds the vocabulary, so nothing else has to spell the mode.
@@ -114,24 +168,34 @@ export function isBypassMode(mode: string | null | undefined): boolean {
   return mode === PERMISSION_MODES[2];
 }
 
-/** What a `session_configure` frame asked for, narrowed to the SDK's own types. */
+/**
+ * What a `session_configure` frame asked for, narrowed to the SDK's own types. `effort` is the
+ * session's runtime's own word: one of the SDK's levels for Claude.
+ */
 export interface SessionConfigureChange {
   readonly model?: string | null;
   readonly permissionMode?: PermissionMode;
   readonly thinking?: ThinkingConfig;
-  readonly effort?: EffortLevel;
+  readonly effort?: string;
 }
 
 /**
  * Narrow a `session_configure` payload. Same discipline as `readSessionRequest`: a value the SDK does
  * not declare is REFUSED by name — a mode nobody recognises must never become "the default" silently.
+ *
+ * `vocabulary` is the session's runtime's own when it is not Claude: an effort is then read as that
+ * runtime's word, from its list. A mode or a level the runtime does not take is its process's to refuse,
+ * which answers `session-configure-failed` naming the member.
  */
-export function readSessionConfigure(payload: SessionConfigure): Result<SessionConfigureChange> {
+export function readSessionConfigure(
+  payload: SessionConfigure,
+  vocabulary: HostAgentVocabularies | null = null,
+): Result<SessionConfigureChange> {
   const change: {
     model?: string | null;
     permissionMode?: PermissionMode;
     thinking?: ThinkingConfig;
-    effort?: EffortLevel;
+    effort?: string;
   } = {};
   if (payload.model !== null) change.model = payload.model;
   if (payload.permissionMode !== null) {
@@ -151,16 +215,59 @@ export function readSessionConfigure(payload: SessionConfigure): Result<SessionC
   }
   // Protocol 12. Absent from a controller one release behind, which reads the same as null.
   if (payload.effort !== undefined && payload.effort !== null) {
-    if (!EFFORT_LEVELS.includes(payload.effort)) {
+    const levels = vocabulary === null ? EFFORT_LEVELS : vocabulary.efforts;
+    if (!levels.includes(payload.effort)) {
       return refuse<SessionConfigureChange>(
         'frame-malformed',
-        `effort is ${JSON.stringify(payload.effort)}; the levels this SDK declares are ${EFFORT_LEVELS.join(', ')}`,
+        vocabulary === null
+          ? `effort is ${JSON.stringify(payload.effort)}; the levels this SDK declares are ${EFFORT_LEVELS.join(', ')}`
+          : `effort is ${JSON.stringify(payload.effort)}; the levels this runtime declares are ${levels.join(', ')}`,
       );
     }
-    change.effort = payload.effort as EffortLevel;
+    change.effort = payload.effort;
   }
   return ok(change);
 }
+
+/**
+ * The first member of a request that the runtime `entry` describes does not honour, in words naming
+ * the key, or null. The members that are Claude's alone (its settings tiers, its sub-agent text
+ * forwarding, its own system-prompt preset) and a value outside the runtime's own vocabularies.
+ */
+function unsupportedKey(request: SessionNewRequest, entry: HostAgentEntry): string | null {
+  const runtime = entry.runtime;
+  if (request.settingSources !== null && request.settingSources.length > 0) {
+    return `settingSources: Claude's settings tiers, which runtime ${runtime} does not load`;
+  }
+  if (request.forwardSubagentText === true) {
+    return `forwardSubagentText: runtime ${runtime} runs a sub-agent on a thread of its own`;
+  }
+  const prompt = request.systemPrompt;
+  if (prompt !== null && typeof prompt !== 'string') {
+    const preset = typeof prompt === 'object' && !Array.isArray(prompt) ? prompt['preset'] : undefined;
+    if (preset !== RUNTIME_DEFAULT_PRESET) {
+      return (
+        `systemPrompt: runtime ${runtime} takes a string, which replaces its base instructions, or ` +
+        `{ "type": "preset", "preset": "${RUNTIME_DEFAULT_PRESET}", "append": ... }; ${JSON.stringify(preset ?? null)} is not either`
+      );
+    }
+  }
+  const vocabulary = entry.vocabularies;
+  if (request.permissionMode !== null && !vocabulary.permissionModes.includes(request.permissionMode)) {
+    return `permissionMode: runtime ${runtime} takes ${vocabulary.permissionModes.join(', ')}, not ${request.permissionMode}`;
+  }
+  if (request.effort !== null && !vocabulary.efforts.includes(request.effort)) {
+    return `effort: runtime ${runtime} takes ${vocabulary.efforts.length === 0 ? 'no level' : vocabulary.efforts.join(', ')}, not ${request.effort}`;
+  }
+  const thinking = request.thinking;
+  if (thinking !== null && !vocabulary.thinking && thinking['type'] !== 'adaptive') {
+    return `thinking: runtime ${runtime} honours no thinking control; omit the key`;
+  }
+  return null;
+}
+
+/** The system-prompt preset every runtime reads: its own base instructions and an append. */
+const RUNTIME_DEFAULT_PRESET = 'runtime-default';
 
 /**
  * The keys a controller's `env` places in the spawn environment, by lane: `extraAllowedKeys`
@@ -198,12 +305,17 @@ function namedInLanes(
  *
  * `endpoints` are the model endpoints this host's operator declared; a request may name one, and
  * nothing it carries can describe one.
+ *
+ * `runtimes` are the hello's entries for the runtimes this host offers beside Claude. A request may name
+ * one that is available; its members are then read against that runtime's own vocabularies, and a
+ * member that is Claude's alone is refused `request-key-unsupported`, naming it.
  */
 export function readSessionRequest(
   request: SessionNewRequest | null,
   extraEnvFloor: readonly string[] = EXTRA_ENV_FLOOR,
   controllerEnvKeys: readonly string[] = [],
   endpoints: readonly ModelEndpoint[] = [],
+  runtimes: readonly HostAgentEntry[] = [],
 ): Result<ComposableRequest> {
   if (request === null) return ok({});
 
@@ -211,12 +323,29 @@ export function readSessionRequest(
   // this host cannot spawn is refused before any of them is. Null or absent is the host's default and
   // composes nothing; the composer reads the default through `runtimeOf`.
   const runtime = request.runtime ?? null;
-  if (runtime !== null && runtime !== DEFAULT_RUNTIME) {
+  const entry =
+    runtime === null || runtime === DEFAULT_RUNTIME
+      ? null
+      : (runtimes.find((one) => one.runtime === runtime) ?? null);
+  if (runtime !== null && runtime !== DEFAULT_RUNTIME && entry === null) {
     return refuse<ComposableRequest>(
       'runtime-unavailable',
-      `runtime is ${JSON.stringify(runtime)}; this host spawns sessions on ${DEFAULT_RUNTIME} only, the ` +
-        `one runtime its hello lists in agents`,
+      runtimes.length === 0
+        ? `runtime is ${JSON.stringify(runtime)}; this host spawns sessions on ${DEFAULT_RUNTIME} only, the ` +
+            `one runtime its hello lists in agents`
+        : `runtime is ${JSON.stringify(runtime)}; this host spawns sessions on ` +
+            `${[DEFAULT_RUNTIME, ...runtimes.map((one) => one.runtime)].join(', ')}, the runtimes its hello lists in agents`,
     );
+  }
+  if (entry !== null && !entry.available) {
+    return refuse<ComposableRequest>(
+      'runtime-unavailable',
+      `runtime ${entry.runtime} is listed unavailable: ${entry.unavailableReason ?? 'no reason was given'}`,
+    );
+  }
+  if (entry !== null) {
+    const unsupported = unsupportedKey(request, entry);
+    if (unsupported !== null) return refuse<ComposableRequest>('request-key-unsupported', unsupported);
   }
 
   const composed: Record<string, unknown> = {};
@@ -280,7 +409,8 @@ export function readSessionRequest(
   }
 
   if (request.effort !== null) {
-    if (!EFFORT_LEVELS.includes(request.effort)) {
+    // A runtime beside Claude names its own levels, already held to its list above.
+    if (entry === null && !EFFORT_LEVELS.includes(request.effort)) {
       return refuse<ComposableRequest>(
         'frame-malformed',
         `effort is ${JSON.stringify(request.effort)}; the levels this SDK declares are ${EFFORT_LEVELS.join(', ')}`,

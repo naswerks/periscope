@@ -1,0 +1,1116 @@
+{
+  "release": "rust-v0.162.1",
+  "version": "0.162.1",
+  "notifications": [
+    {
+      "method": "error",
+      "experimental": false
+    },
+    {
+      "method": "thread/started",
+      "experimental": false
+    },
+    {
+      "method": "thread/status/changed",
+      "experimental": false
+    },
+    {
+      "method": "thread/archived",
+      "experimental": false
+    },
+    {
+      "method": "thread/deleted",
+      "experimental": false
+    },
+    {
+      "method": "thread/unarchived",
+      "experimental": false
+    },
+    {
+      "method": "thread/closed",
+      "experimental": false
+    },
+    {
+      "method": "thread/reverted",
+      "experimental": false
+    },
+    {
+      "method": "skills/changed",
+      "experimental": false
+    },
+    {
+      "method": "thread/name/updated",
+      "experimental": false
+    },
+    {
+      "method": "thread/attachment/updated",
+      "experimental": false
+    },
+    {
+      "method": "thread/goal/updated",
+      "experimental": false
+    },
+    {
+      "method": "thread/prediction/updated",
+      "experimental": true
+    },
+    {
+      "method": "thread/goal/cleared",
+      "experimental": false
+    },
+    {
+      "method": "thread/queue/changed",
+      "experimental": true
+    },
+    {
+      "method": "project/changed",
+      "experimental": true
+    },
+    {
+      "method": "thread/project/updated",
+      "experimental": true
+    },
+    {
+      "method": "thread/environment/connected",
+      "experimental": true
+    },
+    {
+      "method": "thread/environment/disconnected",
+      "experimental": true
+    },
+    {
+      "method": "thread/settings/updated",
+      "experimental": true
+    },
+    {
+      "method": "thread/tokenUsage/updated",
+      "experimental": false
+    },
+    {
+      "method": "turn/started",
+      "experimental": false
+    },
+    {
+      "method": "hook/started",
+      "experimental": false
+    },
+    {
+      "method": "turn/completed",
+      "experimental": false
+    },
+    {
+      "method": "hook/completed",
+      "experimental": false
+    },
+    {
+      "method": "turn/diff/updated",
+      "experimental": false
+    },
+    {
+      "method": "turn/plan/updated",
+      "experimental": false
+    },
+    {
+      "method": "item/started",
+      "experimental": false
+    },
+    {
+      "method": "item/autoApprovalReview/started",
+      "experimental": false
+    },
+    {
+      "method": "item/autoApprovalReview/completed",
+      "experimental": false
+    },
+    {
+      "method": "autoApprovalReview/strictReviewRequired",
+      "experimental": true
+    },
+    {
+      "method": "item/completed",
+      "experimental": false
+    },
+    {
+      "method": "rawResponseItem/completed",
+      "experimental": false
+    },
+    {
+      "method": "rawResponse/completed",
+      "experimental": false
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "experimental": false
+    },
+    {
+      "method": "item/plan/delta",
+      "experimental": false
+    },
+    {
+      "method": "command/exec/outputDelta",
+      "experimental": false
+    },
+    {
+      "method": "process/outputDelta",
+      "experimental": true
+    },
+    {
+      "method": "process/exited",
+      "experimental": true
+    },
+    {
+      "method": "item/commandExecution/outputDelta",
+      "experimental": false
+    },
+    {
+      "method": "item/commandExecution/terminalInteraction",
+      "experimental": false
+    },
+    {
+      "method": "item/fileChange/outputDelta",
+      "experimental": false
+    },
+    {
+      "method": "item/fileChange/patchUpdated",
+      "experimental": false
+    },
+    {
+      "method": "serverRequest/resolved",
+      "experimental": false
+    },
+    {
+      "method": "item/mcpToolCall/progress",
+      "experimental": false
+    },
+    {
+      "method": "mcpServer/oauthLogin/completed",
+      "experimental": false
+    },
+    {
+      "method": "mcpServer/startupStatus/updated",
+      "experimental": false
+    },
+    {
+      "method": "mcpServer/event/stream/notification",
+      "experimental": true
+    },
+    {
+      "method": "account/updated",
+      "experimental": false
+    },
+    {
+      "method": "account/gatewayOAuth/changed",
+      "experimental": false
+    },
+    {
+      "method": "account/rateLimits/updated",
+      "experimental": false
+    },
+    {
+      "method": "app/list/updated",
+      "experimental": false
+    },
+    {
+      "method": "remoteControl/status/changed",
+      "experimental": false
+    },
+    {
+      "method": "externalAgentConfig/import/progress",
+      "experimental": false
+    },
+    {
+      "method": "externalAgentConfig/import/completed",
+      "experimental": false
+    },
+    {
+      "method": "fs/changed",
+      "experimental": false
+    },
+    {
+      "method": "item/reasoning/summaryTextDelta",
+      "experimental": false
+    },
+    {
+      "method": "item/reasoning/summaryPartAdded",
+      "experimental": false
+    },
+    {
+      "method": "item/reasoning/textDelta",
+      "experimental": false
+    },
+    {
+      "method": "thread/compacted",
+      "experimental": false
+    },
+    {
+      "method": "model/rerouted",
+      "experimental": false
+    },
+    {
+      "method": "model/verification",
+      "experimental": false
+    },
+    {
+      "method": "modelProvider/authRecoveryStarted",
+      "experimental": false
+    },
+    {
+      "method": "modelProvider/authRecoveryCompleted",
+      "experimental": false
+    },
+    {
+      "method": "turn/moderationMetadata",
+      "experimental": true
+    },
+    {
+      "method": "model/safetyBuffering/updated",
+      "experimental": false
+    },
+    {
+      "method": "warning",
+      "experimental": false
+    },
+    {
+      "method": "guardianWarning",
+      "experimental": false
+    },
+    {
+      "method": "deprecationNotice",
+      "experimental": false
+    },
+    {
+      "method": "configWarning",
+      "experimental": false
+    },
+    {
+      "method": "fuzzyFileSearch/sessionUpdated",
+      "experimental": false
+    },
+    {
+      "method": "fuzzyFileSearch/sessionCompleted",
+      "experimental": false
+    },
+    {
+      "method": "thread/realtime/started",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/itemAdded",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/item/started",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/item/transcript/delta",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/item/completed",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/transcript/delta",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/transcript/done",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/outputAudio/delta",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/sdp",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/error",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/closed",
+      "experimental": true
+    },
+    {
+      "method": "windows/worldWritableWarning",
+      "experimental": false
+    },
+    {
+      "method": "windowsSandbox/setupCompleted",
+      "experimental": false
+    },
+    {
+      "method": "account/login/completed",
+      "experimental": false
+    }
+  ],
+  "serverRequests": [
+    {
+      "method": "item/commandExecution/requestApproval",
+      "experimental": false
+    },
+    {
+      "method": "item/fileChange/requestApproval",
+      "experimental": false
+    },
+    {
+      "method": "item/tool/requestUserInput",
+      "experimental": false
+    },
+    {
+      "method": "mcpServer/elicitation/request",
+      "experimental": false
+    },
+    {
+      "method": "item/permissions/requestApproval",
+      "experimental": false
+    },
+    {
+      "method": "item/tool/call",
+      "experimental": false
+    },
+    {
+      "method": "account/chatgptAuthTokens/refresh",
+      "experimental": false
+    },
+    {
+      "method": "attestation/generate",
+      "experimental": false
+    },
+    {
+      "method": "currentTime/read",
+      "experimental": true
+    },
+    {
+      "method": "applyPatchApproval",
+      "experimental": false
+    },
+    {
+      "method": "execCommandApproval",
+      "experimental": false
+    }
+  ],
+  "itemKinds": [
+    "userMessage",
+    "hookPrompt",
+    "agentMessage",
+    "functionCallOutput",
+    "plan",
+    "reasoning",
+    "commandExecution",
+    "fileChange",
+    "mcpToolCall",
+    "dynamicToolCall",
+    "collabAgentToolCall",
+    "subAgentActivity",
+    "webSearch",
+    "imageView",
+    "sleep",
+    "imageGeneration",
+    "enteredReviewMode",
+    "exitedReviewMode",
+    "contextCompaction"
+  ],
+  "clientMethods": [
+    {
+      "method": "initialize",
+      "experimental": false
+    },
+    {
+      "method": "server/diagnostics",
+      "experimental": true
+    },
+    {
+      "method": "userVerification/status",
+      "experimental": true
+    },
+    {
+      "method": "userVerification/enroll",
+      "experimental": true
+    },
+    {
+      "method": "userVerification/delete",
+      "experimental": true
+    },
+    {
+      "method": "userVerification/verify",
+      "experimental": true
+    },
+    {
+      "method": "userVerification/cancel",
+      "experimental": true
+    },
+    {
+      "method": "thread/start",
+      "experimental": false
+    },
+    {
+      "method": "thread/resume",
+      "experimental": false
+    },
+    {
+      "method": "thread/fork",
+      "experimental": false
+    },
+    {
+      "method": "thread/archive",
+      "experimental": false
+    },
+    {
+      "method": "thread/delete",
+      "experimental": false
+    },
+    {
+      "method": "thread/unsubscribe",
+      "experimental": false
+    },
+    {
+      "method": "thread/increment_elicitation",
+      "experimental": true
+    },
+    {
+      "method": "thread/decrement_elicitation",
+      "experimental": true
+    },
+    {
+      "method": "thread/name/set",
+      "experimental": false
+    },
+    {
+      "method": "thread/prediction/request",
+      "experimental": true
+    },
+    {
+      "method": "thread/goal/set",
+      "experimental": false
+    },
+    {
+      "method": "thread/goal/get",
+      "experimental": false
+    },
+    {
+      "method": "thread/goal/clear",
+      "experimental": false
+    },
+    {
+      "method": "thread/queue/add",
+      "experimental": true
+    },
+    {
+      "method": "thread/queue/list",
+      "experimental": true
+    },
+    {
+      "method": "thread/queue/update",
+      "experimental": true
+    },
+    {
+      "method": "thread/queue/delete",
+      "experimental": true
+    },
+    {
+      "method": "thread/queue/reorder",
+      "experimental": true
+    },
+    {
+      "method": "thread/queue/start",
+      "experimental": true
+    },
+    {
+      "method": "thread/metadata/update",
+      "experimental": false
+    },
+    {
+      "method": "thread/attachment/add",
+      "experimental": false
+    },
+    {
+      "method": "thread/attachment/list",
+      "experimental": false
+    },
+    {
+      "method": "thread/attachmentOwner/list",
+      "experimental": false
+    },
+    {
+      "method": "thread/attachment/remove",
+      "experimental": false
+    },
+    {
+      "method": "thread/section/move",
+      "experimental": false
+    },
+    {
+      "method": "thread/settings/update",
+      "experimental": true
+    },
+    {
+      "method": "thread/memoryMode/set",
+      "experimental": true
+    },
+    {
+      "method": "memory/status",
+      "experimental": true
+    },
+    {
+      "method": "memory/reset",
+      "experimental": true
+    },
+    {
+      "method": "rollout/compress",
+      "experimental": true
+    },
+    {
+      "method": "thread/unarchive",
+      "experimental": false
+    },
+    {
+      "method": "thread/compact/start",
+      "experimental": false
+    },
+    {
+      "method": "thread/shellCommand",
+      "experimental": false
+    },
+    {
+      "method": "thread/approveGuardianDeniedAction",
+      "experimental": false
+    },
+    {
+      "method": "thread/backgroundTerminals/clean",
+      "experimental": true
+    },
+    {
+      "method": "thread/backgroundTerminals/list",
+      "experimental": true
+    },
+    {
+      "method": "thread/backgroundTerminals/terminate",
+      "experimental": true
+    },
+    {
+      "method": "thread/revert",
+      "experimental": false
+    },
+    {
+      "method": "thread/list",
+      "experimental": false
+    },
+    {
+      "method": "project/list",
+      "experimental": true
+    },
+    {
+      "method": "project/read",
+      "experimental": true
+    },
+    {
+      "method": "project/create",
+      "experimental": true
+    },
+    {
+      "method": "project/import",
+      "experimental": true
+    },
+    {
+      "method": "project/update",
+      "experimental": true
+    },
+    {
+      "method": "project/move",
+      "experimental": true
+    },
+    {
+      "method": "project/delete",
+      "experimental": true
+    },
+    {
+      "method": "threadSection/list",
+      "experimental": false
+    },
+    {
+      "method": "threadSection/create",
+      "experimental": false
+    },
+    {
+      "method": "threadSection/update",
+      "experimental": false
+    },
+    {
+      "method": "threadSection/delete",
+      "experimental": false
+    },
+    {
+      "method": "thread/search",
+      "experimental": true
+    },
+    {
+      "method": "thread/searchOccurrences",
+      "experimental": true
+    },
+    {
+      "method": "thread/loaded/list",
+      "experimental": false
+    },
+    {
+      "method": "thread/read",
+      "experimental": false
+    },
+    {
+      "method": "thread/turns/list",
+      "experimental": false
+    },
+    {
+      "method": "thread/items/list",
+      "experimental": false
+    },
+    {
+      "method": "thread/inject_items",
+      "experimental": false
+    },
+    {
+      "method": "skills/list",
+      "experimental": false
+    },
+    {
+      "method": "skills/extraRoots/set",
+      "experimental": false
+    },
+    {
+      "method": "hooks/list",
+      "experimental": false
+    },
+    {
+      "method": "marketplace/add",
+      "experimental": false
+    },
+    {
+      "method": "marketplace/remove",
+      "experimental": false
+    },
+    {
+      "method": "marketplace/upgrade",
+      "experimental": false
+    },
+    {
+      "method": "plugin/list",
+      "experimental": false
+    },
+    {
+      "method": "plugin/search",
+      "experimental": true
+    },
+    {
+      "method": "plugin/installed",
+      "experimental": false
+    },
+    {
+      "method": "plugin/reconcile",
+      "experimental": false
+    },
+    {
+      "method": "plugin/read",
+      "experimental": false
+    },
+    {
+      "method": "plugin/skill/read",
+      "experimental": false
+    },
+    {
+      "method": "plugin/share/save",
+      "experimental": false
+    },
+    {
+      "method": "plugin/share/updateTargets",
+      "experimental": false
+    },
+    {
+      "method": "plugin/share/list",
+      "experimental": false
+    },
+    {
+      "method": "plugin/share/checkout",
+      "experimental": false
+    },
+    {
+      "method": "plugin/share/delete",
+      "experimental": false
+    },
+    {
+      "method": "app/read",
+      "experimental": false
+    },
+    {
+      "method": "app/list",
+      "experimental": false
+    },
+    {
+      "method": "app/installed",
+      "experimental": false
+    },
+    {
+      "method": "fs/readFile",
+      "experimental": false
+    },
+    {
+      "method": "fs/writeFile",
+      "experimental": false
+    },
+    {
+      "method": "fs/createDirectory",
+      "experimental": false
+    },
+    {
+      "method": "fs/getMetadata",
+      "experimental": false
+    },
+    {
+      "method": "fs/readDirectory",
+      "experimental": false
+    },
+    {
+      "method": "fs/remove",
+      "experimental": false
+    },
+    {
+      "method": "fs/copy",
+      "experimental": false
+    },
+    {
+      "method": "fs/watch",
+      "experimental": false
+    },
+    {
+      "method": "fs/unwatch",
+      "experimental": false
+    },
+    {
+      "method": "skills/config/write",
+      "experimental": false
+    },
+    {
+      "method": "plugin/install",
+      "experimental": false
+    },
+    {
+      "method": "plugin/uninstall",
+      "experimental": false
+    },
+    {
+      "method": "turn/start",
+      "experimental": false
+    },
+    {
+      "method": "turn/settings/update",
+      "experimental": true
+    },
+    {
+      "method": "turn/steer",
+      "experimental": false
+    },
+    {
+      "method": "turn/interrupt",
+      "experimental": false
+    },
+    {
+      "method": "thread/realtime/start",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/appendAudio",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/appendText",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/appendSpeech",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/stop",
+      "experimental": true
+    },
+    {
+      "method": "thread/timeline/list",
+      "experimental": true
+    },
+    {
+      "method": "thread/realtime/listVoices",
+      "experimental": true
+    },
+    {
+      "method": "review/start",
+      "experimental": false
+    },
+    {
+      "method": "model/list",
+      "experimental": false
+    },
+    {
+      "method": "account/gatewayOAuth/read",
+      "experimental": false
+    },
+    {
+      "method": "account/gatewayOAuth/login",
+      "experimental": false
+    },
+    {
+      "method": "account/gatewayOAuth/cancel",
+      "experimental": false
+    },
+    {
+      "method": "modelProvider/capabilities/read",
+      "experimental": false
+    },
+    {
+      "method": "experimentalFeature/list",
+      "experimental": false
+    },
+    {
+      "method": "permissionProfile/list",
+      "experimental": false
+    },
+    {
+      "method": "experimentalFeature/enablement/set",
+      "experimental": false
+    },
+    {
+      "method": "remoteControl/enable",
+      "experimental": true
+    },
+    {
+      "method": "remoteControl/disable",
+      "experimental": true
+    },
+    {
+      "method": "remoteControl/status/read",
+      "experimental": true
+    },
+    {
+      "method": "remoteControl/pairing/start",
+      "experimental": true
+    },
+    {
+      "method": "remoteControl/pairing/status",
+      "experimental": true
+    },
+    {
+      "method": "remoteControl/client/list",
+      "experimental": true
+    },
+    {
+      "method": "remoteControl/client/revoke",
+      "experimental": true
+    },
+    {
+      "method": "collaborationMode/list",
+      "experimental": true
+    },
+    {
+      "method": "mock/experimentalMethod",
+      "experimental": true
+    },
+    {
+      "method": "environment/add",
+      "experimental": true
+    },
+    {
+      "method": "environment/info",
+      "experimental": true
+    },
+    {
+      "method": "environment/status",
+      "experimental": true
+    },
+    {
+      "method": "mcpServer/oauth/login",
+      "experimental": false
+    },
+    {
+      "method": "config/mcpServer/reload",
+      "experimental": false
+    },
+    {
+      "method": "mcpServerStatus/list",
+      "experimental": false
+    },
+    {
+      "method": "mcpServer/resource/read",
+      "experimental": false
+    },
+    {
+      "method": "mcpServer/event/stream/start",
+      "experimental": true
+    },
+    {
+      "method": "mcpServer/event/stream/stop",
+      "experimental": true
+    },
+    {
+      "method": "mcpServer/tool/call",
+      "experimental": false
+    },
+    {
+      "method": "windowsSandbox/setupStart",
+      "experimental": false
+    },
+    {
+      "method": "windowsSandbox/readiness",
+      "experimental": false
+    },
+    {
+      "method": "account/login/start",
+      "experimental": false
+    },
+    {
+      "method": "account/bedrock/discover",
+      "experimental": true
+    },
+    {
+      "method": "account/bedrock/setup",
+      "experimental": true
+    },
+    {
+      "method": "account/bedrock/checkGovCloudRequirements",
+      "experimental": true
+    },
+    {
+      "method": "account/login/cancel",
+      "experimental": false
+    },
+    {
+      "method": "account/logout",
+      "experimental": false
+    },
+    {
+      "method": "account/rateLimits/read",
+      "experimental": false
+    },
+    {
+      "method": "account/rateLimitResetCredit/consume",
+      "experimental": false
+    },
+    {
+      "method": "account/usage/read",
+      "experimental": false
+    },
+    {
+      "method": "account/workspaceMessages/read",
+      "experimental": false
+    },
+    {
+      "method": "account/sendAddCreditsNudgeEmail",
+      "experimental": false
+    },
+    {
+      "method": "feedback/upload",
+      "experimental": false
+    },
+    {
+      "method": "command/exec",
+      "experimental": false
+    },
+    {
+      "method": "command/exec/write",
+      "experimental": false
+    },
+    {
+      "method": "command/exec/terminate",
+      "experimental": false
+    },
+    {
+      "method": "command/exec/resize",
+      "experimental": false
+    },
+    {
+      "method": "process/spawn",
+      "experimental": true
+    },
+    {
+      "method": "process/writeStdin",
+      "experimental": true
+    },
+    {
+      "method": "process/kill",
+      "experimental": true
+    },
+    {
+      "method": "process/resizePty",
+      "experimental": true
+    },
+    {
+      "method": "config/read",
+      "experimental": false
+    },
+    {
+      "method": "externalAgentConfig/detect",
+      "experimental": false
+    },
+    {
+      "method": "externalAgentConfig/import",
+      "experimental": false
+    },
+    {
+      "method": "externalAgentConfig/import/recordHistory",
+      "experimental": false
+    },
+    {
+      "method": "externalAgentConfig/import/readHistories",
+      "experimental": false
+    },
+    {
+      "method": "config/value/write",
+      "experimental": false
+    },
+    {
+      "method": "config/batchWrite",
+      "experimental": false
+    },
+    {
+      "method": "configRequirements/read",
+      "experimental": false
+    },
+    {
+      "method": "account/read",
+      "experimental": false
+    },
+    {
+      "method": "getConversationSummary",
+      "experimental": false
+    },
+    {
+      "method": "gitDiffToRemote",
+      "experimental": false
+    },
+    {
+      "method": "getAuthStatus",
+      "experimental": false
+    },
+    {
+      "method": "fuzzyFileSearch",
+      "experimental": false
+    },
+    {
+      "method": "fuzzyFileSearch/sessionStart",
+      "experimental": true
+    },
+    {
+      "method": "fuzzyFileSearch/sessionUpdate",
+      "experimental": true
+    },
+    {
+      "method": "fuzzyFileSearch/sessionStop",
+      "experimental": true
+    }
+  ],
+  "wireKeys": {
+    "agentMessage": {
+      "phase": "stage"
+    }
+  }
+}

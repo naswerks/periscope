@@ -2,6 +2,7 @@
 export type {
   ActivityKind,
   AgedEntry,
+  AgentEventName,
   CauseEvent,
   CauseKind,
   ControlEventName,
@@ -22,6 +23,7 @@ export type {
 } from './model.js';
 export {
   ACTIVITY_KINDS,
+  AGENT_EVENTS,
   CAUSE_KINDS,
   CONTROL_EVENTS,
   CONTROL_TIER_LEVELS,

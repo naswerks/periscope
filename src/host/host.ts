@@ -42,6 +42,7 @@ import type { LinkTransition } from '../control/link-state.js';
 import { hostAgentProblem, hostAgentsProblem, hostEndpointsProblem } from '../control/codec.js';
 import type {
   HostAgent,
+  HostAgentEntry,
   HostConfiguration,
   HostConfigure,
   HostConfigureEntry,
@@ -83,9 +84,16 @@ import {
   repositoryReadResult,
   stateTransitionUpdate,
   workspaceReadResult,
+  DEFAULT_RUNTIME,
+  MAX_AGENT_CATALOG_BYTES,
 } from '../control/frames.js';
 import type { FrameSink } from '../control/stream.js';
-import { forwardSession } from '../control/stream.js';
+import { forwardNativeSession, forwardSession } from '../control/stream.js';
+import { CODEX_PINNED_VERSION } from './codex-binary.js';
+import type { CodexRuntimeConfig } from './codex-process.js';
+import type { CodexRuntimeRead } from './codex-runtime.js';
+import { CODEX_MESSAGE_BINDING, codexNativeRuntime, unavailableCodexEntry } from './codex-runtime.js';
+import type { CodexMessage } from './codex-wire.js';
 import type { Decider } from '../gate/decision.js';
 import type { LocalGate } from '../gate/local.js';
 import type { ToolFamilies } from '../gate/local.js';
@@ -97,7 +105,7 @@ import type { McpServerOptions } from '../mcp/server.js';
 import type { SessionRequest } from '../sessions/registry.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { factLiftFor } from '../sessions/fact-lift.js';
-import { controlTierFor, runtimeOf } from '../sessions/runtimes.js';
+import { CODEX_RUNTIME, controlTierFor, runtimeOf } from '../sessions/runtimes.js';
 import type { HostedSession, SessionDegrade, Unsubscribe } from '../sessions/session.js';
 import { SessionStateMachine } from '../state/machine.js';
 import type { SessionTransition, TransitionWhere } from '../state/model.js';
@@ -278,6 +286,12 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   const runtime = runtimeOf(options.request);
   const observer = new SessionObserver(machine, { controlTier: controlTierFor(runtime) });
 
+  // A runtime driven by a process of its own (Codex) has no SDK hooks to register, no in-process gate
+  // and its own messages: it is started bare and forwarded through its own binding.
+  if (runtime === CODEX_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
+    return composeCodexSession(options, machine, observer, clock);
+  }
+
   // The gate records every outcome on the machine. That emission is what makes a deny, an outage and
   // an expiry visible off-box at all, so it is unconditional and the embedder's listener is extra.
   const gate = permissionHooks({
@@ -342,6 +356,34 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   observer.created(`a session was requested in ${options.cwd}`);
 
   return ok({ sessionKey: options.sessionKey, session, machine, observer, detach });
+}
+
+/** `composeSession` for a session on Codex: no hooks, no in-process gate, Codex's own forwarding. */
+function composeCodexSession(
+  options: ComposeSessionOptions,
+  machine: SessionStateMachine,
+  observer: SessionObserver,
+  clock: Clock,
+): Result<ComposedSession> {
+  const created = options.registry.create({ ...(options.request ?? {}), cwd: options.cwd });
+  if (!created.ok) return refuse<ComposedSession>(created.refusal.reason, created.refusal.detail);
+  // The registry started this session on Codex's own process, so its messages are Codex's.
+  const session = created.value as unknown as HostedSession<CodexMessage>;
+  const lift = factLiftFor<CodexMessage>(CODEX_RUNTIME);
+  const detach = forwardNativeSession(
+    {
+      sessionKey: options.sessionKey,
+      session,
+      observer,
+      sink: options.sink,
+      clock,
+      ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
+      ...(lift === null ? {} : { lift }),
+    },
+    CODEX_MESSAGE_BINDING,
+  );
+  observer.created(`a session was requested in ${options.cwd}`);
+  return ok({ sessionKey: options.sessionKey, session: created.value, machine, observer, detach });
 }
 
 /**
@@ -588,6 +630,17 @@ export interface PeriscopeHostOptions {
    * never a failed start. Omitted, the hello carries no `agent` and the link starts at once.
    */
   readonly agentCatalog?: () => Promise<AgentCatalog>;
+  /**
+   * Codex, offered beside Claude: how a Codex session's app-server is started, and the read at start
+   * that decides its entry in the hello (`readCodexRuntime`). The host builds its registry with
+   * Codex's own process when it builds one; an embedder passing its own `registry` gives it the
+   * runtime itself. Omitted, the hello lists Claude alone and a session naming `codex` is refused
+   * `runtime-unavailable`. The daemon composes it from its two config keys; it is not an embedder's
+   * option until Codex runs under the gate.
+   *
+   * @internal
+   */
+  readonly codex?: PeriscopeCodexOptions;
   readonly registry?: SessionRegistry;
   /** How the link is built. Defaults to the real `ControllerLink`. See `HostLink`. */
   readonly link?: (handlers: LinkHandlers) => HostLink;
@@ -598,6 +651,18 @@ export interface PeriscopeHostOptions {
   readonly ticker?: Ticker;
   /** Every named thing that happened. A host with no reporter is a host nobody can debug. */
   readonly report?: (event: HostEvent) => void;
+}
+
+/**
+ * Codex, as a host offers it.
+ *
+ * @internal
+ */
+export interface PeriscopeCodexOptions {
+  /** The binary, the home and the seams a session's app-server starts with. */
+  readonly runtime: CodexRuntimeConfig;
+  /** The read at start; the binary composes `readCodexRuntime` over the same binary and home. */
+  readonly read: () => Promise<CodexRuntimeRead>;
 }
 
 /** What a host reports. Data rather than log lines, so an embedder decides the format. */
@@ -630,7 +695,18 @@ export type HostEvent =
    * What the catalog read at start produced: the catalog the hello now carries, or null and what
    * went wrong. Once per start, on a host composed with `agentCatalog`.
    */
-  | { readonly kind: 'agent-catalog'; readonly agent: HostAgent | null; readonly detail: string | null };
+  | { readonly kind: 'agent-catalog'; readonly agent: HostAgent | null; readonly detail: string | null }
+  /**
+   * What the read at start found for a runtime beside Claude: the entry the hello lists for it, and
+   * what is wrong with it, if anything (unavailable, no catalog, or models left out of the hello to
+   * keep the runtimes list within its bound). Once per start, and once more when the list is fitted.
+   */
+  | {
+      readonly kind: 'runtime-catalog';
+      readonly runtime: string;
+      readonly entry: HostAgentEntry;
+      readonly detail: string | null;
+    };
 
 /**
  * How many turns may wait for one still-opening session before the rest are refused.
@@ -763,6 +839,14 @@ export class PeriscopeHost {
   readonly #endpointOf = new Map<string, ModelEndpoint>();
   /** The start whose catalog read is in flight; `stop()` clears it, so that read starts nothing. */
   #pendingStart: object | null = null;
+  /** Codex's entry as its read at start left it; undefined on a host that does not offer Codex. */
+  #codexEntry: HostAgentEntry | undefined;
+  /**
+   * The entries the hello lists after Claude's, fitted to the runtimes list's bound with Claude's
+   * first: an entry that would push the list past it rides with no models, so one runtime's catalog
+   * can never cost another's.
+   */
+  #otherEntries: readonly HostAgentEntry[] = [];
 
   constructor(options: PeriscopeHostOptions) {
     this.#options = options;
@@ -800,6 +884,9 @@ export class PeriscopeHost {
         homeDir: options.homeDir ?? '',
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
+        ...(options.codex === undefined
+          ? {}
+          : { runtimes: { [CODEX_RUNTIME]: codexNativeRuntime(options.codex.runtime) } }),
       });
 
     const handlers: LinkHandlers = {
@@ -862,16 +949,29 @@ export class PeriscopeHost {
    */
   start(): void {
     const readCatalog = this.#options.agentCatalog;
-    if (readCatalog === undefined) {
+    const readCodex = this.#options.codex?.read;
+    if (readCatalog === undefined && readCodex === undefined) {
       this.#link.start();
       return;
     }
     const pending = {};
     this.#pendingStart = pending;
-    void settledCatalog(readCatalog).then((catalog) => {
+    void Promise.all([
+      readCatalog === undefined ? Promise.resolve(undefined) : settledCatalog(readCatalog),
+      readCodex === undefined ? Promise.resolve(undefined) : settledCodexRead(readCodex),
+    ]).then(([catalog, codex]) => {
       if (this.#pendingStart !== pending) return;
       this.#pendingStart = null;
-      this.#stampAgent(catalog);
+      if (codex !== undefined) {
+        this.#codexEntry = codex.entry;
+        this.#report({
+          kind: 'runtime-catalog',
+          runtime: CODEX_RUNTIME,
+          entry: codex.entry,
+          detail: codex.detail,
+        });
+      }
+      if (catalog !== undefined) this.#stampAgent(catalog);
       this.#link.start();
     });
   }
@@ -946,7 +1046,12 @@ export class PeriscopeHost {
         // that refusal, like any other for a handle this host does not hold, is reported here only.
         const composed = this.session(frame.sessionId);
         if (!composed.ok) return this.#refuse(frame.sessionId, composed.refusal);
-        const change = readSessionConfigure(payload);
+        const runtime = composed.value.session.runtime;
+        const vocabulary =
+          runtime === DEFAULT_RUNTIME
+            ? null
+            : (this.#offeredRuntimes().find((entry) => entry.runtime === runtime)?.vocabularies ?? null);
+        const change = readSessionConfigure(payload, vocabulary);
         if (!change.ok) return this.#refuseConfigure(frame.sessionId, composed.value, change.refusal);
         // A session on an endpoint keeps the open's model rule for its whole life: a switch to a model
         // the endpoint must not be sent is refused here, before the agent hears of it.
@@ -1165,6 +1270,7 @@ export class PeriscopeHost {
       this.#options.extraEnvFloor,
       this.#options.controllerEnvKeys,
       this.#options.endpoints,
+      this.#offeredRuntimes(),
     );
     if (!requested.ok) return this.#refuseOpen(sessionKey, null, requested.refusal);
 
@@ -1974,6 +2080,7 @@ export class PeriscopeHost {
       ? (hostAgentProblem(catalog.agent) ?? hostAgentsProblem(hostAgentEntries(catalog.agent)))
       : catalog.detail;
     this.#agent = catalog.ok && problem === null ? catalog.agent : null;
+    this.#otherEntries = this.#agent === null ? [] : this.#fittedOthers(hostAgentEntries(this.#agent));
     this.#configuration = this.#withAgent(this.#configuration);
     this.#link.announce?.(this.#linkCapabilities, this.#configuration, this.#pendingRestart);
     this.#report({ kind: 'agent-catalog', agent: this.#agent, detail: problem });
@@ -1983,13 +2090,46 @@ export class PeriscopeHost {
    * The configuration with the catalog and the runtimes list it yields, both from `#agent`, and the
    * endpoints, which ride whatever the catalog read did.
    */
+  /**
+   * The entries after Claude's that fit the runtimes list's bound, each whole where it fits and with no
+   * models where it does not, each trim reported by name. Claude's are checked first and alone, so
+   * they are never what a later runtime's catalog pushes out.
+   */
+  #fittedOthers(first: readonly HostAgentEntry[]): HostAgentEntry[] {
+    const fitted: HostAgentEntry[] = [];
+    for (const entry of this.#codexEntry === undefined ? [] : [this.#codexEntry]) {
+      if (hostAgentsProblem([...first, ...fitted, entry]) === null) {
+        fitted.push(entry);
+        continue;
+      }
+      const trimmed: HostAgentEntry = { ...entry, models: [] };
+      const problem = hostAgentsProblem([...first, ...fitted, trimmed]);
+      if (problem === null) fitted.push(trimmed);
+      this.#report({
+        kind: 'runtime-catalog',
+        runtime: entry.runtime,
+        entry: trimmed,
+        detail:
+          problem === null
+            ? `its ${entry.models.length} model(s) were left out of the hello: the runtimes list would pass its ${MAX_AGENT_CATALOG_BYTES} bytes`
+            : `it was left out of the hello: ${problem}`,
+      });
+    }
+    return fitted;
+  }
+
+  /** The entries a session may name a runtime from, beside Claude: what this host offers, whole. */
+  #offeredRuntimes(): readonly HostAgentEntry[] {
+    return this.#codexEntry === undefined ? [] : [this.#codexEntry];
+  }
+
   #withAgent(configuration: HostConfiguration): HostConfiguration {
     const endpoints = this.#hostEndpoints === null ? {} : { endpoints: this.#hostEndpoints };
     if (this.#agent === undefined) return { ...configuration, ...endpoints };
     return {
       ...configuration,
       agent: this.#agent,
-      agents: this.#agent === null ? null : hostAgentEntries(this.#agent),
+      agents: this.#agent === null ? null : [...hostAgentEntries(this.#agent), ...this.#otherEntries],
       ...endpoints,
     };
   }
@@ -2224,6 +2364,16 @@ function describe(error: unknown): string {
 }
 
 /** An embedder's catalog read, settled: a read that throws or rejects is a failed reading, never a lost start. */
+/** The Codex read, settled: a read that throws is reported as an unavailable runtime, never a failed start. */
+async function settledCodexRead(read: () => Promise<CodexRuntimeRead>): Promise<CodexRuntimeRead> {
+  try {
+    return await read();
+  } catch (error) {
+    const reason = `the Codex runtime could not be read: ${describe(error)}`;
+    return { entry: unavailableCodexEntry(CODEX_PINNED_VERSION, reason), detail: reason };
+  }
+}
+
 async function settledCatalog(read: () => Promise<AgentCatalog>): Promise<AgentCatalog> {
   try {
     return await read();

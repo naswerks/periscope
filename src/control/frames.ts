@@ -35,7 +35,7 @@ import type { ControlTier, SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -45,22 +45,20 @@ export const PROTOCOL_VERSION = 15;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 15 adds the `agent_facts` update body (the facts a controller acts on, lifted out of the
- * agent's own messages into typed members), the `agent_fragment` delta body, and `runtime` on
- * `agent_message`. It also adds `agents` and `endpoints` to the hello's configuration (each runtime
- * this host can spawn, with its vocabularies and control tier, and each model endpoint its operator
- * declared), `runtime` and `endpoint` on `session_new.request`, `controlTier` on a session's first
- * transition into `ready`, `toolKind` and `runtime` on the decision request, five refusal reasons for
- * the runtime and endpoint a session names, and `settings-route-refused` for a repository's settings
- * file that names a key beneath the env floor. Each is a new body, an optional member or a reason.
- * Five of the reasons answer only a member a version-14 controller never sends; the sixth answers a
- * repository's file, and reaches such a controller as a reason it reads tolerantly, as it reads any
- * reason it does not know. So a version-14 controller is still spoken to: it reads the new bodies and
- * members as open JSON it may ignore, and every frame it sends decodes here unchanged. The narrowing of `session_new.request.env` that version 14 made (a key a
+ * Version 16 adds the `agent-event` cause kind, whose events are a runtime's own notifications named
+ * `{runtime}:{native name}` (`AGENT_EVENTS`); `codex` as a runtime a hello may list and a session may
+ * name, whose forwarded messages are its own JSON-RPC traffic with `runtime: "codex"`; the
+ * `runtime-default` system-prompt preset, which every runtime reads as its own base instructions with
+ * an append; and five refusal reasons for a runtime's stdio JSON-RPC peer (`rpc-line-malformed`,
+ * `rpc-line-too-large`, `rpc-request-timed-out`, `rpc-request-failed`, `rpc-server-overloaded`). A
+ * transition's cause is carried unnarrowed, a runtime is a word, the preset is a value of a member
+ * that already carries any JSON, and a reason a controller does not know is read tolerantly. So a
+ * version-15 controller is still spoken to: what it sends decodes here unchanged, and what it receives
+ * decodes on its side. The narrowing of `session_new.request.env` that version 14 made (a key a
  * controller places in the spawn environment must be one this host's operator declared, above the
  * floor) holds at every version this host negotiates.
  */
-export const PROTOCOL_VERSION_MIN = 14;
+export const PROTOCOL_VERSION_MIN = 15;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {

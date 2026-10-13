@@ -17,6 +17,7 @@
 import type { HostConfigureEntry } from '../control/frames.js';
 import { isAbsolutePath, normalizePath } from '../core/paths.js';
 import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
+import { isBatchFile } from '../host/stdio-rpc.js';
 import { MAX_PLUGIN_DIRS } from '../control/frames.js';
 import { EXTRA_ENV_FLOOR, envFloorEntryCovers } from '../sessions/spawn-env.js';
 import type { Result } from '../core/result.js';
@@ -101,7 +102,13 @@ export function configValueProblem(key: string, value: string): string | null {
     case 'PERISCOPE_REPOSITORY_ROOT':
     case 'PERISCOPE_AGENT_HOME':
     case 'PERISCOPE_MODEL_ENDPOINTS':
+    case 'PERISCOPE_CODEX_HOME':
       return isAbsolutePath(value) ? null : `${key} must be an absolute path — got '${value}'`;
+    case 'PERISCOPE_CODEX_BIN':
+      if (!isAbsolutePath(value)) return `${key} must be an absolute path — got '${value}'`;
+      return isBatchFile(value)
+        ? `${key} names a batch file, which runs only through a shell; name codex.exe, or the npm launcher codex.js — got '${value}'`
+        : null;
     case 'PERISCOPE_BRANCH_SCHEME':
       return value.includes('{key}')
         ? null

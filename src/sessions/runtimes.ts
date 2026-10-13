@@ -13,11 +13,17 @@ import type { EndpointWireApi } from '../control/frames.js';
 import { DEFAULT_RUNTIME } from '../control/frames.js';
 import type { ControlTier } from '../state/model.js';
 
+/** Codex's name on the wire: the runtime this host drives through `codex app-server`. */
+export const CODEX_RUNTIME = 'codex';
+
 /** The control tier a session starts at, per runtime, keyed by the runtime's name. */
 export const CONTROL_TIERS = {
   // Every tool call reaches the `PreToolUse` gate before it runs, under every permission mode, and
   // the gate's answer holds: no path falls below it.
   [DEFAULT_RUNTIME]: { level: 'intercepted', degrades: [] },
+  // Nothing decides a Codex tool call before it runs: the session is observed and driven, and every
+  // approval Codex asks for is answered no.
+  [CODEX_RUNTIME]: { level: 'none', degrades: [] },
 } as const satisfies Readonly<Record<string, ControlTier>>;
 
 /**
@@ -27,7 +33,16 @@ export const CONTROL_TIERS = {
 export const RUNTIME_WIRE_APIS = {
   // Claude Code calls its model through Anthropic's Messages API, whichever server answers it.
   [DEFAULT_RUNTIME]: ['anthropic-messages'],
+  // Codex calls its model through OpenAI's Responses API only.
+  [CODEX_RUNTIME]: ['openai-responses'],
 } as const satisfies Readonly<Record<keyof typeof CONTROL_TIERS, readonly EndpointWireApi[]>>;
+
+/**
+ * The runtimes a model endpoint may name: the ones this host builds an endpoint's route for. A runtime
+ * this host spawns with no route built yet is absent, so an endpoints file that names it is refused at
+ * start and the hello never offers an endpoint no session on that runtime could use.
+ */
+export const ENDPOINT_ROUTED_RUNTIMES: readonly string[] = [DEFAULT_RUNTIME];
 
 /** The wire APIs `runtime` speaks; empty for a runtime this host does not spawn. */
 export function wireApisFor(runtime: string): readonly EndpointWireApi[] {

@@ -30,7 +30,7 @@ import {
 import { hostEndpointsProblem } from '../control/codec.js';
 import { isAbsolutePath } from '../core/paths.js';
 import { STRIPPED_HOST_SESSION_KEYS } from '../sessions/spawn-env.js';
-import { spawnableRuntimes, wireApisFor } from '../sessions/runtimes.js';
+import { ENDPOINT_ROUTED_RUNTIMES, wireApisFor } from '../sessions/runtimes.js';
 
 /** The model tiers an endpoint may map to its own ids, each read by the agent CLI from one variable. */
 export const MODEL_ALIAS_TIERS = ['opus', 'sonnet', 'haiku', 'fable'] as const;
@@ -276,7 +276,7 @@ function declaredEndpoint(
   ) {
     return `${the} needs a non-empty "runtimes" list of runtime names`;
   }
-  const spawnable = spawnableRuntimes();
+  const spawnable = ENDPOINT_ROUTED_RUNTIMES;
   for (const runtime of runtimes) {
     if (!spawnable.includes(runtime)) {
       return `${the} names the runtime ${JSON.stringify(runtime)}, which this host cannot spawn — it spawns ${spawnable.join(', ')}`;

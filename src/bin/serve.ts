@@ -46,6 +46,9 @@ import { SessionRegistry } from '../sessions/registry.js';
 import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import { readConfigFile } from '../host/config-file.js';
 import { readModelEndpoints } from '../host/model-endpoints.js';
+import type { CodexRuntimeRead, ReadCodexRuntimeOptions } from '../host/codex-runtime.js';
+import { codexNativeRuntime, readCodexRuntime } from '../host/codex-runtime.js';
+import { CODEX_RUNTIME } from '../sessions/runtimes.js';
 import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
 import { MAX_PLUGIN_DIRS } from '../control/frames.js';
 import { writeLinkState } from '../host/link-state-file.js';
@@ -115,6 +118,8 @@ export interface ServeDeps {
    * hello carries no catalog and no agent is started to read one.
    */
   readonly readAgentCatalog?: (options: AgentCatalogOptions) => Promise<AgentCatalog>;
+  /** Reads the Codex runtime at start, when one is configured. Defaults to the real read. */
+  readonly readCodexRuntime?: (options: ReadCodexRuntimeOptions) => Promise<CodexRuntimeRead>;
 }
 
 export type ServeOutcome =
@@ -147,6 +152,8 @@ interface Config {
   readonly controllerEnvKeys: readonly string[];
   /** The file of model endpoints the operator declares. Null = none. */
   readonly modelEndpoints: string | null;
+  /** The Codex binary and its runner-owned home; both, or neither. Null = Codex is not offered. */
+  readonly codex: { readonly binary: string; readonly home: string } | null;
 }
 
 function readConfig(env: NodeJS.ProcessEnv): Config | string {
@@ -193,6 +200,23 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     if (problem !== null) return problem;
   }
 
+  // Codex is offered only with both: a binary with no home would run from the operator's own, and a
+  // home with no binary offers nothing to run. Each is an absolute path, and the binary no batch file.
+  const codexBinary = nonEmpty(env['PERISCOPE_CODEX_BIN']);
+  const codexHome = nonEmpty(env['PERISCOPE_CODEX_HOME']);
+  if ((codexBinary === null) !== (codexHome === null)) {
+    return codexBinary === null
+      ? 'PERISCOPE_CODEX_HOME is set without PERISCOPE_CODEX_BIN: Codex is offered with both or neither'
+      : "PERISCOPE_CODEX_BIN is set without PERISCOPE_CODEX_HOME: Codex is offered with both or neither, and never from the operator's own home";
+  }
+  for (const [key, value] of [
+    ['PERISCOPE_CODEX_BIN', codexBinary],
+    ['PERISCOPE_CODEX_HOME', codexHome],
+  ] as const) {
+    const problem = value === null ? null : configValueProblem(key, value);
+    if (problem !== null) return problem;
+  }
+
   const configuredHostId = env['PERISCOPE_HOST_ID'];
   return {
     controllerUrl,
@@ -211,7 +235,12 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     pluginDirs: env['PERISCOPE_PLUGIN_DIRS'] ?? null,
     controllerEnvKeys: parseControllerEnvKeys(controllerEnvKeys),
     modelEndpoints: modelEndpoints === undefined || modelEndpoints === '' ? null : modelEndpoints,
+    codex: codexBinary === null || codexHome === null ? null : { binary: codexBinary, home: codexHome },
   };
+}
+
+function nonEmpty(value: string | undefined): string | null {
+  return value === undefined || value === '' ? null : value;
 }
 
 /** One trace line: `<clock> [channel] message — detail`. */
@@ -500,6 +529,25 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     readCatalog === undefined
       ? undefined
       : () => readCatalog({ env: composeSpawnEnv(raw), cwd: homeDir, timeoutMs: AGENT_CATALOG_TIMEOUT_MS });
+  // Codex, read the way a session starts it: the same filtered environment, the runner-owned home.
+  const codexConfigured = config.codex;
+  const codex =
+    codexConfigured === null
+      ? null
+      : {
+          runtime: {
+            binary: codexConfigured.binary,
+            home: codexConfigured.home,
+            clientVersion: packageVersion(),
+          },
+          read: () =>
+            (deps.readCodexRuntime ?? readCodexRuntime)({
+              binary: codexConfigured.binary,
+              home: codexConfigured.home,
+              env: composeSpawnEnv(raw),
+              clientVersion: packageVersion(),
+            }),
+        };
 
   let linkStateProblemSaid = false;
   const onEvent = (event: HostEvent): void => {
@@ -588,6 +636,7 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     protectedPaths: credentialPaths(raw, {
       agentHome,
       ...(endpoints === null ? {} : { modelEndpointFiles: endpoints.files }),
+      ...(config.codex === null ? {} : { codexHome: config.codex.home }),
     }),
     // The home the shell check expands `~` and `$HOME` to, from the same environment as the set above.
     home: homeDirectory(raw),
@@ -639,9 +688,17 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     // the registry alone: the host refuses the two beside a registry, where nothing would read them.
     ...(deps.startProcess === undefined
       ? { baseEnv: raw, homeDir }
-      : { registry: new SessionRegistry({ baseEnv: raw, homeDir, startProcess: deps.startProcess }) }),
+      : {
+          registry: new SessionRegistry({
+            baseEnv: raw,
+            homeDir,
+            startProcess: deps.startProcess,
+            ...(codex === null ? {} : { runtimes: { [CODEX_RUNTIME]: codexNativeRuntime(codex.runtime) } }),
+          }),
+        }),
     ...(deps.link === undefined ? {} : { link: deps.link }),
     ...(agentCatalog === undefined ? {} : { agentCatalog }),
+    ...(codex === null ? {} : { codex }),
     report: onEvent,
   });
 
@@ -717,6 +774,15 @@ export function report(event: HostEvent, log: Logger): void {
               `${event.agent.models.length} model(s) in the hello`,
             null,
           );
+    case 'runtime-catalog':
+      // A runtime beside Claude, said once: what the hello lists for it, and what is wrong, if anything.
+      return log(
+        event.runtime,
+        event.entry.available
+          ? `${event.entry.runtime} ${event.entry.version}, ${event.entry.models.length} model(s) in the hello, control tier ${event.entry.controlTier.level}`
+          : `${event.entry.runtime} is listed unavailable`,
+        event.detail,
+      );
     default:
       return;
   }

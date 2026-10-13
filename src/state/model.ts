@@ -131,8 +131,20 @@ export function sameActivity(left: SessionActivity | null, right: SessionActivit
  * `detail` — free text a reader greps instead of a fact code branches on. Conflating an outage with
  * a deliberate "no" is the most expensive confusion a controller can make, so the two differ in
  * `kind` and in `event`, twice over, neither of them prose.
+ *
+ * `agent-event` is an event a runtime other than Claude reported in its own vocabulary, named
+ * `{runtime}:{native name}` (`AGENT_EVENTS`). A hook event such a runtime reports under Claude's own
+ * spelling keeps the kind `hook` and Claude's name.
  */
-export const CAUSE_KINDS = ['hook', 'sdk-message', 'control', 'timeout', 'process', 'refusal'] as const;
+export const CAUSE_KINDS = [
+  'hook',
+  'sdk-message',
+  'control',
+  'timeout',
+  'process',
+  'refusal',
+  'agent-event',
+] as const;
 
 export type CauseKind = (typeof CAUSE_KINDS)[number];
 
@@ -206,6 +218,51 @@ export const MESSAGE_EVENTS = [
 export type MessageEventName = (typeof MESSAGE_EVENTS)[number];
 
 /**
+ * The events a runtime other than Claude can move a session with, each `{runtime}:{native name}`:
+ * Codex's are its app-server notifications, `codex:{method}`. An item's kind rides a cause's
+ * `detail`, never its name.
+ *
+ * The set is a runtime's received notifications exactly: `pins/codex-coverage.test.ts` holds it equal
+ * to the wired rows of `CODEX_NOTIFICATION_COVERAGE`, in both directions, and holds every event the
+ * Codex observer emits to it.
+ */
+export const AGENT_EVENTS = [
+  'codex:error',
+  'codex:thread/started',
+  'codex:thread/status/changed',
+  'codex:thread/closed',
+  'codex:skills/changed',
+  'codex:thread/tokenUsage/updated',
+  'codex:turn/started',
+  'codex:hook/started',
+  'codex:turn/completed',
+  'codex:hook/completed',
+  'codex:turn/plan/updated',
+  'codex:item/started',
+  'codex:item/autoApprovalReview/started',
+  'codex:item/autoApprovalReview/completed',
+  'codex:item/completed',
+  'codex:item/agentMessage/delta',
+  'codex:item/commandExecution/terminalInteraction',
+  'codex:serverRequest/resolved',
+  'codex:mcpServer/startupStatus/updated',
+  'codex:account/updated',
+  'codex:account/rateLimits/updated',
+  'codex:item/reasoning/summaryTextDelta',
+  'codex:item/reasoning/textDelta',
+  'codex:model/rerouted',
+  'codex:modelProvider/authRecoveryStarted',
+  'codex:modelProvider/authRecoveryCompleted',
+  'codex:warning',
+  'codex:guardianWarning',
+  'codex:deprecationNotice',
+  'codex:configWarning',
+  'codex:windows/worldWritableWarning',
+] as const;
+
+export type AgentEventName = (typeof AGENT_EVENTS)[number];
+
+/**
  * Calls the host makes on itself or is asked to make. Not SDK events — decisions.
  *
  * `kind` and `event` are validated independently and never as a pair. `machine.ts`'s `nameable()`
@@ -267,11 +324,18 @@ export const HOOK_TIMEOUT_EVENT = 'hook_timed_out' satisfies TimeoutEventName;
  * compile — the strongest available form of "cause is not nullable".
  */
 export type CauseEvent =
-  HookEventName | MessageEventName | ControlEventName | ProcessEventName | TimeoutEventName | RefusalReason;
+  | HookEventName
+  | MessageEventName
+  | AgentEventName
+  | ControlEventName
+  | ProcessEventName
+  | TimeoutEventName
+  | RefusalReason;
 
 const CAUSE_EVENT_SET: ReadonlySet<string> = new Set<string>([
   ...HOOK_EVENTS,
   ...MESSAGE_EVENTS,
+  ...AGENT_EVENTS,
   ...CONTROL_EVENTS,
   ...PROCESS_EVENTS,
   ...TIMEOUT_EVENTS,

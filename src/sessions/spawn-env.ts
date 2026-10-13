@@ -53,6 +53,8 @@ export type EnvSource = Readonly<Record<string, string | undefined>>;
  * one, so each family is one pattern: every name the bundled CLI's own strings carry under
  * `ANTHROPIC_`, `CLAUDE_CODE_USE_`, `CLAUDE_CODE_SKIP_..._AUTH`, `CLAUDE_CODE_CLIENT_`, `SSL_CERT_` and
  * `_PROXY` is covered, and so is the next one it adds. Matched by upper-cased name, as Windows matches.
+ * Codex's are exact names: its home and state databases, its local-model route, its model route and
+ * identity, and the certificate authority it trusts.
  *
  * It screens the controller's lanes only. What a spawn inherits from this host's own environment is
  * the allow-list's business below, so a proxy or a certificate directory the operator set still
@@ -84,6 +86,18 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'SSL_CERT_*',
   // Every proxy, in either spelling.
   '*_PROXY',
+  // Codex's home and its state databases: where its sign-in, its trust records and its config live.
+  'CODEX_HOME',
+  'CODEX_SQLITE_HOME',
+  // Codex's local-model route.
+  'CODEX_OSS_BASE_URL',
+  'CODEX_OSS_PORT',
+  // Codex's model route and the identity it uses.
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'CODEX_ACCESS_TOKEN',
+  // The certificate authority Codex trusts.
+  'CODEX_CA_CERTIFICATE',
 ];
 
 /**

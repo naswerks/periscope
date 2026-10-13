@@ -8,6 +8,56 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+Protocol 16; the window is `[15, 16]`, so a version-15 controller is still spoken to. Version 16
+adds a runtime, a cause kind, a preset value and refusal reasons, no payload kind and no member: a
+version-15 controller reads a transition's cause unnarrowed, a runtime as a word, the preset as a
+value of a member that already carries any JSON, and a reason it does not know as such; every frame
+it sends decodes unchanged.
+
+- Added: Codex as a second runtime. With `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME` set, the
+  hello's `agents` lists Codex after Claude (its version, the models its app-server lists, the
+  permission modes `default`, `dontAsk` and `bypassPermissions`, its efforts, `thinking` when a
+  listed model takes `none`, and the control tier `none`), and a `session_new` naming
+  `runtime: "codex"` runs `codex app-server` over stdio in the session's directory. The binary is
+  pinned to Codex 0.162.1: another version, an absent binary or a home with no sign-in is listed
+  unavailable with its reason, and a session naming it is refused `runtime-unavailable`. A Codex
+  session's messages ride as its app-server sent them, with `runtime: "codex"`, the text deltas on
+  the delta lane, and its facts are lifted as Claude's are. Every approval it asks for is declined.
+- Added: the cause kind `agent-event`, whose events are a runtime's own notifications named
+  `{runtime}:{native name}` (`AGENT_EVENTS`, exported with `AgentEventName`). A Codex session moves
+  by them: `codex:thread/started` makes it `ready`, `codex:turn/started` and `codex:turn/completed`
+  bound a turn.
+- Added: the `runtime-default` preset for `session_new.request.systemPrompt`,
+  `{ type: 'preset', preset: 'runtime-default', append? }`: every runtime keeps its own base
+  instructions and adds the append (Claude's `claude_code` preset; Codex's developer instructions).
+- Added refusal reasons: `rpc-line-malformed`, `rpc-line-too-large`, `rpc-request-timed-out`,
+  `rpc-request-failed` and `rpc-server-overloaded`, for a runtime's JSON-RPC peer.
+- Added: `request-key-unsupported` is raised. A Codex session naming a member that is Claude's alone
+  (`settingSources`, `forwardSubagentText`, the `claude_code` preset) or a value Codex's vocabularies
+  lack is refused before anything is spawned, naming the member; one naming an endpoint is refused
+  `endpoint-unknown` or `endpoint-incompatible`. `plugins` and `mcpServers` are accepted on a Codex
+  session and held.
+- Added: `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME`, config-file keys never settable over the
+  link: both or neither, each absolute, and the binary not a batch file, or start is refused. The
+  host reads Codex once at start, bounded at 20 seconds, and prints one `[codex]` line.
+- Added: Codex's sign-in files (`auth.json`, `.credentials.json`) in the runner's Codex home and in
+  `~/.codex` join the protected set; `credentialPaths` takes `codexHome`.
+- Changed: `EXTRA_ENV_FLOOR` gains eight exact names: `CODEX_HOME`, `CODEX_SQLITE_HOME`,
+  `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_ACCESS_TOKEN`
+  and `CODEX_CA_CERTIFICATE`. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses start,
+  a `session_new` whose `env` names one refuses `env-key-refused`, and a repository settings file
+  whose `env` names one refuses `settings-route-refused`.
+- Changed: the hello's runtimes list places Claude's entry first, and a later entry that would push
+  the list past its byte budget rides with `models: []` and a `runtime-catalog` host event, so
+  another runtime's catalog never empties Claude's.
+- Changed: `HostedSession`, `FactLift`, `ForwardSessionOptions`, `SessionListener` and `factLiftFor`
+  take the runtime's message type as a parameter, `SDKMessage` by default, so a Claude embedder's code
+  is unchanged; each `FACT_LIFTS` entry is typed `FactLift<never>`, read through `factLiftFor`.
+  `SessionRequest.effort` is a runtime's own word (`string`); a Claude process refuses a word the SDK
+  does not declare. `SessionDegrade.kind` gains `runtime_degraded`, `HostEvent` gains
+  `runtime-catalog`, `CompactionReport` gains an optional `sourceId`, and `CONTROL_TIERS` and
+  `RUNTIME_WIRE_APIS` gain a `codex` row.
+
 ## [1.6.0] - 2026-10-11
 
 Protocol 15; the window is `[14, 15]`, so a version-14 controller is still spoken to. Version 15

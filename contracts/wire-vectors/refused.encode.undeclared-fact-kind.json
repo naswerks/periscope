@@ -23,6 +23,6 @@
     }
   },
   "name": "refused.encode.undeclared-fact-kind",
-  "protocolVersion": 15,
+  "protocolVersion": 16,
   "wire": null
 }

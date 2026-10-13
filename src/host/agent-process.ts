@@ -244,11 +244,16 @@ export interface AgentProcessRequest {
    * confirms this took effect. It ships unproven-by-report, and that is stated here rather than left
    * for someone to discover while trying to write the assertion.
    *
-   * Typed off the SDK's own option so it cannot drift from what `query()` accepts.
+   * Typed off the SDK's own option so it cannot drift from what `query()` accepts, beside the
+   * runtime-neutral preset (`RuntimeDefaultPrompt`), which this process reads as Claude's own preset
+   * with the same append.
    */
-  readonly systemPrompt: AgentSystemPrompt | null;
-  /** The effort level. `null` leaves the SDK's own default. */
-  readonly effort: EffortLevel | null;
+  readonly systemPrompt: SessionSystemPrompt | null;
+  /**
+   * The effort, in the runtime's own word. `null` leaves the runtime's own default. A Claude process
+   * takes the SDK's levels (`EffortLevel`) and refuses any other word by name.
+   */
+  readonly effort: string | null;
   /**
    * The permission mode. `null` leaves the SDK's default. Deliberately opened: see
    * `CLI_PARITY_OPTION_KEYS` for the reason stated as data, and `SHADOWING_LANES` for what stays
@@ -264,6 +269,54 @@ export interface AgentProcessRequest {
  * hand-copied union is a second copy that can disagree with the first.
  */
 export type AgentSystemPrompt = NonNullable<Options['systemPrompt']>;
+
+/**
+ * The instructions append in a form every runtime reads: the runtime keeps its own base instructions
+ * and adds `append` in its own lane. Claude reads it as its `claude_code` preset with the same append.
+ */
+export interface RuntimeDefaultPrompt {
+  readonly type: 'preset';
+  readonly preset: 'runtime-default';
+  readonly append?: string;
+}
+
+/** What a session request may name as its system prompt: the SDK's own forms, or the neutral preset. */
+export type SessionSystemPrompt = AgentSystemPrompt | RuntimeDefaultPrompt;
+
+/** Whether `prompt` is the runtime-neutral preset. */
+export function isRuntimeDefaultPrompt(prompt: unknown): prompt is RuntimeDefaultPrompt {
+  return (
+    typeof prompt === 'object' &&
+    prompt !== null &&
+    (prompt as { type?: unknown }).type === 'preset' &&
+    (prompt as { preset?: unknown }).preset === 'runtime-default'
+  );
+}
+
+/** The effort levels the SDK declares, as values. */
+const CLAUDE_EFFORT_LEVELS: readonly string[] = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] satisfies readonly EffortLevel[];
+
+/** `word` as one of the SDK's effort levels; any other word is refused by name, never passed on. */
+function claudeEffort(word: string): EffortLevel {
+  if (!CLAUDE_EFFORT_LEVELS.includes(word)) {
+    throw new Error(`effort is ${JSON.stringify(word)}; Claude takes ${CLAUDE_EFFORT_LEVELS.join(', ')}`);
+  }
+  return word as EffortLevel;
+}
+
+/** The system prompt as the SDK takes it: the neutral preset is Claude's own preset with its append. */
+function claudeSystemPrompt(prompt: SessionSystemPrompt): AgentSystemPrompt {
+  if (!isRuntimeDefaultPrompt(prompt)) return prompt;
+  return prompt.append === undefined
+    ? { type: 'preset', preset: 'claude_code' }
+    : { type: 'preset', preset: 'claude_code', append: prompt.append };
+}
 
 /** How many sent turns may wait for the agent to read them. Past it, `prompt()` says no. */
 export const MAX_PENDING_PROMPTS = 16;
@@ -480,8 +533,11 @@ export const CLI_PARITY_OPTION_KEYS = [
   'permissionMode',
 ] as const satisfies readonly (keyof AgentProcessRequest)[];
 
-/** A started agent process, in this package's terms. */
-export interface AgentProcess {
+/**
+ * A started agent process, in this package's terms. `M` is what its runtime emits: the SDK's messages
+ * for Claude, `CodexMessage` for Codex.
+ */
+export interface AgentProcess<M = SDKMessage> {
   /**
    * Everything the agent emits, in order. One consumer.
    *
@@ -500,7 +556,7 @@ export interface AgentProcess {
    * casting it; the point is that one file decides which of the SDK's controls this package
    * offers.
    */
-  readonly messages: AsyncGenerator<SDKMessage, void>;
+  readonly messages: AsyncGenerator<M, void>;
   /** Queue a turn. Returns false once the process is closed. */
   prompt(text: string): boolean;
   /** Stop the current turn in band, leaving the session alive. */
@@ -516,7 +572,8 @@ export interface AgentProcess {
   setModel(model: string | null): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   setThinking(thinking: ThinkingConfig): Promise<void>;
-  setEffort(level: EffortLevel): Promise<void>;
+  /** In the runtime's own word; a word the runtime does not take is refused by name. */
+  setEffort(level: string): Promise<void>;
   /**
    * The agent's initialize answer to whether every plugin it was started with loaded. Null when none
    * were listed, when there was no answer, or when the CLI predates the field. Claude Code 2.1.284
@@ -685,8 +742,8 @@ export function composeOptions(request: AgentProcessRequest): Options {
     // Omitted rather than passed as null when unset, like every other optional above: the SDK reads
     // an absent key as "use the default" and a present-but-null one as a value it must interpret.
     ...(request.model === null ? {} : { model: request.model }),
-    ...(request.systemPrompt === null ? {} : { systemPrompt: request.systemPrompt }),
-    ...(request.effort === null ? {} : { effort: request.effort }),
+    ...(request.systemPrompt === null ? {} : { systemPrompt: claudeSystemPrompt(request.systemPrompt) }),
+    ...(request.effort === null ? {} : { effort: claudeEffort(request.effort) }),
     ...(request.permissionMode === null ? {} : { permissionMode: request.permissionMode }),
     // The SDK enters bypass only with this flag set. Set exactly when bypass is the mode asked for:
     // it permits that mode and chooses nothing (see `CLI_PARITY_OPTION_KEYS`).
@@ -765,11 +822,12 @@ export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
       const control = thinkingControl(thinking);
       await running.setMaxThinkingTokens(control.cap, control.display);
     },
-    async setEffort(level: EffortLevel): Promise<void> {
+    async setEffort(level: string): Promise<void> {
       if (closed) return;
+      const checked = claudeEffort(level);
       // The flag-settings call carries permission rules and a mode among its keys. This literal has
       // the one key, and the permission pin allows this call only in this shape, in this file.
-      await running.applyFlagSettings({ effortLevel: level });
+      await running.applyFlagSettings({ effortLevel: checked });
     },
     async pluginsApplied(): Promise<boolean | null> {
       // The agent's own answer to its initialize request, cached by the SDK. Never a throw: a

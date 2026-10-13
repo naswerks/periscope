@@ -1,8 +1,10 @@
 # Security
 
-Periscope runs Claude Code sessions on your machine on behalf of a remote controller. That is a
-serious thing to install, and this document is written to be read _before_ you do. It states the
-posture, what each control covers, and what it does not.
+Periscope runs Claude Code sessions on your machine on behalf of a remote controller, and Codex
+sessions when you configure Codex. That is a serious thing to install, and this document is written
+to be read _before_ you do. It states the posture, what each control covers, and what it does not.
+Everything about the gate below is about Claude sessions; a Codex session runs with no gate, and
+[Codex sessions](#codex-sessions) says what holds instead.
 
 ## The permission model
 
@@ -246,6 +248,44 @@ Three settings files can change what the agent does, and the host treats each by
   before. Whether a reloaded `env` moves a running agent's model route is not documented and not
   measured.
 
+## Codex sessions
+
+Codex is offered only when you set `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME`
+([configuration](docs/configuration.md#codex)). A Codex session's control tier is `none`, and the hello
+says so: no `PreToolUse` gate sees its tool calls, so the local refusals above (the path jail, the
+credential set, the git verbs) and your controller's decisions do not apply to it. What holds
+instead:
+
+- **Codex's own sandbox and approval policy, from the session's permission mode.** `default` is
+  `on-request` approval in the `workspace-write` sandbox; `dontAsk` is `never` in `workspace-write`;
+  `bypassPermissions` is `never` with `danger-full-access`, no sandbox at all. No other mode is
+  accepted. The sandbox is Codex's; this package neither implements nor measures it.
+- **Every approval is declined.** A command or file change Codex asks to run is declined, a request
+  for wider permissions is granted nothing, a tool server's question is declined, and a question for
+  the user gets no answers. Nothing is ever granted for the rest of the session, and the host never
+  asks the app-server to run a command itself. The approvals reviewer is pinned to the user, so no
+  approval is handed to a reviewing agent; web search is off, because it runs at the provider where
+  nothing can see it; and Codex's hook layer is forced on.
+- **A home of the runner's own.** `CODEX_HOME` is `PERISCOPE_CODEX_HOME` for every Codex process, so
+  a session never runs from your own `~/.codex`, its sign-in or its history. The sign-in files in both
+  homes (`auth.json`, `.credentials.json`) are in the protected set, which binds Claude sessions and
+  the read doors. A Codex session's shell is not gated: it can read what this host's OS user can read
+  where its sandbox allows, the runner home's sign-in included.
+- **No project is trusted on your behalf.** The host sends no working directory on any thread or turn
+  request; the app-server's own working directory is the session's. Codex records a project as
+  trusted only when a thread request names a directory, so the host never writes a trust entry, and
+  the repository's own Codex layer (its `.codex/` configuration, hooks and exec policies) stays
+  disabled. Its `AGENTS.md` instructions still load, as they do for any project not marked untrusted.
+  The one residual: a trust entry already in the runner home's `config.toml` that covers the
+  session's repository opens that layer; keep the runner home's trust list empty.
+- **The model route and identity are beneath the floor.** `CODEX_HOME`, `CODEX_SQLITE_HOME`,
+  `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_ACCESS_TOKEN`
+  and `CODEX_CA_CERTIFICATE` are exact names in `EXTRA_ENV_FLOOR`, so no controller can move a Codex
+  session's home, model server, credential or certificate authority.
+- **A pinned binary.** The host runs one Codex release (`CODEX_PINNED_VERSION`), checks its
+  `--version` and the version its app-server reports, and lists any other version unavailable. It
+  never installs or updates Codex, and it never runs a batch file.
+
 ## The outbound-only posture
 
 There is no inbound port anywhere in this package. Periscope dials out to your controller over a
@@ -300,7 +340,8 @@ over the link and without a further credential:
   cannot write it over the link. Beneath the floor no declaration reaches: `PATH`, `NODE_OPTIONS`,
   `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`,
   `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
-  `ANTHROPIC_API_KEY`, and the families `ANTHROPIC_*` (the model endpoint, its tokens and headers,
+  `ANTHROPIC_API_KEY`, Codex's home, model route, credentials and certificate authority (the eight
+  names [Codex sessions](#codex-sessions) lists), and the families `ANTHROPIC_*` (the model endpoint, its tokens and headers,
   every provider's base URL), `CLAUDE_CODE_USE_*` (the provider switches),
   `CLAUDE_CODE_SKIP_*_AUTH`, `CLAUDE_CODE_CLIENT_*` (the client certificate), `SSL_CERT_*` and
   `*_PROXY` (`EXTRA_ENV_FLOOR`). So a controller cannot change which server the model call goes
@@ -341,6 +382,9 @@ over the link and without a further credential:
 - **Reconfigure the host.** The workspace root, the repository root, the branch scheme, the agent
   home, the plugin directories and the two controller URLs through `host_configure`, written to the
   config file; the URLs apply at the next start.
+- **Start a Codex session, where you configured Codex.** It runs with no gate, under Codex's sandbox
+  and approval policy for the permission mode the controller names, `bypassPermissions` (no sandbox)
+  included ([Codex sessions](#codex-sessions)).
 - **Start sessions** that run the agent with the interactive prompt replaced by the gate, and
   answer every permission decision those sessions raise; and **end** one it no longer needs
   (`session_end`): the agent's process exits, and its transcript stays where the agent CLI wrote it.
@@ -369,6 +413,7 @@ stops being true.
 | `@anthropic-ai/claude-agent-sdk` | **0.3.284**, pinned exactly, no caret                        |
 | Bundled Claude Code CLI          | **2.1.284**                                                  |
 | Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows |
+| Codex app-server                 | **0.162.1**, pinned; any other version is listed unavailable |
 
 The SDK is pre-1.0 and its surface moves without semver protection, so a SHA-256 of the installed
 type definitions is kept in `contracts/sdk.sha256` and a CI job fails on any drift between the installed

@@ -79,6 +79,6 @@
     }
   },
   "name": "refused.encode.undeclared-cost-basis",
-  "protocolVersion": 15,
+  "protocolVersion": 16,
   "wire": null
 }

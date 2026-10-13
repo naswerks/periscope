@@ -418,10 +418,11 @@ export const REFUSAL_REASONS = [
   //                             not know, or one its hello lists with `available: false` (the binary
   //                             absent or off its pinned version, the sign-in missing). The detail
   //                             names the runtime and the ones this host offers.
-  //   request-key-unsupported   A session_new member the named runtime does not honour; the detail
-  //                             names the key. Refused rather than dropped, because a key silently
-  //                             ignored starts a session its controller believes it configured. Every
-  //                             member is Claude's own, so a session on Claude never meets it.
+  //   request-key-unsupported   A session_new member, or a value of one, the named runtime does not
+  //                             honour; the detail names the key. Refused rather than dropped, because
+  //                             a key silently ignored starts a session its controller believes it
+  //                             configured. Every member is Claude's own, so a session on Claude never
+  //                             meets it.
   //   endpoint-unknown          A session_new naming a model endpoint this host's operator did not
   //                             declare.
   //   endpoint-incompatible     The named endpoint cannot carry the session's runtime: its runtimes
@@ -448,6 +449,28 @@ export const REFUSAL_REASONS = [
   //                             a proxy, the certificates trusted, the loader. Refused before the agent
   //                             starts; the detail names each file and its keys.
   'settings-route-refused',
+
+  // A line-delimited JSON-RPC peer this host runs as a child process over its stdio: how it reaches a
+  // runtime that is driven through a protocol server rather than a library.
+  //
+  //   rpc-line-malformed        An inbound line that is not one JSON-RPC message: not JSON, not UTF-8,
+  //                             not an object, or neither a request, a notification nor an answer.
+  //                             The line is dropped and the peer keeps running; the detail carries
+  //                             the head of the line.
+  //   rpc-line-too-large        An inbound line longer than this host reads (`MAX_RPC_LINE_BYTES`).
+  //                             Dropped whole, never cut: half a message would read as a whole one.
+  //   rpc-request-timed-out     A request this host sent met no answer by the deadline this host set.
+  //                             The peer imposes none, so this deadline is the only one there is.
+  //   rpc-request-failed        The peer answered a request with an error, or ended before it
+  //                             answered. The detail carries the code and the message, or how the peer
+  //                             ended.
+  //   rpc-server-overloaded     The peer refused a request because it is overloaded. Named apart from
+  //                             a failure because a later attempt may succeed.
+  'rpc-line-malformed',
+  'rpc-line-too-large',
+  'rpc-request-timed-out',
+  'rpc-request-failed',
+  'rpc-server-overloaded',
 ] as const;
 
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];
