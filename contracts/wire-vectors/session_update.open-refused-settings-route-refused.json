@@ -36,6 +36,6 @@
     }
   },
   "name": "session_update.open-refused-settings-route-refused",
-  "protocolVersion": 15,
+  "protocolVersion": 16,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"state_transition\",\"transition\":{\"sessionId\":null,\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"from\":\"spawning\",\"to\":\"ended\",\"activity\":null,\"entryId\":null,\"cause\":{\"kind\":\"refusal\",\"event\":\"settings-route-refused\",\"detail\":\"/work/repo/.claude/settings.json (the project tier) names ANTHROPIC_BASE_URL in its env, beneath this host's floor\"},\"where\":{\"cwd\":\"\",\"worktree\":null,\"branch\":null,\"unknownReason\":\"the session never had a workspace\"},\"correlationId\":\"session-1\"}}}}"
 }

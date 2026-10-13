@@ -13,9 +13,9 @@
  * than two that can drift.
  */
 import type {
+  AgentInitFacts,
   AgentProcess,
   AgentProcessRequest,
-  AgentSystemPrompt,
   HookRegistrations,
   McpServerConfig,
   SdkPluginConfig,
@@ -24,8 +24,8 @@ import type {
   SettingSource,
   SpawnAgentProcess,
   ThinkingConfig,
-  EffortLevel,
   PermissionMode,
+  SessionSystemPrompt,
 } from '../host/agent-process.js';
 import { startAgentProcess } from '../host/agent-process.js';
 import type { WorkspaceTrust } from '../host/workspace-trust.js';
@@ -146,9 +146,12 @@ export interface SessionRequest {
    * This one is not provable the same way. The init message carries no system prompt, so nothing
    * the agent says back confirms it. Asking for it is a decision made blind, by construction.
    */
-  readonly systemPrompt?: AgentSystemPrompt;
-  /** The effort level. Defaults to the SDK's own. */
-  readonly effort?: EffortLevel;
+  readonly systemPrompt?: SessionSystemPrompt;
+  /**
+   * The effort, in the session's runtime's own word: the SDK's levels (`EffortLevel`) for Claude.
+   * Defaults to the runtime's own.
+   */
+  readonly effort?: string;
   /** The permission mode. Defaults to the SDK's own. See `CLI_PARITY_OPTION_KEYS`. */
   readonly permissionMode?: PermissionMode;
   /**
@@ -171,6 +174,12 @@ export interface SessionRequest {
    * is the host's own, composed from its operator's configuration.
    */
   readonly hostEnv?: Readonly<Record<string, string>>;
+  /**
+   * The session's gate, built by its composer for a runtime driven by a process of its own, which the
+   * runtime's start reads; never reaches the agent process otherwise.
+   * @internal
+   */
+  readonly nativeGate?: unknown;
 }
 
 /** How many sessions one host holds at once, live and opening together, unless told otherwise. */
@@ -205,6 +214,34 @@ export interface SessionRegistryOptions {
    * @internal
    */
   readonly startProcess?: (request: AgentProcessRequest) => AgentProcess;
+  /**
+   * The runtimes this registry starts by a process of their own, by name. A request naming one is
+   * started by it; a request naming any other runtime, or none, is started by `startProcess`.
+   *
+   * Internal, as `startProcess` is.
+   * @internal
+   */
+  readonly runtimes?: Readonly<Record<string, NativeRuntime>>;
+}
+
+/**
+ * A runtime started by a process of its own rather than the agent SDK: how its process starts, and how
+ * one of its messages says the agent has reported itself (the session's id, its version, its model).
+ * Methods, so a runtime typed on its own messages is held beside one typed on another's.
+ * @internal
+ */
+export interface NativeRuntime<M = unknown> {
+  /**
+   * Start the process. `degrade` names, on the session, something the process lost without ending;
+   * `route` names the model endpoint the session opens on, which a native runtime routes itself, and the
+   * session's gate its composer built, which the runtime's start reads.
+   */
+  start(
+    request: AgentProcessRequest,
+    degrade: (detail: string) => void,
+    route: { readonly endpoint: string | null; readonly gate?: unknown },
+  ): AgentProcess<M>;
+  readInit(message: M): AgentInitFacts | null;
 }
 
 /**
@@ -215,14 +252,15 @@ export interface SessionRegistryOptions {
 const DEFAULT_START_TIMEOUT_MS = 60_000;
 
 export class SessionRegistry {
-  readonly #live = new Map<string, HostedSession>();
+  readonly #live = new Map<string, HostedSession<unknown>>();
   readonly #maxSessions: number;
-  readonly #provisioning = new Set<HostedSession>();
+  readonly #provisioning = new Set<HostedSession<unknown>>();
   readonly #baseEnv: Readonly<Record<string, string | undefined>>;
   readonly #homeDir: string;
   readonly #clock: Clock;
   readonly #startTimeoutMs: number;
   readonly #startProcess: (request: AgentProcessRequest) => AgentProcess;
+  readonly #runtimes: Readonly<Record<string, NativeRuntime>>;
 
   constructor(options: SessionRegistryOptions) {
     this.#baseEnv = options.baseEnv;
@@ -230,12 +268,22 @@ export class SessionRegistry {
     this.#clock = options.clock ?? systemClock;
     this.#startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
     this.#startProcess = options.startProcess ?? startAgentProcess;
+    this.#runtimes = options.runtimes ?? {};
     this.#maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
   }
 
   /** Every live session. A copy — a caller iterating this cannot be surprised by one ending. */
   list(): HostedSession[] {
-    return [...this.#live.values()];
+    return [...this.#live.values()].map(asHandle);
+  }
+
+  /**
+   * The process of its own a runtime is started by, or null when sessions on it are started by
+   * `startProcess`.
+   * @internal
+   */
+  nativeRuntime(runtime: string): NativeRuntime | null {
+    return Object.hasOwn(this.#runtimes, runtime) ? (this.#runtimes[runtime] ?? null) : null;
   }
 
   get liveCount(): number {
@@ -252,7 +300,7 @@ export class SessionRegistry {
     if (session === undefined) {
       return refuse<HostedSession>('session-unknown', `no live session ${sessionId} in this registry`);
     }
-    return ok(session);
+    return ok(asHandle(session));
   }
 
   /**
@@ -283,48 +331,60 @@ export class SessionRegistry {
     const settingSources = request.settingSources ?? [];
     const trust = readWorkspaceTrust(trustConfigPath(this.#homeDir), cwd.value);
 
-    const session = new HostedSession(
-      this.#startProcess({
-        cwd: cwd.value,
-        env: composeSpawnEnv(this.#baseEnv, request.env ?? {}, request.hostEnv ?? {}),
-        settingSources,
-        plugins: request.plugins ?? null,
-        hooks: request.hooks ?? null,
-        resume: request.resume ?? null,
-        fork: request.fork ?? false,
-        // The two defaults that carry the streaming policy are these two lines. See SessionRequest
-        // for why the rule is stated as an asymmetry rather than as attendedness.
-        includePartialMessages: request.includePartialMessages ?? true,
-        thinking: request.thinking ?? null,
-        forwardSubagentText: request.forwardSubagentText ?? false,
-        mcpServers: request.mcpServers ?? null,
-        // The default is strict, and it is stated rather than left to the SDK. Omitting the key
-        // lets a provisioned workspace's own files register servers — see SessionRequest.
-        strictMcpConfig: request.strictMcpConfig ?? true,
-        // No default destination, and there must never be one: a host that mirrored somewhere by
-        // default would be sending transcripts off-box without anyone choosing to.
-        sessionStore: request.sessionStore ?? null,
-        sessionStoreFlush: request.sessionStoreFlush ?? null,
-        spawn: request.spawn ?? null,
-        // No default for either: naming a model here would make this package's own choice look like
-        // the CLI's, and the CLI's default is the one an operator can actually see and change.
-        model: request.model ?? null,
-        systemPrompt: request.systemPrompt ?? null,
-        effort: request.effort ?? null,
-        permissionMode: request.permissionMode ?? null,
-        // The untrusted-workspace condition is reported here and nowhere else in the SDK, so the
-        // callback is wired on every start rather than only when it is expected.
-        onStderr: (data: string) => {
-          if (isUntrustedWorkspaceWarning(data)) {
-            session.degrade('workspace_untrusted', data.trim());
-          }
-        },
-      }),
+    const runtime = request.runtime;
+    const native = runtime === undefined ? null : this.nativeRuntime(runtime);
+    const processRequest: AgentProcessRequest = {
+      cwd: cwd.value,
+      env: composeSpawnEnv(this.#baseEnv, request.env ?? {}, request.hostEnv ?? {}),
+      settingSources,
+      plugins: request.plugins ?? null,
+      hooks: request.hooks ?? null,
+      resume: request.resume ?? null,
+      fork: request.fork ?? false,
+      // The two defaults that carry the streaming policy are these two lines. See SessionRequest
+      // for why the rule is stated as an asymmetry rather than as attendedness.
+      includePartialMessages: request.includePartialMessages ?? true,
+      thinking: request.thinking ?? null,
+      forwardSubagentText: request.forwardSubagentText ?? false,
+      mcpServers: request.mcpServers ?? null,
+      // The default is strict, and it is stated rather than left to the SDK. Omitting the key
+      // lets a provisioned workspace's own files register servers — see SessionRequest.
+      strictMcpConfig: request.strictMcpConfig ?? true,
+      // No default destination, and there must never be one: a host that mirrored somewhere by
+      // default would be sending transcripts off-box without anyone choosing to.
+      sessionStore: request.sessionStore ?? null,
+      sessionStoreFlush: request.sessionStoreFlush ?? null,
+      spawn: request.spawn ?? null,
+      // No default for either: naming a model here would make this package's own choice look like
+      // the CLI's, and the CLI's default is the one an operator can actually see and change.
+      model: request.model ?? null,
+      systemPrompt: request.systemPrompt ?? null,
+      effort: request.effort ?? null,
+      permissionMode: request.permissionMode ?? null,
+      // The untrusted-workspace condition is reported here and nowhere else in the SDK, so the
+      // callback is wired on every start rather than only when it is expected.
+      onStderr: (data: string) => {
+        if (isUntrustedWorkspaceWarning(data)) {
+          session.degrade('workspace_untrusted', data.trim());
+        }
+      },
+    };
+
+    const session = new HostedSession<unknown>(
+      native === null
+        ? this.#startProcess(processRequest)
+        : native.start(processRequest, (detail) => session.degrade('runtime_degraded', detail), {
+            endpoint: request.endpoint ?? null,
+            gate: request.nativeGate ?? null,
+          }),
       this.#clock,
       cwd.value,
       trust,
       (live) => this.#adopt(live),
       (finished) => this.#release(finished),
+      native === null || runtime === undefined
+        ? undefined
+        : { runtime, readInit: (message) => native.readInit(message) },
     );
 
     this.#provisioning.add(session);
@@ -340,7 +400,7 @@ export class SessionRegistry {
       );
     }
 
-    return ok(session);
+    return ok(asHandle(session));
   }
 
   /**
@@ -401,7 +461,7 @@ export class SessionRegistry {
    * being observed, and a degrade names the collision on the session that is about to be dropped —
    * whose caller is the one that can do something about it.
    */
-  #adopt(session: HostedSession): void {
+  #adopt(session: HostedSession<unknown>): void {
     const id = session.facts?.id;
     if (id === undefined) return;
     this.#provisioning.delete(session);
@@ -422,11 +482,20 @@ export class SessionRegistry {
   }
 
   /** Only the holder of an id may release it — a colliding session must not evict the incumbent. */
-  #release(session: HostedSession): void {
+  #release(session: HostedSession<unknown>): void {
     this.#provisioning.delete(session);
     const id = session.facts?.id;
     if (id !== undefined && this.#live.get(id) === session) this.#live.delete(id);
   }
+}
+
+/**
+ * A held session under the handle type this registry's methods return. The registry reads none of a
+ * session's messages, and a session's `runtime` says whose they are: the host subscribes to a session
+ * on a runtime other than Claude through that runtime's own forwarding, never as the SDK's.
+ */
+function asHandle(session: HostedSession<unknown>): HostedSession {
+  return session as HostedSession;
 }
 
 export type { WorkspaceTrust };

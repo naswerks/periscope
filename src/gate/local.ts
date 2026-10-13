@@ -36,6 +36,8 @@ import {
 } from './jail.js';
 import { classifyShellCommand } from './shell.js';
 import { parseCommand } from './command.js';
+import { patchPaths } from './patch.js';
+import { isAbsolutePath } from '../core/paths.js';
 
 /**
  * Decides one tool call, locally. Null means no local opinion, never "allowed".
@@ -58,6 +60,11 @@ export interface ToolFamilies {
    * default family.
    */
   readonly search?: readonly string[];
+  /**
+   * Tools that apply a patch, whose files are named on the patch's own header lines (`command`) or
+   * listed as `changes[].path`. Every file is a write. Absent: the default family.
+   */
+  readonly patch?: readonly string[];
 }
 
 /**
@@ -74,6 +81,19 @@ export const DEFAULT_TOOL_FAMILIES: ToolFamilies = {
   search: ['Grep', 'Glob'],
 };
 
+/**
+ * The names Codex's hook gives its tools: `Bash` runs a command, `view_image` reads a path, and
+ * `apply_patch` writes every file its patch names. Every other Codex tool has no local family and is
+ * asked about like any call this gate has no opinion on.
+ */
+export const CODEX_TOOL_FAMILIES: ToolFamilies = {
+  write: [],
+  read: ['view_image'],
+  shell: ['Bash'],
+  search: [],
+  patch: ['apply_patch'],
+};
+
 export interface LocalGateOptions {
   /** The absolute root every path-taking call must resolve inside. */
   readonly workspaceRoot: string | null;
@@ -85,6 +105,20 @@ export interface LocalGateOptions {
   readonly home?: string | null;
   /** Defaults to `DEFAULT_TOOL_FAMILIES`. */
   readonly toolFamilies?: ToolFamilies;
+  /**
+   * Read a shell command in the grammar its request names (`shellDialect`). Defaults to false, and
+   * then every command is read as a POSIX shell reads it. When set, a `powershell` command is read
+   * both ways and refused when either reading refuses: a command read in the wrong grammar is read as
+   * different text from the one that runs, and reading both never scans less than the POSIX reading
+   * alone. Set for a runtime whose shell tool runs PowerShell under a tool name that does not say so.
+   */
+  readonly readsShellDialect?: boolean;
+  /**
+   * Resolve a relative path a read tool names against the call's own working directory (`cwd`), else
+   * the workspace root, rather than this process's. Defaults to false. Set for a runtime whose file
+   * tools take paths relative to where the call runs; a patch's paths are always resolved this way.
+   */
+  readonly resolvesAgainstCallCwd?: boolean;
 }
 
 /**
@@ -106,6 +140,9 @@ export function localGate(options: LocalGateOptions): LocalGate {
   const readTools = new Set(families.read);
   const shellTools = new Set(families.shell);
   const searchTools = new Set(families.search ?? DEFAULT_TOOL_FAMILIES.search);
+  const patchTools = new Set(families.patch ?? []);
+  const readsShellDialect = options.readsShellDialect ?? false;
+  const resolvesAgainstCallCwd = options.resolvesAgainstCallCwd ?? false;
 
   return (request: DecisionRequest): Refusal | null => {
     if (shellTools.has(request.toolName)) {
@@ -119,7 +156,13 @@ export function localGate(options: LocalGateOptions): LocalGate {
       // One parse, both consumers. The credential check runs first because a command naming the
       // token cache is the more serious of the two answers and should be the one the reader gets.
       const parsed = parseCommand(command);
-      return checkShellForProtectedPaths(command, jail) ?? classifyShellCommand(command, parsed);
+      const posix = checkShellForProtectedPaths(command, jail) ?? classifyShellCommand(command, parsed);
+      if (!readsShellDialect || request.shellDialect !== 'powershell') return posix;
+      return strongerRefusal(posix, classifyShellCommand(command, parseCommand(command, 'powershell')));
+    }
+
+    if (patchTools.has(request.toolName)) {
+      return checkPatch(request, jail);
     }
 
     if (writeTools.has(request.toolName)) {
@@ -127,7 +170,10 @@ export function localGate(options: LocalGateOptions): LocalGate {
     }
 
     if (readTools.has(request.toolName)) {
-      return checkReadPath(pathFromToolInput(request.toolInput), jail);
+      const named = pathFromToolInput(request.toolInput);
+      if (!resolvesAgainstCallCwd || named === null) return checkReadPath(named, jail);
+      const placed = againstCallCwd(named, request.cwd, jail.workspaceRoot);
+      return typeof placed === 'string' ? checkReadPath(placed, jail) : placed;
     }
 
     if (searchTools.has(request.toolName)) {
@@ -137,4 +183,76 @@ export function localGate(options: LocalGateOptions): LocalGate {
     // No opinion. The surrounding gate asks whoever it was going to ask.
     return null;
   };
+}
+
+/**
+ * Of two readings' answers, the one that blocks soonest: a local refusal before a boundary shape, which
+ * is escalated rather than refused here, and either before no opinion.
+ */
+function strongerRefusal(first: Refusal | null, second: Refusal | null): Refusal | null {
+  if (first !== null && first.reason !== 'shell-boundary-command') return first;
+  if (second !== null && second.reason !== 'shell-boundary-command') return second;
+  return first ?? second;
+}
+
+/**
+ * `path` placed under the call's working directory when it is relative: the call's `cwd`, else the
+ * workspace root. A relative path with neither to stand on is refused, because resolving it against this
+ * process's own directory would check a file the call never named.
+ */
+function againstCallCwd(path: string, callCwd: string, workspaceRoot: string | null): string | Refusal {
+  if (isAbsolutePath(path)) return path;
+  const base = isAbsolutePath(callCwd)
+    ? callCwd
+    : workspaceRoot !== null && isAbsolutePath(workspaceRoot)
+      ? workspaceRoot
+      : null;
+  if (base === null) {
+    return refusal(
+      'path-not-absolute',
+      `${path} is relative and the call states no absolute working directory to resolve it against`,
+    );
+  }
+  return `${base}/${path}`;
+}
+
+/**
+ * Every file a patch call names goes through the jail and the protected set, as a write. The files come
+ * from the patch's own header lines (`command`) or from `changes[].path` and `changes[].movePath`. A
+ * patch that names no file this host can read is refused: there is nothing to bound.
+ */
+function checkPatch(request: DecisionRequest, jail: JailOptions): Refusal | null {
+  const paths = patchInputPaths(request.toolInput);
+  if (paths === null) {
+    return refusal(
+      'path-input-missing',
+      'this patch names no file on a header this host can read, so there is nothing to bound — refused rather than guessed',
+    );
+  }
+  for (const path of paths) {
+    const placed = againstCallCwd(path, request.cwd, jail.workspaceRoot);
+    const refused = typeof placed === 'string' ? checkPath(placed, jail) : placed;
+    if (refused !== null) return refused;
+  }
+  return null;
+}
+
+/** The files a patch call's input names, or null when it names none. */
+export function patchInputPaths(toolInput: unknown): string[] | null {
+  if (typeof toolInput !== 'object' || toolInput === null) return null;
+  const record = toolInput as Record<string, unknown>;
+  const command = record['command'];
+  if (typeof command === 'string') return patchPaths(command);
+  const changes = record['changes'];
+  if (!Array.isArray(changes)) return null;
+  const paths: string[] = [];
+  for (const change of changes as unknown[]) {
+    if (typeof change !== 'object' || change === null) return null;
+    const entry = change as Record<string, unknown>;
+    if (typeof entry['path'] !== 'string' || entry['path'].trim() === '') return null;
+    paths.push(entry['path']);
+    if (typeof entry['movePath'] === 'string' && entry['movePath'].trim() !== '')
+      paths.push(entry['movePath']);
+  }
+  return paths.length === 0 ? null : paths;
 }

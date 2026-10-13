@@ -48,6 +48,19 @@ test('the files allowlist exists and excludes tests, maps and pins', () => {
   }
 });
 
+test('the Codex names snapshot ships: the host reads it at load, so a package without it cannot offer Codex', () => {
+  const files = manifest.files ?? [];
+  const reader = readFileSync(at('src/host/codex-names.ts'), 'utf8');
+  assert.ok(
+    reader.includes("'../../contracts/codex-protocol-names.json'"),
+    'the names reader no longer reads the snapshot from the package root; this pin is about nothing',
+  );
+  assert.ok(
+    files.includes('contracts/codex-protocol-names.json'),
+    'the allowlist does not ship contracts/codex-protocol-names.json, which src/host/codex-names.ts reads at load',
+  );
+});
+
 test('the package declares no side effects, so a consumer bundler can drop what it does not use', () => {
   assert.equal(manifest.sideEffects, false);
 });

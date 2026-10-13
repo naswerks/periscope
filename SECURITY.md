@@ -1,8 +1,11 @@
 # Security
 
-Periscope runs Claude Code sessions on your machine on behalf of a remote controller. That is a
-serious thing to install, and this document is written to be read _before_ you do. It states the
-posture, what each control covers, and what it does not.
+Periscope runs Claude Code sessions on your machine on behalf of a remote controller, and Codex
+sessions when you configure Codex. That is a serious thing to install, and this document is written
+to be read _before_ you do. It states the posture, what each control covers, and what it does not.
+Everything about the gate below is about Claude sessions; a Codex session is gated through its own
+hook, with residual paths named as they happen, and [Codex sessions](#codex-sessions) says what holds
+and what does not.
 
 ## The permission model
 
@@ -244,7 +247,97 @@ Three settings files can change what the agent does, and the host treats each by
   session opens or resumes, and the agent reloads its settings files while it runs, so a session that
   writes its own `.claude/settings.local.json` mid-session is caught at its next open or resume, not
   before. Whether a reloaded `env` moves a running agent's model route is not documented and not
-  measured.
+  measured. A repository tier can also name an `apiKeyHelper`, a command the agent CLI runs to fetch
+  its credential: the check reads only `env`, so a session that loads that tier runs the repository's
+  command outside the gate and authenticates with what it prints. Load the repository tiers only for a
+  repository you trust.
+
+## Codex sessions
+
+Codex is offered only when you set `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME`
+([configuration](docs/configuration.md#codex)). A Codex session's control tier is
+`intercepted-with-residual`, and the hello says so: every tool call Codex's `PreToolUse` hook sees is
+decided by the same gate as a Claude call (the local refusals above, then your controller), and the
+paths that can still run undecided are named, one by one, as they happen ([gate.md](docs/gate.md),
+the Codex gate). What holds, and what does not:
+
+- **Periscope's hook decides each call, and fails closed itself.** Codex runs the `periscope hook codex`
+  command before each tool call; it asks this host over a per-session named pipe or Unix socket (never
+  a TCP port) and writes either nothing (proceed) or a deny. Codex lets a call proceed whenever a hook
+  fails (times out, crashes, writes output it does not accept), so the command answers deny on every
+  failure of its own, inside Codex's timeout. A session opens only when periscope's hook is listed
+  trusted and enabled for it (`codex-hook-not-active` otherwise), and the host trusts it over the wire
+  exactly as Codex's own interface does.
+- **The hook runs unsandboxed, with the app-server's whole environment.** It is a plain child process,
+  and Codex hands it every variable the app-server has, the session's channel token
+  (`PERISCOPE_HOOK_TOKEN`) included; Codex's shell exclusion keeps the token from the agent's own
+  commands. The agent shares this host's OS user, so it could read the token out of the app-server's
+  memory: what the token buys is asking the gate about a call, which runs nothing and grants nothing.
+  Every answer carries an HMAC keyed by the token, so a process that takes over the channel's name
+  cannot answer allow. The controller's credential never leaves the host.
+- **The residual, named.** A call can still run undecided: when the hook fails (`gate-hook-timed-out`,
+  `gate-hook-unspawnable`, `gate-hook-output-rejected`) in a mode that asks no approval (in one that
+  does, the call reaches the approval channel, which the gate decides afresh), when a call starts or proceeds with no decision
+  from this host (`gate-hook-missing`), and on the calls no hook sees: input written to a running
+  command, a hosted web search, an image generation (`gate-unhooked-call`). An approval Codex's own
+  reviewer decided is `gate-approval-auto-reviewed`. A hook periscope did not install
+  (`gate-hook-foreign`), the workspace's own Codex configuration (`gate-project-config-active`) and a
+  mode with no operating-system sandbox (`gate-sandbox-absent`) are named when the session opens. Each
+  is an observation on the session's record; none stops a session.
+- **Codex's approvals are decided by the same gate.** An approval Codex asks for is answered from the
+  hook's decision for that call, or decided fresh, or declined at this host's deadline
+  (`gate-approval-unanswered`). It is never granted for the rest of the session, never an amendment to
+  Codex's rules and never a root it may write under; a request for wider permissions is granted
+  nothing, and a question for the user gets no answers. The approvals reviewer is pinned to the user,
+  web search is off, and Codex's hook layer is forced on. The host never asks the app-server to run a
+  command itself.
+- **Codex's own sandbox, from the session's permission mode.** `default` is `on-request` approval in
+  the `workspace-write` sandbox; `dontAsk` is `never` in `workspace-write`; `bypassPermissions` is
+  `never` with `danger-full-access`, no sandbox at all, and then no approval is ever asked, so the hook
+  is the only decision. On Windows with no sandbox backend configured, `workspace-write` is not
+  enforced by the operating system (`gate-sandbox-absent`), and `default` asks for an approval on every
+  command and patch, a second decision behind the hook. The sandbox is Codex's; this package neither
+  implements nor measures it. On Windows Codex runs the agent's commands through PowerShell, which
+  loads the user's PowerShell profile whenever Codex runs a call as a login shell: its default, unless
+  the call asks otherwise, in which case the command runs with `-NoProfile`.
+- **The gate's own files are protected.** The runner home's `hooks.json`, its `hooks` directory and its
+  `config.toml` join the protected set beside its sign-in files: the hook is all that stands between
+  the agent's shell and those credentials, and rewriting the shim (whose trust covers its path, not its
+  bytes) or the recorded trust would take it away. The shim's bytes are also rewritten at every open
+  when they differ. This is the gate protecting itself, nothing more.
+- **A home of the runner's own.** `CODEX_HOME` is `PERISCOPE_CODEX_HOME` for every Codex process, so
+  a session never runs from your own `~/.codex`, its sign-in or its history. The sign-in files in both
+  homes (`auth.json`, `.credentials.json`) are in the protected set. A home whose path holds a space or
+  a shell metacharacter cannot carry the hook's line, so Codex is listed unavailable there, naming the
+  character; the host itself still starts.
+- **No project is trusted on your behalf.** The host sends no working directory on any thread or turn
+  request; the app-server's own working directory is the session's. Codex records a project as
+  trusted only when a thread request names a directory, so the host never writes a trust entry, and
+  the repository's own Codex layer (its `.codex/` configuration, hooks and exec policies) stays
+  disabled. Its `AGENTS.md` instructions still load, as they do for any project not marked untrusted.
+  The one residual: a trust entry already in the runner home's `config.toml` that covers the
+  session's repository opens that layer; keep the runner home's trust list empty.
+- **The model route and identity are beneath the floor.** `CODEX_HOME`, `CODEX_SQLITE_HOME`,
+  `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_ACCESS_TOKEN`,
+  `CODEX_CA_CERTIFICATE`, `PERISCOPE_CODEX_ENDPOINT_KEY` and the hook's own `PERISCOPE_HOOK_CHANNEL`,
+  `PERISCOPE_HOOK_TOKEN` and `PERISCOPE_HOOK_DEADLINE_MS` are exact names in `EXTRA_ENV_FLOOR`, so no
+  controller can move a Codex session's home, model server, credential, certificate authority or hook.
+- **An endpoint's credential is kept from the agent's shell.** A Codex session on a named endpoint
+  reads its key from `PERISCOPE_CODEX_ENDPOINT_KEY`, which the host sets, with the endpoint's own
+  `env`, in the app-server's environment only. Codex hands a shell command the app-server's whole
+  environment unless told otherwise, and its own exclusion of `*KEY*`, `*SECRET*` and `*TOKEN*` names
+  is off unless asked for, so the host names each of those variables, and the hook's three, in
+  `shell_environment_policy.exclude`, exactly; Codex matches each entry as a glob without regard to
+  case, so each removes that one variable. Codex's hooks still receive the whole environment.
+- **A tool server's ticket stays out of the environment and off the command line.** A session's HTTP
+  MCP servers ride its thread's config, sent over the app-server's stdin, with their headers as
+  static `http_headers`: never `env_http_headers`, which reads a header from the app-server's
+  environment where the agent's shell could read it too, and never a `-c` argument, which a process
+  listing shows. Each server's tools are asked about before every call, and the gate decides each ask
+  for the call pending on that server.
+- **A pinned binary.** The host runs one Codex release (`CODEX_PINNED_VERSION`), checks its
+  `--version` and the version its app-server reports, and lists any other version unavailable. It
+  never installs or updates Codex, and it never runs a batch file.
 
 ## The outbound-only posture
 
@@ -300,7 +393,8 @@ over the link and without a further credential:
   cannot write it over the link. Beneath the floor no declaration reaches: `PATH`, `NODE_OPTIONS`,
   `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`,
   `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
-  `ANTHROPIC_API_KEY`, and the families `ANTHROPIC_*` (the model endpoint, its tokens and headers,
+  `ANTHROPIC_API_KEY`, Codex's home, model route, credentials and certificate authority (the eight
+  names [Codex sessions](#codex-sessions) lists), and the families `ANTHROPIC_*` (the model endpoint, its tokens and headers,
   every provider's base URL), `CLAUDE_CODE_USE_*` (the provider switches),
   `CLAUDE_CODE_SKIP_*_AUTH`, `CLAUDE_CODE_CLIENT_*` (the client certificate), `SSL_CERT_*` and
   `*_PROXY` (`EXTRA_ENV_FLOOR`). So a controller cannot change which server the model call goes
@@ -341,6 +435,10 @@ over the link and without a further credential:
 - **Reconfigure the host.** The workspace root, the repository root, the branch scheme, the agent
   home, the plugin directories and the two controller URLs through `host_configure`, written to the
   config file; the URLs apply at the next start.
+- **Start a Codex session, where you configured Codex.** Its tool calls go through the gate by
+  periscope's own hook, with the residual paths named, under Codex's sandbox and approval policy for
+  the permission mode the controller names, `bypassPermissions` (no sandbox) included
+  ([Codex sessions](#codex-sessions)).
 - **Start sessions** that run the agent with the interactive prompt replaced by the gate, and
   answer every permission decision those sessions raise; and **end** one it no longer needs
   (`session_end`): the agent's process exits, and its transcript stays where the agent CLI wrote it.
@@ -369,6 +467,7 @@ stops being true.
 | `@anthropic-ai/claude-agent-sdk` | **0.3.284**, pinned exactly, no caret                        |
 | Bundled Claude Code CLI          | **2.1.284**                                                  |
 | Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows |
+| Codex app-server                 | **0.162.1**, pinned; any other version is listed unavailable |
 
 The SDK is pre-1.0 and its surface moves without semver protection, so a SHA-256 of the installed
 type definitions is kept in `contracts/sdk.sha256` and a CI job fails on any drift between the installed

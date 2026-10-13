@@ -95,6 +95,11 @@ export const REFUSAL_REASONS = [
   //                                      failed, or the controller answered non-2xx. Nobody decided.
   //   permission-decision-unrecognised   a decision value this build has never seen: a controller
   //                                      running ahead of a host, a new tier, a rolled-back deploy.
+  //                                      Also a decision this build reads but the session's runtime
+  //                                      cannot carry out: an allow that rewrites the call's input, on
+  //                                      a runtime whose hook can only let a call proceed as asked or
+  //                                      block it. Carrying out half of it would run the call with
+  //                                      arguments nobody approved.
   // An outage is an infrastructure fix and an unrecognised value is a controller-version fix, so
   // telling them apart is the difference between two different investigations. Both block the tool.
   //   permission-grant-shadows-settings  A composition this package will not assemble, refused
@@ -418,10 +423,11 @@ export const REFUSAL_REASONS = [
   //                             not know, or one its hello lists with `available: false` (the binary
   //                             absent or off its pinned version, the sign-in missing). The detail
   //                             names the runtime and the ones this host offers.
-  //   request-key-unsupported   A session_new member the named runtime does not honour; the detail
-  //                             names the key. Refused rather than dropped, because a key silently
-  //                             ignored starts a session its controller believes it configured. Every
-  //                             member is Claude's own, so a session on Claude never meets it.
+  //   request-key-unsupported   A session_new member, or a value of one, the named runtime does not
+  //                             honour; the detail names the key. Refused rather than dropped, because
+  //                             a key silently ignored starts a session its controller believes it
+  //                             configured. Every member is Claude's own, so a session on Claude never
+  //                             meets it.
   //   endpoint-unknown          A session_new naming a model endpoint this host's operator did not
   //                             declare.
   //   endpoint-incompatible     The named endpoint cannot carry the session's runtime: its runtimes
@@ -437,6 +443,17 @@ export const REFUSAL_REASONS = [
   'endpoint-incompatible',
   'model-endpoint-mismatch',
 
+  // The plugin directories a session is asked to load, handed to a runtime that takes them from its
+  // own server rather than from the agent SDK.
+  //
+  //   plugins-undeliverable     The runtime refused the call that hands it the session's plugin
+  //                             directories (Codex: `skills/extraRoots/set`), so the session would
+  //                             run without the plugins it was opened with. The open ends before the
+  //                             session is ready; the detail names the runtime's answer. A directory
+  //                             that does not exist is not this: the runtime takes it and finds no
+  //                             skills, and the session's receipt names it among its plugin errors.
+  'plugins-undeliverable',
+
   // A repository's own agent settings, read when the session's directory is known. The agent CLI
   // applies a settings file's `env` to itself after every screen this host runs, so a key there would
   // reach the agent's environment past them.
@@ -448,6 +465,75 @@ export const REFUSAL_REASONS = [
   //                             a proxy, the certificates trusted, the loader. Refused before the agent
   //                             starts; the detail names each file and its keys.
   'settings-route-refused',
+
+  // A line-delimited JSON-RPC peer this host runs as a child process over its stdio: how it reaches a
+  // runtime that is driven through a protocol server rather than a library.
+  //
+  //   rpc-line-malformed        An inbound line that is not one JSON-RPC message: not JSON, not UTF-8,
+  //                             not an object, or neither a request, a notification nor an answer.
+  //                             The line is dropped and the peer keeps running; the detail carries
+  //                             the head of the line.
+  //   rpc-line-too-large        An inbound line longer than this host reads (`MAX_RPC_LINE_BYTES`).
+  //                             Dropped whole, never cut: half a message would read as a whole one.
+  //   rpc-request-timed-out     A request this host sent met no answer by the deadline this host set.
+  //                             The peer imposes none, so this deadline is the only one there is.
+  //   rpc-request-failed        The peer answered a request with an error, or ended before it
+  //                             answered. The detail carries the code and the message, or how the peer
+  //                             ended.
+  //   rpc-server-overloaded     The peer refused a request because it is overloaded. Named apart from
+  //                             a failure because a later attempt may succeed.
+  'rpc-line-malformed',
+  'rpc-line-too-large',
+  'rpc-request-timed-out',
+  'rpc-request-failed',
+  'rpc-server-overloaded',
+
+  // The gate over a runtime whose own hook process asks this host for each decision (Codex), and the
+  // paths where a call can still run without one. Every name below but the first is a degrade: an
+  // observation that a call went on undecided, or that the session lost a guarantee, raised on the
+  // session's state lane when it occurs and never stopping the session. None of them is
+  // `permission-decision-unavailable`, which means the tool did not run. When the hook fails, the
+  // runtime goes on as if it had allowed the call: the call runs where the session's mode asks no
+  // approval, and otherwise reaches the approval channel, which this host decides afresh.
+  //
+  //   codex-hook-not-active        Refused: the open ends because this host's own hook is not installed,
+  //                                trusted and enabled for the session, its channel could not listen, or
+  //                                its probe still fails. Without it nothing enforces the protected set
+  //                                on that runtime. The detail says what to fix.
+  //   gate-hook-timed-out          The runtime's own timeout for the hook fired before the hook answered,
+  //                                and the call went on past it.
+  //   gate-hook-unspawnable        The hook could not start, or exited without answering, and the call
+  //                                went on past it.
+  //   gate-hook-output-rejected    The runtime refused the hook's output, and the call went on past it.
+  //   gate-hook-missing            A tool call started, or the hook let one proceed, with no decision
+  //                                from this host for its call id: a hook that did not run or did not
+  //                                ask.
+  //   gate-hook-foreign            A hook this host did not install would run in the session, on the
+  //                                event the detail names. Known when the session opens.
+  //   gate-unhooked-call           A call no hook sees ran: input written to a running command, a hosted
+  //                                web search, an image generation.
+  //   gate-approval-unanswered     An approval the runtime asked for outlived the host's deadline and
+  //                                was declined. The call did not run.
+  //   gate-approval-auto-reviewed  An approval was decided by the runtime's own reviewer, not this host.
+  //   gate-approval-ambiguous      An approval could not be tied to one call: several calls to the same
+  //                                server were pending and not every one was allowed, so it was declined.
+  //                                The call did not run.
+  //   gate-project-config-active   The workspace's own runtime configuration is in force for the session.
+  //                                Known when the session opens.
+  //   gate-sandbox-absent          No operating-system boundary bounds the session's tools under its
+  //                                mode. Known when the session opens, or when a later mode removes it.
+  'codex-hook-not-active',
+  'gate-hook-timed-out',
+  'gate-hook-unspawnable',
+  'gate-hook-output-rejected',
+  'gate-hook-missing',
+  'gate-hook-foreign',
+  'gate-unhooked-call',
+  'gate-approval-unanswered',
+  'gate-approval-auto-reviewed',
+  'gate-approval-ambiguous',
+  'gate-project-config-active',
+  'gate-sandbox-absent',
 ] as const;
 
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];

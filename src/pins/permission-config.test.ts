@@ -80,16 +80,31 @@ const MODE_MODULES = [
   // composeSession reads the requested mode for the one exception to `permission-grant-shadows-settings`
   // (bypass) through `isBypassMode`; it never names a mode.
   'host/host.ts',
+  // The Codex process hands the requested mode to Codex as its own approval policy and sandbox, at the
+  // thread's start and at the next turn, through the map the narrowing reader holds; it names no mode.
+  'host/codex-process.ts',
+  // The Codex fact lift reports, inside the receipt, the approval word the server answered with:
+  // evidence read off the runtime's own answer, as the Claude lift reads the agent's. It sets nothing.
+  'host/codex-facts.ts',
   'host/wire-request.ts',
   'sessions/registry.ts',
   'sessions/session.ts',
 ];
+
+/**
+ * The one appearance of a shadowing word that is not an option: the answer to Codex's permission
+ * request carries the profile it grants under the key `permissions`, and that profile is always empty.
+ * It is Codex's wire, in a module that holds no SDK option, so this file is exempt for this word alone;
+ * every other lane is still scanned there.
+ */
+const CODEX_GRANT = { file: 'host/codex-answers.ts', option: 'permissions' } as const;
 
 test('regression: nothing in this package sets an option that could answer a permission before the gate does', () => {
   const violations: string[] = [];
   for (const file of sourceFiles()) {
     file.text.split('\n').forEach((line, index) => {
       const hit = SETS.exec(line);
+      if (hit !== null && file.path === CODEX_GRANT.file && hit[1] === CODEX_GRANT.option) return;
       if (hit !== null) violations.push(`${file.path}:${index + 1} sets "${hit[1]}"`);
     });
   }

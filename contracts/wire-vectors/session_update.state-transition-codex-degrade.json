@@ -1,0 +1,44 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_update",
+      "body": {
+        "update": "state_transition",
+        "transition": {
+          "sessionId": "thread-1",
+          "seq": 4,
+          "at": "2000-01-01T00:00:00.000Z",
+          "from": "working",
+          "to": "working",
+          "activity": {
+            "kind": "tool",
+            "name": "web_search"
+          },
+          "entryId": "call-1",
+          "cause": {
+            "kind": "refusal",
+            "event": "gate-unhooked-call",
+            "detail": "item call-1 (webSearch) ran without a decision: Codex runs no hook for it"
+          },
+          "where": {
+            "cwd": "/work/plain",
+            "worktree": null,
+            "branch": null,
+            "unknownReason": "not-a-repository"
+          },
+          "correlationId": null
+        }
+      }
+    }
+  },
+  "name": "session_update.state-transition-codex-degrade",
+  "protocolVersion": 16,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"state_transition\",\"transition\":{\"sessionId\":\"thread-1\",\"seq\":4,\"at\":\"2000-01-01T00:00:00.000Z\",\"from\":\"working\",\"to\":\"working\",\"activity\":{\"kind\":\"tool\",\"name\":\"web_search\"},\"entryId\":\"call-1\",\"cause\":{\"kind\":\"refusal\",\"event\":\"gate-unhooked-call\",\"detail\":\"item call-1 (webSearch) ran without a decision: Codex runs no hook for it\"},\"where\":{\"cwd\":\"/work/plain\",\"worktree\":null,\"branch\":null,\"unknownReason\":\"not-a-repository\"},\"correlationId\":null}}}}"
+}

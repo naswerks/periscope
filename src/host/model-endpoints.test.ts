@@ -95,10 +95,15 @@ test('an unknown wire API refuses start, naming the APIs this host knows', async
   );
 });
 
-test('a runtime this host cannot spawn refuses start, naming the runtimes it can', async () => {
+test('a runtime this host routes no endpoint for refuses start, naming the runtimes it routes', async () => {
+  assert.match(
+    await problemFor({ ...VALID, runtimes: ['example-runtime'] }),
+    /runtime "example-runtime", which this host routes no model endpoint for — it routes claude, codex/,
+  );
   assert.match(
     await problemFor({ ...VALID, runtimes: ['codex'] }),
-    /runtime "codex", which this host cannot spawn — it spawns claude/,
+    /runtime codex, which does not speak anthropic-messages — codex speaks openai-responses/,
+    'codex is routed, and an Anthropic-format endpoint is still not one it can reach',
   );
 });
 
@@ -375,5 +380,97 @@ test('an alias the endpoint does not map is refused; a mapped one, with or witho
     }),
     null,
     'a mapped fable',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// An endpoint Codex reaches
+// ---------------------------------------------------------------------------
+
+/** An OpenAI Responses endpoint the operator named Codex on, in the members Codex reads. */
+const CODEX_ENDPOINT = {
+  name: 'gateway',
+  wireApi: 'openai-responses',
+  runtimes: ['codex'],
+  baseUrl: 'https://gateway.example/v1',
+  credential: { env: 'EXAMPLE_ENDPOINT_KEY' },
+  models: ['gpt-6-sol', 'claude-opus-5'],
+  contextWindow: { maxContextTokens: 400000 },
+  env: { EXAMPLE_FLAG: '1' },
+};
+
+test("an endpoint only Codex reaches reads without Claude's rules: no model tiers, and any model id", async () => {
+  const read = await readEntries([CODEX_ENDPOINT]);
+  assert.notEqual(typeof read, 'string', said(read));
+  if (typeof read === 'string') return;
+  assert.deepEqual(read.ignored, []);
+  assert.deepEqual(hostEndpointsOf(read.endpoints), [
+    {
+      name: 'gateway',
+      wireApi: 'openai-responses',
+      runtimes: ['codex'],
+      models: ['gpt-6-sol', 'claude-opus-5'],
+    },
+  ]);
+  const endpoint = read.endpoints[0] as ModelEndpoint;
+  assert.equal(
+    endpointModelProblem('claude-opus-5', endpoint),
+    null,
+    "the alias rule is Claude's: a Codex session never meets it",
+  );
+  assert.equal(endpointModelProblem('opus', endpoint), null);
+});
+
+test('a model tier or the first-party marker on an endpoint only Codex reaches is ignored and reported, never refused', async () => {
+  const read = await readEntries([
+    { ...CODEX_ENDPOINT, modelAliases: { opus: 'gpt-6-sol' }, firstParty: true },
+  ]);
+  assert.notEqual(typeof read, 'string', said(read));
+  if (typeof read === 'string') return;
+  assert.deepEqual(read.ignored, [{ endpoint: 'gateway', members: ['modelAliases', 'firstParty'] }]);
+  const endpoint = read.endpoints[0] as ModelEndpoint;
+  assert.equal(endpoint.firstParty, false, 'no runtime reaching it reads the marker, so none is applied');
+  assert.deepEqual(endpoint.modelAliases, {});
+  assert.deepEqual(
+    hostEndpointsOf(read.endpoints)[0]?.models,
+    ['gpt-6-sol', 'claude-opus-5'],
+    'no tier is offered',
+  );
+});
+
+test("control: Claude's rules still hold on an endpoint Claude reaches", async () => {
+  assert.match(await problemFor({ ...VALID, modelAliases: {} }), /maps no model for opus, sonnet, haiku/);
+});
+
+test('Codex on an endpoint it cannot speak is refused at start: an OpenAI Chat endpoint', async () => {
+  assert.match(
+    await problemFor({ ...CODEX_ENDPOINT, wireApi: 'openai-chat' }),
+    /runtime codex, which does not speak openai-chat — codex speaks openai-responses/,
+  );
+});
+
+test('the hello lists a runtime on an endpoint only where it speaks its API: Codex on Responses, never on Chat', () => {
+  const declared = (
+    wireApi: ModelEndpoint['wireApi'],
+    runtimes: string[],
+  ): Omit<ModelEndpoint, 'authToken'> => ({
+    name: `on-${wireApi}`,
+    wireApi,
+    runtimes,
+    baseUrl: 'https://x.example',
+    models: ['m'],
+    modelAliases: {},
+    contextWindow: null,
+    env: {},
+    firstParty: false,
+  });
+  assert.deepEqual(
+    hostEndpointsOf([declared('openai-responses', ['codex']), declared('openai-chat', ['codex'])]).map(
+      (endpoint) => [endpoint.name, endpoint.runtimes],
+    ),
+    [
+      ['on-openai-responses', ['codex']],
+      ['on-openai-chat', []],
+    ],
   );
 });

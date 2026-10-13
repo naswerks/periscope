@@ -18,6 +18,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { changelogReady } from './changelog-heading.mjs';
 
 const root = new URL('../', import.meta.url);
 const at = (relative) => fileURLToPath(new URL(relative, root));
@@ -105,8 +106,8 @@ require_(
 );
 const changelog = readIfPresent('CHANGELOG.md') ?? '';
 require_(
-  /^## Unreleased\s*$/m.test(changelog) || changelog.includes(`## [${manifest.version}]`),
-  `CHANGELOG.md has neither an Unreleased section nor a section for ${manifest.version}`,
+  changelogReady(changelog, manifest.version),
+  `CHANGELOG.md has neither a non-empty Unreleased section nor a section for ${manifest.version}`,
 );
 
 /**

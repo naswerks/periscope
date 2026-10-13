@@ -62,6 +62,13 @@ export type Command =
       /** `--unset <key>`: remove the key from the file. */
       readonly unset: boolean;
     }
+  /**
+   * Answer one tool call for a runtime's own hook: read the event the runtime hands its hook on standard
+   * input, ask this host's running session over the hook channel, and write the runtime's proceed or
+   * block. Run by the runtime, never by a person. `--probe` only proves the command starts and reads its
+   * input, which the host checks at start through the same shell the runtime uses.
+   */
+  | { readonly kind: 'hook'; readonly runtime: string | null; readonly probe: boolean }
   /** Print the package version. */
   | { readonly kind: 'version' }
   /** Say what the verbs are. */
@@ -118,6 +125,8 @@ export function readCommand(argv: readonly string[]): Command {
       return { kind: 'version' };
     case 'status':
       return { kind: 'status' };
+    case 'hook':
+      return { kind: 'hook', runtime: argv[1] ?? null, probe: argv.slice(2).includes('--probe') };
     case 'help':
     case '--help':
     case '-h':
@@ -190,6 +199,7 @@ export const USAGE = [
   '  periscope config --unset <key>   Remove one config value from the file.',
   '  periscope status         Say what this host is: its link, credential, ids, workspace and where',
   '                           each setting came from. Reads what serve left behind; never dials.',
+  "  periscope hook codex     Answer one tool call for Codex's own hook; Codex runs it, not a person.",
   '  periscope version        Print the package version.',
   '  periscope help           Show this.',
   '',

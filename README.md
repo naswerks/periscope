@@ -18,7 +18,11 @@ hosts is a live conversation you can steer mid-turn, not a job you collect at th
 port and carries no opinion about what a session _means_: it emits what happened, and the
 controller decides what to do about it. The agent it hosts is Claude Code, through the Claude Agent
 SDK, behind a seam whose own vocabulary names no agent; the agent's hook and message names ride
-the wire as `cause.event`, and the transcript locator is `claude-transcript:`.
+the wire as `cause.event`, and the transcript locator is `claude-transcript:`. A host can also offer
+Codex, through Codex's app-server, when its operator points it at a Codex binary and a home of the
+runner's own ([configuration](docs/configuration.md#codex)); a Codex session is gated through
+periscope's own Codex hook, at tier `intercepted-with-residual`, and every path that can still run
+undecided is named when it happens.
 
 ## Run a host
 
@@ -48,12 +52,12 @@ PERISCOPE_CONTROLLER_URL and PERISCOPE_DECISION_URL written to the config file -
 The fourth starts the host, in the foreground, until you stop it:
 
 ```
-[host] periscope 1.6.0 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
+[host] periscope 1.7.0 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
 [credential] paired as ph-8cb226ae… - the paired credential is presented on every dial
 [agent] Claude Code 2.1.284 (agent SDK 0.3.284), 12 model(s) in the hello
 [link] idle -> connecting (start_requested)
 [link] connecting -> open (socket_connected)
-[link] open -> accepted (hello_completed) — protocol v15
+[link] open -> accepted (hello_completed) — protocol v16
 ```
 
 Before it dials, the host asks the agent which models it offers, without sending a prompt, and the
@@ -130,6 +134,7 @@ anything. The figure for a release is in [`CHANGELOG.md`](CHANGELOG.md).
 | -------------------------------- | ------------------------------------- |
 | `@anthropic-ai/claude-agent-sdk` | **0.3.284**, pinned exactly, no caret |
 | Claude Code CLI                  | **2.1.284** (bundled with that SDK)   |
+| Codex app-server                 | **0.162.1**, pinned, when configured  |
 | Node                             | 22 or later; CI proves 22 and 24      |
 
 The SDK is pre-1.0, so the SHA-256 of its installed type definitions is kept in

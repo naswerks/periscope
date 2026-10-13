@@ -16,6 +16,7 @@
  */
 import type { Refusal } from '../core/refusal.js';
 import { isRefusalReason } from '../core/refusal.js';
+import type { ToolKind } from '../gate/decision.js';
 import type { ControlTier, SessionTransition } from '../state/model.js';
 
 /**
@@ -35,7 +36,7 @@ import type { ControlTier, SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -45,22 +46,20 @@ export const PROTOCOL_VERSION = 15;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 15 adds the `agent_facts` update body (the facts a controller acts on, lifted out of the
- * agent's own messages into typed members), the `agent_fragment` delta body, and `runtime` on
- * `agent_message`. It also adds `agents` and `endpoints` to the hello's configuration (each runtime
- * this host can spawn, with its vocabularies and control tier, and each model endpoint its operator
- * declared), `runtime` and `endpoint` on `session_new.request`, `controlTier` on a session's first
- * transition into `ready`, `toolKind` and `runtime` on the decision request, five refusal reasons for
- * the runtime and endpoint a session names, and `settings-route-refused` for a repository's settings
- * file that names a key beneath the env floor. Each is a new body, an optional member or a reason.
- * Five of the reasons answer only a member a version-14 controller never sends; the sixth answers a
- * repository's file, and reaches such a controller as a reason it reads tolerantly, as it reads any
- * reason it does not know. So a version-14 controller is still spoken to: it reads the new bodies and
- * members as open JSON it may ignore, and every frame it sends decodes here unchanged. The narrowing of `session_new.request.env` that version 14 made (a key a
+ * Version 16 adds the `agent-event` cause kind, whose events are a runtime's own notifications named
+ * `{runtime}:{native name}` (`AGENT_EVENTS`); `codex` as a runtime a hello may list and a session may
+ * name, whose forwarded messages are its own JSON-RPC traffic with `runtime: "codex"`; the
+ * `runtime-default` system-prompt preset, which every runtime reads as its own base instructions with
+ * an append; and five refusal reasons for a runtime's stdio JSON-RPC peer (`rpc-line-malformed`,
+ * `rpc-line-too-large`, `rpc-request-timed-out`, `rpc-request-failed`, `rpc-server-overloaded`). A
+ * transition's cause is carried unnarrowed, a runtime is a word, the preset is a value of a member
+ * that already carries any JSON, and a reason a controller does not know is read tolerantly. So a
+ * version-15 controller is still spoken to: what it sends decodes here unchanged, and what it receives
+ * decodes on its side. The narrowing of `session_new.request.env` that version 14 made (a key a
  * controller places in the spawn environment must be one this host's operator declared, above the
  * floor) holds at every version this host negotiates.
  */
-export const PROTOCOL_VERSION_MIN = 14;
+export const PROTOCOL_VERSION_MIN = 15;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {
@@ -84,7 +83,7 @@ export const MAX_FRAME_BYTES = 64 * 1024;
 /**
  * What a session update carries. ACP: `session/update`, whose payload is likewise a union.
  *
- * Four members. A later kind of update adds a member here rather than a new payload kind, which
+ * Five members. A later kind of update adds a member here rather than a new payload kind, which
  * keeps `session_update` meaning "a settled fact about this session" (the non-droppable lane)
  * instead of splitting one idea across several discriminators.
  *
@@ -96,9 +95,13 @@ export const MAX_FRAME_BYTES = 64 * 1024;
  * `AgentFactsUpdate` is the fourth: one fact the agent reported (its resumable handle, its receipt,
  * its spend, its context use, its running tasks, a compaction) lifted out of its own message into a
  * typed member, riding beside the message it came from.
+ *
+ * `AgentItemUpdate` is the fifth: one item of the session's conversation (a turn's start or end, the
+ * prompt, a reply, thinking, a tool call and its result, a plan, a notice), stated in one shape for
+ * every runtime and riding beside the native message it was read from.
  */
 export type SessionUpdateBody =
-  StateTransitionUpdate | AgentMessageUpdate | WireRefusalUpdate | AgentFactsUpdate;
+  StateTransitionUpdate | AgentMessageUpdate | WireRefusalUpdate | AgentFactsUpdate | AgentItemUpdate;
 
 /**
  * A declared state transition. The reason this lane is not droppable: losing one is not a repaint
@@ -470,6 +473,21 @@ export interface RunningTaskEntry {
   readonly description: string | null;
 }
 
+/** How a task the runtime ran came to an end: it finished, it failed, or it was stopped. */
+export const TASK_SETTLEMENTS = ['completed', 'failed', 'stopped'] as const;
+
+export type TaskSettlement = (typeof TASK_SETTLEMENTS)[number];
+
+/**
+ * One task the runtime says has ended, and how. `type` is the task's type as the runtime reported it
+ * when the task started, and null when this host never saw it start.
+ */
+export interface SettledTaskEntry {
+  readonly taskId: string;
+  readonly type: string | null;
+  readonly status: TaskSettlement;
+}
+
 /** The runtime's own resumable id for the session. A resume or a fork reports a new one. */
 export interface SessionHandleFact {
   readonly kind: 'session_handle';
@@ -493,6 +511,12 @@ export interface AgentReceiptFact {
   readonly pluginErrors: readonly ReceiptPluginError[] | null;
   readonly mcpServers: readonly ReceiptMcpServer[] | null;
   readonly source: ReceiptSource;
+  /**
+   * Whether the runtime's report stated an effort at all (protocol 16). True with `effort: null`
+   * means the runtime said no effort is in force; false means its report carried no effort, so a
+   * null `effort` says nothing. Absent from a host one release behind.
+   */
+  readonly effortReported?: boolean | null;
 }
 
 /**
@@ -527,13 +551,24 @@ export interface UsageSampleFact {
   readonly contextWindow: number | null;
   readonly cacheTtl: CacheTtl | null;
   readonly mainThread: boolean;
+  /**
+   * The tokens the call read from the prompt cache, as the runtime reported them (protocol 16); null
+   * when it did not say. A call that read the cache and wrote none (`cacheTtl` null) still reports
+   * its read here. Absent from a host one release behind.
+   */
+  readonly cacheReadTokens?: number | null;
 }
 
-/** Every task the runtime says is running, whole: each one replaces the last. */
+/**
+ * Every task the runtime says is running, whole: each one replaces the last. `settled` lists the
+ * tasks the runtime says ended since the current turn began, each with how it ended (protocol 16),
+ * replaced whole the same way; absent from a host one release behind.
+ */
 export interface TasksFact {
   readonly kind: 'tasks';
   readonly runtime: string;
   readonly running: readonly RunningTaskEntry[];
+  readonly settled?: readonly SettledTaskEntry[] | null;
 }
 
 /** A compaction began or finished, with what its source reported. */
@@ -636,6 +671,216 @@ export function readAgentFragment(body: JsonObject): AgentFragmentDelta | null {
   if (typeof delta.runtime !== 'string' || typeof delta.channel !== 'string') return null;
   if (typeof delta.text !== 'string') return null;
   return body as unknown as AgentFragmentDelta;
+}
+
+// ---------------------------------------------------------------------------
+// The conversation item stream: the session's conversation, one complete item at a time.
+//
+// A runtime reports its conversation in its own message shapes. These items state it once: a turn
+// began or ended, the prompt it took, the text it wrote, its thinking, a tool call and that call's
+// result, its plan, and a notice it raised. A consumer folds every runtime's conversation with one
+// reader, and the native message still rides `agent_message` beside the items for whoever wants it.
+//
+// Every item is reported, never synthesized: a runtime fills only the kinds its events carry, and a
+// member it did not report is null (a `final` it does not mark, an exit code it does not state, a diff
+// it does not send). An item is emitted once, complete; streaming text rides the fragments on the
+// delta lane. Every text member is held to the item budget, and an item cut to fit says so.
+// ---------------------------------------------------------------------------
+
+/** How a turn stands: it began, it finished, it was interrupted, or it failed. */
+export const TURN_ITEM_STATUSES = ['started', 'completed', 'interrupted', 'failed'] as const;
+
+export type TurnItemStatus = (typeof TURN_ITEM_STATUSES)[number];
+
+/**
+ * How a tool call ended: it ran to an end (`completed`) or broke (`failed`), the runtime's own approval
+ * answered no (`declined`), or this host's gate refused it (`blocked`).
+ */
+export const TOOL_RESULT_STATUSES = ['completed', 'failed', 'declined', 'blocked'] as const;
+
+export type ToolResultStatus = (typeof TOOL_RESULT_STATUSES)[number];
+
+/** What a tool call did to one file: created it, removed it, or changed it. */
+export const FILE_CHANGE_KINDS = ['add', 'delete', 'update'] as const;
+
+export type FileChangeKind = (typeof FILE_CHANGE_KINDS)[number];
+
+/** How much a notice matters: worth knowing, worth attention, or something went wrong. */
+export const NOTICE_LEVELS = ['info', 'warning', 'error'] as const;
+
+export type NoticeLevel = (typeof NOTICE_LEVELS)[number];
+
+/**
+ * The most bytes one item takes as JSON. A text member past it is cut and the item says so in its
+ * `truncated`; a tool call's `input` past it is left out whole, never cut. Half a frame, so an item
+ * and its envelope always fit `MAX_FRAME_BYTES`.
+ */
+export const MAX_AGENT_ITEM_BYTES = 32 * 1024;
+
+/** A turn began or ended. `detail` says why a turn that did not complete ended, when the runtime says. */
+export interface TurnItem {
+  readonly kind: 'turn';
+  readonly itemId: string;
+  readonly turnId: string | null;
+  readonly status: TurnItemStatus;
+  readonly detail: string | null;
+  readonly truncated: boolean;
+}
+
+/** The prompt, as the runtime received it. */
+export interface UserTextItem {
+  readonly kind: 'user_text';
+  readonly itemId: string;
+  readonly turnId: string | null;
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+/**
+ * Text the agent wrote. `final` is true where the runtime marks the text as the turn's answer, false
+ * where it marks it interim, and null where it does not say.
+ */
+export interface AgentTextItem {
+  readonly kind: 'agent_text';
+  readonly itemId: string;
+  readonly turnId: string | null;
+  readonly text: string;
+  readonly final: boolean | null;
+  readonly truncated: boolean;
+}
+
+/**
+ * The agent's reasoning. `summary` is true for a reasoning summary and false for the reasoning text
+ * itself; the text is empty where the runtime keeps it to itself.
+ */
+export interface ThinkingItem {
+  readonly kind: 'thinking';
+  readonly itemId: string;
+  readonly turnId: string | null;
+  readonly text: string;
+  readonly summary: boolean;
+  readonly truncated: boolean;
+}
+
+/**
+ * A tool call, as the runtime names it. `toolUseId` joins it to its result and to the decision request
+ * the gate posted for it. `input` is null where the runtime reported none, or where it is past the
+ * item budget (and then `truncated` is true).
+ */
+export interface ToolCallItem {
+  readonly kind: 'tool_call';
+  readonly itemId: string;
+  readonly turnId: string | null;
+  readonly toolUseId: string;
+  readonly toolName: string;
+  readonly toolKind: ToolKind;
+  readonly input: JsonObject | null;
+  readonly truncated: boolean;
+}
+
+/** One file a tool call changed. `movePath` is where it moved to; `diff` is the change as reported. */
+export interface FileChangeEntry {
+  readonly path: string;
+  readonly change: FileChangeKind;
+  readonly movePath: string | null;
+  readonly diff: string | null;
+}
+
+/**
+ * How a tool call ended, with what it reported: its output, its exit code, how long it ran, and the
+ * files it changed. Each is null where the runtime did not report it.
+ */
+export interface ToolResultItem {
+  readonly kind: 'tool_result';
+  readonly itemId: string;
+  readonly turnId: string | null;
+  readonly toolUseId: string;
+  readonly status: ToolResultStatus;
+  readonly output: string | null;
+  readonly exitCode: number | null;
+  readonly durationMs: number | null;
+  readonly changes: readonly FileChangeEntry[] | null;
+  readonly truncated: boolean;
+}
+
+/** The agent's plan, as text. */
+export interface PlanItem {
+  readonly kind: 'plan';
+  readonly itemId: string;
+  readonly turnId: string | null;
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+/** Something the runtime reported beside the conversation: a warning, a retry, an error. */
+export interface NoticeItem {
+  readonly kind: 'notice';
+  readonly itemId: string;
+  readonly turnId: string | null;
+  readonly level: NoticeLevel;
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+/** One conversation item, tagged by `kind`. */
+export type AgentItem =
+  | TurnItem
+  | UserTextItem
+  | AgentTextItem
+  | ThinkingItem
+  | ToolCallItem
+  | ToolResultItem
+  | PlanItem
+  | NoticeItem;
+
+/** The item kinds this build reads; a newer peer's other kinds cross the wire and read as null here. */
+const AGENT_ITEM_KINDS: ReadonlySet<string> = new Set<AgentItem['kind']>([
+  'turn',
+  'user_text',
+  'agent_text',
+  'thinking',
+  'tool_call',
+  'tool_result',
+  'plan',
+  'notice',
+]);
+
+/**
+ * One conversation item, on the update lane (protocol 16). `runtime` names the runtime whose
+ * conversation it is; `observedAt` is the instant this host took its source off the agent's stream.
+ * `itemId` is unique within the session, so a consumer's ingest is idempotent on it.
+ */
+export interface AgentItemUpdate {
+  readonly update: 'agent_item';
+  readonly runtime: string;
+  readonly item: AgentItem;
+  readonly observedAt?: string | null;
+}
+
+/** Build the update carrying one item. The only supported way to put one on the wire. */
+export function agentItemUpdate(runtime: string, item: AgentItem, observedAt?: string | null): SessionUpdate {
+  const body: AgentItemUpdate = {
+    update: 'agent_item',
+    runtime,
+    item,
+    ...(observedAt === undefined ? {} : { observedAt }),
+  };
+  return { kind: 'session_update', body: body as unknown as JsonObject };
+}
+
+/**
+ * Read an item back out, or null when the body is some other kind of update or carries an item kind
+ * this build does not model. Null rather than a throw, for the reason `readStateTransition` gives.
+ */
+export function readAgentItem(body: JsonObject): AgentItemUpdate | null {
+  const update = body as { update?: unknown; runtime?: unknown; item?: unknown };
+  if (update.update !== 'agent_item') return null;
+  if (typeof update.runtime !== 'string') return null;
+  const item = update.item as { kind?: unknown; itemId?: unknown } | null | undefined;
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) return null;
+  if (typeof item.kind !== 'string' || !AGENT_ITEM_KINDS.has(item.kind)) return null;
+  if (typeof item.itemId !== 'string') return null;
+  return body as unknown as AgentItemUpdate;
 }
 
 /*
@@ -2047,15 +2292,41 @@ export interface HostEndpoint {
 }
 
 /**
+ * How a runtime names the skills a plugin carries: under the plugin's own name (`plugin:skill`), or
+ * by the skill's name alone.
+ */
+export const SKILL_NAMINGS = ['namespaced', 'bare'] as const;
+
+export type SkillNaming = (typeof SKILL_NAMINGS)[number];
+
+/**
+ * When a runtime takes the plugin directories: with each session's own request (`per-session`), from
+ * this host when the runtime's process starts (`per-process`), or only from what is already in the
+ * session's working directory (`workspace`).
+ */
+export const SKILL_DELIVERIES = ['per-session', 'per-process', 'workspace'] as const;
+
+export type SkillDelivery = (typeof SKILL_DELIVERIES)[number];
+
+/**
+ * How one runtime takes plugin directories, as the hello states it (protocol 16): how it names their
+ * skills and when they reach it. A runtime the hello's `agentSkills` does not list cannot take them.
+ */
+export interface HostAgentSkills {
+  readonly runtime: string;
+  readonly naming: SkillNaming;
+  readonly delivery: SkillDelivery;
+}
+
+/**
  * How this host is configured, as values: the read half of `periscope config`.
  *
  * The `workspace:*` capability markers say which mode a host is in; these say what it is pointed
- * at. Every member but `agent`, `agents` and `endpoints` is `T | null` (absent is null, never
- * undefined), and null means the setting is not set on the host, not that the host declined to say.
- * `agent`, `agents` and `endpoints` were added inside the protocol window and are optional (see this
- * file's header). `controllerUrl` is what the host
- * dialled to deliver this frame, reported so a controller can show it beside the rest; nothing here
- * is an ask, so nothing here can be refused.
+ * at. Every member but `agent`, `agents`, `endpoints` and `agentSkills` is `T | null` (absent is null,
+ * never undefined), and null means the setting is not set on the host, not that the host declined to
+ * say. Those four were added inside the protocol window and are optional (see this file's header).
+ * `controllerUrl` is what the host dialled to deliver this frame, reported so a controller can show it
+ * beside the rest; nothing here is an ask, so nothing here can be refused.
  */
 export interface HostConfiguration {
   readonly repositoryRoot: string | null;
@@ -2096,6 +2367,12 @@ export interface HostConfiguration {
    * from.
    */
   readonly endpoints?: readonly HostEndpoint[] | null;
+  /**
+   * How each runtime this host can spawn takes plugin directories (protocol 16), one entry per runtime
+   * `agents` lists that can, at most `MAX_AGENT_ENTRIES`. It rides with `agents`: null when `agents` is
+   * null, absent when it is absent and from a host one release behind. Never settable.
+   */
+  readonly agentSkills?: readonly HostAgentSkills[] | null;
 }
 
 /** A `HostConfiguration` with nothing set: what a host composed without one reports. */

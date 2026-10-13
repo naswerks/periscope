@@ -14,9 +14,11 @@ import { ok, refuse } from '../core/result.js';
 import { isRefusalReason } from '../core/refusal.js';
 import type {
   AgentFact,
+  AgentItem,
   Frame,
   HostAgent,
   HostAgentEntry,
+  HostAgentSkills,
   HostEndpoint,
   JsonObject,
   JsonValue,
@@ -28,8 +30,10 @@ import {
   COMPACTION_TRIGGERS,
   COST_BASES,
   ENDPOINT_WIRE_APIS,
+  FILE_CHANGE_KINDS,
   FRAGMENT_CHANNELS,
   MAX_AGENT_CATALOG_BYTES,
+  MAX_AGENT_ITEM_BYTES,
   MAX_AGENT_ENTRIES,
   MAX_AGENT_MODELS,
   MAX_BULK_RELEASES,
@@ -47,10 +51,18 @@ import {
   MAX_REPOSITORY_READ_BYTES,
   MAX_WORKSPACE_FILE_BYTES,
   MAX_WORKSPACE_READ_BYTES,
+  NOTICE_LEVELS,
   RECEIPT_SOURCES,
+  SKILL_DELIVERIES,
+  SKILL_NAMINGS,
+  TASK_SETTLEMENTS,
+  TOOL_RESULT_STATUSES,
+  TURN_ITEM_STATUSES,
   TURN_SCOPES,
 } from './frames.js';
 import { MAX_WORKSPACE_ID_LENGTH } from '../core/workspace-id.js';
+import { TOOL_KINDS } from '../gate/decision.js';
+import { agentItemBytes } from './item-budget.js';
 import { CONTROL_TIER_LEVELS } from '../state/model.js';
 
 /**
@@ -180,6 +192,17 @@ const hostEndpointSchema = z.looseObject({
 
 const hostEndpointsSchema = z.array(hostEndpointSchema).max(MAX_ENDPOINTS);
 
+// How one runtime takes plugin directories (protocol 16). The entry is new, so its own members are
+// required; the list that carries it is the optional member. Each word is bounded here, so a newer
+// peer's added word is read; `encode` refuses a word this host does not declare.
+const hostAgentSkillsSchema = z.looseObject({
+  runtime: z.string().min(1).max(MAX_FACT_WORD_LENGTH),
+  naming: z.string().min(1).max(MAX_FACT_WORD_LENGTH),
+  delivery: z.string().min(1).max(MAX_FACT_WORD_LENGTH),
+});
+
+const hostAgentSkillsListSchema = z.array(hostAgentSkillsSchema).max(MAX_AGENT_ENTRIES);
+
 const hostConfigurationSchema = z.looseObject({
   repositoryRoot: configurationValueSchema,
   workspaceRoot: configurationValueSchema,
@@ -194,6 +217,8 @@ const hostConfigurationSchema = z.looseObject({
   // Protocol 15, optional for the same reason.
   agents: hostAgentsSchema.nullable().optional(),
   endpoints: hostEndpointsSchema.nullable().optional(),
+  // Protocol 16, optional for the same reason.
+  agentSkills: hostAgentSkillsListSchema.nullable().optional(),
 });
 
 /** The key names a hello or a configure result lists as pending: config keys, so short and few. */
@@ -291,6 +316,7 @@ const FACT_SCHEMAS: Readonly<Record<AgentFact['kind'], z.ZodType>> = {
       .nullable()
       .optional(),
     source: factWordSchema.nullable().optional(),
+    effortReported: z.boolean().nullable().optional(),
   }),
   turn_record: z.looseObject({
     runtime: factWordSchema.nullable().optional(),
@@ -308,6 +334,7 @@ const FACT_SCHEMAS: Readonly<Record<AgentFact['kind'], z.ZodType>> = {
     contextWindow: z.number().int().nonnegative().nullable().optional(),
     cacheTtl: factWordSchema.nullable().optional(),
     mainThread: z.boolean().nullable().optional(),
+    cacheReadTokens: z.number().int().nonnegative().nullable().optional(),
   }),
   tasks: z.looseObject({
     runtime: factWordSchema.nullable().optional(),
@@ -317,6 +344,17 @@ const FACT_SCHEMAS: Readonly<Record<AgentFact['kind'], z.ZodType>> = {
           taskId: factTextSchema.nullable().optional(),
           type: factWordSchema.nullable().optional(),
           description: factTextSchema.nullable().optional(),
+        }),
+      )
+      .max(MAX_FACT_LIST_ENTRIES)
+      .nullable()
+      .optional(),
+    settled: z
+      .array(
+        z.looseObject({
+          taskId: factTextSchema.nullable().optional(),
+          type: factWordSchema.nullable().optional(),
+          status: factWordSchema.nullable().optional(),
         }),
       )
       .max(MAX_FACT_LIST_ENTRIES)
@@ -352,6 +390,85 @@ const agentFragmentBodySchema = z.looseObject({
   parentId: factTextSchema.nullable().optional(),
 });
 
+// ---------------------------------------------------------------------------
+// The conversation item stream's body (protocol 16).
+//
+// Every member an item declares is `.nullable().optional()`, as the facts' are: a peer that omits one
+// is read as not stating it, and an unknown key is carried. What these refuse is a member present with
+// the wrong type, a count that is not a whole number, and an item past `MAX_AGENT_ITEM_BYTES`. Each
+// count is spelled out as `<member>: z.number().int()` for the reason the facts' counts are.
+// ---------------------------------------------------------------------------
+
+/** The members every item carries, whatever its kind. */
+const itemMembers = {
+  itemId: factTextSchema.nullable().optional(),
+  turnId: factTextSchema.nullable().optional(),
+  truncated: z.boolean().nullable().optional(),
+};
+
+const itemTextSchema = z.string().nullable().optional();
+
+const fileChangeEntrySchema = z.looseObject({
+  path: factTextSchema.nullable().optional(),
+  change: factWordSchema.nullable().optional(),
+  movePath: factTextSchema.nullable().optional(),
+  diff: z.string().nullable().optional(),
+});
+
+/** One schema per item kind this build models, each holding the members that kind declares. */
+const ITEM_SCHEMAS: Readonly<Record<AgentItem['kind'], z.ZodType>> = {
+  turn: z.looseObject({
+    ...itemMembers,
+    status: factWordSchema.nullable().optional(),
+    detail: itemTextSchema,
+  }),
+  user_text: z.looseObject({ ...itemMembers, text: itemTextSchema }),
+  agent_text: z.looseObject({
+    ...itemMembers,
+    text: itemTextSchema,
+    final: z.boolean().nullable().optional(),
+  }),
+  thinking: z.looseObject({
+    ...itemMembers,
+    text: itemTextSchema,
+    summary: z.boolean().nullable().optional(),
+  }),
+  tool_call: z.looseObject({
+    ...itemMembers,
+    toolUseId: factTextSchema.nullable().optional(),
+    toolName: factTextSchema.nullable().optional(),
+    toolKind: factWordSchema.nullable().optional(),
+    input: jsonObjectSchema.nullable().optional(),
+  }),
+  tool_result: z.looseObject({
+    ...itemMembers,
+    toolUseId: factTextSchema.nullable().optional(),
+    status: factWordSchema.nullable().optional(),
+    output: itemTextSchema,
+    exitCode: z.number().int().nullable().optional(),
+    durationMs: z.number().int().nonnegative().nullable().optional(),
+    changes: z.array(fileChangeEntrySchema).max(MAX_FACT_LIST_ENTRIES).nullable().optional(),
+  }),
+  plan: z.looseObject({ ...itemMembers, text: itemTextSchema }),
+  notice: z.looseObject({
+    ...itemMembers,
+    level: factWordSchema.nullable().optional(),
+    text: itemTextSchema,
+  }),
+};
+
+/**
+ * The `agent_item` body. `item` is required because it is what the body is. An item kind this build
+ * does not model is carried with only its `kind` checked, and every item, of any kind, is held to the
+ * item budget.
+ */
+const agentItemBodySchema = z.looseObject({
+  update: z.literal('agent_item'),
+  runtime: factWordSchema.nullable().optional(),
+  item: z.looseObject({ kind: factKindSchema }),
+  observedAt: z.string().min(1).nullable().optional(),
+});
+
 /** An `agent_message` body's one checked member: the runtime that emitted it. */
 const agentMessageRuntimeSchema = z.looseObject({ runtime: factWordSchema.nullable().optional() });
 
@@ -373,8 +490,8 @@ function carryIssues(
 const transitionControlTierSchema = controlTierSchema.nullable().optional();
 
 /**
- * The checks a body earns by its `update`, for the bodies protocol 15 added shapes to. Every other
- * body is open JSON, exactly as before.
+ * The checks a body earns by its `update`, for the bodies protocols 15 and 16 added shapes to. Every
+ * other body is open JSON, exactly as before.
  */
 function checkBody(body: JsonObject, lane: 'update' | 'delta', ctx: BodyCheckContext): void {
   const update = body['update'];
@@ -400,6 +517,22 @@ function checkBody(body: JsonObject, lane: 'update' | 'delta', ctx: BodyCheckCon
     const kind = parsed.data.fact.kind;
     const schema = (FACT_SCHEMAS as Partial<Record<string, z.ZodType>>)[kind];
     if (schema !== undefined) carryIssues(schema.safeParse(parsed.data.fact), ['fact'], ctx);
+    return;
+  }
+  if (lane === 'update' && update === 'agent_item') {
+    const parsed = agentItemBodySchema.safeParse(body);
+    carryIssues(parsed, [], ctx);
+    if (!parsed.success) return;
+    const schema = (ITEM_SCHEMAS as Partial<Record<string, z.ZodType>>)[parsed.data.item.kind];
+    if (schema !== undefined) carryIssues(schema.safeParse(parsed.data.item), ['item'], ctx);
+    const byteCount = agentItemBytes(body['item']);
+    if (byteCount > MAX_AGENT_ITEM_BYTES) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `the item is ${byteCount} bytes as JSON, over the ${MAX_AGENT_ITEM_BYTES} an item takes`,
+        path: ['item'],
+      });
+    }
     return;
   }
   if (lane === 'delta' && update === 'agent_fragment') {
@@ -433,8 +566,8 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
   // keep malformed bytes out, and a newer peer's richer body must survive the crossing rather than
   // be rejected here. The typed union is what a consumer reads it back as.
   //
-  // The bodies protocol 15 added shapes to are checked for the members they declare, and only those:
-  // an `agent_facts` or `agent_fragment` body, an `agent_message`'s `runtime` and a
+  // The bodies protocols 15 and 16 added shapes to are checked for the members they declare, and only
+  // those: an `agent_facts`, `agent_item` or `agent_fragment` body, an `agent_message`'s `runtime` and a
   // `state_transition`'s `controlTier` (`checkBody`). Every declared member is optional and every
   // unknown key is carried, so a richer body still crosses; the rest of a `state_transition`, a
   // `wire_refusal` and an `agent_message`'s `message` are not narrowed.
@@ -806,9 +939,15 @@ export function encode(frame: Frame): Result<string> {
     );
   }
 
-  // The same pair for the fact layer's vocabularies, the control tier's levels and the endpoints' wire
-  // APIs: a newer peer's word is read on the way in, and this host may send only the words it declares.
-  const undeclaredWord = undeclaredFactWord(frame) ?? undeclaredTierLevel(frame) ?? undeclaredWireApi(frame);
+  // The same pair for the fact layer's and the item stream's vocabularies, the control tier's levels,
+  // the endpoints' wire APIs and the runtimes' skill words: a newer peer's word is read on the way in,
+  // and this host may send only the words it declares.
+  const undeclaredWord =
+    undeclaredFactWord(frame) ??
+    undeclaredItemWord(frame) ??
+    undeclaredTierLevel(frame) ??
+    undeclaredWireApi(frame) ??
+    undeclaredSkillWord(frame);
   if (undeclaredWord !== null) {
     return refuse(
       'frame-malformed',
@@ -1005,6 +1144,8 @@ function undeclaredFactWord(frame: Frame): UndeclaredWord | null {
       );
     case 'usage_sample':
       return wordOutside('fact.cacheTtl', members['cacheTtl'], CACHE_TTLS);
+    case 'tasks':
+      return undeclaredInList('fact.settled', members['settled'], 'status', TASK_SETTLEMENTS);
     case 'compaction':
       return (
         wordOutside('fact.status', members['status'], COMPACTION_STATUSES) ??
@@ -1013,6 +1154,73 @@ function undeclaredFactWord(frame: Frame): UndeclaredWord | null {
     default:
       return null;
   }
+}
+
+/** The item kinds this host declares, for the outgoing check. */
+const DECLARED_ITEM_KINDS: readonly string[] = Object.keys(ITEM_SCHEMAS);
+
+/**
+ * The first item-stream word on an outgoing frame that this host does not declare, else null: an item
+ * kind, a turn's status, a tool call's kind, a tool result's status or a change's kind, or a notice's
+ * level. Null and absent are not words.
+ */
+function undeclaredItemWord(frame: Frame): UndeclaredWord | null {
+  if (frame.frame !== 'session' || frame.payload.kind !== 'session_update') return null;
+  const body = frame.payload.body as Record<string, unknown>;
+  if (body['update'] !== 'agent_item') return null;
+  const item = body['item'];
+  if (typeof item !== 'object' || item === null) return null;
+  const members = item as Record<string, unknown>;
+  const kind = wordOutside('item.kind', members['kind'], DECLARED_ITEM_KINDS);
+  if (kind !== null) return kind;
+
+  switch (members['kind']) {
+    case 'turn':
+      return wordOutside('item.status', members['status'], TURN_ITEM_STATUSES);
+    case 'tool_call':
+      return wordOutside('item.toolKind', members['toolKind'], TOOL_KINDS);
+    case 'tool_result':
+      return (
+        wordOutside('item.status', members['status'], TOOL_RESULT_STATUSES) ??
+        undeclaredInList('item.changes', members['changes'], 'change', FILE_CHANGE_KINDS)
+      );
+    case 'notice':
+      return wordOutside('item.level', members['level'], NOTICE_LEVELS);
+    default:
+      return null;
+  }
+}
+
+/** The first undeclared word among one member of a list's entries, else null. */
+function undeclaredInList(
+  member: string,
+  list: unknown,
+  key: string,
+  declared: readonly string[],
+): UndeclaredWord | null {
+  if (!Array.isArray(list)) return null;
+  for (const [index, entry] of (list as readonly unknown[]).entries()) {
+    const value = (entry as Record<string, unknown> | null)?.[key];
+    const undeclared = wordOutside(`${member}.${index}.${key}`, value, declared);
+    if (undeclared !== null) return undeclared;
+  }
+  return null;
+}
+
+/** The first skill naming or delivery word on an outgoing hello's or configure answer's `agentSkills` this host does not declare, else null. */
+function undeclaredSkillWord(frame: Frame): UndeclaredWord | null {
+  let skills: readonly HostAgentSkills[] | null | undefined;
+  if (frame.frame === 'control') {
+    if (frame.payload.kind !== 'link_hello') return null;
+    skills = frame.payload.configuration.agentSkills;
+  } else {
+    if (frame.payload.kind !== 'host_configure_result') return null;
+    skills = frame.payload.configuration.agentSkills;
+  }
+  return (
+    undeclaredInList('agentSkills', skills, 'naming', SKILL_NAMINGS) ??
+    undeclaredInList('agentSkills', skills, 'delivery', SKILL_DELIVERIES)
+  );
 }
 
 /**

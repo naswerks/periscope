@@ -785,7 +785,10 @@ test('an endpoints file the host could not honour refuses start by name, before 
     const raw = rawEnv(dir, { EXAMPLE_ENDPOINT_KEY: 'example-secret' });
     const run = serve({ raw, merged: mergedEnv(raw, { PERISCOPE_MODEL_ENDPOINTS: path }) });
 
-    assert.match(refused(run), /^PERISCOPE_MODEL_ENDPOINTS: .*runtime "codex", which this host cannot spawn/);
+    assert.match(
+      refused(run),
+      /^PERISCOPE_MODEL_ENDPOINTS: .*runtime codex, which does not speak anthropic-messages/,
+    );
     assert.deepEqual(run.exitCodes, [1]);
     assert.equal(run.link.handlers, null, 'a host refusing its own configuration must not dial');
 
@@ -853,4 +856,29 @@ test('declared endpoints reach the host: the trace names them, a session on one 
     ).hookSpecificOutput;
     assert.equal(decision?.permissionDecision, 'deny');
     assert.match(decision?.permissionDecisionReason ?? '', /credential-path-denied/);
+  }));
+
+test('a member no runtime reaching an endpoint reads is said once at start, and the host still dials', () =>
+  inDir(async (dir) => {
+    const path = join(dir, 'endpoints.json');
+    const codexEndpoint = {
+      name: 'gateway',
+      wireApi: 'openai-responses',
+      runtimes: ['codex'],
+      baseUrl: 'https://gateway.example/v1',
+      credential: { env: 'EXAMPLE_ENDPOINT_KEY' },
+      models: ['gpt-6-sol'],
+      modelAliases: { opus: 'gpt-6-sol' },
+      firstParty: true,
+    };
+    await writeFile(path, JSON.stringify({ endpoints: [codexEndpoint] }), 'utf8');
+    const raw = rawEnv(dir, { EXAMPLE_ENDPOINT_KEY: 'example-secret' });
+    const run = serve({ raw, merged: mergedEnv(raw, { PERISCOPE_MODEL_ENDPOINTS: path }) });
+
+    assert.equal(run.outcome.ok, true, run.err.join('\n'));
+    const said = run.out.filter((line) => line.includes('[endpoint]'));
+    assert.equal(said.length, 1, run.out.join('\n'));
+    assert.match(said[0] ?? '', /\[endpoint\] gateway: modelAliases, firstParty ignored/);
+    assert.equal(run.link.started, true, 'an ignored member never stops a host');
+    assert.equal(run.out.join('\n').includes('example-secret'), false, 'the credential is never printed');
   }));

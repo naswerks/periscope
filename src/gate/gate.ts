@@ -58,27 +58,19 @@ import type {
   HookJSONOutput,
   HookRegistrations,
 } from '../host/agent-process.js';
-import type { Refusal, RefusalReason } from '../core/refusal.js';
+import type { RefusalReason } from '../core/refusal.js';
 import { refusal } from '../core/refusal.js';
 import { DEFAULT_RUNTIME } from '../control/frames.js';
 import { HOOK_TIMEOUT_EVENT } from '../state/model.js';
-import type { Decider, DecisionRequest } from './decision.js';
-import { describeRaw, readDecision } from './decision.js';
-import type { GateOutcome } from './outcome.js';
-import { EscalationUnavailable } from './escalate.js';
+import type { Decider, DecisionRequest, ShellDialect } from './decision.js';
+import { describeRaw } from './decision.js';
+import type { GateOutcome, TerminalOutcome } from './outcome.js';
+import { createCallDecision, unreadableRequest } from './call-decision.js';
 import type { LocalGate } from './local.js';
-import { claudeToolKind } from './tool-kind.js';
+import { claudeShellDialect, claudeToolKind } from './tool-kind.js';
 
 /** Told about every outcome — allows, denials, outages, expiries. Never only the interesting ones. */
 export type OutcomeListener = (outcome: GateOutcome) => void;
-
-/**
- * An outcome that ends a decision. A hold is not one: it is emitted while a decision is still
- * outstanding, and something else terminates it later.
- *
- * Naming it rather than leaving it implied is what lets `outputFor` refuse the hold at compile time.
- */
-type TerminalOutcome = Exclude<GateOutcome, { kind: 'holding' }>;
 
 export interface PermissionGateOptions {
   readonly decide: Decider;
@@ -163,8 +155,8 @@ export interface PermissionGateOptions {
   readonly onDegrade?: (degrade: { readonly name: RefusalReason; readonly detail: string }) => void;
 }
 
-const DEFAULT_MATCHER_TIMEOUT_SECONDS = 60;
-const DEFAULT_DECISION_TIMEOUT_MS = 50_000;
+export const DEFAULT_MATCHER_TIMEOUT_SECONDS = 60;
+export const DEFAULT_DECISION_TIMEOUT_MS = 50_000;
 
 /**
  * The two-deadline invariant, as one declaration with two consumers.
@@ -195,7 +187,7 @@ export function deadlineOrderRefusal(
  * 250ms. Below this, opening and closing a permission entry records a session as "waiting" for
  * less time than it takes to read the record — noise in the one signal the entry exists to carry.
  */
-const DEFAULT_HOLD_AFTER_MS = 250;
+export const DEFAULT_HOLD_AFTER_MS = 250;
 
 /**
  * The `PreToolUse` registration for a session's gate.
@@ -239,45 +231,41 @@ export function permissionHooks(options: PermissionGateOptions): HookRegistratio
     }
   };
 
+  // The decision itself is the one every runtime's gate asks through: the local gate, the decider under
+  // the host's deadline, the hold report and the single emission of the outcome.
+  const decideCall = createCallDecision({
+    decide: options.decide,
+    onOutcome: emit,
+    sessionKey: options.sessionKey,
+    runtime,
+    ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+    decisionTimeoutMs,
+    holdAfterMs,
+  });
+
   const handler = async (
     input: HookInput,
     _toolUseId: string | undefined,
     hookOptions: { signal: AbortSignal },
   ) => {
-    // The hold flag lives here, outside decide(), so the recovery below can tell the truth about
-    // whether a hold entry was opened. A hardcoded `held: false` in the catch would leave any
-    // opened entry with no close — the invariant would hold while the trace showed a session
-    // eternally waiting on a decision that was in fact refused.
-    const held = { value: false };
     let outcome: TerminalOutcome;
     try {
       if (input.hook_event_name !== 'PreToolUse') return {};
-      outcome = await decide(
-        input,
-        options.decide,
-        emit,
-        hookOptions.signal,
-        decisionTimeoutMs,
-        holdAfterMs,
-        held,
-        options.localGate,
-        options.sessionKey,
-        runtime,
-      );
+      // Emits its outcome, the hold included, and never rejects.
+      outcome = await decideCall(readRequest(input, options.sessionKey, runtime), hookOptions.signal);
     } catch (error) {
-      // The fail-open hole, closed. Anything at all that escaped above — a bug in this file, a
-      // decider that threw synchronously, a request that could not be read — becomes an explicit
-      // refusal rather than an absent hook.
+      // The fail-open hole, closed. The decision never rejects, so what reaches here is reading the
+      // input itself throwing — and that becomes an explicit refusal rather than an absent hook. No hold
+      // was armed: the decision never started.
       outcome = {
         kind: 'refused',
         request:
           readRequest(input, options.sessionKey, runtime) ?? unreadableRequest(options.sessionKey, runtime),
-        held: held.value,
+        held: false,
         refusal: refusal('permission-decision-unavailable', `the gate itself failed: ${String(error)}`),
       };
+      emit(outcome);
     }
-
-    emit(outcome);
 
     // The silent failure, made audible — once. An allow the CLI will not act on is the shape of
     // this gate's worst outcome: the call is approved, the tool does not run, and the agent is told
@@ -314,241 +302,6 @@ export function permissionHooks(options: PermissionGateOptions): HookRegistratio
 // ---------------------------------------------------------------------------
 
 /**
- * Ask, with a hold report and a deadline. Every return is a terminal outcome.
- *
- * The decider is started before either timer, so a fast answer never pays for the hold machinery.
- *
- * `held` is the caller's box, not a local: the handler's own catch reads it, so even a throw this
- * function does not anticipate reports whether a hold entry was opened — and the terminal outcome
- * then closes it instead of orphaning it.
- */
-async function decide(
-  input: Extract<HookInput, { hook_event_name: 'PreToolUse' }>,
-  ask: Decider,
-  emit: (outcome: GateOutcome) => void,
-  signal: AbortSignal,
-  decisionTimeoutMs: number,
-  holdAfterMs: number,
-  held: { value: boolean },
-  localGate: LocalGate | undefined,
-  sessionKey: string,
-  runtime: string,
-): Promise<TerminalOutcome> {
-  const request = readRequest(input, sessionKey, runtime);
-  if (request === null) {
-    // The gate cannot say which tool this is, so it cannot authorize it. Blocking is the only
-    // answer that does not amount to permitting an unidentified call.
-    return {
-      kind: 'refused',
-      request: unreadableRequest(sessionKey, runtime),
-      held: false,
-      refusal: refusal(
-        'permission-decision-unavailable',
-        'the hook input could not be read, so the call it describes has no name to decide about',
-      ),
-    };
-  }
-
-  // The host's own gate, before anything is asked of anyone. It is consulted here rather than
-  // after the decider because a refusal that waits for an unreachable controller to time out is not
-  // a refusal, it is a `decisionTimeoutMs` silence that ends in an outage report — and the property
-  // this package states is that a locally refused call is refused immediately, by name.
-  const localRefusal = askLocalGate(localGate, request);
-  if (localRefusal !== null && localRefusal.reason !== 'shell-boundary-command') {
-    // `held: false` is a fact, not a default: nothing has been armed yet, so no entry was opened.
-    return { kind: 'refused', request, held: false, refusal: localRefusal };
-  }
-  // regression: a boundary-shaped shell command (publishing, remote surgery, branch deletion, a PR
-  // merge) was refused here, in-process, before the controller was asked, so a controller that
-  // holds such a call for a person could never deliver that answer and nothing on this host could
-  // publish. A boundary shape is escalated like any other call; when the controller cannot be
-  // reached the deadline below refuses it. Every other local refusal (the jail, the credential set,
-  // an unrecognised git verb) stays local and immediate.
-
-  // Both timers are armed inside the try whose finally disarms them. Between arming and the
-  // `finally` there is no window a throw can cross with a timer left live — that is a structural
-  // property of this block, not an audit of what happens to be between the lines.
-  let holdTimer: ReturnType<typeof setTimeout> | undefined;
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-  let abortListener: (() => void) | undefined;
-
-  try {
-    const answer = (async (): Promise<unknown> => ask(request, signal))();
-    // The promise is consumed by the race below; this keeps a rejection from being unhandled in the
-    // window before the race attaches, which node reports as a process-level warning.
-    answer.catch(() => undefined);
-
-    holdTimer = setTimeout(() => {
-      held.value = true;
-      emit({ kind: 'holding', request });
-    }, holdAfterMs);
-    holdTimer.unref?.();
-
-    // The deadline timer is ref'd, and that is the fail-closed guarantee itself.
-    //
-    // An unref'd timer here is the same bug as a gate that cannot say no. An unref'd timer does
-    // not hold the event loop open, so a host with nothing else pending — exactly the state a host
-    // is in while it waits for a decision — drains the loop before the deadline fires. The decider
-    // never answers, the deadline never fires, and this handler never returns: the tool call has no
-    // fate at all, which is strictly worse than either answer.
-    //
-    // Observed on Linux: `gate.test.ts`'s "a decision that never arrives blocks" — the test that
-    // proves this exact property — reported "Promise resolution is still pending but the event
-    // loop has already resolved" and cancelled, taking its sibling tests with it. It passed on
-    // win32 only because something else in that process happened to keep the loop alive; the
-    // guarantee was never unconditional, and it is stated as unconditional.
-    //
-    // Holding the loop open is the correct cost. A tool call is in flight and undecided; a host
-    // that exits underneath it has answered nothing. The bound is `decisionTimeoutMs`, and the
-    // `finally` below clears the timer on every exit path, so nothing outlives the call. The
-    // hold timer stays unref'd — it only emits an observation, and this deadline keeps the loop
-    // alive for both.
-    const deadline = new Promise<'expired'>((resolve) => {
-      deadlineTimer = setTimeout(() => resolve('expired'), decisionTimeoutMs);
-    });
-
-    // A missing or hostile signal cannot escape: a throw inside a Promise executor rejects the
-    // promise, and the race below carries that rejection into this function's own catch.
-    const aborted = new Promise<'aborted'>((resolve) => {
-      if (signal.aborted) resolve('aborted');
-      else {
-        // Held so the `finally` can detach it. `{once: true}` self-removes only when the event
-        // fires, and the ordinary case is that it never does — so on a signal that outlives one tool
-        // call, every call would leave a listener behind on it.
-        abortListener = (): void => resolve('aborted');
-        signal.addEventListener('abort', abortListener, { once: true });
-      }
-    });
-
-    const settled = await Promise.race([
-      answer.then((value) => ({ answered: value }) as const),
-      deadline,
-      aborted,
-    ]);
-
-    if (settled === 'expired') {
-      return {
-        kind: 'expired',
-        request,
-        held: held.value,
-        detail: `no decision for ${request.toolName} within ${decisionTimeoutMs}ms; the tool did not run`,
-      };
-    }
-
-    if (settled === 'aborted') {
-      return {
-        kind: 'refused',
-        request,
-        held: held.value,
-        refusal: refusal(
-          'permission-decision-unavailable',
-          `the turn was cancelled while a decision for ${request.toolName} was outstanding`,
-        ),
-      };
-    }
-
-    return terminal(request, held.value, settled.answered);
-  } catch (error) {
-    // The decider rejected. An outage — nobody decided — and never a denial, which is why it is a
-    // refusal reason rather than a deny with a borrowed message.
-    const detail =
-      error instanceof EscalationUnavailable
-        ? error.message
-        : `the decision for ${request.toolName} could not be obtained: ${String(error)}`;
-    return {
-      kind: 'refused',
-      request,
-      held: held.value,
-      refusal: refusal('permission-decision-unavailable', detail),
-    };
-  } finally {
-    // Both timers are cleared however this returned. A hook handler runs once per tool call, so a
-    // timer left armed here is a slow leak that only shows up on a long session. The abort listener
-    // is detached for the same reason and in the same place — one exit, three things released.
-    if (holdTimer !== undefined) clearTimeout(holdTimer);
-    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-    if (abortListener !== undefined) {
-      // A signal that does not implement removal must not turn a resolved decision into a thrown
-      // hook, which the CLI reads as an absent one.
-      try {
-        signal.removeEventListener('abort', abortListener);
-      } catch {
-        // Nothing to recover: the listener resolves a promise nobody is waiting on any more.
-      }
-    }
-  }
-}
-
-/**
- * Ask the host's own gate, if there is one.
- *
- * A local gate that throws refuses. It must not fall through to the decider, and the wrong
- * implementation here does not look wrong: falling through is not fail-open — the controller is
- * still asked — so nothing would break in a test and nothing would show in a trace. What it would do
- * is silently convert a local refusal into a remote question, which is the offline property
- * evaporating at the exact moment the controller is unreachable. The invariant is absolute: any
- * error, any outage, any timeout means the tool does not run.
- */
-function askLocalGate(localGate: LocalGate | undefined, request: DecisionRequest): Refusal | null {
-  if (localGate === undefined) return null;
-  try {
-    return localGate(request) ?? null;
-  } catch (error) {
-    return refusal(
-      'permission-decision-unavailable',
-      `the host's own gate failed while deciding ${request.toolName}, so the call is refused rather than escalated: ${String(error)}`,
-    );
-  }
-}
-
-/** A settled answer, read. The unknown-decision rule lands here. */
-function terminal(request: DecisionRequest, held: boolean, answered: unknown): TerminalOutcome {
-  const reading = readDecision(answered);
-
-  if (!reading.recognised) {
-    return {
-      kind: 'refused',
-      request,
-      held,
-      refusal: refusal(
-        'permission-decision-unrecognised',
-        // The raw payload travels. A host that drops what it did not understand makes a
-        // controller-side bug invisible on the only side that could have seen it.
-        `the decision for ${request.toolName} was not one this build understands: ${reading.raw}`,
-      ),
-    };
-  }
-
-  if (reading.decision.behavior === 'deny') {
-    return { kind: 'deny', request, held, message: reading.decision.message };
-  }
-
-  const { updatedInput } = reading.decision;
-  return { kind: 'allow', request, held, ...(updatedInput === undefined ? {} : { updatedInput }) };
-}
-
-/** Everything unknown, for an input that could not be read at all. Never a thrown alternative. */
-function unreadableRequest(sessionKey: string, runtime: string): DecisionRequest {
-  return {
-    toolName: '(unnamed tool)',
-    toolUseId: '(no tool_use_id)',
-    toolInput: null,
-    sessionId: '',
-    // The one field that is still true when nothing else is. Everything above is a placeholder for
-    // an input this code could not read; the controller handle comes from the host, not from that
-    // input, so an unreadable call is still attributable to the session it happened in. That is the
-    // difference between a refusal a controller can file and one it can only count.
-    sessionKey,
-    cwd: '',
-    agentId: null,
-    agentType: null,
-    // A tool this code cannot name is a kind it cannot name either.
-    toolKind: 'other',
-    runtime,
-  };
-}
-
-/**
  * The hook's input in this package's terms, or null if it could not be read at all.
  *
  * The recovery path must not use the thing that broke. This is called from the handler's own
@@ -583,10 +336,19 @@ function readRequest(input: HookInput, sessionKey: string, runtime: string): Dec
       toolKind: claudeToolKind(toolName),
       // Supplied by the composer, like `sessionKey`: the session's runtime, not the agent's input.
       runtime,
+      // The grammar the shell tool runs its command in, stated for the decider; absent for every other
+      // tool. Data only: this host's own gate reads Claude's commands as it always has.
+      ...dialectOf(toolName),
     };
   } catch {
     return null;
   }
+}
+
+/** `shellDialect` for a Claude shell tool, as a spread: absent, never null, for every other tool. */
+function dialectOf(toolName: string): { readonly shellDialect?: ShellDialect } {
+  const dialect = claudeShellDialect(toolName);
+  return dialect === null ? {} : { shellDialect: dialect };
 }
 
 /**

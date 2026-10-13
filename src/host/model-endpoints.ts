@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs';
 
 import type { EndpointWireApi, HostEndpoint } from '../control/frames.js';
 import {
+  DEFAULT_RUNTIME,
   ENDPOINT_WIRE_APIS,
   MAX_ENDPOINT_MODELS,
   MAX_ENDPOINTS,
@@ -30,7 +31,7 @@ import {
 import { hostEndpointsProblem } from '../control/codec.js';
 import { isAbsolutePath } from '../core/paths.js';
 import { STRIPPED_HOST_SESSION_KEYS } from '../sessions/spawn-env.js';
-import { spawnableRuntimes, wireApisFor } from '../sessions/runtimes.js';
+import { ENDPOINT_ROUTED_RUNTIMES, wireApisFor } from '../sessions/runtimes.js';
 
 /** The model tiers an endpoint may map to its own ids, each read by the agent CLI from one variable. */
 export const MODEL_ALIAS_TIERS = ['opus', 'sonnet', 'haiku', 'fable'] as const;
@@ -78,6 +79,8 @@ export const ENDPOINT_MEMBER_VARIABLES: readonly string[] = [
   'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
   'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS',
   'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB',
+  // A Codex session's endpoint credential: the variable its provider reads the key from.
+  'PERISCOPE_CODEX_ENDPOINT_KEY',
 ];
 
 /** The most variables an endpoint's own `env` may set. */
@@ -118,11 +121,28 @@ export interface ModelEndpoint {
   readonly authToken: () => string;
 }
 
+/** An endpoint's members that no runtime reaching it reads, left out of what the host applies. */
+export interface IgnoredEndpointMembers {
+  readonly endpoint: string;
+  readonly members: readonly string[];
+}
+
 /** What reading the endpoints file produced: the endpoints, and every file the protected set takes. */
 export interface ModelEndpointsReading {
   readonly endpoints: readonly ModelEndpoint[];
   /** The endpoints file and every credential file it names, as absolute paths. */
   readonly files: readonly string[];
+  /**
+   * Members an endpoint states that no runtime reaching it reads (a model alias or the first-party
+   * marker on an endpoint only Codex reaches), each endpoint's once. Reported, never refused.
+   */
+  readonly ignored: readonly IgnoredEndpointMembers[];
+  /**
+   * Agent aliases an endpoint lists in its `models` and does not map, each endpoint's once. A session
+   * naming one is refused `model-endpoint-mismatch` at its open, so it never reaches the wrong model;
+   * the listing is reported at start, never refused.
+   */
+  readonly unmappedAliases: readonly IgnoredEndpointMembers[];
 }
 
 export interface ModelEndpointsReadOptions {
@@ -141,6 +161,10 @@ type CredentialReference =
 /** One endpoint as the file declares it, checked, before its credential is resolved. */
 interface DeclaredEndpoint extends Omit<ModelEndpoint, 'authToken'> {
   readonly credential: CredentialReference;
+  /** The members it states that no runtime reaching it reads. */
+  readonly ignored: readonly string[];
+  /** The agent aliases its `models` lists and its `modelAliases` does not map. */
+  readonly unmappedAliases: readonly string[];
 }
 
 const ENDPOINT_KEYS = [
@@ -190,7 +214,12 @@ export function readModelEndpoints(
 
   const endpoints: ModelEndpoint[] = [];
   const files = [path];
+  const ignored: IgnoredEndpointMembers[] = [];
+  const unmappedAliases: IgnoredEndpointMembers[] = [];
   for (const entry of declared) {
+    if (entry.ignored.length > 0) ignored.push({ endpoint: entry.name, members: entry.ignored });
+    if (entry.unmappedAliases.length > 0)
+      unmappedAliases.push({ endpoint: entry.name, members: entry.unmappedAliases });
     const token = resolveCredential(entry, env, options.helperTimeoutMs ?? HELPER_TIMEOUT_MS);
     if (!token.ok) return `${where}: endpoint "${entry.name}" ${token.problem}`;
     if ('file' in entry.credential && !files.includes(entry.credential.file))
@@ -209,7 +238,7 @@ export function readModelEndpoints(
       authToken: () => value,
     });
   }
-  return { endpoints, files };
+  return { endpoints, files, ignored, unmappedAliases };
 }
 
 /** The endpoints a parsed file declares, checked, or the first problem with them. */
@@ -276,16 +305,20 @@ function declaredEndpoint(
   ) {
     return `${the} needs a non-empty "runtimes" list of runtime names`;
   }
-  const spawnable = spawnableRuntimes();
+  const routed = ENDPOINT_ROUTED_RUNTIMES;
   for (const runtime of runtimes) {
-    if (!spawnable.includes(runtime)) {
-      return `${the} names the runtime ${JSON.stringify(runtime)}, which this host cannot spawn — it spawns ${spawnable.join(', ')}`;
+    if (!routed.includes(runtime)) {
+      return `${the} names the runtime ${JSON.stringify(runtime)}, which this host routes no model endpoint for — it routes ${routed.join(', ')}`;
     }
     if (!wireApisFor(runtime).includes(api)) {
       return `${the} names the runtime ${runtime}, which does not speak ${api} — ${runtime} speaks ${wireApisFor(runtime).join(', ')}`;
     }
   }
   if (new Set(runtimes).size !== runtimes.length) return `${the} names a runtime twice`;
+  // Claude's rules (the model tiers, the first-party route, the window a [1m] id implies) are the agent
+  // CLI's, and hold only on an endpoint Claude reaches. On any other, what only they read is ignored.
+  const reachesClaude = runtimes.includes(DEFAULT_RUNTIME);
+  const ignored: string[] = [];
 
   const baseUrl = value['baseUrl'];
   if (typeof baseUrl !== 'string' || !isHttpUrl(baseUrl)) {
@@ -305,7 +338,8 @@ function declaredEndpoint(
   if (new Set(models).size !== models.length) return `${the} lists a model id twice`;
   const modelIds = models as string[];
 
-  const aliases = value['modelAliases'] ?? {};
+  const aliases = reachesClaude ? (value['modelAliases'] ?? {}) : {};
+  if (!reachesClaude && value['modelAliases'] !== undefined) ignored.push('modelAliases');
   if (!isPlainObject(aliases)) return `${the} has a "modelAliases" that is not an object`;
   const modelAliases: Partial<Record<ModelAliasTier, string>> = {};
   for (const [tier, target] of Object.entries(aliases)) {
@@ -324,9 +358,11 @@ function declaredEndpoint(
     return `${the} offers more than ${MAX_ENDPOINT_MODELS} model ids, its alias ids included`;
   }
 
-  const firstParty = value['firstParty'] ?? false;
-  if (typeof firstParty !== 'boolean') return `${the} has a "firstParty" that is not true or false`;
-  if (!firstParty) {
+  const marked = value['firstParty'] ?? false;
+  if (typeof marked !== 'boolean') return `${the} has a "firstParty" that is not true or false`;
+  if (marked && !reachesClaude) ignored.push('firstParty');
+  const firstParty = marked && reachesClaude;
+  if (!firstParty && reachesClaude) {
     const unmapped = REQUIRED_ALIAS_TIERS.filter((tier) => modelAliases[tier] === undefined);
     if (unmapped.length > 0) {
       return (
@@ -341,9 +377,21 @@ function declaredEndpoint(
     }
   }
 
+  // An agent alias listed as a model and not mapped cannot be opened on: the open refuses it by name.
+  const unmappedAliases =
+    reachesClaude && !firstParty
+      ? modelIds.filter((id) => {
+          const alias = id.toLowerCase().replace(/\[1m\]$/, '');
+          return (
+            (AGENT_MODEL_ALIASES as readonly string[]).includes(alias) &&
+            modelAliases[alias as ModelAliasTier] === undefined
+          );
+        })
+      : [];
+
   const window = contextWindowOf(value['contextWindow'], the);
   if (typeof window === 'string') return window;
-  if (window !== null && 'maxContextTokens' in window) {
+  if (reachesClaude && window !== null && 'maxContextTokens' in window) {
     const suffixed = [...modelIds, ...Object.values(modelAliases)].find((id) => /\[1m\]$/i.test(id));
     if (suffixed !== undefined) {
       return (
@@ -385,6 +433,8 @@ function declaredEndpoint(
     contextWindow: window,
     env: { ...(extra as Record<string, string>) },
     firstParty,
+    ignored,
+    unmappedAliases,
   };
 }
 
@@ -544,7 +594,9 @@ function helperFailure(error: unknown, timeoutMs: number): string {
 
 /**
  * The endpoints as the hello lists them: names, wire APIs, runtimes, and every model id a session may
- * name, the alias ids each maps included. No address, no credential, no first-party marker.
+ * name, the alias ids each maps included. No address, no credential, no first-party marker. A runtime
+ * is listed only where this host routes it and it speaks the endpoint's wire API, so an endpoint the
+ * hello offers a runtime is one a session on that runtime can open on.
  */
 export function hostEndpointsOf(endpoints: readonly Omit<ModelEndpoint, 'authToken'>[]): HostEndpoint[] {
   return endpoints.map((endpoint) => {
@@ -552,7 +604,11 @@ export function hostEndpointsOf(endpoints: readonly Omit<ModelEndpoint, 'authTok
     for (const tier of MODEL_ALIAS_TIERS) {
       if (endpoint.modelAliases[tier] !== undefined && !models.includes(tier)) models.push(tier);
     }
-    return { name: endpoint.name, wireApi: endpoint.wireApi, runtimes: [...endpoint.runtimes], models };
+    const runtimes = endpoint.runtimes.filter(
+      (runtime) =>
+        ENDPOINT_ROUTED_RUNTIMES.includes(runtime) && wireApisFor(runtime).includes(endpoint.wireApi),
+    );
+    return { name: endpoint.name, wireApi: endpoint.wireApi, runtimes, models };
   });
 }
 
@@ -586,13 +642,15 @@ export function endpointSpawnEnv(endpoint: ModelEndpoint): Record<string, string
  * route, a Claude model id, or an alias the endpoint does not map (which the agent CLI resolves to a
  * Claude model id). A provider that maps Claude ids to its own model would answer in its place, while
  * the run reads, and is priced, as the Claude model it named. No model named is not refused: every such
- * endpoint maps the opus, sonnet and haiku tiers.
+ * endpoint maps the opus, sonnet and haiku tiers. The rule is the agent CLI's, so it holds only on an
+ * endpoint Claude reaches: a session on any other runtime never meets it.
  */
 export function endpointModelProblem(
   model: string | null | undefined,
   endpoint: ModelEndpoint,
 ): string | null {
   if (endpoint.firstParty || model === null || model === undefined) return null;
+  if (!endpoint.runtimes.includes(DEFAULT_RUNTIME)) return null;
   const route = `endpoint "${endpoint.name}", which is not marked as Anthropic's own route`;
   if (isClaudeModelId(model)) {
     return `model ${model} named for ${route}: a provider that maps Claude ids to its own model would answer in its place`;

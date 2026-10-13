@@ -33,6 +33,7 @@ import type { AgentInitFacts, AgentProcess, SDKMessage } from '../host/agent-pro
 import type { SessionConfigureChange } from '../host/wire-request.js';
 import { readInitFacts } from '../host/agent-process.js';
 import type { WorkspaceTrust } from '../host/workspace-trust.js';
+import { DEFAULT_RUNTIME } from '../control/frames.js';
 import type { Clock } from '../core/time.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
@@ -93,17 +94,21 @@ export interface SessionEnded {
  * this session was refused registration and stopped. Its own kind because it is neither an outage
  * nor a bug: it is what a resume-without-fork legitimately produces.
  *
+ * `runtime_degraded` means a runtime driven by a process of its own lost something without ending: a
+ * line it sent that was dropped, a request that failed. The detail opens with the refusal's name.
+ *
  * This union is local — not exported on `periscope/protocol`, not validated by any closed wire
  * enum — which is the only reason widening it is a safe, additive change. Putting it on the wire
  * would make an added kind decode-fatal to an older peer; re-decide the shape then, not by copy.
  */
 export interface SessionDegrade {
-  readonly kind: 'workspace_untrusted' | 'subscriber_failed' | 'session_id_collision';
+  readonly kind: 'workspace_untrusted' | 'subscriber_failed' | 'session_id_collision' | 'runtime_degraded';
   readonly detail: string;
   readonly at: string;
 }
 
-export type SessionListener = (message: SDKMessage) => void;
+/** A subscriber to a session's messages: the SDK's for a Claude session, its runtime's otherwise. */
+export type SessionListener<M = SDKMessage> = (message: M) => void;
 export type SessionEndListener = (ended: SessionEnded) => void;
 export type SessionDegradeListener = (degrade: SessionDegrade) => void;
 
@@ -155,18 +160,36 @@ export interface HostedSessionFacts {
   readonly workspaceTrust: WorkspaceTrust;
 }
 
-export class HostedSession {
-  readonly #process: AgentProcess;
+/**
+ * What a session on a runtime other than Claude is told at construction: the runtime's name, and how
+ * it reads, from one of its own messages, that the agent has reported itself.
+ */
+export interface SessionRuntimeBinding<M> {
+  readonly runtime: string;
+  readonly readInit: (message: M) => AgentInitFacts | null;
+}
+
+/**
+ * `M` is what the session's runtime emits, and it appears only in `onMessage`: a session on any runtime
+ * is held by the one registry, which reads none of its messages.
+ */
+export class HostedSession<M = SDKMessage> {
+  /** The runtime the session runs on, by name. */
+  readonly runtime: string;
+  readonly #process: AgentProcess<unknown>;
+  readonly #readInit: (message: unknown) => AgentInitFacts | null;
   readonly #clock: Clock;
-  readonly #onReleased: (session: HostedSession) => void;
-  readonly #messageListeners = new Set<SessionListener>();
+  /** Tells the registry this session ended; bound to this session at construction. */
+  readonly #onReleased: () => void;
+  readonly #messageListeners = new Set<SessionListener<unknown>>();
   readonly #endListeners = new Set<SessionEndListener>();
   readonly #degradeListeners = new Set<SessionDegradeListener>();
 
   readonly #liveWaiters: ((result: Result<HostedSessionFacts>) => void)[] = [];
   readonly #cwd: string;
   readonly #trust: WorkspaceTrust;
-  readonly #onLive: (session: HostedSession) => void;
+  /** Tells the registry this session reported itself; bound to this session at construction. */
+  readonly #onLive: () => void;
   readonly #degrades: SessionDegrade[] = [];
 
   #state: SessionLifecycle = 'provisioning';
@@ -181,19 +204,26 @@ export class HostedSession {
    * @internal
    */
   constructor(
-    process: AgentProcess,
+    process: AgentProcess<M>,
     clock: Clock,
     cwd: string,
     trust: WorkspaceTrust,
-    onLive: (session: HostedSession) => void,
-    onReleased: (session: HostedSession) => void,
+    onLive: (session: HostedSession<M>) => void,
+    onReleased: (session: HostedSession<M>) => void,
+    binding?: SessionRuntimeBinding<M>,
   ) {
     this.#process = process;
+    this.runtime = binding?.runtime ?? DEFAULT_RUNTIME;
+    // The pump reads only what this process yields, so each message is the `M` its reader takes.
+    this.#readInit =
+      binding === undefined
+        ? (message) => readInitFacts(message as SDKMessage)
+        : (message) => binding.readInit(message as M);
     this.#clock = clock;
     this.#cwd = cwd;
     this.#trust = trust;
-    this.#onLive = onLive;
-    this.#onReleased = onReleased;
+    this.#onLive = () => onLive(this);
+    this.#onReleased = () => onReleased(this);
     // Reading starts immediately. The agent will say nothing until a turn is queued, but a consumer
     // attached later would miss whatever came before it.
     void this.#pump();
@@ -289,9 +319,11 @@ export class HostedSession {
     this.#finish('stop_requested', detail);
   }
 
-  onMessage(listener: SessionListener): Unsubscribe {
-    this.#messageListeners.add(listener);
-    return () => this.#messageListeners.delete(listener);
+  onMessage(listener: SessionListener<M>): Unsubscribe {
+    // The pump hands every listener what this session's process yields, which is `M`.
+    const held = listener as SessionListener<unknown>;
+    this.#messageListeners.add(held);
+    return () => this.#messageListeners.delete(held);
   }
 
   /** Fires exactly once. A listener added after the end is called immediately with the same value. */
@@ -389,7 +421,7 @@ export class HostedSession {
   async #pump(): Promise<void> {
     try {
       for await (const message of this.#process.messages) {
-        const facts = readInitFacts(message);
+        const facts = this.#readInit(message);
         if (facts !== null && this.#facts === null) this.#adopt(facts);
         else if (facts !== null) this.#refresh(facts);
         for (const listener of this.#messageListeners) {
@@ -437,7 +469,7 @@ export class HostedSession {
     };
     this.#state = 'live';
     // Keyed by the agent's own id only now, because only now is there one.
-    this.#onLive(this);
+    this.#onLive();
     while (this.#liveWaiters.length > 0) this.#liveWaiters.shift()?.(ok(this.#facts));
   }
 
@@ -474,7 +506,7 @@ export class HostedSession {
     // Closed on every ending path, not only the deliberate ones — close() is idempotent, and a
     // pump-failure path that skipped it would leave a live process with nobody reading its stream.
     this.#process.close();
-    this.#onReleased(this);
+    this.#onReleased();
     for (const listener of this.#endListeners) {
       try {
         listener(this.#ended);

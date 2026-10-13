@@ -760,7 +760,7 @@ test('an alias the endpoint does not map is refused model-endpoint-mismatch; a m
   }
 });
 
-test("the variables an endpoint sets refuse on both of a controller's lanes: undeclared, and beneath the floor when declared", () => {
+test("the variables an endpoint sets refuse on a controller's lanes while undeclared, and its ANTHROPIC_ ones beneath the floor even when declared", () => {
   // The names the host's own lane sets for an endpoint. A controller may set none of them itself.
   const names = [
     'ANTHROPIC_BASE_URL',

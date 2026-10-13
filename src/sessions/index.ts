@@ -29,9 +29,13 @@ export { SessionRegistry } from './registry.js';
 // The fact lifts: one per runtime, each reading that runtime's messages into the wire's facts.
 export type { FactLift, LiftedFacts } from './fact-lift.js';
 export { FACT_LIFTS, factLiftFor } from './fact-lift.js';
+// The item fills: one per runtime, each reading that runtime's messages into the conversation items.
+export type { ItemFill } from './item-fill.js';
 export {
+  AGENT_SKILLS,
   CONTROL_TIERS,
   RUNTIME_WIRE_APIS,
+  agentSkillsFor,
   controlTierFor,
   runtimeOf,
   spawnableRuntimes,

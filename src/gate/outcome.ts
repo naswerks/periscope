@@ -45,6 +45,8 @@ export type GateOutcome =
       readonly request: DecisionRequest;
       readonly message: string;
       readonly held: boolean;
+      /** The decision also asked for the turn to stop. Present only when it did. */
+      readonly interrupt?: boolean;
     }
   /** Nobody decided: the decider threw, the escalation failed, or the answer was not understood. */
   | {
@@ -60,6 +62,12 @@ export type GateOutcome =
       readonly detail: string;
       readonly held: boolean;
     };
+
+/**
+ * An outcome that ends a decision. A hold is not one: it is emitted while a decision is still
+ * outstanding, and something else terminates it later.
+ */
+export type TerminalOutcome = Exclude<GateOutcome, { kind: 'holding' }>;
 
 const permissionActivity = (toolName: string): SessionActivity => ({ kind: 'permission', name: toolName });
 

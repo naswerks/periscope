@@ -1516,6 +1516,7 @@ const EVERY_DEGRADE_KIND: Record<SessionDegrade['kind'], true> = {
   workspace_untrusted: true,
   subscriber_failed: true,
   session_id_collision: true,
+  runtime_degraded: true,
 };
 
 test('regression: every degrade kind reaches the host reporter as a degrade event', async () => {

@@ -9,12 +9,17 @@
  * What each fact is read from:
  *   - `session_handle`: `system/init.session_id`, when it first appears and whenever it changes.
  *   - `agent_receipt`: `system/init`, when any member differs from the last receipt. The CLI re-sends
- *     its init at every turn, so an unchanged one reports nothing.
+ *     its init at every turn, so an unchanged one reports nothing. `effortReported` says whether the
+ *     init carried an `effort` at all: the SDK omits it on a CLI that does not publish it, and states
+ *     null when no effort will be sent.
  *   - `turn_record`: each `result`. `totals` is the running total the result reports and `turn` is
  *     the result's own `usage`, which covers the turn's main loop and names no model; it is filed
  *     under the model the latest init reported, and is null until an init has been seen.
- *   - `usage_sample`: each main-thread `assistant` model call, once per API message id.
- *   - `tasks`: the running set, composed from the level message and the task edges.
+ *   - `usage_sample`: each main-thread `assistant` model call, once per API message id, with the
+ *     cache reads the call reported.
+ *   - `tasks`: the running set, composed from the level message and the task edges, and the tasks
+ *     settled since the turn began, from each `task_notification`'s status; the next turn's init
+ *     clears them.
  *   - `compaction`: the observer's report, not a message.
  * And one fragment per `content_block_delta` that carries text, thinking or a tool's arguments.
  */
@@ -27,11 +32,13 @@ import type {
   FragmentChannel,
   ModelSpendFact,
   RunningTaskEntry,
+  SettledTaskEntry,
   SpendFacts,
+  TaskSettlement,
   TurnRecordFact,
   UsageSampleFact,
 } from '../control/frames.js';
-import { DEFAULT_RUNTIME } from '../control/frames.js';
+import { DEFAULT_RUNTIME, TASK_SETTLEMENTS } from '../control/frames.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import type { CompactionReport } from '../state/observer.js';
 import type { ModelSpend } from '../telemetry/usage.js';
@@ -96,7 +103,10 @@ export class ClaudeFactLift implements FactLift {
   /** The level the last `background_tasks_changed` reported, and the start edges it may lack. */
   #level: readonly RunningTaskEntry[] = [];
   #edges: readonly RunningTaskEntry[] = [];
-  #running = '[]';
+  /** The tasks settled since the turn began, each with how it ended. */
+  #settled: readonly SettledTaskEntry[] = [];
+  /** The tasks fact last sent, as its key: none yet reads as nothing running and nothing settled. */
+  #running = tasksKey([], []);
 
   fromMessage(message: SDKMessage): LiftedFacts {
     const facts: AgentFact[] = [];
@@ -134,6 +144,7 @@ export class ClaudeFactLift implements FactLift {
           this.#tasksIfChanged(facts);
         }
       } else if (message.subtype === 'task_notification') {
+        this.#settle(message.task_id, message.status);
         this.#edges = this.#edges.filter((edge) => edge.taskId !== message.task_id);
         this.#tasksIfChanged(facts);
       }
@@ -173,6 +184,13 @@ export class ClaudeFactLift implements FactLift {
     if (written !== this.#receipt) {
       this.#receipt = written;
       facts.push(receipt);
+    }
+
+    // The CLI sends its init as each turn begins, so a task settled in the turn before no longer
+    // stands; the tasks fact says so once, and only when one had settled.
+    if (this.#settled.length > 0) {
+      this.#settled = [];
+      this.#tasksIfChanged(facts);
     }
   }
 
@@ -226,6 +244,7 @@ export class ClaudeFactLift implements FactLift {
       contextWindow: windowFor(model, this.#windows),
       cacheTtl: cacheTtlOf(usage),
       mainThread: true,
+      cacheReadTokens: wholeOrNull(usage.cache_read_input_tokens),
     };
     const written = JSON.stringify(sample);
     if (id === null && written === this.#lastSample) return;
@@ -235,15 +254,38 @@ export class ClaudeFactLift implements FactLift {
     facts.push(sample);
   }
 
-  /** The running set: the level, then each start edge the level lacks, by id. Reported when it changed. */
+  /**
+   * A task ended, as `status` says: the settled set takes it, with the type it started with where this
+   * lift saw it start. A status this build does not know is not stated.
+   */
+  #settle(taskId: string, status: string): void {
+    if (taskId === '' || !(TASK_SETTLEMENTS as readonly string[]).includes(status)) return;
+    const started = [...this.#edges, ...this.#level].find((task) => task.taskId === taskId);
+    const entry: SettledTaskEntry = {
+      taskId,
+      type: started === undefined || started.type === '' ? null : started.type,
+      status: status as TaskSettlement,
+    };
+    this.#settled = [...this.#settled.filter((task) => task.taskId !== taskId), entry];
+  }
+
+  /**
+   * The running set (the level, then each start edge the level lacks, by id) and the settled set.
+   * Reported when either changed.
+   */
   #tasksIfChanged(facts: AgentFact[]): void {
     const listed = new Set(this.#level.map((task) => task.taskId));
     const running = [...this.#level, ...this.#edges.filter((edge) => !listed.has(edge.taskId))];
-    const written = JSON.stringify(running);
+    const written = tasksKey(running, this.#settled);
     if (written === this.#running) return;
     this.#running = written;
-    facts.push({ kind: 'tasks', runtime: RUNTIME, running });
+    facts.push({ kind: 'tasks', runtime: RUNTIME, running, settled: this.#settled });
   }
+}
+
+/** What a tasks fact states, as one string: the running and the settled sets. */
+function tasksKey(running: readonly RunningTaskEntry[], settled: readonly SettledTaskEntry[]): string {
+  return JSON.stringify([running, settled]);
 }
 
 /** The receipt an init message states. `effort` and `pluginErrors` are absent from `readInitFacts`. */
@@ -276,6 +318,7 @@ function receiptOf(message: SDKMessage, init: AgentInitFacts): AgentReceiptFact 
       : null,
     mcpServers: init.mcpServers.map((server) => ({ name: server.name, status: server.status })),
     source: 'runtime',
+    effortReported: Object.hasOwn(raw, 'effort'),
   };
 }
 
@@ -368,6 +411,11 @@ function cacheTtlOf(usage: UsageCounts): CacheTtl | null {
 
 function isPositive(value: unknown): boolean {
   return typeof value === 'number' && value > 0;
+}
+
+/** A reported count as the wire carries it, a non-negative whole number, or null when none was reported. */
+function wholeOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 /**

@@ -6,10 +6,10 @@ session's state model in [state-machine.md](state-machine.md), the permission ga
 
 ## What it is
 
-Periscope runs where the code lives, hosts Claude Code sessions through the Claude Agent SDK, and
-reports to a controller anywhere else over one outbound WebSocket. The controller decides what a
-session means; the host carries what it did. Three properties follow, each enforced rather than
-promised:
+Periscope runs where the code lives, hosts Claude Code sessions through the Claude Agent SDK and,
+when its operator configures it, Codex sessions through Codex's app-server, and reports to a
+controller anywhere else over one outbound WebSocket. The controller decides what a session means;
+the host carries what it did. Three properties follow, each enforced rather than promised:
 
 - Generic. Nothing on the wire is shaped to one product. The test for a new member or event: could
   a different controller make different meaning from it? If yes it belongs here; if it means
@@ -51,6 +51,9 @@ everything as arguments, so it is checkable without a socket or a process, and r
   the same event. No pin enforces the order; it is stated at both sites.
 - Every gate outcome is recorded on the machine unconditionally. `onOutcome` is an extra listener,
   never a substitute.
+- The repository check is `PeriscopeHost`'s, not `composeSession`'s: the repository-tier settings check
+  (`settingsRouteRefusal`, `settings-route-refused`) runs in the host's open, before it composes. An
+  embedder that calls `composeSession` directly owns that check.
 
 `PeriscopeHost` owns the link and the registry and turns inbound payloads into calls on them.
 
@@ -80,6 +83,10 @@ everything as arguments, so it is checkable without a socket or a process, and r
   - A `stop()` before the read settles means the link never dials.
   - Every configure answer and later hello keep the catalog, though the file they are rebuilt from
     has none.
+  - With `codex`, the same wait covers Codex's read (`readCodexRuntime`), and the runtimes list
+    names Claude first, then Codex. An entry that would push the list past its byte budget rides
+    with `models: []` and a `runtime-catalog` event, so one runtime's catalog never empties
+    another's.
 - Each session's hooks are the observation hooks, the gate, then `modelSwitchHooks`, which answers
   every `PreModelSwitch` with allow. Claude Code 2.1.284 lets a headless `setModel` through with no
   answer at all. The allow keeps a controller's switch from ever meeting the interactive cache-miss
@@ -99,15 +106,19 @@ something is about the daemon; the other verbs are where interactive work lives.
   read) and refuses to start without `PERISCOPE_DECISION_URL` (a host that cannot ask is an open door or a
   session where nothing runs). It never signs anyone in: it presents credentials that are already
   there and refuses by name when they are not. It prints one `[host]` posture line, reads the agent's
-  model catalog (bounded at 20 seconds, one `[agent]` line saying what the hello carries), then
-  dials, and writes the link's state to `link-state.json` beside the credentials on every transition.
+  model catalog (bounded at 20 seconds, one `[agent]` line saying what the hello carries) and, with
+  `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME` set, Codex's (bounded at 20 seconds, one
+  `[codex]` line), then dials, and writes the link's state to `link-state.json` beside the
+  credentials on every transition. One of the two Codex keys without the other refuses start by
+  name.
 - `login` runs the sign-in and writes the token cache. `pair <code>`, with `--controller <origin>`
   and `--label <name>`, redeems a controller-minted code for a paired credential and writes the
   controller's addresses to the config file. `config` shows or edits `config.json`. `status` prints
   the whole posture from the link record, the credentials and the settings, and never dials.
 - `config.json` lives beside the credentials under a closed key allowlist (`CONFIG_KEYS`: the two
   control-plane URLs, the host id, both roots, the branch scheme, the workspace key, the agent home,
-  the plugin directories; `PERISCOPE_CONFIG_DIR` is excluded, a file cannot move itself). `serve`, `login`, `pair` and
+  the plugin directories, the Codex binary and home; `PERISCOPE_CONFIG_DIR` is excluded, a file
+  cannot move itself). `serve`, `login`, `pair` and
   `status` read the environment with the file filling its absences; the environment always wins. A
   corrupt file is fatal by name for all four. `config` itself reads the raw environment so it can
   still name a broken file.
@@ -154,6 +165,91 @@ registers, refused in the open's `finally` on every failure path, or withdrawn b
 during the open; it is never dropped. The hold is bounded at `MAX_HELD_TURNS`; overflow refuses
 `session-unknown` with the bound in its detail. A cancel during the open withdraws the turn and does
 not stop the open. `HostEvent` reports `prompt-held`, `prompt-delivered` and `prompt-withdrawn`.
+
+## Codex
+
+A session naming `runtime: "codex"` runs Codex's app-server (`codex app-server --listen stdio://`)
+in the session's worktree, and the host speaks JSON-RPC to it over stdio. Codex is offered only when
+the operator sets `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME` ([configuration.md](configuration.md)).
+Its control tier is `intercepted-with-residual`: periscope's own `PreToolUse` hook asks the host for
+each decision over a per-session channel, Codex's approvals are decided by the same gate, and every
+path that can still run undecided is named on the session's state lane ([gate.md](gate.md), the Codex
+gate).
+
+- **The gate.** `composeCodexSession` builds the session's gate (`createCodexSessionGate`,
+  `src/host/codex-gate.ts`) before the process starts: the hook channel
+  (`src/host/hook-channel.ts`), whose address, token and deadline ride the app-server's environment;
+  the per-call decision every runtime shares (`createCallDecision`); the approval answers
+  (`src/host/codex-approvals.ts`); and the watch over the residual (`src/host/codex-gate-watch.ts`). It
+  reaches the process through the registry's route (`SessionRequest.nativeGate`, internal). The
+  process holds the open until the channel listens and periscope's hook is trusted
+  (`src/host/codex-hook.ts`), answers every server request through the gate, and tells it every
+  notification first. The host writes the hook into the runner's Codex home and probes it at start.
+- **The hook command.** `periscope hook codex` (`src/bin/hook.ts`) is dispatched by
+  `bin/periscope.ts` before the composition root loads, because Codex runs it once per tool call; it
+  imports nothing of this package but itself and `src/gate/hook-exchange.ts`.
+
+- The transport is runtime-neutral (`StdioRpcPeer`, `startStdioRpc`, `src/host/stdio-rpc.ts`) and
+  knows no Codex word. One JSON message per line, `\n` or `\r\n`; a line past `MAX_RPC_LINE_BYTES`
+  (8 MiB) is dropped whole and named. Ids out are integers; every request has a deadline the host
+  sets; notifications are delivered in arrival order; a server request with no handler is answered
+  `-32601`. The child is spawned with `shell: false`, and a batch file is refused by name. Close ends
+  stdin, waits a grace, then kills the process tree (`taskkill /T /F` on Windows, the process group
+  elsewhere).
+- The binary is pinned (`CODEX_PINNED_VERSION`, `src/host/codex-binary.ts`). Its `--version` and the
+  `initialize` answer's user agent must both name the pinned release, or Codex is listed unavailable
+  with the path, the version found and the version pinned. A `.js` path is the npm launcher and runs
+  under this Node. Nothing installs it.
+- The home is the runner's own (`src/host/codex-home.ts`). `CODEX_HOME` is set on every app-server
+  and created when absent; its sign-in is the operator's `codex login` with `CODEX_HOME` set to it.
+  Every app-server starts with the session flags as root `-c` overrides under `--strict-config`: the
+  approvals reviewer is the user, web search is off, hooks are on, `approval_policy` and
+  `sandbox_mode` follow the permission mode (`CODEX_MODE_MAP`, `src/host/wire-request.ts`), and each
+  credential variable the host places in the app-server's environment is excluded from the agent's
+  shell by its exact name, which Codex matches as a glob without regard to case.
+- No thread or turn request carries a `cwd`; the app-server's process cwd is the worktree. Codex
+  writes a project trust entry only for a thread request that names a cwd, so the host never trusts
+  a project on the operator's behalf: the repository's `.codex/` layer stays closed and its
+  `AGENTS.md` still loads ([SECURITY.md](../SECURITY.md)).
+- At start the host reads Codex once (`readCodexRuntime`, `src/host/codex-runtime.ts`, bounded at 20
+  seconds): the version, the account and the model catalog, then the app-server is closed. A home
+  with no sign-in is unavailable with the sign-in step named. A catalog that cannot be read leaves
+  Codex available with `models: []`. `vocabularies.thinking` is true only when a listed model takes
+  the effort `none`.
+- The process (`startCodexProcess`, `src/host/codex-process.ts`) is an `AgentProcess<CodexMessage>`.
+  A prompt is queued in the host and sent as `turn/start` only while no turn runs; the model, mode,
+  effort and thinking setters apply at the next turn; thinking off is the effort `none`, refused by
+  name where the model does not list it; an interrupt names the running turn. Server requests are
+  answered by `codexServerRequestAnswer` (`src/host/codex-answers.ts`): a command or a file change is
+  declined, a permissions request is granted nothing for the turn, an elicitation is declined, a
+  question gets no answers, anything else is `-32601`. Nothing is ever granted for the session.
+- A session's plugin directories reach its app-server as skill roots before its thread opens
+  (`skills/extraRoots/set`, `codexSkillRoots`, `src/host/codex-pack.ts`): each the plugin root, so
+  Codex names its skills `plugin:skill` from the manifest. A directory the host cannot hand over is
+  left out and named among the receipt's plugin errors, and Codex refusing the call ends the open
+  `plugins-undeliverable`. Its MCP servers ride the thread's config (`codexMcpConfig`,
+  `src/host/codex-mcp.ts`): an HTTP server's headers as static `http_headers`, every server's tools
+  asked about before each call. A member that is Claude's alone (`settingSources`,
+  `forwardSubagentText`, the `claude_code` preset) or a value Codex's vocabularies lack is refused
+  `request-key-unsupported`, naming the member.
+- A named endpoint reaches Codex as a provider of the session's own (`src/host/codex-endpoints.ts`):
+  defined in its thread's config under an id the host derives (`codexProviderKey`), opened on by
+  `modelProvider`, its key in the app-server's environment as `PERISCOPE_CODEX_ENDPOINT_KEY` and kept
+  from the agent's shell. `ENDPOINT_ROUTED_RUNTIMES` (`src/sessions/runtimes.ts`) is Claude and Codex.
+- Its messages ride as Codex wrote them (`CODEX_MESSAGE_BINDING`): each notification and server
+  request is an `agent_message` with `runtime: "codex"`, the three text deltas on the delta lane;
+  the answers to the host's own requests are not forwarded. The observer arm
+  (`src/state/codex-observer.ts`) records the transitions they cause under `agent-event` events
+  (`AGENT_EVENTS`: `codex:` and the notification's method), and `CodexFactLift`
+  (`src/host/codex-facts.ts`) lifts the same facts Claude's lift does. `CodexItemFill`
+  (`src/host/codex-items.ts`) fills the conversation items from the session's own thread, as
+  `ClaudeItemFill` (`src/host/claude-items.ts`) does from Claude's messages and its prompt hook; the
+  forwarder holds each to the item budget (`fitAgentItem`) and puts it behind its message's facts.
+- What Codex's protocol declares is pinned name by name. `contracts/codex-protocol-names.json`,
+  regenerated by `scripts/derive-codex-names.mjs` from the pinned release's source, holds every
+  notification, server request, item kind and client method; `CODEX_COVERAGE`
+  (`src/state/codex-coverage.ts`) holds a row for each (`pins/codex-coverage.test.ts`), and a live
+  test holds the snapshot to the installed binary.
 
 ## The two read-only doors
 
@@ -270,12 +366,15 @@ paired machine credential is the alternative for a host meant to stay up.
 
 - Exports are exactly `.` and `./protocol`; a third subpath would reopen the boundary
   (`pins/package-shape.test.ts`, `pins/protocol-closure.test.ts`).
-- `files` is an allowlist: `dist/` without tests, maps, pins and test support, plus README,
-  SECURITY and LICENSE. `npm pack` is gated against it.
-- `contracts/` holds the approved snapshots, in the repository and not the tarball: `wire-vectors/`
-  (every payload kind byte for byte, the refusal and tolerance cases), `public-api.txt` (every
-  export of both barrels with its signature), and the installed SDK's type hash with its version.
-  `npm run contracts:update` re-approves the first two after an intended change;
+- `files` is an allowlist: `dist/` and `src/` without tests, maps, pins and test support, plus
+  `docs/`, `examples/`, the wire vectors, the Codex names snapshot, README, SECURITY, CHANGELOG and
+  LICENSE. `npm pack` is gated against it.
+- `contracts/` holds the approved snapshots: `wire-vectors/` (every payload kind byte for byte, the
+  refusal and tolerance cases), `public-api.txt` (every export of both barrels with its signature),
+  the installed SDK's type hash with its version, and `codex-protocol-names.json` (the names Codex's
+  app-server declares at the pinned release). The wire vectors and the names snapshot ship in the
+  tarball, the names because the host reads them at load; the rest stay in the repository.
+  `npm run contracts:update` re-approves the vectors and the API after an intended change;
   `npm run check:drift` compares the SDK.
 - The suite is `npm test`: a clean build, then every `*.test.js`. Its figure is four numbers per
   platform (tests, pass, fail, skipped) with the invocation. Live probes skip loudly unless
@@ -301,20 +400,20 @@ paired machine credential is the alternative for a host meant to stay up.
 
 ## Where things live
 
-| Path                                 | What                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/index.ts`                       | The public barrel; anything not exported here or from `protocol.ts` is internal                                                                                                                                                                                                                                                                                                                                                              |
-| `src/protocol.ts`                    | The `./protocol` subpath: types and runtime values whose closure reaches no `host/` file and no `node:` builtin                                                                                                                                                                                                                                                                                                                              |
-| `src/bin/`                           | The binary: `command.ts` (the verbs), `main.ts` (dispatch through `Io`), `serve.ts` (the daemon), `login.ts`, `pair.ts`, `config.ts`, `status.ts`, `posture.ts`, `workspaces.ts` (the provider selector and the scheme), `reconfigure.ts`                                                                                                                                                                                                    |
-| `src/host/`                          | The only importer of the SDK and the process-reaching builtins: `host.ts`, `agent-process.ts` (the SDK seam), `hooks.ts`, `paths.ts`, `config-file.ts`, `link-state-file.ts`, `claude-transcripts.ts`, `claude-facts.ts` (the Claude fact lift), `repository-read.ts`, `bulk-post.ts`, `wire-request.ts`, `model-endpoints.ts` (the operator's model endpoints), `repository-settings.ts` (the repository-tier settings check), `sign-in.ts` |
-| `src/control/`                       | The wire: `frames.ts`, `codec.ts`, `seq.ts`, `queue.ts`, `link.ts`, `link-state.ts`, `stream.ts`, `stream-routing.ts`                                                                                                                                                                                                                                                                                                                        |
-| `src/sessions/`                      | `registry.ts`, `session.ts`, `spawn-env.ts`, `fact-lift.ts` (the fact lift per runtime), `runtimes.ts` (the tier and the wire APIs per runtime)                                                                                                                                                                                                                                                                                              |
-| `src/state/`                         | `model.ts`, `machine.ts`, `observer.ts`, `store.ts`, `coverage.ts`, `reporter.ts`                                                                                                                                                                                                                                                                                                                                                            |
-| `src/gate/`                          | `gate.ts`, `decision.ts`, `outcome.ts`, `local.ts`, `jail.ts`, `shell.ts`, `command.ts`, `escalate.ts`                                                                                                                                                                                                                                                                                                                                       |
-| `src/workspace/`                     | `provider.ts`, `plain-dir.ts`, `git-worktree.ts`, `worktree-porcelain.ts`                                                                                                                                                                                                                                                                                                                                                                    |
-| `src/identity/`                      | Generic OIDC: config, PKCE, authorize, device code, the token store, the file-mode measurement                                                                                                                                                                                                                                                                                                                                               |
-| `src/mcp/`                           | JSON Schema to Zod, the descriptor, the server                                                                                                                                                                                                                                                                                                                                                                                               |
-| `src/persistence/`, `src/telemetry/` | The receipt, the transition log, per-model spend                                                                                                                                                                                                                                                                                                                                                                                             |
-| `src/pins/`                          | The structural tests; `walk.ts` is the tree walker they share                                                                                                                                                                                                                                                                                                                                                                                |
-| `examples/`                          | The minimal controller, the reference controller with its runnable entry, and the parallel-run proof                                                                                                                                                                                                                                                                                                                                         |
-| `contracts/`                         | The approved snapshots                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Path                                 | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`                       | The public barrel; anything not exported here or from `protocol.ts` is internal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `src/protocol.ts`                    | The `./protocol` subpath: types and runtime values whose closure reaches no `host/` file and no `node:` builtin                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `src/bin/`                           | The binary: `command.ts` (the verbs), `main.ts` (dispatch through `Io`), `serve.ts` (the daemon), `login.ts`, `pair.ts`, `config.ts`, `status.ts`, `posture.ts`, `workspaces.ts` (the provider selector and the scheme), `reconfigure.ts`                                                                                                                                                                                                                                                                                                                                                                              |
+| `src/host/`                          | The only importer of the SDK and the process-reaching builtins: `host.ts`, `agent-process.ts` (the SDK seam), `hooks.ts`, `paths.ts`, `config-file.ts`, `link-state-file.ts`, `claude-transcripts.ts`, `claude-facts.ts` (the Claude fact lift), `repository-read.ts`, `bulk-post.ts`, `wire-request.ts`, `model-endpoints.ts` (the operator's model endpoints), `repository-settings.ts` (the repository-tier settings check), `sign-in.ts`, `stdio-rpc.ts` (the runtime-neutral JSON-RPC transport), `codex-*.ts` (the Codex binary, home, process, answers, wire shapes, names reader, fact lift and start-up read) |
+| `src/control/`                       | The wire: `frames.ts`, `codec.ts`, `seq.ts`, `queue.ts`, `link.ts`, `link-state.ts`, `stream.ts`, `stream-routing.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `src/sessions/`                      | `registry.ts`, `session.ts`, `spawn-env.ts`, `fact-lift.ts` (the fact lift per runtime), `runtimes.ts` (the tier and the wire APIs per runtime)                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `src/state/`                         | `model.ts`, `machine.ts`, `observer.ts`, `store.ts`, `coverage.ts`, `reporter.ts`, `codex-coverage.ts` (`CODEX_COVERAGE`), `codex-observer.ts` (the Codex observer arm)                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `src/gate/`                          | `gate.ts`, `decision.ts`, `outcome.ts`, `local.ts`, `jail.ts`, `shell.ts`, `command.ts`, `escalate.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `src/workspace/`                     | `provider.ts`, `plain-dir.ts`, `git-worktree.ts`, `worktree-porcelain.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `src/identity/`                      | Generic OIDC: config, PKCE, authorize, device code, the token store, the file-mode measurement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `src/mcp/`                           | JSON Schema to Zod, the descriptor, the server                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `src/persistence/`, `src/telemetry/` | The receipt, the transition log, per-model spend                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `src/pins/`                          | The structural tests; `walk.ts` is the tree walker they share                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `examples/`                          | The minimal controller, the reference controller with its runnable entry, and the parallel-run proof                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `contracts/`                         | The approved snapshots; `scripts/derive-codex-names.mjs` regenerates the Codex names                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |

@@ -88,31 +88,46 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[14, 15]`. Version 15 adds:
+`[15, 16]`. Version 16 adds:
 
-- the `agent_facts` update body, the fact layer (below);
-- the `agent_fragment` delta body (below);
-- `runtime` on `agent_message`, optional (below);
-- `agents` on the hello's `configuration`, optional: the runtimes the host can spawn (below);
-- `endpoints` on the hello's `configuration`, optional: the model endpoints the host's operator
-  declared (below);
-- `runtime` and `endpoint` on `session_new.request`, optional (below);
-- `controlTier` on a session's first transition into `ready`, optional (below);
-- `toolKind` and `runtime` on the decision request, optional (below);
-- five refusal reasons for the runtime and the model endpoint a session names, and
-  `settings-route-refused` for a repository's settings file that names a key beneath the env floor
-  (below).
+- `codex`, a runtime the hello's `agents` may list and a `session_new` may name, whose messages
+  are its app-server's own JSON-RPC traffic with `runtime: "codex"` (below);
+- the cause kind `agent-event`, whose events are a runtime's own notifications named
+  `{runtime}:{native name}` (`AGENT_EVENTS`; [state-machine.md](state-machine.md));
+- the `runtime-default` preset for `session_new.request.systemPrompt` (below);
+- five refusal reasons for a runtime's JSON-RPC peer: `rpc-line-malformed`, `rpc-line-too-large`,
+  `rpc-request-timed-out`, `rpc-request-failed` and `rpc-server-overloaded` (below);
+- the conversation item stream, `agent_item` bodies on the update lane, filled for Claude and Codex
+  ([The conversation item stream](#the-conversation-item-stream));
+- the hello's `agentSkills`, how each runtime takes plugin directories (below);
+- three fact members: `tasks.settled`, `usage_sample.cacheReadTokens` and
+  `agent_receipt.effortReported` ([The fact layer](#the-fact-layer));
+- the refusal reason `plugins-undeliverable` ([Refusals](#refusals));
+- Codex's gate: the refusal reason `codex-hook-not-active` and the degrades `gate-hook-timed-out`,
+  `gate-hook-unspawnable`, `gate-hook-output-rejected`, `gate-hook-missing`, `gate-hook-foreign`,
+  `gate-unhooked-call`, `gate-approval-unanswered`, `gate-approval-auto-reviewed`,
+  `gate-approval-ambiguous`, `gate-project-config-active` and `gate-sandbox-absent`, raised on the
+  session's state lane ([The control tier](#the-control-tier)), and Codex at
+  `intercepted-with-residual`;
+- `shellDialect` on the decision request (`SHELL_DIALECTS`: `posix`, `powershell`), the grammar a
+  shell call's command runs in, stated only when `toolKind` is `shell`. Claude's `Bash` is `posix` and
+  its `PowerShell` is `powershell`; Codex's `Bash` is `powershell` on Windows and `posix` elsewhere.
+  No runtime here runs a tool under `cmd.exe`, so there is no word for it. A decision that allows a
+  Codex call with rewritten input is refused `permission-decision-unrecognised`: Codex's hook can only
+  let a call proceed as asked or block it.
 
-It adds no payload kind and no required member to an existing body. A version-14 controller is
-still spoken to: it reads the new bodies as open JSON it may ignore, since every reader it has
-returns null for an `update` it does not know, carries the new members unread, never sends the
-members five of the new reasons answer, and reads the sixth, `settings-route-refused`, as it reads any
-reason it does not know; every frame it sends decodes here unchanged. Version 14 narrowed
+Each is optional, so a version-15 controller reads what this build sends: an `agent_item` body is an
+`update` it does not model and leaves alone, and the rest are members it carries without reading.
+
+It adds no payload kind and no member. A version-15 controller is still spoken to: a transition's
+cause is carried unnarrowed and `readStateTransition` reads it whatever its kind, a runtime is a
+word, the preset is a value of a member that already carries any JSON, and a reason it does not know
+is read as such; every frame it sends decodes here unchanged. Version 14 narrowed
 `session_new.request.env` (below), and the narrowing holds at every version the host negotiates.
 `src/host/protocol-window.test.ts` holds both directions over a real link: every frame this host
-sends, its facts, fragments, runtimes list, endpoints list and tier included, decodes with the protocol-14 decoder
-v1.5.0 shipped, and the decision request it posts reads as that release's `DecisionRequest`; a
-version-14 controller's `session_new` and `session_configure` decode here and apply.
+sends, a Claude session's and a Codex session's on one link, decodes with the protocol-15 decoder
+v1.6.0 shipped, and the decision request it posts reads as that release's `DecisionRequest`; a
+version-15 controller's `session_new` and `session_configure` decode here and apply.
 
 Two close reasons carry meaning. A close with code 1002 whose reason starts with `seq gap` is a
 replay request: the controller names the position it holds, and the host's next dial replays from
@@ -151,10 +166,10 @@ A `host_configure_result` carries the same `agent`.
 From v15, `configuration.agents` lists the runtimes the host can spawn sessions on, one
 `HostAgentEntry` each, at most `MAX_AGENT_ENTRIES`, and is optional:
 
-- `runtime`: the name a `session_new` names it by (`claude`).
+- `runtime`: the name a `session_new` names it by (`claude`, `codex`).
 - `version` and `sdkVersion`: the runtime's own version, and the version of the library the host
   drives it through, null when there is none. Claude's are `agent`'s `claudeCodeVersion` and
-  `sdkVersion`.
+  `sdkVersion`; Codex's `version` is its app-server's, and its `sdkVersion` is null.
 - `models`: the models it offers, each a `HostModel` as above.
 - `vocabularies`: `{ permissionModes, efforts, thinking }`, the words a `session_new` or
   `session_configure` may name for it, and whether it takes a thinking control.
@@ -163,10 +178,17 @@ From v15, `configuration.agents` lists the runtimes the host can spawn sessions 
   or off its pinned version, its sign-in missing) is listed `available: false` with the reason, and a
   `session_new` naming it is refused `runtime-unavailable`. Claude is always available.
 
-This host lists one runtime, Claude, built from the same catalog read `agent` carries, so `agents`
-is null when `agent` is null and absent when it is absent. The whole list is held to
-`MAX_AGENT_CATALOG_BYTES` as JSON, and a list that cannot ride takes the catalog with it: both ride
-null, named once. A `host_configure_result` carries the same `agents`.
+This host lists Claude, built from the same catalog read `agent` carries, then Codex when its
+operator configured it ([configuration](configuration.md)), so `agents` is null when `agent` is
+null and absent when it is absent. Codex's entry is its pinned version, the models its app-server
+lists, the permission modes `default`, `dontAsk` and `bypassPermissions`, the efforts its models
+list, `thinking` true only when a listed model takes the effort `none`, and the tier
+`intercepted-with-residual`, with `gate-sandbox-absent` among its degrades where Windows reports no
+sandbox ready. The
+whole list is held to `MAX_AGENT_CATALOG_BYTES` as JSON. Claude's entry is placed first, and a later
+entry that would push the list past the budget rides with `models: []`, named once, so one
+runtime's catalog never empties another's; a list Claude's entry alone cannot fit takes the catalog
+with it, both riding null. A `host_configure_result` carries the same `agents`.
 
 From v15, `configuration.endpoints` lists the model endpoints the host's operator declared, one
 `HostEndpoint` each, at most `MAX_ENDPOINTS`, and is optional:
@@ -176,7 +198,8 @@ From v15, `configuration.endpoints` lists the model endpoints the host's operato
   `openai-responses`, `openai-chat`). A wire API a newer peer adds is read; the host sends only the
   ones it declares.
 - `runtimes`: the runtimes that can reach it. Each speaks the endpoint's wire API (Claude speaks
-  `anthropic-messages`), and the host refuses at start an endpoint naming one that does not, so a
+  `anthropic-messages`, Codex `openai-responses`), and the host refuses at start an endpoint naming
+  one that does not, and lists a runtime only where it routes it and it speaks the API, so a
   controller filters its picker on `runtimes` with no table of its own.
 - `models`: every model id a session may name on it, at most `MAX_ENDPOINT_MODELS`: the endpoint's
   own ids, as the agent sends them (a `[1m]` suffix included where the endpoint declares one), and
@@ -189,6 +212,21 @@ and none of them is on the wire. The list is the operator's configuration (`PERI
 it, rather than letting it push the runtimes list out of the hello. With every bound on the hello
 filled, the hello still fits `MAX_FRAME_BYTES` (`src/control/codec-endpoints.test.ts`). A
 `host_configure_result` carries the same `endpoints`.
+
+From v16, `configuration.agentSkills` says how each runtime `agents` lists takes plugin directories,
+one `HostAgentSkills` each, and is optional. It rides with `agents`: null when `agents` is null and
+absent when it is absent. A runtime it does not list cannot take plugin directories.
+
+- `runtime`: the runtime, as `agents` names it.
+- `naming` (`SKILL_NAMINGS`): `namespaced` when the runtime lists a plugin's skills under the
+  plugin's own name (`plugin:skill`), `bare` when it lists them by the skill's name alone.
+- `delivery` (`SKILL_DELIVERIES`): `per-session` when the runtime takes the directories with each
+  session's request, `per-process` when this host hands them to the runtime's process as it starts,
+  `workspace` when the runtime takes only what is already in the session's directory.
+
+Claude is `namespaced`, `per-session`: the agent CLI's plugin directories. Codex is `namespaced`,
+`per-process`: each directory is a skill root of the session's own app-server. A word a newer peer
+adds is read; the host sends only the words it declares.
 
 ## The credential on the three transports
 
@@ -279,15 +317,22 @@ a fact whose message it does not have.
 
 `session_update.body` is an open JSON object read through typed readers: `readStateTransition`,
 `readAgentMessage`, `readWireRefusal` (`{ refusal, expected, received }`; `expected` is the seq the
-receiver will accept next on the refused party's own outbound lane), `readAgentFacts`.
+receiver will accept next on the refused party's own outbound lane), `readAgentFacts`,
+`readAgentItem`.
 `wire_refusal` is a body member, not a payload kind, so a refusal rides the same fact lane it
 refuses. `session_delta.body` is open JSON in the same way, a `SessionDeltaBody` read through
 `readAgentMessage` and `readAgentFragment`. A controller carries unknown keys through and must not
-narrow the body. The codec checks the members the fact layer declares (below) and nothing else in a
-body.
+narrow the body. The codec checks the members the fact layer and the item stream declare (below)
+and nothing else in a body.
 
 `agent_message` carries `runtime`, the runtime that emitted the message, from v15. Absent means
 `claude` (`DEFAULT_RUNTIME`): a Claude session's messages omit it, so their bodies are unchanged.
+A Codex session's messages carry `runtime: "codex"`, and each `message` is what its app-server
+sent: a notification as `{ method, params }`, a request it made of the host as
+`{ id, method, params }`. The three text deltas (`item/agentMessage/delta`,
+`item/reasoning/textDelta`, `item/reasoning/summaryTextDelta`) ride the delta lane and everything
+else the update lane; the answers to the host's own requests are not forwarded. Which notifications
+move the session is `CODEX_COVERAGE` ([state-machine.md](state-machine.md)).
 
 A forwarded message's body, on either lane, carries `observedAt` (v12): the instant, ISO-8601 in
 UTC, this host took the message off the agent's stream. Date a message by it rather than by its
@@ -318,14 +363,24 @@ them into typed members and puts each on the update lane as an `agent_facts` bod
 `{ update: 'agent_facts', fact, sourceId?, observedAt? }`, right behind the message it came from.
 The message still rides; a consumer that wants it whole still has it.
 
-| `fact.kind`      | What it states                                                                            | Claude's source                                              |
-| ---------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `session_handle` | `handle`: the runtime's own resumable id                                                  | `system/init.session_id`, when it first appears or changes   |
-| `agent_receipt`  | the version, model, approval mode, effort, skills, plugins, plugin errors and MCP servers | `system/init`, when any member differs from the last receipt |
-| `turn_record`    | `totals` and `turn`, each a `SpendFacts`, with `turnScope`, `numTurns`, `durationMs`      | each `result`                                                |
-| `usage_sample`   | `contextTokens`, `contextWindow`, `cacheTtl` and `mainThread` for one model call          | each main-thread `assistant` call, once per API message id   |
-| `tasks`          | `running`: every task running now, whole; each fact replaces the last                     | `background_tasks_changed` and the task edges, composed      |
-| `compaction`     | `status` (`started`, `ended`), `trigger`, `tokensBefore`, `tokensAfter`                   | the observer's compaction entry opening and closing          |
+| `fact.kind`      | What it states                                                                                                             | Claude's source                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `session_handle` | `handle`: the runtime's own resumable id                                                                                   | `system/init.session_id`, when it first appears or changes                   |
+| `agent_receipt`  | the version, model, approval mode, effort, skills, plugins, plugin errors and MCP servers                                  | `system/init`, when any member differs from the last receipt                 |
+| `turn_record`    | `totals` and `turn`, each a `SpendFacts`, with `turnScope`, `numTurns`, `durationMs`                                       | each `result`                                                                |
+| `usage_sample`   | `contextTokens`, `contextWindow`, `cacheTtl`, `cacheReadTokens` and `mainThread` for one model call                        | each main-thread `assistant` call, once per API message id                   |
+| `tasks`          | `running`: every task running now, whole, and `settled`: the tasks ended since the turn began; each fact replaces the last | `background_tasks_changed` and the task edges, composed; `task_notification` |
+| `compaction`     | `status` (`started`, `ended`), `trigger`, `tokensBefore`, `tokensAfter`                                                    | the observer's compaction entry opening and closing                          |
+
+Codex's sources: `session_handle` is the thread id the opening answer names; `agent_receipt` is
+built from the opening answers, so it rides before `ready`, and sent again on a reroute, a skills
+change, an MCP server's status, and a setter applied on a `turn/start` (`source: 'host'`);
+`turn_record` is each `turn/completed`, its `totals` the newest `thread/tokenUsage/updated` and its
+`turn` and `turnScope` null, because Codex's per-call figure is not a turn; `usage_sample` is each
+`thread/tokenUsage/updated`, the last call's total as the context; `tasks` is the running
+sub-agents, and the sub-agents settled since the turn began. Codex's usage names no model, so its
+figures are filed under the model the thread opened on, moved by a model a `turn/start` sends and by
+a reroute.
 
 Every fact carries `runtime`. `sourceId` is the id of the native message the fact was lifted from
 (Claude: the message's `uuid`, the same id its `agent_message` carries) and null for a fact lifted
@@ -362,13 +417,28 @@ cache reads plus cache writes; `contextWindow` is the window the latest result r
 call's model (a `modelUsage` key naming it exactly, with a bracketed selector such as `[1m]`, or
 through its canonical model), and null until a result has named one; `cacheTtl` is `1h` when the
 call wrote hour-long cache tokens, else `5m` when it wrote five-minute ones, else null. A call that
-arrives as several messages is sampled once, by its API message id.
+arrives as several messages is sampled once, by its API message id. From v16 `cacheReadTokens` is the
+tokens the call read from the cache, as reported (Claude: the call's `cache_read_input_tokens`;
+Codex: the last call's cached input), and null when not reported: a call that read the cache and
+wrote none is told apart from one that touched it not at all.
 
 `tasks` is a level: `running` is every task running now, so each fact replaces the last. Claude's is
 composed from the level message and the task edges: the level replaces itself with its non-ambient
 entries; a non-ambient `task_started` of type `local_agent` adds an edge when its id is absent; a
 `task_notification` removes that edge and never a level entry; a `result` clears every edge; and
-`running` is the level, then the edges the level lacks, by id.
+`running` is the level, then the edges the level lacks, by id. From v16 `settled` lists the tasks the
+runtime says ended since the turn began, each `{ taskId, type, status }` with `status` one of
+`TASK_SETTLEMENTS` (`completed`, `failed`, `stopped`) and `type` the one it started with, null when
+the host never saw it start. Claude's is each `task_notification`'s status, cleared by the init the
+next turn begins with; Codex's is each sub-agent a collaboration call reports settled (`errored` is
+`failed`, `shutdown` and `notFound` are `stopped`) or its activity ends (`interrupted` is `stopped`),
+cleared at the next `turn/started`. A fact whose only news is a settlement restates `running`
+unchanged.
+
+`agent_receipt` carries `effortReported` from v16: true when the runtime's report stated an effort at
+all, so a null `effort` means no effort is in force; false when its report carried none, so a null
+`effort` says nothing. Claude's init omits `effort` on a CLI that does not publish it and states null
+when no effort will be sent; Codex's thread answer always states it.
 
 `compaction` reports `started` when the observer's compaction entry opens and `ended` when it
 closes, with what the source that moved it stated: the compaction hooks state the trigger, the
@@ -376,11 +446,14 @@ closes, with what the source that moved it stated: the compaction hooks state th
 
 **Whole numbers.** `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
 `reasoningTokens`, `contextTokens`, `contextWindow`, `numTurns`, `durationMs`, `tokensBefore` and
-`tokensAfter` are non-negative integers on the wire; the codec refuses any other number there with
-`frame-malformed`. A cost is any non-negative number.
+`tokensAfter` are non-negative integers on the wire, and an item's `exitCode` an integer; the codec
+refuses any other number there with `frame-malformed`. A cost is any non-negative number. The codec
+spells each as `<member>: z.number().int()`, which a consumer generating its readers from the source
+reads (`src/pins/wire-counts.test.ts`).
 
 **Vocabularies.** Every closed set a fact names is an exported array: `COST_BASES`, `TURN_SCOPES`,
-`RECEIPT_SOURCES`, `CACHE_TTLS`, `COMPACTION_STATUSES`, `COMPACTION_TRIGGERS`, `FRAGMENT_CHANNELS`.
+`RECEIPT_SOURCES`, `CACHE_TTLS`, `COMPACTION_STATUSES`, `COMPACTION_TRIGGERS`, `FRAGMENT_CHANNELS`,
+`TASK_SETTLEMENTS`.
 A word outside one is read on the way in, so a newer peer's added word survives, and refused on the
 way out: this host sends only the words it declares. A fact `kind` this build does not model decodes
 and reads as null through `readAgentFacts`.
@@ -399,6 +472,62 @@ JSON and never prose). `parentId` names the tool call that spawned the subagent 
 null on the main thread. The `agent_message` delta it came from still rides beside it. A fragment is
 a delta like any other: droppable, and never stored.
 
+## The conversation item stream
+
+From v16 the session's conversation also rides the update lane as items, one shape for every
+runtime: `{ update: 'agent_item', runtime, item, observedAt? }`, read through `readAgentItem`. A
+consumer folds every runtime's conversation with one reader; the native message still rides
+`agent_message` beside the items, for the transcript store and anyone who wants it whole. Items are
+an addition: every other frame a session sends is the same with them or without them
+(`src/host/claude-wire-replay.test.ts` holds Claude's recorded wire both ways).
+
+An item is tagged by `kind`, and every item carries `itemId`, `turnId` and `truncated`:
+
+| `item.kind`   | Its members                                                                                                            |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `turn`        | `status` (`started`, `completed`, `interrupted`, `failed`), `detail`: why it ended, where stated                       |
+| `user_text`   | `text`: the prompt as the runtime received it                                                                          |
+| `agent_text`  | `text`, `final`: true where the runtime marks the text as the turn's answer, false interim, null where it does not say |
+| `thinking`    | `text`, `summary`: true for a reasoning summary, false for the reasoning itself; empty where kept back                 |
+| `tool_call`   | `toolUseId`, `toolName`, `toolKind` (one of `TOOL_KINDS`, the gate's tool kinds), `input`                              |
+| `tool_result` | `toolUseId`, `status` (`completed`, `failed`, `declined`, `blocked`), `output`, `exitCode`, `durationMs`, `changes`    |
+| `plan`        | `text`: the agent's plan                                                                                               |
+| `notice`      | `level` (`info`, `warning`, `error`), `text`: a warning, a retry, an error the runtime reported                        |
+
+- `tool_result.status` is `blocked` when this host's gate refused the call, and `declined` when the
+  runtime's own approval or permission check answered no. `changes` lists the files a call changed,
+  each `{ path, change, movePath, diff }` with `change` one of `add`, `delete`, `update`.
+- **Reported, never synthesized.** A runtime fills only the kinds its events carry, and a member it
+  did not report is null: Claude states no exit code, duration or `final`; Codex states `final` only
+  where it gives a message stage. Nothing is computed.
+- **Which text is the turn's answer** is the consumer's reading: the last `agent_text` of the turn
+  with `final` true, else the last with `final` null. Claude marks none, so its answer is the turn's
+  last `agent_text`.
+- **Once, complete.** An item is emitted once, when what it states is known: a `tool_call` when the
+  call is known, its `tool_result` when it ends. Streaming text rides the fragments.
+- **Ids.** `itemId` is unique within the session, so ingest is idempotent on it: the runtime's own id
+  where it has one (a tool use, a Codex item), with a suffix where one source yields two items
+  (`:result`, `:raw`, `:started`, `:completed`), and otherwise its message's id and the block's index,
+  or, for a Claude prompt, the periscope session's key and the prompt's count. `turnId` is the
+  runtime's turn id, and null where it has none (every Claude item).
+- **The budget.** An item takes at most `MAX_AGENT_ITEM_BYTES` as JSON. A text member past it is cut
+  at a character and the item says so in `truncated`; a tool call's `input` past it is left out whole
+  (`input: null`, `truncated: true`), never cut. The codec refuses an item past the budget.
+- **The main thread.** Items state the session's own conversation. A subagent's (Claude) or a
+  sub-agent thread's (Codex) messages ride `agent_message` and fill no item; its call and result in
+  the main conversation do.
+
+Claude's items come from `UserPromptSubmit` (the turn's start and its prompt), each assistant
+`text`, `thinking`, `redacted_thinking` and `tool_use` block, each `tool_result` block, each `result`
+(the turn's end), `system/compact_boundary` and `system/api_retry` (`CLAUDE_ITEM_COVERAGE`,
+`src/host/claude-items.ts`, keyed by the SDK's own message and block kinds). Codex's come from its
+turn and item notifications, its plan updates and its notices (`CODEX_ITEM_FILLS`,
+`src/host/codex-items.ts`, and each `CODEX_COVERAGE` row's note).
+
+A kind or a vocabulary word a newer peer adds is read on the way in and refused on the way out; an
+item kind this build does not model decodes and reads as null through `readAgentItem`. Every member
+an item declares is optional on the wire, beside `item` and its `kind`.
+
 ## The control tier
 
 How much of a session's tool use the host can see and stop is stated as its control tier,
@@ -413,9 +542,26 @@ first:
 `degrades` names the paths that fall below the level, each a word, and is empty when none does.
 The tier rides `controlTier` on the session's first transition into `ready`, the one where the agent
 reports itself, and on no other transition; and in each `HostAgentEntry` of the hello. Both come
-from one lookup per runtime, so they cannot differ. A Claude session is
-`{ level: 'intercepted', degrades: [] }`: every tool call reaches the `PreToolUse` gate under every
-permission mode. The tier is stated, never negotiated, and the host decides nothing by it.
+from one lookup per runtime, so they state the same level; a session's own `degrades` add what is
+known for it alone when it opens. A Claude session is `{ level: 'intercepted', degrades: [] }`: every
+tool call reaches the `PreToolUse` gate under every permission mode. A Codex session is
+`intercepted-with-residual`: every call Codex's hook sees, and every approval it asks for, is decided
+by the gate, and its opening `degrades` name `gate-hook-foreign`, `gate-project-config-active` and
+`gate-sandbox-absent` when they hold for it. The tier is stated, never negotiated, and the host decides
+nothing by it.
+
+**Degrades raised mid-session.** A degrade is a `RefusalReason` that names a path where a call ran
+undecided, or where the session lost a guarantee; it never means the call was stopped, and it never
+stops the session. One raised after the opening transition rides the session's state lane as a
+same-state transition with cause `{ kind: 'refusal', event: <the degrade>, detail }`, once per call.
+Codex's are `gate-hook-timed-out`, `gate-hook-unspawnable`, `gate-hook-output-rejected`,
+`gate-hook-missing`, `gate-unhooked-call`, `gate-approval-unanswered` (the approval was declined at
+the host's deadline), `gate-approval-auto-reviewed` and `gate-approval-ambiguous` (an MCP approval
+that could not be tied to one call, declined); the three known at the open are also raised once each,
+with their detail. A Codex session's transport refusals (`rpc-*`) ride the same lane, once per reason.
+None of these is `permission-decision-unavailable`, which means the tool did not run. A Codex open
+whose hook is not trusted and enabled is refused `codex-hook-not-active`: a refusal transition on
+this lane, then the session's end.
 
 A level outside `CONTROL_TIER_LEVELS` is read on the way in, so a newer peer's added level survives,
 and refused on the way out. The codec checks a transition's `controlTier` and nothing else in it.
@@ -455,7 +601,10 @@ certificates trusted, the model endpoint, provider and credentials, every proxy)
 `session_new.request` carries `resume`, `fork`, `settingSources`, `plugins`, `mcpServers`,
 `strictMcpConfig`, `includePartialMessages`, `thinking`, `forwardSubagentText`, `env`, `model`,
 `systemPrompt`, `effort` and `permissionMode` (the SDK's own vocabularies), and from v15 `runtime`
-and `endpoint`, which are optional. The narrowing site from
+and `endpoint`, which are optional. From v16 `systemPrompt` may also be the preset every runtime
+reads, `{ type: 'preset', preset: 'runtime-default', append? }`: the runtime keeps its own base
+instructions and adds `append` in its own lane (Claude's `claude_code` preset with the append;
+Codex's developer instructions). The narrowing site from
 a wire request to a local one is `src/host/wire-request.ts`; the members of the in-process API that
 have no JSON form are structurally absent.
 
@@ -485,10 +634,33 @@ settings, plugins or agent frontmatter is loaded. In-process tool descriptors ar
 (`PeriscopeHostOptions.tools`) and have no wire lane; the `periscope` binary registers none.
 
 `runtime` names the runtime the session runs on. Null or absent is the host's default, `claude`
-(`DEFAULT_RUNTIME`); `claude` itself opens exactly as null does. Any other name is refused
-`runtime-unavailable` before anything is reserved and before any other member is read, the detail
-naming the runtime and what the host offers. The hello's `agents` is the list a controller picks
-from.
+(`DEFAULT_RUNTIME`); `claude` itself opens exactly as null does. A name the hello's `agents` does
+not list, or lists `available: false`, is refused `runtime-unavailable` before anything is reserved
+and before any other member is read, the detail naming the runtime and what the host offers, or the
+listed reason. The hello's `agents` is the list a controller picks from.
+
+On `codex`, every other member is read as Codex's own:
+
+- `permissionMode`, `effort` and `thinking` take the words Codex's entry lists; another word is
+  refused `request-key-unsupported`, the detail naming the member and the words it takes. Thinking
+  off is the effort `none`, which the model must list.
+- A member that is Claude's alone is refused `request-key-unsupported`, naming it: `settingSources`,
+  `forwardSubagentText`, and a `systemPrompt` that is the `claude_code` preset. A string
+  `systemPrompt` replaces Codex's base instructions.
+- `plugins` are handed to the session's app-server as skill roots before its thread opens
+  (`skills/extraRoots/set`): each directory the root that holds `.claude-plugin/plugin.json`, so its
+  skills list as `plugin:skill`. A directory that is not there is left out and named among the
+  receipt's `pluginErrors`; Codex refusing the call ends the open `plugins-undeliverable`.
+- `mcpServers` ride the thread's own config, one `mcp_servers.<name>` table each: an HTTP server's
+  `headers` as static `http_headers`, a stdio server's command, arguments and environment. Every
+  server's tools are asked about before each call, and the session's gate decides each ask for the
+  call pending on that server. A server Codex has no form for
+  (SSE, an in-process server, a key it has no setting for, a name with a `.`) is refused
+  `mcp-descriptor-invalid`, naming it.
+- `endpoint` opens the session on a provider of its own, defined in its thread's config and named by
+  the host. The endpoint must carry `codex` and speak `openai-responses`; otherwise it is refused
+  `endpoint-unknown` or `endpoint-incompatible`. `model-endpoint-mismatch` is Claude's rule and a
+  Codex session never meets it.
 
 `endpoint` names the model endpoint the session's model traffic goes to, by a name the hello's
 `endpoints` lists. Null or absent is the runtime's own route. A controller names an endpoint and
@@ -711,25 +883,29 @@ learn it before it can answer with it. Count the entries in the file; never carr
 
 The reasons a controller meets most, and what each is not:
 
-| reason                                                                                  | names                                                                                                                                                                                                                                                                 |
-| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frame-not-json`, `frame-malformed`, `frame-too-large`                                  | the codec's three; the last names the bulk lane                                                                                                                                                                                                                       |
-| `seq-gap`, `seq-regressed`                                                              | the receiver's inbound lane; the refusal's `expected` is where to resume                                                                                                                                                                                              |
-| `link-unauthorized`                                                                     | the peer refused this host's identity at the door; terminal, never retried. Not `link-send-failed`, which names a transport that faltered                                                                                                                             |
-| `session-unknown`                                                                       | a handle that does not and never will exist, or a held turn over the bound                                                                                                                                                                                            |
-| `session-configure-failed`                                                              | the agent refused one of a `session_configure`'s controls; the detail names the member, and the members before it were applied. Not `frame-malformed`, which is the host refusing a value                                                                             |
-| `permission-decision-unavailable`, `permission-decision-unrecognised`                   | an outage, and a decision this build does not know; neither is an allow                                                                                                                                                                                               |
-| `transcript-path-escape`                                                                | a caller-supplied name that failed one of the discovery jail's three layers; the refusal names the layer                                                                                                                                                              |
-| `bulk-target-not-controller`, `bulk-target-invalid`                                     | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                                                                                                       |
-| `resume-cwd-not-honoured`                                                               | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                                                                                                      |
-| `runtime-unavailable`                                                                   | a `session_new` naming a runtime the host cannot spawn: unknown, or listed `available: false`; the detail names it and what the host offers                                                                                                                           |
-| `request-key-unsupported`                                                               | a `session_new` member the named runtime does not honour; the detail names the key. Every member is Claude's own, so a session on Claude never meets it                                                                                                               |
-| `endpoint-unknown`, `endpoint-incompatible`, `model-endpoint-mismatch`                  | a model endpoint the host's operator did not declare; one whose runtimes or wire API exclude the session's runtime; a `claude-` model id, or an alias the endpoint does not map, on an endpoint not marked as Anthropic's own route, at the open or on a later switch |
-| `settings-route-refused`                                                                | a repository settings file the session loads names a key beneath the env floor in its `env`; the detail names the file and the keys. Not `env-key-refused`, which is the controller's own lanes                                                                       |
-| `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed` | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                                                                                                 |
-| `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force`                                                                                 |
-| `repository-path-escape`, `repository-read-failed`                                      | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                                                                                                  |
-| `workspace-path-escape`, `workspace-read-failed`                                        | the same two over a workspace's directory; the second also names an unusable key, an offset inside a character or past the end, and a file larger than the read serves                                                                                                |
+| reason                                                                                                                                                                                                                                                                                 | names                                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frame-not-json`, `frame-malformed`, `frame-too-large`                                                                                                                                                                                                                                 | the codec's three; the last names the bulk lane                                                                                                                                                                                                                                          |
+| `seq-gap`, `seq-regressed`                                                                                                                                                                                                                                                             | the receiver's inbound lane; the refusal's `expected` is where to resume                                                                                                                                                                                                                 |
+| `link-unauthorized`                                                                                                                                                                                                                                                                    | the peer refused this host's identity at the door; terminal, never retried. Not `link-send-failed`, which names a transport that faltered                                                                                                                                                |
+| `session-unknown`                                                                                                                                                                                                                                                                      | a handle that does not and never will exist, or a held turn over the bound                                                                                                                                                                                                               |
+| `session-configure-failed`                                                                                                                                                                                                                                                             | the agent refused one of a `session_configure`'s controls; the detail names the member, and the members before it were applied. Not `frame-malformed`, which is the host refusing a value                                                                                                |
+| `permission-decision-unavailable`, `permission-decision-unrecognised`                                                                                                                                                                                                                  | an outage, and a decision this build does not know; neither is an allow                                                                                                                                                                                                                  |
+| `transcript-path-escape`                                                                                                                                                                                                                                                               | a caller-supplied name that failed one of the discovery jail's three layers; the refusal names the layer                                                                                                                                                                                 |
+| `bulk-target-not-controller`, `bulk-target-invalid`                                                                                                                                                                                                                                    | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                                                                                                                          |
+| `resume-cwd-not-honoured`                                                                                                                                                                                                                                                              | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                                                                                                                         |
+| `runtime-unavailable`                                                                                                                                                                                                                                                                  | a `session_new` naming a runtime the host cannot spawn: unknown, or listed `available: false`; the detail names it and what the host offers                                                                                                                                              |
+| `codex-hook-not-active`                                                                                                                                                                                                                                                                | a Codex open whose periscope hook is not trusted and enabled, whose hook channel could not listen, or whose hook command fails its probe; the detail says what to fix. Without the hook nothing enforces the protected set on Codex                                                      |
+| `gate-hook-timed-out`, `gate-hook-unspawnable`, `gate-hook-output-rejected`, `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call`, `gate-approval-unanswered`, `gate-approval-auto-reviewed`, `gate-approval-ambiguous`, `gate-project-config-active`, `gate-sandbox-absent` | degrades on a Codex session's state lane: a call went on undecided, or the session lost a guarantee ([The control tier](#the-control-tier)). Never a stop                                                                                                                                |
+| `request-key-unsupported`                                                                                                                                                                                                                                                              | a `session_new` member the named runtime does not honour, or a value of one its vocabularies lack; the detail names the key. Every member is Claude's own, so a session on Claude never meets it                                                                                         |
+| `plugins-undeliverable`                                                                                                                                                                                                                                                                | the runtime refused the call that hands it a session's plugin directories (Codex's `skills/extraRoots/set`); the open ends before `ready`, the detail carrying the runtime's answer. A directory that is not there is not this: it is named among the receipt's `pluginErrors`           |
+| `rpc-line-malformed`, `rpc-line-too-large`, `rpc-request-timed-out`, `rpc-request-failed`, `rpc-server-overloaded`                                                                                                                                                                     | a runtime's JSON-RPC peer: a line that is no JSON-RPC message, a line past what the host reads (dropped whole), a request with no answer by the host's deadline, an error answer, and the peer's own overload code. They reach a controller in a cause's detail, never as a wire refusal |
+| `endpoint-unknown`, `endpoint-incompatible`, `model-endpoint-mismatch`                                                                                                                                                                                                                 | a model endpoint the host's operator did not declare; one whose runtimes or wire API exclude the session's runtime; a `claude-` model id, or an alias the endpoint does not map, on an endpoint not marked as Anthropic's own route, at the open or on a later switch                    |
+| `settings-route-refused`                                                                                                                                                                                                                                                               | a repository settings file the session loads names a key beneath the env floor in its `env`; the detail names the file and the keys. Not `env-key-refused`, which is the controller's own lanes                                                                                          |
+| `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed`                                                                                                                                                                                                | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                                                                                                                    |
+| `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                                                                                                                                                                                                               | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force`                                                                                                    |
+| `repository-path-escape`, `repository-read-failed`                                                                                                                                                                                                                                     | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                                                                                                                     |
+| `workspace-path-escape`, `workspace-read-failed`                                                                                                                                                                                                                                       | the same two over a workspace's directory; the second also names an unusable key, an offset inside a character or past the end, and a file larger than the read serves                                                                                                                   |
 
 `protocol_version_rejected` is not a refusal reason but a link cause: the windows did not overlap,
 and the link's state reports it.
@@ -799,27 +975,35 @@ Over the link:
 
 ## Where things live
 
-| Path                                                                 | What                                                                                                                                                                                  |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/protocol.ts`                                                    | The subpath barrel: types and runtime values (`encode`, `decode`, `SeqTracker`, `REFUSAL_REASONS`, `PROTOCOL_VERSION`, `PROTOCOL_VERSION_MIN`, `readDecision`, the permission shapes) |
-| `src/control/frames.ts`                                              | The envelope, the payload union, the sequence semantics, `DROPPABLE_KINDS`, the three ids                                                                                             |
-| `src/control/codec.ts`                                               | The one edge between bytes and types; tolerant decode, strict encode                                                                                                                  |
-| `src/control/seq.ts`                                                 | `SeqTracker`: dense minting, gap and duplicate judgement                                                                                                                              |
-| `src/control/queue.ts`                                               | `BoundedFrameQueue`: pending and written entries, the eviction ladder                                                                                                                 |
-| `src/control/link.ts`                                                | `ControllerLink`: the dial-out socket, admit then drain, backoff with jitter, heartbeat, the connect timeout, replay, acks, the version window                                        |
-| `src/control/link-state.ts`                                          | The link's own state machine and `LINK_CAUSES`                                                                                                                                        |
-| `src/control/stream-routing.ts`                                      | `MESSAGE_ROUTING`: the lane for each SDK message                                                                                                                                      |
-| `src/sessions/fact-lift.ts`                                          | `FACT_LIFTS`: the fact lift for each runtime, and `factLiftFor`                                                                                                                       |
-| `src/host/claude-facts.ts`                                           | The Claude lift: the fact layer read out of the agent's own messages                                                                                                                  |
-| `src/host/bulk-post.ts`                                              | The streamed outbound POST behind `bulk_request` and its origin bind                                                                                                                  |
-| `src/gate/decision.ts`                                               | The permission types the subpath re-exports, and `TOOL_KINDS`                                                                                                                         |
-| `src/gate/tool-kind.ts`                                              | Claude's map from a tool name to its `toolKind`                                                                                                                                       |
-| `src/sessions/runtimes.ts`                                           | `CONTROL_TIERS`, the tier per runtime; `RUNTIME_WIRE_APIS`, the wire APIs each runtime speaks; and `runtimeOf`, the runtime a session request names                                   |
-| `src/host/model-endpoints.ts`                                        | The operator's model endpoints: the file read and checked at start, the hello's entries, the variables a session on one is spawned with, and the model rule                           |
-| `src/host/repository-settings.ts`                                    | The repository's own settings tiers, read before a session that loads them starts                                                                                                     |
-| `src/host/claude-runtime.ts`                                         | Claude's entry in the hello's `agents`                                                                                                                                                |
-| `src/host/wire-request.ts`                                           | The single narrowing from `session_new.request` and `session_configure` to local requests                                                                                             |
-| `contracts/wire-vectors/`                                            | The byte-level contract                                                                                                                                                               |
-| `src/pins/wire-vectors.test.ts`, `src/pins/protocol-closure.test.ts` | The corpus check; the proof that the subpath reaches no `host/` file and no `node:` builtin                                                                                           |
-| `src/host/protocol-window.test.ts`                                   | The window's two directions over a real link: this host's frames through the protocol-14 decoder v1.5.0 shipped, and a version-14 controller's frames through this build              |
-| `examples/minimal-controller/`, `examples/test-controller/`          | The smallest controller that accepts a host, and the reference controller that drives every ask                                                                                       |
+| Path                                                                 | What                                                                                                                                                                                                   |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/protocol.ts`                                                    | The subpath barrel: types and runtime values (`encode`, `decode`, `SeqTracker`, `REFUSAL_REASONS`, `PROTOCOL_VERSION`, `PROTOCOL_VERSION_MIN`, `readDecision`, the permission shapes)                  |
+| `src/control/frames.ts`                                              | The envelope, the payload union, the sequence semantics, `DROPPABLE_KINDS`, the three ids                                                                                                              |
+| `src/control/codec.ts`                                               | The one edge between bytes and types; tolerant decode, strict encode                                                                                                                                   |
+| `src/control/seq.ts`                                                 | `SeqTracker`: dense minting, gap and duplicate judgement                                                                                                                                               |
+| `src/control/queue.ts`                                               | `BoundedFrameQueue`: pending and written entries, the eviction ladder                                                                                                                                  |
+| `src/control/link.ts`                                                | `ControllerLink`: the dial-out socket, admit then drain, backoff with jitter, heartbeat, the connect timeout, replay, acks, the version window                                                         |
+| `src/control/link-state.ts`                                          | The link's own state machine and `LINK_CAUSES`                                                                                                                                                         |
+| `src/control/stream-routing.ts`                                      | `MESSAGE_ROUTING`: the lane for each SDK message                                                                                                                                                       |
+| `src/sessions/fact-lift.ts`                                          | `FACT_LIFTS`: the fact lift for each runtime, and `factLiftFor`                                                                                                                                        |
+| `src/host/claude-facts.ts`                                           | The Claude lift: the fact layer read out of the agent's own messages                                                                                                                                   |
+| `src/sessions/item-fill.ts`                                          | `ItemFill`: what a runtime's conversation item fill is                                                                                                                                                 |
+| `src/control/item-budget.ts`                                         | `fitAgentItem`: an item held to `MAX_AGENT_ITEM_BYTES`, its cut said in `truncated`                                                                                                                    |
+| `src/host/claude-items.ts`                                           | The Claude fill, `CLAUDE_ITEM_COVERAGE` and `CLAUDE_BLOCK_ITEMS`: the items read out of the agent's messages and its prompt hook                                                                       |
+| `src/host/codex-items.ts`                                            | The Codex fill and `CODEX_ITEM_FILLS`: the items read out of the app-server's notifications                                                                                                            |
+| `src/host/bulk-post.ts`                                              | The streamed outbound POST behind `bulk_request` and its origin bind                                                                                                                                   |
+| `src/gate/decision.ts`                                               | The permission types the subpath re-exports, and `TOOL_KINDS`                                                                                                                                          |
+| `src/gate/tool-kind.ts`                                              | Claude's and Codex's maps from a tool name to its `toolKind`                                                                                                                                           |
+| `src/sessions/runtimes.ts`                                           | `CONTROL_TIERS`, the tier per runtime; `RUNTIME_WIRE_APIS`, the wire APIs each runtime speaks; `AGENT_SKILLS`, how each takes plugin directories; and `runtimeOf`, the runtime a session request names |
+| `src/host/model-endpoints.ts`                                        | The operator's model endpoints: the file read and checked at start, the hello's entries, the variables a session on one is spawned with, and the model rule                                            |
+| `src/host/repository-settings.ts`                                    | The repository's own settings tiers, read before a session that loads them starts                                                                                                                      |
+| `src/host/claude-runtime.ts`                                         | Claude's entry in the hello's `agents`                                                                                                                                                                 |
+| `src/host/wire-request.ts`                                           | The single narrowing from `session_new.request` and `session_configure` to local requests                                                                                                              |
+| `contracts/wire-vectors/`                                            | The byte-level contract                                                                                                                                                                                |
+| `src/pins/wire-vectors.test.ts`, `src/pins/protocol-closure.test.ts` | The corpus check; the proof that the subpath reaches no `host/` file and no `node:` builtin                                                                                                            |
+| `src/host/protocol-window.test.ts`                                   | The window's two directions over a real link: this host's frames, a Codex session's included, through the protocol-15 decoder v1.6.0 shipped, and a version-15 controller's frames through this build  |
+| `src/host/codex-wire.ts`                                             | `CodexMessage`, what a Codex session yields, and the shapes of the app-server answers the host reads                                                                                                   |
+| `src/host/codex-runtime.ts`                                          | Codex's entry in the hello's `agents`, and `CODEX_MESSAGE_BINDING`, the lane for each Codex message                                                                                                    |
+| `src/host/codex-pack.ts`, `src/host/codex-mcp.ts`                    | A Codex session's plugin directories as skill roots, and its MCP servers as thread config                                                                                                              |
+| `src/host/codex-endpoints.ts`                                        | A named endpoint as a Codex session reaches it: the derived provider id, the provider config, the key's variable                                                                                       |
+| `examples/minimal-controller/`, `examples/test-controller/`          | The smallest controller that accepts a host, and the reference controller that drives every ask                                                                                                        |

@@ -34,12 +34,14 @@ import assert from 'node:assert/strict';
 import { decode, encode } from '../control/codec.js';
 import {
   MAX_AGENT_ENTRIES,
+  MAX_AGENT_ITEM_BYTES,
   MAX_ENDPOINTS,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_MIN,
   agentFactsUpdate,
   agentFragmentDelta,
+  agentItemUpdate,
   agentMessageDelta,
   agentMessageUpdate,
   bulkDelivered,
@@ -73,6 +75,7 @@ import {
   workspaceReleaseResult,
 } from '../control/frames.js';
 import type {
+  AgentItem,
   AgentReceiptFact,
   CompactionFact,
   ControlPayload,
@@ -80,6 +83,7 @@ import type {
   Frame,
   HostAgent,
   HostAgentEntry,
+  HostAgentSkills,
   HostEndpoint,
   SessionHandleFact,
   SessionPayload,
@@ -216,6 +220,40 @@ const TRANSITION_READY_WITH_TIER: SessionTransition = {
   controlTier: { level: 'intercepted', degrades: [] },
 };
 
+/** A Codex thread's first `ready`: caused by the runtime's own notification, at tier none. */
+const TRANSITION_READY_AGENT_EVENT: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'thread-1',
+  cause: {
+    kind: 'agent-event',
+    event: 'codex:thread/started',
+    detail: 'the thread reported itself on Codex 0.162.1',
+  },
+  controlTier: { level: 'none', degrades: [] },
+};
+
+/** A gated Codex thread's first `ready`: the residual tier, naming a degrade known at spawn. */
+const TRANSITION_READY_RESIDUAL_TIER: SessionTransition = {
+  ...TRANSITION_READY_AGENT_EVENT,
+  controlTier: { level: 'intercepted-with-residual', degrades: ['gate-sandbox-absent'] },
+};
+
+/** A degrade the gate observed mid-turn: a same-state transition whose cause names it. */
+const TRANSITION_CODEX_DEGRADE: SessionTransition = {
+  ...TRANSITION_TOOL,
+  sessionId: 'thread-1',
+  seq: 4,
+  from: 'working',
+  to: 'working',
+  activity: { kind: 'tool', name: 'web_search' },
+  entryId: 'call-1',
+  cause: {
+    kind: 'refusal',
+    event: 'gate-unhooked-call',
+    detail: 'item call-1 (webSearch) ran without a decision: Codex runs no hook for it',
+  },
+};
+
 /** An open refused before any process existed, for one of the runtime and endpoint reasons. */
 const openRefused = (event: RefusalReason, detail: string): SessionTransition => ({
   ...TRANSITION_OPEN_REFUSED,
@@ -264,6 +302,33 @@ const CLAUDE_ENTRY: HostAgentEntry = {
     thinking: true,
   },
   controlTier: { level: 'intercepted', degrades: [] },
+  available: true,
+  unavailableReason: null,
+};
+
+/** Codex's entry: no SDK, and its own efforts (`none` among them). */
+const CODEX_ENTRY: HostAgentEntry = {
+  runtime: 'codex',
+  version: '0.162.1',
+  sdkVersion: null,
+  models: [
+    {
+      value: 'example-codex-model',
+      resolvedModel: null,
+      displayName: 'Example Codex Model',
+      description: 'A model the app-server lists',
+      supportedEffortLevels: ['low', 'medium', 'high', 'none'],
+      supportsFastMode: null,
+      supportsAutoMode: null,
+      supportsAdaptiveThinking: null,
+    },
+  ],
+  vocabularies: {
+    permissionModes: ['default', 'dontAsk', 'bypassPermissions'],
+    efforts: ['low', 'medium', 'high', 'none'],
+    thinking: true,
+  },
+  controlTier: { level: 'none', degrades: [] },
   available: true,
   unavailableReason: null,
 };
@@ -406,6 +471,88 @@ const FACT_COMPACTION: CompactionFact = {
   tokensAfter: 21000,
 };
 
+/** One item of each kind, every member stated, the way each runtime's fill writes it. */
+const ITEM_TURN: AgentItem = {
+  kind: 'turn',
+  itemId: 'turn-1:completed',
+  turnId: 'turn-1',
+  status: 'failed',
+  detail: 'quota (usageLimitExceeded)',
+  truncated: false,
+};
+
+const ITEM_USER_TEXT: AgentItem = {
+  kind: 'user_text',
+  itemId: 'handle-1:prompt:1',
+  turnId: null,
+  text: 'List the files.',
+  truncated: false,
+};
+
+const ITEM_AGENT_TEXT: AgentItem = {
+  kind: 'agent_text',
+  itemId: 'item-2',
+  turnId: 'turn-1',
+  text: 'Two files.',
+  final: true,
+  truncated: false,
+};
+
+const ITEM_THINKING: AgentItem = {
+  kind: 'thinking',
+  itemId: 'item-3',
+  turnId: 'turn-1',
+  text: 'The listing first.',
+  summary: true,
+  truncated: false,
+};
+
+const ITEM_TOOL_CALL: AgentItem = {
+  kind: 'tool_call',
+  itemId: 'call-1',
+  turnId: 'turn-1',
+  toolUseId: 'call-1',
+  toolName: 'Bash',
+  toolKind: 'shell',
+  input: { command: 'ls', cwd: '/work/repo' },
+  truncated: false,
+};
+
+const ITEM_TOOL_RESULT: AgentItem = {
+  kind: 'tool_result',
+  itemId: 'call-1:result',
+  turnId: 'turn-1',
+  toolUseId: 'call-1',
+  status: 'completed',
+  output: 'a.ts\nb.ts',
+  exitCode: 0,
+  durationMs: 31,
+  changes: [{ path: '/work/repo/b.ts', change: 'update', movePath: '/work/repo/c.ts', diff: '@@ -1 +1 @@' }],
+  truncated: false,
+};
+
+const ITEM_PLAN: AgentItem = {
+  kind: 'plan',
+  itemId: 'turn-1:plan:1',
+  turnId: 'turn-1',
+  text: '- [completed] read\n- [inProgress] write',
+  truncated: false,
+};
+
+const ITEM_NOTICE: AgentItem = {
+  kind: 'notice',
+  itemId: 'turn-1:error:1',
+  turnId: 'turn-1',
+  level: 'warning',
+  text: 'slow (serverOverloaded)',
+  truncated: true,
+};
+
+const AGENT_SKILLS: HostAgentSkills[] = [
+  { runtime: 'claude', naming: 'namespaced', delivery: 'per-session' },
+  { runtime: 'codex', naming: 'namespaced', delivery: 'per-process' },
+];
+
 const AUTHORED = {
   session_update: [
     { name: 'session_update.state-transition', frame: session(stateTransitionUpdate(TRANSITION_READY)) },
@@ -460,6 +607,57 @@ const AUTHORED = {
       name: 'session_update.agent-facts-compaction',
       frame: session(agentFactsUpdate(FACT_COMPACTION, null, AT)),
     },
+    // The members protocol 16 adds to facts, each stated.
+    {
+      name: 'session_update.agent-facts-agent-receipt-effort-reported',
+      frame: session(
+        agentFactsUpdate(
+          { ...FACT_AGENT_RECEIPT, effort: null, effortReported: false },
+          'message-uuid-1',
+          AT,
+        ),
+      ),
+    },
+    {
+      name: 'session_update.agent-facts-usage-sample-cache-read',
+      frame: session(
+        agentFactsUpdate({ ...FACT_USAGE_SAMPLE, cacheReadTokens: 132488 }, 'message-uuid-3', AT),
+      ),
+    },
+    {
+      name: 'session_update.agent-facts-tasks-settled',
+      frame: session(
+        agentFactsUpdate(
+          { ...FACT_TASKS, settled: [{ taskId: 'agent-2', type: 'local_agent', status: 'failed' }] },
+          'message-uuid-4',
+          AT,
+        ),
+      ),
+    },
+    // The conversation item stream: one item of each kind.
+    { name: 'session_update.agent-item-turn', frame: session(agentItemUpdate('codex', ITEM_TURN, AT)) },
+    {
+      name: 'session_update.agent-item-user-text',
+      frame: session(agentItemUpdate('claude', ITEM_USER_TEXT, AT)),
+    },
+    {
+      name: 'session_update.agent-item-agent-text',
+      frame: session(agentItemUpdate('codex', ITEM_AGENT_TEXT, AT)),
+    },
+    {
+      name: 'session_update.agent-item-thinking',
+      frame: session(agentItemUpdate('codex', ITEM_THINKING, AT)),
+    },
+    {
+      name: 'session_update.agent-item-tool-call',
+      frame: session(agentItemUpdate('codex', ITEM_TOOL_CALL, AT)),
+    },
+    {
+      name: 'session_update.agent-item-tool-result',
+      frame: session(agentItemUpdate('codex', ITEM_TOOL_RESULT, AT)),
+    },
+    { name: 'session_update.agent-item-plan', frame: session(agentItemUpdate('codex', ITEM_PLAN, AT)) },
+    { name: 'session_update.agent-item-notice', frame: session(agentItemUpdate('codex', ITEM_NOTICE, AT)) },
     {
       name: 'session_update.state-transition-control-tier',
       frame: session(stateTransitionUpdate(TRANSITION_READY_WITH_TIER)),
@@ -526,6 +724,66 @@ const AUTHORED = {
         ),
       ),
     },
+    // Codex: an open refused because the binary is not the pinned release, naming the path, the
+    // version found and the version pinned; and one naming a member that is Claude's alone.
+    {
+      name: 'session_update.open-refused-codex-unavailable',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'runtime-unavailable',
+            'runtime codex is listed unavailable: the Codex binary /opt/codex/bin/codex is Codex 0.163.0; ' +
+              'this host is pinned to Codex 0.162.1',
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.open-refused-codex-request-key',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'request-key-unsupported',
+            "settingSources: Claude's settings tiers, which runtime codex does not load",
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.state-transition-agent-event',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_AGENT_EVENT)),
+    },
+    // The gated Codex: the residual tier on its first ready, a degrade on the state lane, and the open
+    // refused when its hook cannot be made active.
+    {
+      name: 'session_update.state-transition-codex-residual-tier',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_RESIDUAL_TIER)),
+    },
+    {
+      name: 'session_update.state-transition-codex-degrade',
+      frame: session(stateTransitionUpdate(TRANSITION_CODEX_DEGRADE)),
+    },
+    {
+      name: 'session_update.open-refused-codex-hook-not-active',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'codex-hook-not-active',
+            "periscope's hook at /home/runner/.codex/hooks.json is untrusted, not trusted and enabled",
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.agent-message-codex',
+      frame: session(
+        agentMessageUpdate(
+          { method: 'thread/started', params: { thread: { id: 'thread-1', cliVersion: '0.162.1' } } },
+          AT,
+          'codex',
+        ),
+      ),
+    },
   ],
   session_delta: [
     {
@@ -541,6 +799,19 @@ const AUTHORED = {
     {
       name: 'session_delta.agent-fragment-subagent-tool-input',
       frame: session(agentFragmentDelta('claude', 'tool_input', '{"command":"ls', 'toolu_1')),
+    },
+    {
+      name: 'session_delta.agent-message-codex',
+      frame: session(
+        agentMessageDelta(
+          {
+            method: 'item/agentMessage/delta',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'msg-1', delta: 'Hel' },
+          },
+          AT,
+          'codex',
+        ),
+      ),
     },
   ],
   session_new: [
@@ -580,6 +851,18 @@ const AUTHORED = {
       frame: session(
         sessionNew('/work/repo', {
           request: sessionNewRequest({ endpoint: 'example-endpoint', model: 'opus' }),
+        }),
+      ),
+    },
+    {
+      name: 'session_new.codex-runtime-default-prompt',
+      frame: session(
+        sessionNew('/work/repo', {
+          request: sessionNewRequest({
+            runtime: 'codex',
+            effort: 'none',
+            systemPrompt: { type: 'preset', preset: 'runtime-default', append: 'Answer briefly.' },
+          }),
         }),
       ),
     },
@@ -1080,6 +1363,56 @@ const AUTHORED = {
       }),
     },
     {
+      name: 'link_hello.agents-codex',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: { ...unsetHostConfiguration(), agent: AGENT, agents: [CLAUDE_ENTRY, CODEX_ENTRY] },
+        pendingRestart: [],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    {
+      name: 'link_hello.agent-skills',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: {
+          ...unsetHostConfiguration(),
+          agent: AGENT,
+          agents: [CLAUDE_ENTRY, CODEX_ENTRY],
+          agentSkills: AGENT_SKILLS,
+        },
+        pendingRestart: [],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    // A hello from a host one release behind, as such a host sends it: it decodes here unchanged.
+    {
+      name: 'link_hello.protocol-15',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: 15,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: {
+          ...unsetHostConfiguration(),
+          agent: AGENT,
+          agents: [CLAUDE_ENTRY],
+          endpoints: [ENDPOINT],
+        },
+        pendingRestart: [],
+        protocolRange: { min: 14, max: 15 },
+      }),
+    },
+    {
       name: 'link_hello.agents-unread',
       frame: control({
         kind: 'link_hello',
@@ -1213,6 +1546,34 @@ interface AuthoredMalformed {
 }
 
 const AUTHORED_MALFORMED: readonly AuthoredMalformed[] = [
+  // The well-formed twin is `session_update.agent-item-tool-result`; only the status differs.
+  {
+    name: 'refused.encode.undeclared-tool-result-status',
+    frame: session(
+      agentItemUpdate('codex', { ...ITEM_TOOL_RESULT, status: 'skipped' } as unknown as AgentItem, AT),
+    ),
+    reason: 'frame-malformed',
+  },
+  // The well-formed twin is `link_hello.agent-skills`; only one delivery word differs.
+  {
+    name: 'refused.encode.undeclared-skill-delivery',
+    frame: control({
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: {
+        ...unsetHostConfiguration(),
+        agentSkills: [
+          { runtime: 'claude', naming: 'namespaced', delivery: 'per-turn' } as unknown as HostAgentSkills,
+        ],
+      },
+      pendingRestart: [],
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    }),
+    reason: 'frame-malformed',
+  },
   {
     name: 'refused.encode.seq-zero',
     frame: { frame: 'session', sessionId: 'session-1', seq: 0, at: AT, payload: { kind: 'session_cancel' } },
@@ -1399,6 +1760,34 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
     name: 'refused.over-limit',
     wire: `{"padding":"${'x'.repeat(MAX_FRAME_BYTES)}"}`,
     expect: refused('frame-too-large'),
+  },
+  // The well-formed twin is `session_update.agent-item-tool-result`; only the exit code differs.
+  {
+    name: 'refused.malformed-agent-item',
+    wire: sessionWire({
+      kind: 'session_update',
+      body: {
+        update: 'agent_item',
+        runtime: 'codex',
+        item: { ...ITEM_TOOL_RESULT, exitCode: 0.5 },
+        observedAt: AT,
+      },
+    }),
+    expect: refused('frame-malformed'),
+  },
+  // The well-formed twin is `session_update.agent-item-agent-text`; only the text's length differs.
+  {
+    name: 'refused.agent-item-over-budget',
+    wire: sessionWire({
+      kind: 'session_update',
+      body: {
+        update: 'agent_item',
+        runtime: 'codex',
+        item: { ...ITEM_AGENT_TEXT, text: 'x'.repeat(MAX_AGENT_ITEM_BYTES) },
+        observedAt: AT,
+      },
+    }),
+    expect: refused('frame-malformed'),
   },
   // The well-formed twin is `session_update.agent-facts-usage-sample`; only the count differs.
   {

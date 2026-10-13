@@ -24,6 +24,8 @@
  * a larger surface with more ways to be wrong, and the classifier does not need one.
  */
 
+import type { ShellDialect } from './decision.js';
+
 /** A flag that appears before the verb, with its argument when the grammar gives it one. */
 export interface GlobalFlag {
   readonly flag: string;
@@ -215,6 +217,100 @@ export function stripComments(command: string): string {
 
     if (character === '#' && atWordStart) {
       // Skip to the end of the line; the newline itself survives because it is a separator.
+      while (i < command.length && command[i] !== '\n') i += 1;
+      if (i < command.length) result += '\n';
+      atWordStart = true;
+      continue;
+    }
+
+    result += character;
+    atWordStart =
+      character === ' ' ||
+      character === '\t' ||
+      character === '\n' ||
+      character === '\r' ||
+      SEPARATORS.has(character);
+  }
+
+  return result;
+}
+
+/**
+ * Drop PowerShell's comments: a `<# … #>` block, which ends at its own `#>` and lets the line go on,
+ * and a `#` at word position, which runs to the end of the line. Outside quotes a backtick escapes the
+ * next character, so `` `# `` is not a comment; inside double quotes a backtick escapes the next
+ * character and `""` is a quote, and inside single quotes `''` is a quote, so a quote that closes in
+ * neither grammar's sense does not end the span early.
+ *
+ * The POSIX reading of the same text sees `<#` as a redirection followed by a comment to the end of
+ * the line, which hides `<# note #> git push` from every later check. That is why a PowerShell command
+ * is read both ways and refused when either reading refuses. An unterminated `<#` is left in place:
+ * the reading that scans more.
+ */
+export function stripPowerShellComments(command: string): string {
+  let result = '';
+  let quote = '';
+  let atWordStart = true;
+
+  for (let i = 0; i < command.length; i += 1) {
+    const character = command[i] as string;
+
+    if (quote === "'") {
+      result += character;
+      if (character === "'") {
+        if (command[i + 1] === "'") {
+          result += "'";
+          i += 1;
+        } else quote = '';
+      }
+      continue;
+    }
+
+    if (quote === '"') {
+      result += character;
+      if (character === '`' && i + 1 < command.length) {
+        result += command[i + 1] as string;
+        i += 1;
+      } else if (character === '"') {
+        if (command[i + 1] === '"') {
+          result += '"';
+          i += 1;
+        } else quote = '';
+      }
+      continue;
+    }
+
+    if (character === '`' && i + 1 < command.length) {
+      result += character + (command[i + 1] as string);
+      i += 1;
+      atWordStart = false;
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      result += character;
+      atWordStart = false;
+      continue;
+    }
+
+    if (character === '<' && command[i + 1] === '#') {
+      const close = command.indexOf('#>', i + 2);
+      if (close === -1) {
+        // Unterminated: kept, and its `#` is not read as a comment either, so the rest stays scanned.
+        result += '<#';
+        i += 1;
+        atWordStart = false;
+        continue;
+      }
+      // The block is replaced by a space, so the words on either side stay apart.
+      result += ' ';
+      i = close + 1;
+      atWordStart = true;
+      continue;
+    }
+
+    if (character === '#' && atWordStart) {
       while (i < command.length && command[i] !== '\n') i += 1;
       if (i < command.length) result += '\n';
       atWordStart = true;
@@ -560,12 +656,17 @@ function readInvocation(tokens: readonly string[]): { invocation: Invocation; sc
  * Total: every input produces a result. An input this parser cannot make sense of yields invocations
  * it could read and a `scannable` that still holds everything else.
  */
-export function parseCommand(command: string): ParsedCommand {
-  const withoutComments = stripComments(command);
+export function parseCommand(command: string, dialect: ShellDialect = 'posix'): ParsedCommand {
+  const withoutComments =
+    dialect === 'powershell' ? stripPowerShellComments(command) : stripComments(command);
   const hasInterpreter = tokenize(withoutComments).some((token) =>
     INTERPRETER_NAMES.includes(programNameOf(token)),
   );
-  const heredocs = separateHeredocBodies(withoutComments);
+  // PowerShell has no heredoc: `<<` there is not a body to separate, so nothing is set aside as data.
+  const heredocs =
+    dialect === 'powershell'
+      ? { text: withoutComments, payloads: [] }
+      : separateHeredocBodies(withoutComments);
 
   const tokens = tokenize(heredocs.text, hasInterpreter);
   const invocations: Invocation[] = [];

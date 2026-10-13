@@ -1,9 +1,20 @@
 /** The PreToolUse hook and the permission decision path. */
-export type { Decider, Decision, DecisionReading, DecisionRequest, ToolKind } from './decision.js';
-export { TOOL_KINDS, describeRaw, readDecision } from './decision.js';
+export type {
+  Decider,
+  Decision,
+  DecisionReading,
+  DecisionRequest,
+  ShellDialect,
+  ToolKind,
+} from './decision.js';
+export { SHELL_DIALECTS, TOOL_KINDS, describeRaw, readDecision } from './decision.js';
 
-export type { GateOutcome } from './outcome.js';
+export type { GateOutcome, TerminalOutcome } from './outcome.js';
 export { gateTransitions, recordGateOutcome } from './outcome.js';
+
+// The per-call decision every runtime's gate asks through.
+export type { CallDecision, CallDecisionOptions } from './call-decision.js';
+export { createCallDecision } from './call-decision.js';
 
 export type { OutcomeListener, PermissionGateOptions } from './gate.js';
 /**
@@ -35,7 +46,7 @@ export { EscalationUnavailable, escalatingDecider } from './escalate.js';
 
 // The host's own gate — the offline-provable local refusal.
 export type { LocalGate, LocalGateOptions, ToolFamilies } from './local.js';
-export { DEFAULT_TOOL_FAMILIES, localGate } from './local.js';
+export { CODEX_TOOL_FAMILIES, DEFAULT_TOOL_FAMILIES, localGate } from './local.js';
 
 export type { JailOptions, PathResolver } from './jail.js';
 export { checkPath, checkShellForProtectedPaths, commandFromToolInput, pathFromToolInput } from './jail.js';

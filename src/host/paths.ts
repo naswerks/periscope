@@ -116,7 +116,11 @@ export function homeDirectory(env: NodeJS.ProcessEnv = process.env): string | nu
  */
 export function credentialPaths(
   env: NodeJS.ProcessEnv = process.env,
-  options: { readonly agentHome?: string | null; readonly modelEndpointFiles?: readonly string[] } = {},
+  options: {
+    readonly agentHome?: string | null;
+    readonly modelEndpointFiles?: readonly string[];
+    readonly codexHome?: string | null;
+  } = {},
 ): string[] {
   const home = homeDirectory(env);
   const paths: string[] = [];
@@ -127,6 +131,11 @@ export function credentialPaths(
   const cliHome = (directory: string): void => {
     add(join(directory, '.credentials.json'));
     add(join(directory, '.claude.json'));
+  };
+  // The two files of a Codex home that hold its sign-in: the cached token and the keyring fallback.
+  const codexHomeFiles = (directory: string): void => {
+    add(join(directory, 'auth.json'));
+    add(join(directory, '.credentials.json'));
   };
 
   // The host's own credential directory, first, and derived rather than spelled out. The
@@ -150,6 +159,8 @@ export function credentialPaths(
     add(join(home, '.azure'));
     // SSH keys: not a token cache, but the same class — material that authenticates this user.
     add(join(home, '.ssh'));
+    // The operator's own Codex home, whether or not this host runs Codex: its sign-in is this user's.
+    codexHomeFiles(join(home, '.codex'));
   }
 
   // An explicitly configured CLI home keeps its credential files there instead.
@@ -172,6 +183,20 @@ export function credentialPaths(
     options.modelEndpointFiles ??
     (typeof endpointsFile === 'string' && endpointsFile.trim() !== '' ? [endpointsFile.trim()] : []);
   for (const file of endpointFiles) add(file);
+
+  // The Codex home this host runs Codex sessions from: the sign-in every Codex session uses, and the
+  // files that make periscope's hook the gate on that runtime. The hook definitions, the shim they run
+  // and the config that records their trust are protected as credential material: on Codex the hook is
+  // all that stands between the agent's shell and the sign-in files above, and rewriting any of the
+  // three would take it away. Rollouts and state stay readable.
+  const codexHome = options.codexHome ?? env['PERISCOPE_CODEX_HOME'] ?? null;
+  if (typeof codexHome === 'string' && codexHome.trim() !== '') {
+    const runnerHome = codexHome.trim();
+    codexHomeFiles(runnerHome);
+    add(join(runnerHome, 'hooks.json'));
+    add(join(runnerHome, 'hooks'));
+    add(join(runnerHome, 'config.toml'));
+  }
 
   return paths;
 }

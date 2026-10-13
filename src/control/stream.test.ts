@@ -19,7 +19,7 @@ import { SessionRegistry } from '../sessions/registry.js';
 import type { HostedSession } from '../sessions/session.js';
 import { SessionStateMachine } from '../state/machine.js';
 import { SessionObserver } from '../state/observer.js';
-import type { JsonObject, SessionPayload } from './frames.js';
+import type { AgentItem, JsonObject, SessionPayload } from './frames.js';
 import { readAgentMessage, readObservedAt, readStateTransition } from './frames.js';
 import type { FrameSink } from './stream.js';
 import { forwardSession } from './stream.js';
@@ -449,4 +449,78 @@ test('with no clock given, the stamp is the system clock, as ISO-8601 in UTC', a
   assert.ok(message !== undefined);
   const observed = readObservedAt(bodyOf(message.payload));
   assert.match(observed ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+});
+
+test('with an item fill, the items a message carries ride after its facts and fragments and before what it caused', async () => {
+  const fake = fakeAgents();
+  const registry = new SessionRegistry({
+    baseEnv: { PATH: 'p' },
+    homeDir: 'C:/nonexistent-home-for-tests',
+    startProcess: fake.start,
+  });
+  const created = registry.create({ cwd: 'C:/work' });
+  assert.ok(created.ok);
+  const machine = new SessionStateMachine({ where: WHERE, clock: () => AT, ticker: fixedTicker(0) });
+  const sink = new RecordingSink();
+  let push: (item: AgentItem) => void = () => undefined;
+  const item = (itemId: string): AgentItem => ({
+    kind: 'notice',
+    itemId,
+    turnId: null,
+    level: 'info',
+    text: itemId,
+    truncated: false,
+  });
+  const stop = forwardSession({
+    sessionKey: 'controller-handle-1',
+    session: created.value,
+    observer: new SessionObserver(machine),
+    sink,
+    clock: () => AT,
+    lift: {
+      fromMessage: () => ({
+        facts: [{ kind: 'session_handle', runtime: 'claude', handle: 'h' }],
+        fragments: [
+          { update: 'agent_fragment', runtime: 'claude', channel: 'text', text: 't', parentId: null },
+        ],
+      }),
+      fromCompaction: () => [],
+    },
+    items: {
+      fromMessage: () => [item('from-the-message')],
+      attach: (lane) => {
+        push = lane;
+      },
+    },
+  });
+  const agent = fake.started[0];
+  assert.ok(agent);
+  agent.emit(initMessage('agent-session-1'));
+  await settle();
+  assert.deepEqual(sink.bodies(), [
+    'session_update/agent_message',
+    'session_update/agent_facts',
+    'session_delta/agent_fragment',
+    'session_update/agent_item',
+    'session_update/state_transition',
+  ]);
+  const fourth = sink.sent[3];
+  assert.ok(fourth);
+  assert.deepEqual(bodyOf(fourth.payload), {
+    update: 'agent_item',
+    runtime: 'claude',
+    item: item('from-the-message'),
+    observedAt: AT,
+  });
+
+  push(item('pushed'));
+  assert.equal(
+    sink.bodies().at(-1),
+    'session_update/agent_item',
+    'an item the fill learns off the stream rides at once',
+  );
+  stop();
+  const before = sink.sent.length;
+  push(item('after-the-end'));
+  assert.equal(sink.sent.length, before, 'nothing rides once the forwarding stopped');
 });
