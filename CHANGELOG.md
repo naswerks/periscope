@@ -8,6 +8,8 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-13
+
 Protocol 16; the window is `[15, 16]`, so a version-15 controller is still spoken to. Version 16
 adds a runtime, a cause kind, a preset value and refusal reasons, and optional members only: the
 conversation item stream's `agent_item` body, the hello's `agentSkills`, three fact members and the
