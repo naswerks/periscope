@@ -24,6 +24,7 @@
  */
 import { execFile, spawn as nodeSpawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
+import { readdir, readFile } from 'node:fs/promises';
 
 import type { JsonObject, JsonValue } from '../control/frames.js';
 import type { Refusal } from '../core/refusal.js';
@@ -269,23 +270,162 @@ export function isBatchFile(command: string): boolean {
   return /\.(?:cmd|bat)$/i.test(command);
 }
 
+/** One row of the process table: a process and its parent. */
+export interface ProcessEntry {
+  readonly pid: number;
+  readonly ppid: number;
+}
+
+/** Reads the process table once. A process that exits while it is read is left out. */
+export type ReadProcessTable = () => Promise<readonly ProcessEntry[]>;
+
+/** The two reads `/proc` is listed through, so the listing can be exercised without one. */
+export interface ProcReads {
+  readonly readdir: (path: string) => Promise<readonly string[]>;
+  readonly readFile: (path: string) => Promise<string>;
+}
+
+const procReads: ProcReads = {
+  readdir: (path) => readdir(path),
+  readFile: (path) => readFile(path, 'utf8'),
+};
+
 /**
- * Kill a process and every process under it. On Windows, `taskkill /T /F` walks the tree from the
- * pid; elsewhere the child was spawned as a process-group leader and the whole group is signalled.
- * A process already gone is not an error.
+ * The parent pid in one `/proc/<pid>/stat` line, or null when the line cannot be read. The command
+ * name is parenthesised and may hold spaces and parentheses itself, so the fields are counted from
+ * the last `)`: the state, then the parent pid.
  */
-export function killProcessTree(pid: number): Promise<void> {
-  if (process.platform === 'win32') {
+export function parentOfStat(stat: string): number | null {
+  const close = stat.lastIndexOf(')');
+  if (close === -1) return null;
+  const ppid = Number(
+    stat
+      .slice(close + 1)
+      .trim()
+      .split(/\s+/)[1],
+  );
+  return Number.isInteger(ppid) && ppid >= 0 ? ppid : null;
+}
+
+/**
+ * The process table from `/proc`, or null where there is no `/proc` to list. A pid listed and gone
+ * before its `stat` is read has exited, and is left out.
+ */
+export async function readProcTable(reads: ProcReads = procReads): Promise<ProcessEntry[] | null> {
+  let names: readonly string[];
+  try {
+    names = await reads.readdir('/proc');
+  } catch {
+    return null;
+  }
+  const rows = await Promise.all(
+    names
+      .filter((name) => /^\d+$/.test(name))
+      .map(async (name): Promise<ProcessEntry | null> => {
+        try {
+          const ppid = parentOfStat(await reads.readFile(`/proc/${name}/stat`));
+          return ppid === null ? null : { pid: Number(name), ppid };
+        } catch {
+          return null;
+        }
+      }),
+  );
+  return rows.filter((row): row is ProcessEntry => row !== null);
+}
+
+/** The process table from `ps -A -o pid=,ppid=`, for a system with no `/proc`; empty if `ps` fails. */
+export function readPsTable(): Promise<ProcessEntry[]> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-A', '-o', 'pid=,ppid='], { windowsHide: true }, (error, stdout) => {
+      if (error !== null) {
+        resolve([]);
+        return;
+      }
+      const rows: ProcessEntry[] = [];
+      for (const line of stdout.split('\n')) {
+        const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+        if (Number.isInteger(pid) && Number.isInteger(ppid))
+          rows.push({ pid: pid as number, ppid: ppid as number });
+      }
+      resolve(rows);
+    });
+  });
+}
+
+/** The process table on this system: `/proc` where there is one, `ps` elsewhere. */
+export const readProcessTable: ReadProcessTable = async () => (await readProcTable()) ?? readPsTable();
+
+/**
+ * Every descendant of `root` in `table`, breadth-first, so each parent comes before its children. A
+ * process that is its own parent, and any tree not under `root`, is never reached. Pid 1 and lower are
+ * never entered, even where a table lists one under `root`: through init the walk would reach every
+ * process on the system.
+ */
+export function descendantsOf(root: number, table: readonly ProcessEntry[]): number[] {
+  const children = new Map<number, number[]>();
+  for (const { pid, ppid } of table) {
+    if (pid === ppid || pid <= 1) continue;
+    const siblings = children.get(ppid);
+    if (siblings === undefined) children.set(ppid, [pid]);
+    else siblings.push(pid);
+  }
+  const found: number[] = [];
+  const seen = new Set<number>([root]);
+  const queue = [root];
+  for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+    for (const child of children.get(next) ?? []) {
+      if (seen.has(child)) continue;
+      seen.add(child);
+      found.push(child);
+      queue.push(child);
+    }
+  }
+  return found;
+}
+
+/** The seams `killProcessTree` is exercised through; each defaults to the real one. */
+export interface KillTreeSeams {
+  readonly platform?: NodeJS.Platform;
+  readonly readTable?: ReadProcessTable;
+  readonly signal?: (target: number) => void;
+}
+
+/**
+ * Kill a process and every process under it. A process already gone is not an error.
+ *
+ * On Windows, `taskkill /T /F` walks the tree from the pid. Elsewhere the child is a process-group
+ * leader, but a descendant may have started a group or a session of its own, which a signal to the
+ * child's group never reaches. So the descendants are collected from the process table first, before
+ * any signal (a killed parent's children are reparented, and a later walk cannot find them), and each
+ * descendant's group and the descendant itself are killed, then the child's group. Pid 1 and lower
+ * and this process are never signalled.
+ */
+export async function killProcessTree(pid: number, seams: KillTreeSeams = {}): Promise<void> {
+  if ((seams.platform ?? process.platform) === 'win32') {
     return new Promise<void>((resolve) => {
       execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
     });
   }
+  const signal = seams.signal ?? ((target: number) => process.kill(target, 'SIGKILL'));
+  const send = (target: number): void => {
+    if (Math.abs(target) <= 1 || Math.abs(target) === process.pid) return;
+    try {
+      signal(target);
+    } catch {
+      // Gone already, or not a group leader: either way nothing is left to signal there.
+    }
+  };
+  let table: readonly ProcessEntry[] = [];
   try {
-    process.kill(-pid, 'SIGKILL');
+    table = await (seams.readTable ?? readProcessTable)();
   } catch {
-    // The group has already exited.
+    // An unreadable table leaves the child's group, which is still signalled.
   }
-  return Promise.resolve();
+  for (const descendant of descendantsOf(pid, table)) {
+    send(-descendant);
+    send(descendant);
+  }
+  send(-pid);
 }
 
 const defaultSpawn: SpawnChild = (command, args, options) =>
@@ -295,7 +435,7 @@ const defaultSpawn: SpawnChild = (command, args, options) =>
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: false,
     windowsHide: true,
-    // A group leader elsewhere, so the whole tree can be signalled at close.
+    // A group leader elsewhere, so its group is signalled at close, beside its descendants.
     detached: process.platform !== 'win32',
   });
 
