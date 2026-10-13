@@ -490,19 +490,21 @@ export const REFUSAL_REASONS = [
 
   // The gate over a runtime whose own hook process asks this host for each decision (Codex), and the
   // paths where a call can still run without one. Every name below but the first is a degrade: an
-  // observation that a call ran undecided, or that the session lost a guarantee, raised on the
+  // observation that a call went on undecided, or that the session lost a guarantee, raised on the
   // session's state lane when it occurs and never stopping the session. None of them is
-  // `permission-decision-unavailable`, which means the tool did not run.
+  // `permission-decision-unavailable`, which means the tool did not run. When the hook fails, the
+  // runtime goes on as if it had allowed the call: the call runs where the session's mode asks no
+  // approval, and otherwise reaches the approval channel, which this host decides afresh.
   //
   //   codex-hook-not-active        Refused: the open ends because this host's own hook is not installed,
   //                                trusted and enabled for the session, its channel could not listen, or
   //                                its probe still fails. Without it nothing enforces the protected set
   //                                on that runtime. The detail says what to fix.
   //   gate-hook-timed-out          The runtime's own timeout for the hook fired before the hook answered,
-  //                                and the call ran.
+  //                                and the call went on past it.
   //   gate-hook-unspawnable        The hook could not start, or exited without answering, and the call
-  //                                ran.
-  //   gate-hook-output-rejected    The runtime refused the hook's output, and the call ran.
+  //                                went on past it.
+  //   gate-hook-output-rejected    The runtime refused the hook's output, and the call went on past it.
   //   gate-hook-missing            A tool call started, or the hook let one proceed, with no decision
   //                                from this host for its call id: a hook that did not run or did not
   //                                ask.

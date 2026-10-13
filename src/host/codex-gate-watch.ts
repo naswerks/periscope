@@ -36,6 +36,9 @@ const HOOKED_ITEMS = ['commandExecution', 'fileChange', 'mcpToolCall'] as const;
 /** The item kinds whose calls never reach any hook. */
 const UNHOOKED_ITEMS = ['webSearch', 'imageGeneration'] as const;
 
+/** The sources a command item carries when the model's own tool call started it. */
+const MODEL_COMMAND_SOURCES = ['agent', 'unifiedExecStartup'] as const;
+
 export interface CodexGateWatchOptions {
   /** The hooks file periscope's hook is defined in: its runs carry it as their source. */
   readonly hooksPath: string;
@@ -120,7 +123,11 @@ export class CodexGateWatch {
           : OUTPUT_REJECTED.some((opening) => why.startsWith(opening))
             ? 'gate-hook-output-rejected'
             : 'gate-hook-unspawnable';
-        this.#options.raise(name, `the hook failed for call ${key}, and Codex ran the call: ${why}`, key);
+        this.#options.raise(
+          name,
+          `the hook failed for call ${key}, and Codex went on as if it had allowed the call: ${why}`,
+          key,
+        );
         return;
       }
       case 'completed':
@@ -148,9 +155,17 @@ export class CodexGateWatch {
     const id = text(item['id']);
     if (type === null || id === null) return;
     if ((HOOKED_ITEMS as readonly string[]).includes(type)) {
-      // A command the user's shell or a running process produced is no model tool call.
+      // A command the user's own shell ran, or input written to a running process, is no model tool
+      // call. The model's start as `agent`, or as `unifiedExecStartup` where Codex runs them through
+      // its unified exec.
       const source = text(item['source']);
-      if (type === 'commandExecution' && source !== null && source !== 'agent') return;
+      if (
+        type === 'commandExecution' &&
+        source !== null &&
+        !(MODEL_COMMAND_SOURCES as readonly string[]).includes(source)
+      ) {
+        return;
+      }
       if (!this.#options.decided(id)) {
         this.#options.raise(
           'gate-hook-missing',

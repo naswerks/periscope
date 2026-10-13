@@ -276,7 +276,8 @@ the Codex gate). What holds, and what does not:
   Every answer carries an HMAC keyed by the token, so a process that takes over the channel's name
   cannot answer allow. The controller's credential never leaves the host.
 - **The residual, named.** A call can still run undecided: when the hook fails (`gate-hook-timed-out`,
-  `gate-hook-unspawnable`, `gate-hook-output-rejected`), when a call starts or proceeds with no decision
+  `gate-hook-unspawnable`, `gate-hook-output-rejected`) in a mode that asks no approval (in one that
+  does, the call reaches the approval channel, which the gate decides afresh), when a call starts or proceeds with no decision
   from this host (`gate-hook-missing`), and on the calls no hook sees: input written to a running
   command, a hosted web search, an image generation (`gate-unhooked-call`). An approval Codex's own
   reviewer decided is `gate-approval-auto-reviewed`. A hook periscope did not install
@@ -297,7 +298,8 @@ the Codex gate). What holds, and what does not:
   enforced by the operating system (`gate-sandbox-absent`), and `default` asks for an approval on every
   command and patch, a second decision behind the hook. The sandbox is Codex's; this package neither
   implements nor measures it. On Windows Codex runs the agent's commands through PowerShell, which
-  loads the user's PowerShell profile.
+  loads the user's PowerShell profile whenever Codex runs a call as a login shell: its default, unless
+  the call asks otherwise, in which case the command runs with `-NoProfile`.
 - **The gate's own files are protected.** The runner home's `hooks.json`, its `hooks` directory and its
   `config.toml` join the protected set beside its sign-in files: the hook is all that stands between
   the agent's shell and those credentials, and rewriting the shim (whose trust covers its path, not its

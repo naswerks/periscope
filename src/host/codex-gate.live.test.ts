@@ -54,6 +54,19 @@ const skip = !LIVE
 
 const ENV_LISTING = process.platform === 'win32' ? 'Get-ChildItem env: | ForEach-Object Name' : 'env';
 
+/**
+ * The live probe's decider allows two calls: the environment listing, so the exclusion can be read
+ * from inside the agent's shell, and the fake MCP server's echo, so an MCP approval reaches the host.
+ * Everything else is denied.
+ */
+function allowedByProbe(request: DecisionRequest): boolean {
+  const input = request.toolInput as JsonObject | null;
+  const command = typeof input?.['command'] === 'string' ? input['command'] : '';
+  return (
+    (request.toolName === 'Bash' && command.trim() === ENV_LISTING) || request.toolName === 'mcp__fake__echo'
+  );
+}
+
 /** One receipt line, as the measurement's record. */
 const receipt = (name: string, value: unknown): void => {
   console.log(JSON.stringify({ receipt: name, value }));
@@ -153,34 +166,100 @@ function hookShell(): string | null {
   }
 }
 
-/** Collect a process's messages until `done` holds or the bound passes. */
-async function collect(
-  messages: AsyncIterable<CodexMessage>,
-  sink: CodexMessage[],
-  done: () => boolean,
-  ms: number,
-): Promise<void> {
-  const deadline = Date.now() + ms;
-  const iterator = messages[Symbol.asyncIterator]();
-  while (!done() && Date.now() < deadline) {
-    const next = await Promise.race([
-      iterator.next(),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)),
-    ]);
-    if (next === null) continue;
-    if (next.done === true) return;
-    sink.push(next.value);
+/**
+ * One process's messages, read in order. A read that outlives a wait is kept for the next wait, never
+ * abandoned: an async generator hands its next message to the oldest read asked of it, so a read
+ * dropped at a timeout would swallow a message.
+ */
+class Stream {
+  readonly seen: CodexMessage[] = [];
+  ended = false;
+  error: string | null = null;
+  readonly #iterator: AsyncIterator<CodexMessage>;
+  #pending: Promise<IteratorResult<CodexMessage> | 'failed'> | null = null;
+
+  constructor(messages: AsyncIterable<CodexMessage>) {
+    this.#iterator = messages[Symbol.asyncIterator]();
+  }
+
+  /** Read until `done` holds, the stream ends, or `ms` passes; whether `done` holds. */
+  async until(done: () => boolean, ms: number): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (!done() && !this.ended && Date.now() < deadline) {
+      this.#pending ??= this.#iterator.next().catch((error: unknown) => {
+        this.error = String(error);
+        return 'failed' as const;
+      });
+      let timer: ReturnType<typeof setTimeout> | undefined = undefined;
+      const next = await Promise.race([
+        this.#pending,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), Math.max(1, Math.min(1000, deadline - Date.now())));
+        }),
+      ]);
+      clearTimeout(timer);
+      if (next === null) continue;
+      this.#pending = null;
+      if (next === 'failed' || next.done === true) {
+        this.ended = true;
+        break;
+      }
+      this.seen.push(next.value);
+    }
+    return done();
+  }
+
+  answered(method: string): boolean {
+    return this.seen.some((message) => message.kind === 'answer' && message.method === method);
+  }
+
+  notified(method: string): boolean {
+    return this.seen.some((message) => message.kind === 'notification' && message.method === method);
   }
 }
 
-const turnCompleted = (sink: readonly CodexMessage[]): boolean =>
-  sink.some((message) => message.kind === 'notification' && message.method === 'turn/completed');
+/**
+ * Close a process and wait for its stream to end, which it does once the app-server has exited: a
+ * directory it ran in is not removed while it still holds it.
+ */
+async function closeAndWait(process: { close(): void }, stream: Stream): Promise<void> {
+  process.close();
+  await stream.until(() => false, 30_000);
+  receipt('closed', { ended: stream.ended, error: stream.error });
+}
+
+/**
+ * Remove a scratch directory, retrying while a process that ran in it lets go. A removal that still
+ * fails is a receipt, never a throw: it must not stand in for the test's own result.
+ */
+function removeScratch(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (error) {
+    receipt('scratch directory left behind', { dir, error: String(error) });
+  }
+}
+
+/** What a session saw, in order: printed when a test fails, so the failure says what happened. */
+function sawReceipt(stream: Stream, extra: Record<string, unknown> = {}): void {
+  receipt('what the session saw', {
+    messages: stream.seen.map((message) =>
+      message.kind === 'server_request'
+        ? { request: message.method, id: message.id, params: message.params, answer: message.answer }
+        : { [message.kind]: message.method },
+    ),
+    ended: stream.ended,
+    error: stream.error,
+    ...extra,
+  });
+}
 
 test(
   'live: a gated session on the installed Codex: the hook decides every call it sees, and what Codex does around it is recorded',
   { skip, timeout: 600_000 },
-  async () => {
+  async (t) => {
     const { dir, mcpServer } = scratchRepository();
+    t.after(() => removeScratch(dir));
     const configBefore = existsSync(join(HOME, 'config.toml'))
       ? readFileSync(join(HOME, 'config.toml'), 'utf8')
       : '';
@@ -211,17 +290,13 @@ test(
       decide: (request) => {
         asked.push(request);
         shellOfHook ??= hookShell();
-        const command =
-          typeof (request.toolInput as JsonObject | null)?.['command'] === 'string'
-            ? textOf((request.toolInput as JsonObject)['command'])
-            : '';
-        const allowed = request.toolName === 'Bash' && command.trim() === ENV_LISTING;
         return Promise.resolve(
-          allowed
+          allowedByProbe(request)
             ? { behavior: 'allow' }
             : {
                 behavior: 'deny',
-                message: 'periscope live probe: every call but the environment listing is denied',
+                message:
+                  'periscope live probe: every call but the environment listing and the echo tool is denied',
               },
         );
       },
@@ -234,7 +309,6 @@ test(
       onSpawnDegrades: (names) => spawnDegrades.push(...names),
       onHookEvent: (event) => events.push(event),
     });
-    const sink: CodexMessage[] = [];
     const started = startCodexProcess(
       processRequest(
         dir,
@@ -248,22 +322,19 @@ test(
       null,
       gate,
     );
+    const stream = new Stream(started.messages);
     try {
-      await collect(
-        started.messages,
-        sink,
-        () => sink.some((message) => message.kind === 'answer' && message.method === 'mcpServerStatus/list'),
-        120_000,
-      );
+      await stream.until(() => stream.answered('mcpServerStatus/list'), 120_000);
       started.prompt(
-        `Do exactly these four steps and nothing else, then stop. 1) Run the shell command: ${ENV_LISTING} ` +
-          '2) Run the shell command: echo periscope-live 3) Create a file named live.txt containing ok 4) Call the tool echo on the MCP server fake with text hi',
+        `Do exactly these four steps and nothing else, then stop. If a step is blocked, go on to the next. 1) Run the shell command: ${ENV_LISTING} ` +
+          '2) Call the tool echo on the MCP server fake with text hi 3) Run the shell command: echo periscope-live 4) Create a file named live.txt containing ok',
       );
-      await collect(started.messages, sink, () => turnCompleted(sink), 300_000);
+      await stream.until(() => stream.notified('turn/completed'), 300_000);
     } finally {
-      started.close();
+      await closeAndWait(started, stream);
     }
 
+    const sink = stream.seen;
     const notifications = sink.flatMap((message) => (message.kind === 'notification' ? [message] : []));
     const requests = sink.flatMap((message) => (message.kind === 'server_request' ? [message] : []));
     const answers = sink.flatMap((message) => (message.kind === 'answer' ? [message] : []));
@@ -277,15 +348,7 @@ test(
       .filter((message) => message.method === 'item/completed')
       .map((message) => message.params['item'] as JsonObject);
     const decidedIds = asked.map((request) => request.toolUseId);
-    const deniedIds = asked
-      .filter(
-        (request) =>
-          !(
-            request.toolName === 'Bash' &&
-            textOf((request.toolInput as JsonObject)['command']).trim() === ENV_LISTING
-          ),
-      )
-      .map((request) => request.toolUseId);
+    const deniedIds = asked.filter((request) => !allowedByProbe(request)).map((request) => request.toolUseId);
     const envItem = completed.find(
       (item) => item['type'] === 'commandExecution' && textOf(item['aggregatedOutput']).includes('PATH'),
     );
@@ -295,6 +358,16 @@ test(
       ? readFileSync(join(HOME, 'config.toml'), 'utf8')
       : '';
 
+    receipt(
+      'the calls the gate decided',
+      asked.map((request) => ({
+        toolName: request.toolName,
+        toolKind: request.toolKind ?? null,
+        shellDialect: request.shellDialect ?? null,
+        toolUseId: request.toolUseId,
+        input: JSON.stringify(request.toolInput).slice(0, 160),
+      })),
+    );
     receipt(
       'stdin keys and casing',
       events.map((event) => Object.keys(event as JsonObject)),
@@ -377,10 +450,16 @@ test(
         : null,
     );
     receipt(
-      'the model-facing block message',
-      completed
-        .map((item) => item['aggregatedOutput'] ?? item['error'] ?? null)
-        .filter((text) => typeof text === 'string' && /blocked/i.test(text)),
+      // A call the hook blocks starts no item, so its reason is read from the blocked run Codex reports.
+      'the block message (blocked runs, as Codex reports them; items that say blocked)',
+      {
+        runs: runs
+          .filter((run) => run['status'] === 'blocked')
+          .map((run) => (run['entries'] as JsonObject[] | undefined)?.map((entry) => entry['text']) ?? []),
+        items: completed
+          .map((item) => item['aggregatedOutput'] ?? item['error'] ?? null)
+          .filter((text) => typeof text === 'string' && /blocked/i.test(text)),
+      },
     );
     receipt(
       'agent text',
@@ -391,8 +470,18 @@ test(
       median(runs.map((run) => Number(run['durationMs'])).filter((value) => Number.isFinite(value))),
     );
     receipt(
-      'the MCP surface',
-      answers.find((message) => message.method === 'mcpServerStatus/list')?.result ?? null,
+      'the MCP surface (each server, its status and its tools)',
+      (
+        (answers.find((message) => message.method === 'mcpServerStatus/list')?.result['data'] ??
+          []) as JsonObject[]
+      ).map((server) => {
+        const tools = Object.keys((server['tools'] ?? {}) as JsonObject);
+        return {
+          name: server['name'],
+          runtimeStatus: server['runtimeStatus'] ?? null,
+          tools: tools.length <= 5 ? tools : `${tools.length} tools`,
+        };
+      }),
     );
     receipt('instructionSources (AGENTS.md loaded)', threadAnswer['instructionSources'] ?? null);
     receipt(
@@ -413,18 +502,26 @@ test(
       tokenValueSeen: envOutput.includes(gate.env[HOOK_TOKEN_VARIABLE] ?? '\u0000'),
     });
 
-    assert.deepEqual(leaked, [], "the agent's shell saw a variable the exclusion names");
-    assert.ok(asked.length > 0, 'no tool call reached the gate');
-    for (const id of deniedIds) {
-      assert.equal(
-        completed.some(
-          (item) => item['id'] === id && item['status'] === 'completed' && item['type'] !== 'agentMessage',
-        ),
-        false,
-        `the denied call ${id} completed`,
-      );
+    try {
+      assert.ok(stream.notified('turn/completed'), 'the turn did not complete');
+      assert.deepEqual(leaked, [], "the agent's shell saw a variable the exclusion names");
+      assert.ok(asked.length > 0, 'no tool call reached the gate');
+      for (const id of deniedIds) {
+        assert.equal(
+          completed.some(
+            (item) => item['id'] === id && item['status'] === 'completed' && item['type'] !== 'agentMessage',
+          ),
+          false,
+          `the denied call ${id} completed`,
+        );
+      }
+    } catch (error) {
+      sawReceipt(stream, {
+        degrades,
+        asked: asked.map((request) => ({ toolName: request.toolName, toolUseId: request.toolUseId })),
+      });
+      throw error;
     }
-    rmSync(dir, { recursive: true, force: true });
   },
 );
 
@@ -511,7 +608,7 @@ test(
       );
     } finally {
       for (const started of peers) if (started.ok) await started.value.close();
-      rmSync(dir, { recursive: true, force: true });
+      removeScratch(dir);
     }
   },
 );
@@ -579,25 +676,23 @@ test(
         blockedByHook: () => undefined,
         takeWrittenInput: () => false,
       });
-      const sink: CodexMessage[] = [];
-      const ungated = startCodexProcess(processRequest(dir, env), {
-        binary: BINARY,
-        home: HOME,
-        clientVersion: packageVersion(),
-      });
+      const failures: string[] = [];
+      // A mode that asks no approval, so the hook is the only thing between the call and its running:
+      // under one that asks, a call past a failed hook reaches the approval channel instead.
+      const ungated = startCodexProcess(
+        processRequest(dir, env, { permissionMode: 'bypassPermissions' }),
+        { binary: BINARY, home: HOME, clientVersion: packageVersion() },
+        (detail) => failures.push(detail),
+      );
+      const stream = new Stream(ungated.messages);
       try {
-        await collect(
-          ungated.messages,
-          sink,
-          () =>
-            sink.some((message) => message.kind === 'answer' && message.method === 'mcpServerStatus/list'),
-          120_000,
-        );
+        await stream.until(() => stream.answered('mcpServerStatus/list'), 120_000);
         ungated.prompt('Run the shell command: echo periscope-timeout-probe. Then stop.');
-        await collect(ungated.messages, sink, () => turnCompleted(sink), 300_000);
+        await stream.until(() => stream.notified('turn/completed'), 300_000);
       } finally {
-        ungated.close();
+        await closeAndWait(ungated, stream);
       }
+      const sink = stream.seen;
       for (const message of sink)
         if (message.kind === 'notification') watch.observe(message.method, message.params);
       const runs = sink.flatMap((message) =>
@@ -618,16 +713,62 @@ test(
         runs.map((run) => ({ status: run['status'], entries: run['entries'] })),
       );
       receipt('the call ran despite the hook', ran);
-      receipt('degrades the watch raised', raised);
-      assert.ok(
-        raised.some((line) => line.startsWith('gate-hook-timed-out: ')),
-        'the timeout was not named',
+      receipt(
+        'the command items',
+        sink.flatMap((message) =>
+          message.kind === 'notification' &&
+          message.method === 'item/completed' &&
+          (message.params['item'] as JsonObject)['type'] === 'commandExecution'
+            ? [
+                {
+                  status: (message.params['item'] as JsonObject)['status'],
+                  exitCode: (message.params['item'] as JsonObject)['exitCode'] ?? null,
+                  output: (message.params['item'] as JsonObject)['aggregatedOutput'] ?? null,
+                },
+              ]
+            : [],
+        ),
       );
+      receipt(
+        'items started',
+        sink.flatMap((message) =>
+          message.kind === 'notification' && message.method === 'item/started'
+            ? [
+                {
+                  type: (message.params['item'] as JsonObject)['type'],
+                  id: (message.params['item'] as JsonObject)['id'],
+                  source: (message.params['item'] as JsonObject)['source'] ?? null,
+                },
+              ]
+            : [],
+        ),
+      );
+      receipt(
+        'what the session asked, and how it was answered',
+        sink.flatMap((message) =>
+          message.kind === 'server_request' ? [{ method: message.method, answer: message.answer }] : [],
+        ),
+      );
+      receipt('degrades the watch raised', raised);
+      try {
+        assert.ok(
+          runs.some((run) => run['status'] === 'failed'),
+          'Codex did not report the hook run failed',
+        );
+        assert.ok(ran, 'the call did not run past the timed-out hook');
+        assert.ok(
+          raised.some((line) => line.startsWith('gate-hook-timed-out: ')),
+          'the timeout was not named',
+        );
+      } catch (error) {
+        sawReceipt(stream, { failures });
+        throw error;
+      }
     } finally {
       if (original === null) rmSync(lines.hooksPath, { force: true });
       else writeFileSync(lines.hooksPath, original);
       rmSync(sleeper, { force: true });
-      rmSync(dir, { recursive: true, force: true });
+      removeScratch(dir);
     }
   },
 );
@@ -650,20 +791,49 @@ test(
               ? ['/C', `${lines.windows} --probe`]
               : ['-NoProfile', '-Command', `${lines.windows} --probe`],
           ];
+    // The probe answers with the bytes it read on stdin, so each line proves the payload passed through
+    // the shell whole.
+    const payload = '{"hook_event_name":"PreToolUse","probe":"periscope"}';
+    const expected = `periscope hook probe ${packageVersion()} ${Buffer.byteLength(payload)}`;
     const times: number[] = [];
+    const answers: { code: number | null; stdout: string; stderr: string }[] = [];
     for (let run = 0; run < 10; run += 1) {
       const startedAt = process.hrtime.bigint();
-      await new Promise<void>((resolve) => {
-        const child = spawn(program, args, { env: probeEnv, windowsHide: true });
-        child.on('close', () => resolve());
-        child.stdin.end('{"probe":"periscope"}');
-      });
+      answers.push(
+        await new Promise((resolve) => {
+          const child = spawn(program, args, { env: probeEnv, windowsHide: true });
+          let stdout = '';
+          let stderr = '';
+          child.stdout.on('data', (chunk: Buffer) => {
+            stdout += chunk.toString('utf8');
+          });
+          child.stderr.on('data', (chunk: Buffer) => {
+            stderr += chunk.toString('utf8');
+          });
+          child.on('close', (code) => resolve({ code, stdout, stderr }));
+          child.stdin.end(payload);
+        }),
+      );
       times.push(Number(process.hrtime.bigint() - startedAt) / 1e6);
     }
     receipt('hook start-to-answer through the shell, median of ten (ms)', {
       program,
+      args,
       median: median(times),
       times,
+    });
+    receipt('what each run answered', {
+      expected,
+      answered: answers.map((answer) => answer.stdout.replace(/\r?\n$/, '')),
+    });
+    answers.forEach((answer, run) => {
+      assert.equal(answer.code, 0, `run ${run + 1} exited ${String(answer.code)}: ${answer.stderr}`);
+      assert.equal(answer.stderr, '', `run ${run + 1} wrote to standard error`);
+      assert.equal(
+        answer.stdout.replace(/\r?\n$/, ''),
+        expected,
+        `run ${run + 1} did not read the payload whole`,
+      );
     });
   },
 );

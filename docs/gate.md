@@ -259,11 +259,12 @@ hook channel, and Codex's approval channel.
   for a comment.
 - **The deadline order**: the host's decision deadline, then the hook's own
   (`PERISCOPE_HOOK_DEADLINE_MS`, the decision deadline plus `HOOK_DEADLINE_MARGIN_MS`), then the hook's
-  timeout in `hooks.json` (`CODEX_HOOK_TIMEOUT_SECONDS`), which Codex enforces and on which it lets the
-  call run. A Codex session whose decision deadline leaves no room inside the hook's is refused
+  timeout in `hooks.json` (`CODEX_HOOK_TIMEOUT_SECONDS`), which Codex enforces and on which it goes on as if
+  the hook had allowed the call: the call runs where the session's mode asks no approval, and otherwise
+  reaches the approval channel, which the gate decides afresh. A Codex session whose decision deadline leaves no room inside the hook's is refused
   `gate-deadlines-inverted`. `matcherTimeoutSeconds` does not apply to Codex.
 - **The residual, named as it happens** (`src/host/codex-gate-watch.ts`). Each is a degrade on the
-  session's state lane, never a refusal: the call ran undecided, or the session lost a guarantee.
+  session's state lane, never a refusal: a call went on undecided, or the session lost a guarantee.
   `gate-hook-timed-out`, `gate-hook-unspawnable` and `gate-hook-output-rejected` (a hook run that
   failed); `gate-hook-missing` (a call Codex started, or its hook let proceed, that the host never
   decided); `gate-unhooked-call` (input written to a running command, a hosted web search, an image

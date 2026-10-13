@@ -107,7 +107,7 @@ export function codexDeadlineOrderRefusal(decisionTimeoutMs: number): string | n
   return (
     `decisionTimeoutMs (${decisionTimeoutMs}ms) leaves no room inside Codex's hook: the hook waits it plus ` +
     `${HOOK_DEADLINE_MARGIN_MS}ms and must answer by ${MAX_HOOK_DEADLINE_MS}ms, inside the hook timeout Codex ` +
-    'enforces, after which Codex lets the call run. Set decisionTimeoutMs below ' +
+    'enforces, after which Codex goes on as if the hook had allowed the call. Set decisionTimeoutMs below ' +
     `${MAX_HOOK_DEADLINE_MS - HOOK_DEADLINE_MARGIN_MS}ms for a Codex session.`
   );
 }

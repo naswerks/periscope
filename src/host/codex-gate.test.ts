@@ -713,6 +713,26 @@ test('a call that proceeded or started with no decision from this host is gate-h
   host.stop();
 });
 
+test("a model command started through unified exec is the model's too: undecided, it is gate-hook-missing; the user's own shell is not", async () => {
+  const { host, link, fake } = await gateHost();
+  open(link);
+  await ready(link);
+  const started = (id: string, source: string): void =>
+    fake.server.notify('item/started', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: { type: 'commandExecution', id, command: 'echo hi', status: 'inProgress', source },
+    });
+  started('call_user_shell', 'userShell');
+  started('call_interaction', 'unifiedExecInteraction');
+  started('call_unified', 'unifiedExecStartup');
+  await until(() => link.named('gate-hook-missing').length === 1, 'one missing hook');
+  const missing = link.named('gate-hook-missing').join('\n');
+  assert.match(missing, /call_unified/);
+  assert.doesNotMatch(missing, /call_user_shell|call_interaction/);
+  host.stop();
+});
+
 test('input written to a running command raises gate-unhooked-call once per call, however many times it is written', async () => {
   const { host, link, fake } = await gateHost();
   open(link);
