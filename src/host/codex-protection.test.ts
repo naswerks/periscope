@@ -21,13 +21,16 @@ const jail = (protectedPaths: readonly string[]): JailOptions => ({
   protectedPaths,
 });
 
-test("the runner's Codex home and the operator's own each protect their two sign-in files, and nothing else of the home", () => {
+test("the runner's Codex home protects its sign-in and its hook files, the operator's own its sign-in, and neither the whole home", () => {
   const paths = credentialPaths(ENV);
   for (const expected of [
     'C:/runner/codex-home/auth.json',
     'C:/runner/codex-home/.credentials.json',
     'C:/Users/agent/.codex/auth.json',
     'C:/Users/agent/.codex/.credentials.json',
+    'C:/runner/codex-home/hooks.json',
+    'C:/runner/codex-home/hooks',
+    'C:/runner/codex-home/config.toml',
   ]) {
     assert.ok(paths.includes(expected), `${expected} is not protected`);
   }
@@ -41,14 +44,15 @@ test("the runner's Codex home and the operator's own each protect their two sign
   );
 });
 
-test('a session reading a Codex sign-in is refused credential-path-denied; its config beside it is not', () => {
+test("a session reading a Codex sign-in or the runner home's config is refused credential-path-denied; the operator's own config is not", () => {
   const options = jail(credentialPaths(ENV));
   assert.equal(checkReadPath('C:/runner/codex-home/auth.json', options)?.reason, 'credential-path-denied');
   assert.equal(
     checkReadPath('C:/Users/agent/.codex/.credentials.json', options)?.reason,
     'credential-path-denied',
   );
-  assert.equal(checkReadPath('C:/runner/codex-home/config.toml', options), null);
+  assert.equal(checkReadPath('C:/runner/codex-home/config.toml', options)?.reason, 'credential-path-denied');
+  assert.equal(checkReadPath('C:/Users/agent/.codex/config.toml', options), null);
   assert.equal(
     checkShellForProtectedPaths('type C:\\runner\\codex-home\\auth.json', options)?.reason,
     'credential-path-denied',

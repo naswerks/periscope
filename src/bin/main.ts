@@ -104,6 +104,13 @@ export function main(argv: readonly string[], raw: NodeJS.ProcessEnv, io: Io): P
     return;
   }
 
+  if (command.kind === 'hook') {
+    // `bin/periscope.ts` dispatches this before loading this module; this branch answers the same
+    // command for a caller that went through `main`. It reads the raw environment only: the variables it
+    // needs are set by this host in the runtime's environment, never in the config file.
+    return import('./hook.js').then(({ hookIo, runHook }) => runHook(argv, raw, hookIo()));
+  }
+
   if (command.kind === 'login') {
     const env = environmentWithConfigFile(raw);
     if (typeof env === 'string') {

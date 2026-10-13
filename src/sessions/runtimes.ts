@@ -4,8 +4,8 @@
  * request names.
  *
  * Each lookup has two readers. The tier: the hello's entry for the runtime and the composer that puts
- * the tier on a session's first `ready`, so the tier a hello states and the tier a session carries are
- * the same value by construction. The wire APIs: the check an operator's endpoints meet at start and
+ * the tier on a session's first `ready`, so a hello and a session state the same level by construction,
+ * and a session adds only the degrades known for it alone. The wire APIs: the check an operator's endpoints meet at start and
  * the check a session's endpoint meets at open, so an endpoint the hello offers a runtime is one that
  * runtime can open on.
  */
@@ -16,14 +16,20 @@ import type { ControlTier } from '../state/model.js';
 /** Codex's name on the wire: the runtime this host drives through `codex app-server`. */
 export const CODEX_RUNTIME = 'codex';
 
-/** The control tier a session starts at, per runtime, keyed by the runtime's name. */
+/**
+ * The control tier a session starts at, per runtime, keyed by the runtime's name: what holds for every
+ * session on it. A session's own opening transition adds the degrades known for it alone when it opens
+ * (its sandbox, a hook this host did not install, the workspace's own configuration), so a hello and a
+ * session state the same level and the session may name more paths beneath it.
+ */
 export const CONTROL_TIERS = {
   // Every tool call reaches the `PreToolUse` gate before it runs, under every permission mode, and
   // the gate's answer holds: no path falls below it.
   [DEFAULT_RUNTIME]: { level: 'intercepted', degrades: [] },
-  // Nothing decides a Codex tool call before it runs: the session is observed and driven, and every
-  // approval Codex asks for is answered no.
-  [CODEX_RUNTIME]: { level: 'none', degrades: [] },
+  // Every Codex tool call its hook sees is decided by this host's gate before it runs, and the approvals
+  // Codex asks for are decided by the same gate. Codex runs its hook fail-open on the hook's own failure
+  // and a few calls never reach any hook, so each such path is named as a degrade when it occurs.
+  [CODEX_RUNTIME]: { level: 'intercepted-with-residual', degrades: [] },
 } as const satisfies Readonly<Record<string, ControlTier>>;
 
 /**

@@ -51,6 +51,9 @@ everything as arguments, so it is checkable without a socket or a process, and r
   the same event. No pin enforces the order; it is stated at both sites.
 - Every gate outcome is recorded on the machine unconditionally. `onOutcome` is an extra listener,
   never a substitute.
+- The repository check is `PeriscopeHost`'s, not `composeSession`'s: the repository-tier settings check
+  (`settingsRouteRefusal`, `settings-route-refused`) runs in the host's open, before it composes. An
+  embedder that calls `composeSession` directly owns that check.
 
 `PeriscopeHost` owns the link and the registry and turns inbound payloads into calls on them.
 
@@ -168,7 +171,23 @@ not stop the open. `HostEvent` reports `prompt-held`, `prompt-delivered` and `pr
 A session naming `runtime: "codex"` runs Codex's app-server (`codex app-server --listen stdio://`)
 in the session's worktree, and the host speaks JSON-RPC to it over stdio. Codex is offered only when
 the operator sets `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME` ([configuration.md](configuration.md)).
-Its control tier is `none`: no gate sees its tool calls, and every approval it asks for is declined.
+Its control tier is `intercepted-with-residual`: periscope's own `PreToolUse` hook asks the host for
+each decision over a per-session channel, Codex's approvals are decided by the same gate, and every
+path that can still run undecided is named on the session's state lane ([gate.md](gate.md), the Codex
+gate).
+
+- **The gate.** `composeCodexSession` builds the session's gate (`createCodexSessionGate`,
+  `src/host/codex-gate.ts`) before the process starts: the hook channel
+  (`src/host/hook-channel.ts`), whose address, token and deadline ride the app-server's environment;
+  the per-call decision every runtime shares (`createCallDecision`); the approval answers
+  (`src/host/codex-approvals.ts`); and the watch over the residual (`src/host/codex-gate-watch.ts`). It
+  reaches the process through the registry's route (`SessionRequest.nativeGate`, internal). The
+  process holds the open until the channel listens and periscope's hook is trusted
+  (`src/host/codex-hook.ts`), answers every server request through the gate, and tells it every
+  notification first. The host writes the hook into the runner's Codex home and probes it at start.
+- **The hook command.** `periscope hook codex` (`src/bin/hook.ts`) is dispatched by
+  `bin/periscope.ts` before the composition root loads, because Codex runs it once per tool call; it
+  imports nothing of this package but itself and `src/gate/hook-exchange.ts`.
 
 - The transport is runtime-neutral (`StdioRpcPeer`, `startStdioRpc`, `src/host/stdio-rpc.ts`) and
   knows no Codex word. One JSON message per line, `\n` or `\r\n`; a line past `MAX_RPC_LINE_BYTES`

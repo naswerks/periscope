@@ -100,7 +100,7 @@ the decision deadline.
 - It adds refusals and never removes one. No opinion returns `null` and the surrounding gate asks
   whoever it was going to ask. A locally-decided refusal is `refusal/<reason>`, and the fix for one
   lives with the embedder's policy.
-- A throwing local gate refuses; it must not fall through (`askLocalGate` in `src/gate/gate.ts`).
+- A throwing local gate refuses; it must not fall through (`askLocalGate` in `src/gate/call-decision.ts`).
 - The vocabulary is owned locally, never received. The wire carries no policy in either direction;
   the embedder chooses tool families and protected paths at construction.
 - Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
@@ -111,9 +111,11 @@ the decision deadline.
   file (`.credentials.json` and `.claude.json`) in `~/.claude`, in `CLAUDE_CONFIG_DIR` when set and
   in the effective agent home, plus `~/.claude.json`; and `~/.aws`, `~/.config/gcloud`, `~/.azure`,
   `~/.ssh`; the model endpoints file (`PERISCOPE_MODEL_ENDPOINTS`) with every credential file it
-  names; and Codex's sign-in files (`auth.json` and `.credentials.json`) in the runner's Codex home
-  (`PERISCOPE_CODEX_HOME`) and in `~/.codex`. The rest of the CLI's home (its settings, skills and
-  tool output) is the agent's to read, and so is the rest of a Codex home.
+  names; Codex's sign-in files (`auth.json` and `.credentials.json`) in the runner's Codex home
+  (`PERISCOPE_CODEX_HOME`) and in `~/.codex`; and, in the runner's Codex home, the files that make
+  periscope's hook the gate there (`hooks.json`, the `hooks` directory and `config.toml`, which records
+  the hook's trust). The rest of the CLI's home (its settings, skills and tool output) is the agent's to
+  read, and so is the rest of the operator's own `~/.codex` and the runner home's rollouts and state.
   The host's own cache location derives from the same function, so the two cannot disagree about
   what is protected. The repository and workspace read doors honour the same set.
 - Shell commands are parsed before they are judged (`src/gate/command.ts`, `src/gate/shell.ts`):
@@ -195,7 +197,10 @@ be correlated without re-deriving it from transport state. It also carries `tool
 session's runtime, which the composer passes in beside `sessionKey` (`PermissionGateOptions.runtime`).
 A decider can hold one policy per kind across runtimes; `toolName` is unchanged and still says
 exactly which tool it is. The map names the shell, file and web tools and every `mcp__` tool; a tool
-it does not name is `other`, whatever its input carries, and never left without a kind. Both are
+it does not name is `other`, whatever its input carries, and never left without a kind. A shell call
+also carries `shellDialect` (`SHELL_DIALECTS`: `posix` or `powershell`), the grammar its command runs
+in: Claude's `Bash` is `posix` and its `PowerShell` is `powershell`. For Claude it is data for the
+decider only; the local gate reads Claude's commands as it always has. Both are
 filled where the hook input becomes a request (`readRequest`), so the local gate, an in-process
 decider and the escalated body see the same request; an input the gate cannot read is refused with
 a request that states `other`. The POST presents a credential per
@@ -204,6 +209,69 @@ outage, the deliberate opposite of the link's posture: a prompt that cannot be d
 retried; a gate that cannot authenticate must not proceed. Resolving per request makes this lane a
 second caller of `authorize()`, so a busy session reports one `cache-hit` per decision; read a
 stream of them as the gate working, never as a credential problem.
+
+## The Codex gate
+
+Codex is gated by a `PreToolUse` command hook, periscope's own, that asks the session's host for each
+decision. The host decides it with the same per-call decision a Claude call gets
+(`createCallDecision`, `src/gate/call-decision.ts`): the local gate, the decider under the host's
+deadline, the hold, and one recorded outcome. Its three callers are Claude's `PreToolUse` callback, the
+hook channel, and Codex's approval channel.
+
+- **Two outputs, and nothing else.** Codex lets a call proceed whenever its hook fails: a timeout, a
+  crash, a non-zero exit, output it cannot parse, a shape it does not support (a bare allow, `ask`,
+  `continue: false`, a stop reason, an unknown key). So `periscope hook codex` (`src/bin/hook.ts`)
+  writes either nothing (proceed) or a deny with a non-empty reason, and exits 0 and writes nothing to
+  standard error on every path. It fails closed itself: no channel, a channel it cannot reach, an
+  answer that does not verify, unreadable input, an error, or its own deadline each writes the deny.
+  `src/gate/hook-exchange.test.ts` states, shape by shape, what Codex does with each output and shows
+  every answer the host can give reaches Codex as one of the two.
+- **The hook channel** (`src/host/hook-channel.ts`): a named pipe on Windows and a Unix socket in a
+  directory only this user can enter elsewhere, never a TCP port, one per session. The hook finds it,
+  and proves it belongs to the session, through `PERISCOPE_HOOK_CHANNEL` and `PERISCOPE_HOOK_TOKEN`
+  in the app-server's environment, which Codex's shell exclusion keeps from the agent's tools. A
+  request with the wrong token is refused without asking anyone; every answer carries an HMAC keyed by
+  the token, which the hook verifies, so a process that takes over the channel's name cannot answer
+  allow.
+- **Installed and trusted over the wire.** The host writes the hook into the runner's Codex home at
+  start (`hooks.json` and a `.cmd` shim) and probes it through the shell Codex will run it under. At
+  every Codex session's open it lists the hooks (`hooks/list`), records periscope's as trusted the way
+  Codex's own interface does (`config/batchWrite` on `hooks.state`) when it is not, lists them again,
+  and lists them once more after the thread opens. Unless periscope's hook is trusted, enabled and
+  unchanged, the open is refused `codex-hook-not-active`: without the hook nothing enforces the
+  protected set on Codex.
+- **Approvals through the same decision** (`src/host/codex-approvals.ts`). Codex asks for an approval
+  after its hook, and waits with no deadline of its own. An approval for a call the hook decided is
+  answered from that decision; one the hook did not decide is decided fresh; at the host's deadline it
+  is declined and `gate-approval-unanswered` is raised. Input written to a running command is always
+  decided fresh. An MCP tool approval names no call, so it is tied to the call pending on that server;
+  with several pending, each is decided and the approval is accepted only when every one was allowed
+  (`gate-approval-ambiguous` otherwise). The answers are `accept`, `decline` and `cancel`, never a
+  grant for the session, an amendment to Codex's rules, or a root.
+- **An allow that rewrites the input is refused on Codex** (`permission-decision-unrecognised`):
+  Codex's hook can only let a call proceed as asked or block it, and running half the decision would
+  run arguments nobody approved.
+- **Codex's tools in the local gate** (`CODEX_TOOL_FAMILIES`): `Bash` through the shell rules,
+  `apply_patch` with every file its patch names (`src/gate/patch.ts`) through the jail, `view_image`
+  through the protected set, relative paths resolved where the call runs. Codex's `Bash` runs
+  PowerShell on Windows, so its commands are read both ways and refused when either reading refuses
+  (`readsShellDialect`): the POSIX reading of `<# note #> git push` hides the push behind what it takes
+  for a comment.
+- **The deadline order**: the host's decision deadline, then the hook's own
+  (`PERISCOPE_HOOK_DEADLINE_MS`, the decision deadline plus `HOOK_DEADLINE_MARGIN_MS`), then the hook's
+  timeout in `hooks.json` (`CODEX_HOOK_TIMEOUT_SECONDS`), which Codex enforces and on which it lets the
+  call run. A Codex session whose decision deadline leaves no room inside the hook's is refused
+  `gate-deadlines-inverted`. `matcherTimeoutSeconds` does not apply to Codex.
+- **The residual, named as it happens** (`src/host/codex-gate-watch.ts`). Each is a degrade on the
+  session's state lane, never a refusal: the call ran undecided, or the session lost a guarantee.
+  `gate-hook-timed-out`, `gate-hook-unspawnable` and `gate-hook-output-rejected` (a hook run that
+  failed); `gate-hook-missing` (a call Codex started, or its hook let proceed, that the host never
+  decided); `gate-unhooked-call` (input written to a running command, a hosted web search, an image
+  generation); `gate-approval-auto-reviewed`. Known when the session opens, and named in its opening
+  tier: `gate-hook-foreign` (a hook periscope did not install would run), `gate-project-config-active`
+  and `gate-sandbox-absent`. A degrade is raised once per call.
+
+Codex is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
 
 ## What is deliberately not covered
 
@@ -242,9 +310,19 @@ stream of them as the gate working, never as a credential problem.
 
 | Path                                       | What                                                                                                              |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `src/gate/gate.ts`                         | `permissionHooks()`: registration, the fail-closed wrappers, both deadlines, the hold                             |
-| `src/gate/decision.ts`                     | `Decision` (the SDK's `PermissionResult`) and `readDecision`, the total parser; `TOOL_KINDS`                      |
-| `src/gate/tool-kind.ts`                    | `claudeToolKind`: Claude's map from a tool name to its kind                                                       |
+| `src/gate/gate.ts`                         | `permissionHooks()`: registration, the fail-closed wrappers, both deadlines                                       |
+| `src/gate/call-decision.ts`                | `createCallDecision()`: the per-call decision every runtime's gate asks through, and the hold                     |
+| `src/gate/decision.ts`                     | `Decision` (the SDK's `PermissionResult`) and `readDecision`, the total parser; `TOOL_KINDS`; `SHELL_DIALECTS`    |
+| `src/gate/tool-kind.ts`                    | `claudeToolKind`, `codexToolKind`, and each runtime's shell dialect                                               |
+| `src/gate/codex-request.ts`                | Codex's hook event read as a decision request                                                                     |
+| `src/gate/patch.ts`                        | The files a patch's header lines name                                                                             |
+| `src/gate/hook-exchange.ts`                | The hook channel's exchange, and the hook's two outputs                                                           |
+| `src/bin/hook.ts`                          | `periscope hook codex`, the command Codex runs as its hook                                                        |
+| `src/host/hook-channel.ts`                 | The per-session pipe or socket a runtime's hook asks over                                                         |
+| `src/host/codex-hook.ts`                   | The hook in the Codex home: its lines, its shim, its probe, its listing and its trust write                       |
+| `src/host/codex-gate.ts`                   | One Codex session's gate                                                                                          |
+| `src/host/codex-approvals.ts`              | Codex's approvals through the per-call decision                                                                   |
+| `src/host/codex-gate-watch.ts`             | The residual, watched and named as it happens                                                                     |
 | `src/gate/outcome.ts`                      | `GateOutcome` (`holding`, `allow`, `deny`, `refused`, `expired`) to transitions, pure; `recordGateOutcome`        |
 | `src/gate/escalate.ts`                     | `escalatingDecider()`: status before body, `EscalationUnavailable`; the HTTP lane the link does not carry         |
 | `src/gate/local.ts`                        | `localGate()`: the host's own offline refusal; pure, synchronous, total                                           |

@@ -118,7 +118,9 @@ test('with both keys the runtime is read at start over the configured binary and
     assert.equal(run.reads[0]?.home, 'C:/runner/codex-home');
     assert.ok(
       run.out.some((line) =>
-        /\[codex\] codex 0\.162\.1, 1 model\(s\) in the hello, control tier none/.test(line),
+        /\[codex\] codex 0\.162\.1, 1 model\(s\) in the hello, control tier intercepted-with-residual/.test(
+          line,
+        ),
       ),
       run.out.join('\n'),
     );

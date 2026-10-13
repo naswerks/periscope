@@ -297,8 +297,15 @@ export type { Result } from './core/result.js';
 // them from the SDK's messages stays in `host/`.
 // ---------------------------------------------------------------------------
 
-export type { Decider, Decision, DecisionReading, DecisionRequest, ToolKind } from './gate/decision.js';
-export { TOOL_KINDS, describeRaw, readDecision } from './gate/decision.js';
+export type {
+  Decider,
+  Decision,
+  DecisionReading,
+  DecisionRequest,
+  ShellDialect,
+  ToolKind,
+} from './gate/decision.js';
+export { SHELL_DIALECTS, TOOL_KINDS, describeRaw, readDecision } from './gate/decision.js';
 
 export type { EscalationOptions, EscalationResponse, EscalationTransport } from './gate/escalate.js';
 

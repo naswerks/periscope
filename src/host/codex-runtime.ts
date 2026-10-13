@@ -38,6 +38,11 @@ import {
 } from './codex-wire.js';
 import type { CodexRuntimeConfig } from './codex-process.js';
 import { codexInitFacts, startCodexProcess } from './codex-process.js';
+import { isCodexSessionGate } from './codex-gate.js';
+import type { CodexHookReport } from './codex-hook.js';
+import { codexHomePathProblem, installCodexHook, probeCodexHook } from './codex-hook.js';
+import { ok, refuse } from '../core/result.js';
+import type { ControlTier } from '../state/model.js';
 import type { SpawnChild, StdioRpcPeer } from './stdio-rpc.js';
 import { startStdioRpc } from './stdio-rpc.js';
 import { CODEX_PERMISSION_MODES } from './wire-request.js';
@@ -62,6 +67,8 @@ export interface CodexRuntimeRead {
   readonly entry: HostAgentEntry;
   /** Why the entry is unavailable or has no models, in words, or null when nothing is wrong. */
   readonly detail: string | null;
+  /** Periscope's hook, written and probed, when the read was asked to install it. */
+  readonly hook?: CodexHookReport;
 }
 
 export interface ReadCodexRuntimeOptions {
@@ -75,6 +82,11 @@ export interface ReadCodexRuntimeOptions {
   readonly spawn?: SpawnChild;
   readonly killTree?: (pid: number) => Promise<void>;
   readonly closeGraceMs?: number;
+  /**
+   * Write periscope's hook into the home and probe it through the shell Codex will run it under. Off
+   * unless asked: the daemon asks, once per start.
+   */
+  readonly installHook?: boolean;
 }
 
 /**
@@ -94,8 +106,12 @@ export function unavailableCodexEntry(version: string, reason: string): HostAgen
   };
 }
 
-/** The entry for a Codex runtime that can run, offering `models`. */
-export function availableCodexEntry(version: string, models: readonly HostModel[]): HostAgentEntry {
+/** The entry for a Codex runtime that can run, offering `models`, at `controlTier`. */
+export function availableCodexEntry(
+  version: string,
+  models: readonly HostModel[],
+  controlTier: ControlTier = CONTROL_TIERS[CODEX_RUNTIME],
+): HostAgentEntry {
   const efforts = [...new Set(models.flatMap((model) => model.supportedEffortLevels))].slice(
     0,
     MAX_VOCABULARY_WORDS,
@@ -112,7 +128,7 @@ export function availableCodexEntry(version: string, models: readonly HostModel[
       // that lists it. Reported from the catalog, so no catalog is no thinking control.
       thinking: models.some((model) => model.supportedEffortLevels.includes(THINKING_OFF_EFFORT)),
     },
-    controlTier: CONTROL_TIERS[CODEX_RUNTIME],
+    controlTier,
     available: true,
     unavailableReason: null,
   };
@@ -167,9 +183,32 @@ async function readOnce(
   options: ReadCodexRuntimeOptions,
   started: { peer: StdioRpcPeer | null },
 ): Promise<CodexRuntimeRead> {
+  // A home Codex cannot run periscope's hook from makes Codex unavailable here, never the host's start.
+  const pathProblem = codexHomePathProblem(options.home);
+  if (pathProblem !== null) return unavailable(CODEX_PINNED_VERSION, pathProblem);
   const home = ensureCodexHome(options.home);
   if (!home.ok) return unavailable(CODEX_PINNED_VERSION, home.refusal.detail);
   const env = { ...options.env, CODEX_HOME: options.home };
+  let hook: CodexHookReport | undefined;
+  if (options.installHook === true) {
+    const installed = installCodexHook(options.home);
+    hook = {
+      installed: installed.ok ? ok(undefined) : installed,
+      probed: installed.ok
+        ? await probeCodexHook(installed.value, { env, version: options.clientVersion })
+        : refuse('codex-hook-not-active', 'the hook was not written, so it was not probed'),
+    };
+  }
+  const read = await readServer(options, env, started);
+  return hook === undefined || !read.entry.available ? read : { ...read, hook };
+}
+
+/** The read over the app-server itself: its version, its sign-in, its catalog and, on Windows, its sandbox. */
+async function readServer(
+  options: ReadCodexRuntimeOptions,
+  env: Readonly<Record<string, string>>,
+  started: { peer: StdioRpcPeer | null },
+): Promise<CodexRuntimeRead> {
   const version = await readCodexVersion(options.binary, env, options.runVersion ?? runVersion);
   if (!version.ok) return unavailable(CODEX_PINNED_VERSION, version.refusal.detail);
 
@@ -249,10 +288,24 @@ async function readOnce(
       cursor = catalog.nextCursor ?? null;
       if (cursor === null) break;
     }
-    return { entry: availableCodexEntry(version.value, models), detail: null };
+    return { entry: availableCodexEntry(version.value, models, await hostCodexTier(peer)), detail: null };
   } finally {
     await peer.close();
   }
+}
+
+/**
+ * The tier the hello states for Codex on this host: its level, with `gate-sandbox-absent` where Windows
+ * reports no sandbox ready, which holds for every session here whatever its mode.
+ */
+async function hostCodexTier(peer: StdioRpcPeer): Promise<ControlTier> {
+  const tier = CONTROL_TIERS[CODEX_RUNTIME];
+  if (process.platform !== 'win32') return tier;
+  const readiness = await peer.request('windowsSandbox/readiness', null, CODEX_CATALOG_TIMEOUT_MS);
+  const answer =
+    readiness.ok && typeof readiness.value === 'object' && readiness.value !== null ? readiness.value : {};
+  const status = (answer as { status?: unknown }).status;
+  return status === 'ready' ? tier : { level: tier.level, degrades: ['gate-sandbox-absent'] };
 }
 
 function unavailable(version: string, reason: string): CodexRuntimeRead {
@@ -292,7 +345,13 @@ export const CODEX_MESSAGE_BINDING: MessageBinding<CodexMessage> = {
 export function codexNativeRuntime(config: CodexRuntimeConfig): NativeRuntime<CodexMessage> {
   return {
     start(request, degrade, route) {
-      return startCodexProcess(request, config, degrade, route.endpoint);
+      return startCodexProcess(
+        request,
+        config,
+        degrade,
+        route.endpoint,
+        isCodexSessionGate(route.gate) ? route.gate : null,
+      );
     },
     readInit(message) {
       return codexInitFacts(message);

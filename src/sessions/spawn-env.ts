@@ -101,6 +101,12 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   // The key a Codex session's model endpoint is reached with: this host sets it, from its operator's
   // endpoint, and nothing else may.
   'PERISCOPE_CODEX_ENDPOINT_KEY',
+  // Where a runtime's hook asks this host for each decision, the session's token for asking, and how
+  // long it waits: this host sets them per session, and a controller that could place them could point
+  // the hook somewhere else.
+  'PERISCOPE_HOOK_CHANNEL',
+  'PERISCOPE_HOOK_TOKEN',
+  'PERISCOPE_HOOK_DEADLINE_MS',
 ];
 
 /**

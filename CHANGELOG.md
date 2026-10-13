@@ -10,7 +10,8 @@ removed export. The package version and the wire protocol version are separate n
 
 Protocol 16; the window is `[15, 16]`, so a version-15 controller is still spoken to. Version 16
 adds a runtime, a cause kind, a preset value and refusal reasons, and optional members only: the
-conversation item stream's `agent_item` body, the hello's `agentSkills` and three fact members. A
+conversation item stream's `agent_item` body, the hello's `agentSkills`, three fact members and the
+decision request's `shellDialect`. A
 version-15 controller reads a transition's cause unnarrowed, a runtime as a word, the preset as a
 value of a member that already carries any JSON, and a reason it does not know as such; it leaves an
 `agent_item` body alone as an update it does not model and carries the other members without reading
@@ -19,12 +20,12 @@ them; every frame it sends decodes unchanged.
 - Added: Codex as a second runtime. With `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME` set, the
   hello's `agents` lists Codex after Claude (its version, the models its app-server lists, the
   permission modes `default`, `dontAsk` and `bypassPermissions`, its efforts, `thinking` when a
-  listed model takes `none`, and the control tier `none`), and a `session_new` naming
+  listed model takes `none`, and its control tier), and a `session_new` naming
   `runtime: "codex"` runs `codex app-server` over stdio in the session's directory. The binary is
   pinned to Codex 0.162.1: another version, an absent binary or a home with no sign-in is listed
   unavailable with its reason, and a session naming it is refused `runtime-unavailable`. A Codex
   session's messages ride as its app-server sent them, with `runtime: "codex"`, the text deltas on
-  the delta lane, and its facts are lifted as Claude's are. Every approval it asks for is declined.
+  the delta lane, and its facts are lifted as Claude's are.
 - Added: the cause kind `agent-event`, whose events are a runtime's own notifications named
   `{runtime}:{native name}` (`AGENT_EVENTS`, exported with `AgentEventName`). A Codex session moves
   by them: `codex:thread/started` makes it `ready`, `codex:turn/started` and `codex:turn/completed`
@@ -59,8 +60,7 @@ them; every frame it sends decodes unchanged.
   with the new refusal reason `plugins-undeliverable`. MCP servers ride the thread's config, an HTTP
   server's headers as static headers, never in the app-server's environment or on its command line;
   a server Codex has no form for is refused `mcp-descriptor-invalid`. Each server's tool calls are
-  asked about first and, while Codex runs at tier `none`, declined: a Codex session's MCP tools do not
-  run yet.
+  asked about first, and the session's gate decides each ask.
 - Added: model endpoints for Codex. An `openai-responses` endpoint whose `runtimes` name `codex` is
   offered to Codex in the hello, and a Codex session naming it opens on a provider of its own,
   defined in its thread's config under an id the host derives from the endpoint's name, its key read
@@ -97,6 +97,48 @@ them; every frame it sends decodes unchanged.
   session's items behind each message's facts; `AGENT_SKILLS` and `agentSkillsFor`; `HostEvent` gains
   `endpoint-members-ignored`, and a model endpoints reading carries `ignored`. `endpointModelProblem`
   holds only on an endpoint Claude reaches.
+- Added: Codex's gate. A Codex session's tool calls are decided by its decider and local gate, as
+  Claude's are, through two channels. The first is `periscope hook codex`, a command hook the host
+  installs in the runner's Codex home (a shim under `hooks/` and a group in `hooks.json`) and trusts
+  over the app-server's wire at every open: it asks the host over a channel of the session's own (a
+  named pipe on Windows, a Unix socket elsewhere, never TCP) and writes only the two answers Codex
+  honours, nothing to proceed or a deny with its reason, failing closed. The channel takes a random
+  per-session token, and each answer carries an HMAC keyed by it. The second is Codex's approval
+  requests: a command or a patch is answered from the hook's decision for the same call or decided
+  afresh, an MCP tool call is decided by the call Codex has pending on that server, and nothing is
+  ever granted for the session. A hook that cannot be made active refuses the open with the new
+  reason `codex-hook-not-active`. Codex's control tier is `intercepted-with-residual`.
+- Added: the gate's degrade reasons, each raised on the state lane as a same-state transition, once
+  per call: `gate-hook-timed-out`, `gate-hook-unspawnable`, `gate-hook-output-rejected`,
+  `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call`, `gate-approval-unanswered`,
+  `gate-approval-auto-reviewed`, `gate-approval-ambiguous`, `gate-project-config-active` and
+  `gate-sandbox-absent`. The three known at spawn (`gate-sandbox-absent`,
+  `gate-project-config-active`, `gate-hook-foreign`) also join the session's opening tier.
+- Added: the decision request's `shellDialect` (`SHELL_DIALECTS`: `posix`, `powershell`), present on
+  a shell call. Claude's `Bash` is `posix` and its `PowerShell` is `powershell`, carried as data:
+  Claude's local gate reads a command as before. A Codex session's local gate reads a PowerShell
+  command both ways and refuses it if either reading does.
+- Changed: an allow carrying `updatedInput` on a Codex session is refused
+  `permission-decision-unrecognised`, a decision Codex cannot apply.
+- Changed: a Codex session whose `decisionTimeoutMs` is 110000 or more is refused
+  `gate-deadlines-inverted`: the hook waits for the decision plus `HOOK_DEADLINE_MARGIN_MS` inside its
+  fixed 120-second timeout. `matcherTimeoutSeconds` does not apply to Codex.
+- Changed: a Codex home whose path holds a space or a shell metacharacter lists Codex unavailable,
+  naming the character; the host still starts.
+- Added: `hooks.json`, `hooks/` and `config.toml` in the runner's Codex home join the protected set.
+- Changed: `EXTRA_ENV_FLOOR` gains `PERISCOPE_HOOK_CHANNEL`, `PERISCOPE_HOOK_TOKEN` and
+  `PERISCOPE_HOOK_DEADLINE_MS`, which the host sets in a Codex session's app-server environment and
+  keeps from the agent's shell.
+- Added: `createCallDecision`, `CallDecision` and `CallDecisionOptions`, the one per-call decision
+  Claude's hook and Codex's channels share; `TerminalOutcome`; a deny outcome's optional `interrupt`;
+  `CODEX_TOOL_FAMILIES`, the local gate's reading of Codex's tool names, `apply_patch`'s paths among
+  them, through `ToolFamilies.patch`; `LocalGateOptions.readsShellDialect` and
+  `resolvesAgainstCallCwd`; `parseCommand`'s optional dialect; `SessionObserver.stateSpawnDegrades`.
+- Added: `HostEvent` gains `endpoint-aliases-unmapped`, once at start for each endpoint listing an
+  agent alias as a model without mapping it, and a model endpoints reading carries `unmappedAliases`.
+- Changed: the host's `codex` option and `PeriscopeCodexOptions` stay internal.
+- Changed: the publish gate reads a `## [Unreleased]` heading, and `contracts:update` re-approves the
+  Claude wire replay.
 
 ## [1.6.0] - 2026-10-11
 

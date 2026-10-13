@@ -137,6 +137,12 @@ export interface ModelEndpointsReading {
    * marker on an endpoint only Codex reaches), each endpoint's once. Reported, never refused.
    */
   readonly ignored: readonly IgnoredEndpointMembers[];
+  /**
+   * Agent aliases an endpoint lists in its `models` and does not map, each endpoint's once. A session
+   * naming one is refused `model-endpoint-mismatch` at its open, so it never reaches the wrong model;
+   * the listing is reported at start, never refused.
+   */
+  readonly unmappedAliases: readonly IgnoredEndpointMembers[];
 }
 
 export interface ModelEndpointsReadOptions {
@@ -157,6 +163,8 @@ interface DeclaredEndpoint extends Omit<ModelEndpoint, 'authToken'> {
   readonly credential: CredentialReference;
   /** The members it states that no runtime reaching it reads. */
   readonly ignored: readonly string[];
+  /** The agent aliases its `models` lists and its `modelAliases` does not map. */
+  readonly unmappedAliases: readonly string[];
 }
 
 const ENDPOINT_KEYS = [
@@ -207,8 +215,11 @@ export function readModelEndpoints(
   const endpoints: ModelEndpoint[] = [];
   const files = [path];
   const ignored: IgnoredEndpointMembers[] = [];
+  const unmappedAliases: IgnoredEndpointMembers[] = [];
   for (const entry of declared) {
     if (entry.ignored.length > 0) ignored.push({ endpoint: entry.name, members: entry.ignored });
+    if (entry.unmappedAliases.length > 0)
+      unmappedAliases.push({ endpoint: entry.name, members: entry.unmappedAliases });
     const token = resolveCredential(entry, env, options.helperTimeoutMs ?? HELPER_TIMEOUT_MS);
     if (!token.ok) return `${where}: endpoint "${entry.name}" ${token.problem}`;
     if ('file' in entry.credential && !files.includes(entry.credential.file))
@@ -227,7 +238,7 @@ export function readModelEndpoints(
       authToken: () => value,
     });
   }
-  return { endpoints, files, ignored };
+  return { endpoints, files, ignored, unmappedAliases };
 }
 
 /** The endpoints a parsed file declares, checked, or the first problem with them. */
@@ -366,6 +377,18 @@ function declaredEndpoint(
     }
   }
 
+  // An agent alias listed as a model and not mapped cannot be opened on: the open refuses it by name.
+  const unmappedAliases =
+    reachesClaude && !firstParty
+      ? modelIds.filter((id) => {
+          const alias = id.toLowerCase().replace(/\[1m\]$/, '');
+          return (
+            (AGENT_MODEL_ALIASES as readonly string[]).includes(alias) &&
+            modelAliases[alias as ModelAliasTier] === undefined
+          );
+        })
+      : [];
+
   const window = contextWindowOf(value['contextWindow'], the);
   if (typeof window === 'string') return window;
   if (reachesClaude && window !== null && 'maxContextTokens' in window) {
@@ -411,6 +434,7 @@ function declaredEndpoint(
     env: { ...(extra as Record<string, string>) },
     firstParty,
     ignored,
+    unmappedAliases,
   };
 }
 

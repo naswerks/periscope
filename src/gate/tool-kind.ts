@@ -6,7 +6,7 @@
  * not name is `other`, stated on the request rather than left out, so every gated call carries a kind.
  * Every MCP tool reaches the model as `mcp__{server}__{tool}` and is `mcp` by that prefix.
  */
-import type { ToolKind } from './decision.js';
+import type { ShellDialect, ToolKind } from './decision.js';
 
 /** The kind of each Claude tool this table names. Every other name is `other`. */
 export const CLAUDE_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
@@ -23,6 +23,17 @@ export const CLAUDE_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   WebFetch: 'web',
   WebSearch: 'web',
 };
+
+/** The grammar each Claude shell tool runs its command in: `Bash` a POSIX shell, `PowerShell` PowerShell. */
+export const CLAUDE_SHELL_DIALECTS: Readonly<Record<string, ShellDialect>> = {
+  Bash: 'posix',
+  PowerShell: 'powershell',
+};
+
+/** The dialect of the Claude shell tool named `toolName`, or null for a tool that runs no command. */
+export function claudeShellDialect(toolName: string): ShellDialect | null {
+  return Object.hasOwn(CLAUDE_SHELL_DIALECTS, toolName) ? (CLAUDE_SHELL_DIALECTS[toolName] ?? null) : null;
+}
 
 /** The prefix every MCP tool name carries. */
 const MCP_TOOL_PREFIX = 'mcp__';
@@ -53,6 +64,15 @@ export function codexToolKind(toolName: string): ToolKind {
   if (Object.hasOwn(CODEX_TOOL_KINDS, toolName)) return CODEX_TOOL_KINDS[toolName] ?? 'other';
   if (toolName.startsWith(MCP_TOOL_PREFIX)) return 'mcp';
   return 'other';
+}
+
+/**
+ * The grammar Codex's `Bash` tool runs its command in on `platform`: its shell tool runs the user's
+ * default shell, which on Windows is PowerShell (`pwsh`, else Windows PowerShell), and a POSIX shell
+ * elsewhere. A Windows host with no PowerShell at all would run `cmd.exe`, which no word names.
+ */
+export function codexShellDialect(platform: string): ShellDialect {
+  return platform === 'win32' ? 'powershell' : 'posix';
 }
 
 /**

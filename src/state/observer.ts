@@ -90,7 +90,7 @@ export class SessionObserver {
   /** Whether the agent has reported itself; only its first init message says the session is ready. */
   #reported = false;
   readonly #compactionListeners = new Set<CompactionListener>();
-  readonly #controlTier: ControlTier | null;
+  #controlTier: ControlTier | null;
   /** What the Codex lane remembers; untouched on a Claude session. */
   readonly #codex = new CodexArmState();
 
@@ -139,6 +139,17 @@ export class SessionObserver {
       cause,
       entry: { op: 'abandon-open', reason: `the session ended (${cause.event}) with this entry still open` },
     });
+  }
+
+  /**
+   * Degrades known before the session's first `ready`, added to the tier that transition states. Once it
+   * is stated this does nothing: a degrade found later rides the state lane on its own.
+   */
+  stateSpawnDegrades(names: readonly string[]): void {
+    if (this.#reported || this.#controlTier === null || names.length === 0) return;
+    const degrades = [...this.#controlTier.degrades];
+    for (const name of names) if (!degrades.includes(name)) degrades.push(name);
+    this.#controlTier = { level: this.#controlTier.level, degrades };
   }
 
   /** A named condition the host itself produced — a decision path that failed rather than denied. */

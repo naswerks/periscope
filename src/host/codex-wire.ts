@@ -57,6 +57,10 @@ export const CODEX_CLIENT_METHODS = [
   'mcpServerStatus/list',
   'turn/start',
   'turn/interrupt',
+  'hooks/list',
+  'config/batchWrite',
+  'config/read',
+  'windowsSandbox/readiness',
 ] as const;
 
 export type CodexClientMethod = (typeof CODEX_CLIENT_METHODS)[number];

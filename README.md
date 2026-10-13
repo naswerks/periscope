@@ -20,8 +20,9 @@ controller decides what to do about it. The agent it hosts is Claude Code, throu
 SDK, behind a seam whose own vocabulary names no agent; the agent's hook and message names ride
 the wire as `cause.event`, and the transcript locator is `claude-transcript:`. A host can also offer
 Codex, through Codex's app-server, when its operator points it at a Codex binary and a home of the
-runner's own ([configuration](docs/configuration.md#codex)); a Codex session runs with no gate, and
-the hello says so.
+runner's own ([configuration](docs/configuration.md#codex)); a Codex session is gated through
+periscope's own Codex hook, at tier `intercepted-with-residual`, and every path that can still run
+undecided is named when it happens.
 
 ## Run a host
 

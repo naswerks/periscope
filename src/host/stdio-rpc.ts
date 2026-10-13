@@ -353,9 +353,10 @@ export class StdioRpcPeer {
 
   /**
    * Send a request and wait for its answer, at most `deadlineMs`. Never throws: every way it can fail
-   * is a named refusal.
+   * is a named refusal. `params` null sends a request with no `params` member, for a method that takes
+   * none.
    */
-  request(method: string, params: JsonObject, deadlineMs: number): Promise<Result<JsonValue>> {
+  request(method: string, params: JsonObject | null, deadlineMs: number): Promise<Result<JsonValue>> {
     if (this.ended) {
       return Promise.resolve(refuse('rpc-request-failed', `${method}: the peer has ended`));
     }
@@ -367,7 +368,7 @@ export class StdioRpcPeer {
         resolve(refuse('rpc-request-timed-out', `${method} met no answer within ${deadlineMs} ms`));
       }, deadlineMs);
       this.#pending.set(id, { method, settle: resolve, timer });
-      this.#write({ jsonrpc: '2.0', id, method, params });
+      this.#write(params === null ? { jsonrpc: '2.0', id, method } : { jsonrpc: '2.0', id, method, params });
     });
   }
 

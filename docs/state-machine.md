@@ -176,6 +176,12 @@ experimental one declined as such. `pins/codex-coverage.test.ts` holds it to
 `contracts/codex-protocol-names.json` in both directions, holds `AGENT_EVENTS` equal to the wired
 notifications, and drives every wired one through a real machine.
 
+A Codex session's gate records on the same machine. Its decisions take the five outcomes' causes, as a
+Claude call's do; a residual path it names (a degrade) is a same-state transition with cause
+`refusal/<degrade>`, recorded once per call (`observer.refused`, the lane a refused configure uses);
+and the degrades known when the session opens join the tier its first `ready` states
+(`SessionObserver.stateSpawnDegrades`), which does nothing once that transition is recorded.
+
 ## The reporter is not a roster
 
 `SessionStateReporter` enumerates this host's sessions with state, activity and open-entry ages:

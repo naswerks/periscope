@@ -21,11 +21,14 @@
  *   An interrupt stops the running turn; held prompts stay held and run after it.
  * - **Setters apply at the next turn.** The model, the permission mode, the effort and thinking are
  *   held and sent on the next `turn/start`; thinking off is effort `none`, where the model lists it.
- * - **Every request from the server is answered, fail closed.** Nothing decides a call for this
- *   runtime here: a command or a patch is declined, a permission widening gets an empty grant for the
- *   turn, an elicitation is declined, a question for the user gets no answers, anything else is
- *   `-32601`. Never a session-wide grant, never an amendment, and never `thread/shellCommand` or
- *   `command/exec`, which run a string with full access.
+ * - **The gate, when the session has one.** Its channel listening and periscope's hook trusted over
+ *   the wire before the thread opens, and listed again after (`codex-hook-not-active` otherwise); every
+ *   request from the server answered by the session's gate; every notification told to it first.
+ * - **Every request from the server is answered, fail closed.** With no gate, a command or a patch is
+ *   declined, a permission widening gets an empty grant for the turn, an elicitation is declined, a
+ *   question for the user gets no answers, anything else is `-32601`. Never a session-wide grant,
+ *   never an amendment, and never `thread/shellCommand` or `command/exec`, which run a string with full
+ *   access.
  */
 import type { JsonObject } from '../control/frames.js';
 import { AsyncQueue } from '../core/async-queue.js';
@@ -37,6 +40,9 @@ import { CODEX_PINNED_VERSION, codexCommand, codexVersionProblem, userAgentVersi
 import type { CodexEndpointRoute } from './codex-endpoints.js';
 import { codexEndpointExcludes, codexProviderConfig } from './codex-endpoints.js';
 import { codexAppServerArgs, codexSessionFlags, samePath } from './codex-home.js';
+import type { CodexSessionGate, SpawnDegrade } from './codex-gate.js';
+import type { CodexHookLines, CodexHookState } from './codex-hook.js';
+import { codexHookLines, hookTrustWrite, readHookListing, serializeHookTrust } from './codex-hook.js';
 import { codexMcpConfig } from './codex-mcp.js';
 import { CODEX_NAMES } from './codex-names.js';
 import { codexSkillRoots } from './codex-pack.js';
@@ -69,6 +75,10 @@ export const CODEX_OPEN_DEADLINE_MS = 60_000;
 export const CODEX_TURN_DEADLINE_MS = 30_000;
 /** The longest prompt Codex takes, in characters. */
 export const CODEX_MAX_INPUT_CHARS = 1_048_576;
+/** How many times the hook listing is read after the trust write, while Codex reloads its config. */
+const HOOK_TRUST_ATTEMPTS = 5;
+/** The wait between those reads. */
+const HOOK_TRUST_RETRY_MS = 200;
 /** The most model-catalog pages read: a catalog past this many pages is read no further. */
 const MODEL_LIST_PAGES = 16;
 
@@ -93,6 +103,11 @@ export interface CodexRuntimeConfig {
   readonly closeGraceMs?: number;
   /** The operator's model endpoints a Codex session may open on (`codexEndpointRoutes`). */
   readonly endpoints?: readonly CodexEndpointRoute[];
+  /**
+   * Periscope's hook as this host installed it at start, and its probe. Absent, a gated session still
+   * holds Codex to the hook's lines for this home and trusts it over the wire, with no probe.
+   */
+  readonly hook?: CodexHookState;
 }
 
 /** The stable notifications a Codex session opts out of: every declined row a stable connection receives. */
@@ -169,6 +184,7 @@ export function startCodexProcess(
   runtime: CodexRuntimeConfig,
   degrade: (detail: string) => void = () => undefined,
   endpoint: string | null = null,
+  gate: CodexSessionGate | null = null,
 ): AgentProcess<CodexMessage> {
   const output = new AsyncQueue<CodexMessage>();
   let failure: Error | null = null;
@@ -216,7 +232,14 @@ export function startCodexProcess(
     request.permissionMode !== null && isCodexPermissionMode(request.permissionMode)
       ? request.permissionMode
       : CODEX_PERMISSION_MODES[0];
-  const excluded = route === null ? [] : codexEndpointExcludes(route);
+  // The endpoint's variables and the hook's ride the app-server's environment; neither reaches its shell.
+  const excluded = [
+    ...(route === null ? [] : codexEndpointExcludes(route)),
+    ...(gate?.excludedVariables ?? []),
+  ];
+  const hookLines: CodexHookLines = runtime.hook?.lines ?? codexHookLines(runtime.home);
+  /** How many times the session's mode has moved to one with no sandbox, for the degrade's key. */
+  let unsandboxedMoves = 0;
   const command = codexCommand(runtime.binary, codexAppServerArgs(codexSessionFlags(mode, excluded)));
 
   let peer: StdioRpcPeer | null = null;
@@ -231,7 +254,12 @@ export function startCodexProcess(
       onNotification: (method, params) => onNotification(method, params),
       onRequest: (method, params, id) => onRequest(method, params, id),
       onStderr: (line) => request.onStderr?.(line),
-      onRefusal: (refusal: Refusal) => degrade(`${refusal.reason}: ${refusal.detail}`),
+      onRefusal: (refusal: Refusal) => {
+        degrade(`${refusal.reason}: ${refusal.detail}`);
+        // The transport's own refusals reach the session's state lane too, once per reason: they are
+        // something the session lost, and the host's log alone is not where a controller reads that.
+        gate?.raise(refusal.reason, refusal.detail, 'transport');
+      },
       onExit: (exit) => {
         if (!closed && failure === null) {
           failure = new Error(
@@ -255,7 +283,11 @@ export function startCodexProcess(
     output.end();
   }
 
-  async function ask(method: string, params: JsonObject, deadlineMs: number): Promise<Result<JsonObject>> {
+  async function ask(
+    method: string,
+    params: JsonObject | null,
+    deadlineMs: number,
+  ): Promise<Result<JsonObject>> {
     if (peer === null)
       return { ok: false, refusal: { reason: 'rpc-request-failed', detail: `${method}: no app-server` } };
     const answered = await peer.request(method, params, deadlineMs);
@@ -267,6 +299,7 @@ export function startCodexProcess(
   }
 
   function onNotification(method: string, params: JsonObject): void {
+    gate?.observe(method, params);
     if (method === 'turn/started' && params['threadId'] === thread) {
       const id = (params['turn'] as { id?: unknown } | undefined)?.id;
       if (typeof id === 'string' && !settled.has(id)) turn = id;
@@ -283,8 +316,10 @@ export function startCodexProcess(
     if (method === 'thread/closed' && params['threadId'] === thread) void shutDown();
   }
 
-  function onRequest(method: string, params: JsonObject, id: RpcId): RpcAnswer {
-    const answer = codexServerRequestAnswer(method);
+  async function onRequest(method: string, params: JsonObject, id: RpcId): Promise<RpcAnswer> {
+    // With a gate the session's decider answers; without one every request is refused, as it was before
+    // a gate existed for this runtime.
+    const answer = gate === null ? codexServerRequestAnswer(method) : await gate.answer(method, params, id);
     const record: JsonObject =
       'result' in answer ? { result: answer.result } : { error: { ...answer.error } };
     emit({ kind: 'server_request', id, method, params, answer: record });
@@ -329,6 +364,15 @@ export function startCodexProcess(
     }
     output.push({ kind: 'answer', method: 'initialize', params: initParams, result: initialized.value });
     peer?.notify('initialized', {});
+
+    // The gate, before anything else opens: its channel listening, its hook command proven, its hook
+    // trusted and enabled. Without it nothing enforces the protected set on this runtime.
+    let trustedHash: string | null = null;
+    if (gate !== null) {
+      const gated = await openGate(gate);
+      if (!gated.ok) return refuseOpen(gated.refusal.detail);
+      trustedHash = gated.value;
+    }
 
     await readCatalog();
     if (closed) return;
@@ -392,6 +436,11 @@ export function startCodexProcess(
         `runtime-unavailable: the thread runs in ${openAnswer.cwd}, not the session's ${request.cwd}`,
       );
     }
+    if (trustedHash !== null) {
+      // Codex reads its hooks when the thread opens: the hook it read must still be the one trusted.
+      const still = await hookAt(trustedHash);
+      if (!still.ok) return refuseOpen(still.refusal.detail);
+    }
     thread = openAnswer.thread.id;
     model = openAnswer.model;
     effort = openAnswer.reasoningEffort ?? effort;
@@ -412,6 +461,153 @@ export function startCodexProcess(
     opened = true;
     for (const message of arrived.splice(0)) output.push(message);
     next();
+  }
+
+  /** The open refused by name on the state lane, and ended: the session's hook is not active. */
+  function refuseOpen(detail: string): void {
+    gate?.raise('codex-hook-not-active', detail, 'open');
+    fail(`codex-hook-not-active: ${detail}`);
+  }
+
+  function notActive(detail: string): Result<never> {
+    return { ok: false, refusal: { reason: 'codex-hook-not-active', detail } };
+  }
+
+  /**
+   * The gate's part of the open: the channel listening, the shim's bytes, the probe while it fails, the
+   * hook trusted over the wire, and the degrades known now. Answers the trusted hook's hash.
+   */
+  async function openGate(sessionGate: CodexSessionGate): Promise<Result<string>> {
+    const listening = await sessionGate.ready();
+    if (!listening.ok) return listening;
+    if (runtime.hook !== undefined) {
+      const ready = await runtime.hook.ensureReady();
+      if (!ready.ok) return ready;
+    }
+    const trusted = await trustHook();
+    if (!trusted.ok) return trusted;
+    await stateSpawnDegrades(sessionGate, trusted.value.foreign);
+    return { ok: true, value: trusted.value.hash };
+  }
+
+  /** The hooks Codex lists for the session's working directory. */
+  async function listHooks(): Promise<Result<JsonObject>> {
+    const listed = await ask('hooks/list', { cwds: [request.cwd] }, CODEX_HANDSHAKE_DEADLINE_MS);
+    if (!listed.ok) {
+      return notActive(`Codex could not list its hooks (${listed.refusal.reason}: ${listed.refusal.detail})`);
+    }
+    return listed;
+  }
+
+  /** Periscope's hook trusted over the wire, as Codex's own interface trusts one. */
+  async function trustHook(): Promise<Result<{ hash: string; foreign: readonly string[] }>> {
+    const first = await listHooks();
+    if (!first.ok) return first;
+    const reading = readHookListing(first.value, hookLines);
+    if (reading.ours === null) {
+      return notActive(
+        `${reading.problem ?? "periscope's hook is not listed"}; restarting the host rewrites it`,
+      );
+    }
+    const foreign = reading.foreign.map(
+      (hook) => `${hook.eventName} from ${hook.sourcePath} (${hook.source})`,
+    );
+    const ours = reading.ours;
+    if (!ours.enabled) {
+      return notActive(
+        `periscope's hook at ${hookLines.hooksPath} is disabled in the home's hooks.state; remove that entry`,
+      );
+    }
+    if (ours.trustStatus === 'trusted') return { ok: true, value: { hash: ours.currentHash, foreign } };
+    const written = await serializeHookTrust(() =>
+      ask('config/batchWrite', hookTrustWrite(ours), CODEX_HANDSHAKE_DEADLINE_MS),
+    );
+    if (!written.ok) {
+      return notActive(
+        `Codex refused to record periscope's hook as trusted (${written.refusal.reason}: ${written.refusal.detail})`,
+      );
+    }
+    // The user config reloads after the write; the listing follows it.
+    let after: Result<void> = notActive("periscope's hook did not become trusted");
+    for (let attempt = 0; attempt < HOOK_TRUST_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) await new Promise((settle) => setTimeout(settle, HOOK_TRUST_RETRY_MS));
+      after = await hookAt(ours.currentHash);
+      if (after.ok) return { ok: true, value: { hash: ours.currentHash, foreign } };
+    }
+    return after.ok
+      ? notActive("periscope's hook did not become trusted")
+      : { ok: false, refusal: after.refusal };
+  }
+
+  /** Periscope's hook listed trusted, enabled and with `hash`; why not, otherwise. */
+  async function hookAt(hash: string): Promise<Result<void>> {
+    const listed = await listHooks();
+    if (!listed.ok) return listed;
+    const reading = readHookListing(listed.value, hookLines);
+    if (reading.ours === null) return notActive(reading.problem ?? "periscope's hook is not listed");
+    if (reading.ours.currentHash !== hash) {
+      return notActive(`periscope's hook at ${hookLines.hooksPath} changed after it was trusted`);
+    }
+    if (reading.ours.trustStatus !== 'trusted' || !reading.ours.enabled) {
+      return notActive(
+        `periscope's hook at ${hookLines.hooksPath} is ${reading.ours.trustStatus}` +
+          `${reading.ours.enabled ? '' : ' and disabled'}, not trusted and enabled`,
+      );
+    }
+    return { ok: true, value: undefined };
+  }
+
+  /** The degrades this session carries from its open: named in its tier, each raised once. */
+  async function stateSpawnDegrades(
+    sessionGate: CodexSessionGate,
+    foreign: readonly string[],
+  ): Promise<void> {
+    const found: SpawnDegrade[] = foreign.map((hook) => ({
+      name: 'gate-hook-foreign',
+      detail: `a hook periscope did not install will run in this session: ${hook}`,
+    }));
+    const read = await ask(
+      'config/read',
+      { includeLayers: true, cwd: request.cwd },
+      CODEX_HANDSHAKE_DEADLINE_MS,
+    );
+    if (read.ok) {
+      const layers = Array.isArray(read.value['layers']) ? (read.value['layers'] as unknown[]) : [];
+      for (const layer of layers) {
+        const fields = typeof layer === 'object' && layer !== null ? (layer as JsonObject) : {};
+        const named = fields['name'];
+        const name = typeof named === 'object' && named !== null && !Array.isArray(named) ? named : {};
+        if (name['type'] === 'project' && fields['disabledReason'] === undefined) {
+          const folder =
+            typeof name['dotCodexFolder'] === 'string' ? name['dotCodexFolder'] : 'a project layer';
+          found.push({
+            name: 'gate-project-config-active',
+            detail: `the workspace's own Codex configuration is in force for this session: ${folder}`,
+          });
+        }
+      }
+    } else {
+      degrade(`${read.refusal.reason}: config/read: ${read.refusal.detail}`);
+    }
+    const sandbox = CODEX_MODE_MAP[mode].sandbox;
+    if (sandbox === 'danger-full-access') {
+      found.push({
+        name: 'gate-sandbox-absent',
+        detail: `the session's mode runs Codex with sandbox ${sandbox}`,
+      });
+    } else if (process.platform === 'win32') {
+      const readiness = await ask('windowsSandbox/readiness', null, CODEX_HANDSHAKE_DEADLINE_MS);
+      const status =
+        readiness.ok && typeof readiness.value['status'] === 'string' ? readiness.value['status'] : null;
+      if (status !== 'ready') {
+        const stated = status ?? `unread (${readiness.ok ? 'no status' : readiness.refusal.detail})`;
+        found.push({
+          name: 'gate-sandbox-absent',
+          detail: `Codex's Windows sandbox is ${stated}, so nothing at the operating system bounds its tools under ${sandbox}`,
+        });
+      }
+    }
+    sessionGate.stateSpawnDegrades(found);
   }
 
   async function readCatalog(): Promise<void> {
@@ -471,6 +667,14 @@ export function startCodexProcess(
       }
       if (applied.model !== null) model = applied.model;
       if (applied.effort !== null) effort = applied.effort;
+      if (applied.mode !== null && CODEX_MODE_MAP[applied.mode].sandbox === 'danger-full-access') {
+        unsandboxedMoves += 1;
+        gate?.raise(
+          'gate-sandbox-absent',
+          `the session's mode moved to one that runs Codex with sandbox ${CODEX_MODE_MAP[applied.mode].sandbox}`,
+          `mode-${unsandboxedMoves}`,
+        );
+      }
       const started = parsed(TurnStartResponse, answered.value);
       const id = started?.turn.id ?? null;
       if (id !== null && !settled.has(id)) turn = id;
@@ -491,6 +695,7 @@ export function startCodexProcess(
 
   async function shutDown(): Promise<void> {
     closed = true;
+    gate?.close();
     held.length = 0;
     if (turn !== null) await interruptTurn();
     await peer?.close();

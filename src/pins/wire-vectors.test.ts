@@ -232,6 +232,28 @@ const TRANSITION_READY_AGENT_EVENT: SessionTransition = {
   controlTier: { level: 'none', degrades: [] },
 };
 
+/** A gated Codex thread's first `ready`: the residual tier, naming a degrade known at spawn. */
+const TRANSITION_READY_RESIDUAL_TIER: SessionTransition = {
+  ...TRANSITION_READY_AGENT_EVENT,
+  controlTier: { level: 'intercepted-with-residual', degrades: ['gate-sandbox-absent'] },
+};
+
+/** A degrade the gate observed mid-turn: a same-state transition whose cause names it. */
+const TRANSITION_CODEX_DEGRADE: SessionTransition = {
+  ...TRANSITION_TOOL,
+  sessionId: 'thread-1',
+  seq: 4,
+  from: 'working',
+  to: 'working',
+  activity: { kind: 'tool', name: 'web_search' },
+  entryId: 'call-1',
+  cause: {
+    kind: 'refusal',
+    event: 'gate-unhooked-call',
+    detail: 'item call-1 (webSearch) ran without a decision: Codex runs no hook for it',
+  },
+};
+
 /** An open refused before any process existed, for one of the runtime and endpoint reasons. */
 const openRefused = (event: RefusalReason, detail: string): SessionTransition => ({
   ...TRANSITION_OPEN_REFUSED,
@@ -284,7 +306,7 @@ const CLAUDE_ENTRY: HostAgentEntry = {
   unavailableReason: null,
 };
 
-/** Codex's entry: no SDK, its own efforts (`none` among them), and no control until the gate. */
+/** Codex's entry: no SDK, and its own efforts (`none` among them). */
 const CODEX_ENTRY: HostAgentEntry = {
   runtime: 'codex',
   version: '0.162.1',
@@ -730,6 +752,27 @@ const AUTHORED = {
     {
       name: 'session_update.state-transition-agent-event',
       frame: session(stateTransitionUpdate(TRANSITION_READY_AGENT_EVENT)),
+    },
+    // The gated Codex: the residual tier on its first ready, a degrade on the state lane, and the open
+    // refused when its hook cannot be made active.
+    {
+      name: 'session_update.state-transition-codex-residual-tier',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_RESIDUAL_TIER)),
+    },
+    {
+      name: 'session_update.state-transition-codex-degrade',
+      frame: session(stateTransitionUpdate(TRANSITION_CODEX_DEGRADE)),
+    },
+    {
+      name: 'session_update.open-refused-codex-hook-not-active',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'codex-hook-not-active',
+            "periscope's hook at /home/runner/.codex/hooks.json is untrusted, not trusted and enabled",
+          ),
+        ),
+      ),
     },
     {
       name: 'session_update.agent-message-codex',

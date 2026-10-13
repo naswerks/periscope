@@ -11,6 +11,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { JsonObject, JsonValue } from '../control/frames.js';
+import { CODEX_HOOK_TIMEOUT_SECONDS } from '../gate/hook-exchange.js';
+import { codexHookLines } from '../host/codex-hook.js';
 import { fakeChild, spawnerFor } from './fake-child.js';
 import type { FakeChild } from './fake-child.js';
 
@@ -35,7 +37,22 @@ export interface FakeCodexOptions {
   readonly silent?: readonly string[];
   /** Whether `turn/started` follows a `turn/start` answer. Default true. */
   readonly announceTurns?: boolean;
+  /**
+   * Periscope's hook as `hooks/list` shows it: `trusted` (the default); `untrusted` until the trust
+   * write arrives; `stuck`, untrusted whatever is written; `absent`; `disabled`; `drifts`, trusted until
+   * a thread opens and then changed.
+   */
+  readonly hookTrust?: 'trusted' | 'untrusted' | 'stuck' | 'absent' | 'disabled' | 'drifts';
+  /** Other hooks `hooks/list` shows beside periscope's. */
+  readonly foreignHooks?: readonly JsonObject[];
+  /** Whether `config/read` lists an active project layer. */
+  readonly projectLayer?: boolean;
+  /** What `windowsSandbox/readiness` answers. Default `ready`. */
+  readonly sandboxReadiness?: string;
 }
+
+/** The hash a fake lists for periscope's hook. */
+export const FAKE_HOOK_HASH = 'sha256:periscope-hook';
 
 /** `value` when it is a string, else empty. */
 function text(value: unknown): string {
@@ -100,11 +117,54 @@ export class FakeCodexServer {
   thread: string | null = null;
   /** The skill roots the client set, as `skills/extraRoots/set` last named them. */
   extraRoots: string[] = [];
+  /** Whether periscope's hook is listed trusted now. */
+  hookTrusted: boolean;
+  /** Whether a thread has opened, after which a drifting hook has changed. */
+  #threadOpened = false;
 
   constructor(options: FakeCodexOptions, cwd: string, write: (line: string) => void) {
     this.#options = options;
     this.#cwd = cwd;
     this.#write = write;
+    const trust = options.hookTrust ?? 'trusted';
+    this.hookTrusted = trust === 'trusted' || trust === 'disabled' || trust === 'drifts';
+  }
+
+  /** The hooks file periscope's hook is listed from. */
+  get hooksPath(): string {
+    return codexHookLines(this.#options.codexHome).hooksPath;
+  }
+
+  /** The run id Codex gives periscope's hook run for `toolUseId`. */
+  hookRunId(toolUseId: string): string {
+    return `pre-tool-use:0:${this.hooksPath}:${toolUseId}`;
+  }
+
+  /** Periscope's hook as `hooks/list` lists it now. */
+  #ourHook(): JsonObject | null {
+    const trust = this.#options.hookTrust ?? 'trusted';
+    if (trust === 'absent') return null;
+    const lines = codexHookLines(this.#options.codexHome);
+    const drifted = trust === 'drifts' && this.#threadOpened;
+    return {
+      key: `${lines.hooksPath}:pre_tool_use:0:0`,
+      eventName: 'preToolUse',
+      handlerType: 'command',
+      command: lines.listed,
+      async: false,
+      matcher: null,
+      timeoutSec: CODEX_HOOK_TIMEOUT_SECONDS,
+      statusMessage: null,
+      additionalContextLimit: null,
+      sourcePath: lines.hooksPath,
+      source: 'user',
+      pluginId: null,
+      displayOrder: 0,
+      enabled: trust !== 'disabled',
+      isManaged: false,
+      currentHash: drifted ? 'sha256:changed' : FAKE_HOOK_HASH,
+      trustStatus: drifted ? 'modified' : this.hookTrusted ? 'trusted' : 'untrusted',
+    };
   }
 
   get version(): string {
@@ -201,6 +261,7 @@ export class FakeCodexServer {
               ? text(params['threadId'])
               : base;
         this.thread = thread;
+        this.#threadOpened = true;
         const config = (params['config'] ?? {}) as JsonObject;
         reply({
           thread: {
@@ -255,6 +316,59 @@ export class FakeCodexServer {
             ],
           },
         );
+      case 'hooks/list': {
+        const ours = this.#ourHook();
+        return reply({
+          data: [
+            {
+              cwd: this.#cwd,
+              hooks: [...(ours === null ? [] : [ours]), ...(this.#options.foreignHooks ?? [])],
+              warnings: [],
+              errors: [],
+            },
+          ],
+        });
+      }
+      case 'config/batchWrite': {
+        const edits = Array.isArray(params['edits']) ? (params['edits'] as JsonObject[]) : [];
+        const ours = this.#ourHook();
+        const trusts = edits.some((edit) => {
+          const value = (edit['value'] ?? {}) as JsonObject;
+          const entry =
+            ours === null
+              ? undefined
+              : (value[typeof ours['key'] === 'string' ? ours['key'] : ''] as JsonObject | undefined);
+          return (
+            edit['keyPath'] === 'hooks.state' &&
+            edit['mergeStrategy'] === 'upsert' &&
+            entry?.['trusted_hash'] === ours?.['currentHash']
+          );
+        });
+        if (trusts && (this.#options.hookTrust ?? 'trusted') !== 'stuck') this.hookTrusted = true;
+        return reply({
+          status: 'ok',
+          version: 'v2',
+          filePath: join(this.#options.codexHome, 'config.toml'),
+          overriddenMetadata: null,
+        });
+      }
+      case 'config/read':
+        return reply({
+          config: {},
+          origins: {},
+          layers:
+            this.#options.projectLayer === true
+              ? [
+                  {
+                    name: { type: 'project', dotCodexFolder: join(this.#cwd, '.codex') },
+                    version: 'v1',
+                    config: {},
+                  },
+                ]
+              : [],
+        });
+      case 'windowsSandbox/readiness':
+        return reply({ status: this.#options.sandboxReadiness ?? 'ready' });
       case 'mcpServerStatus/list':
         return reply({ data: [{ name: 'docs', runtimeStatus: 'connected' }], nextCursor: null });
       case 'turn/start': {

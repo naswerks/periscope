@@ -38,6 +38,15 @@ export const TOOL_KINDS = ['shell', 'file_read', 'file_write', 'file_edit', 'mcp
 
 export type ToolKind = (typeof TOOL_KINDS)[number];
 
+/**
+ * The grammar a shell call's command runs in: a POSIX shell, or PowerShell. A command read in the wrong
+ * grammar is read as different text from the one that runs. No runtime this package drives runs a tool
+ * under `cmd.exe`, so there is no word for it.
+ */
+export const SHELL_DIALECTS = ['posix', 'powershell'] as const;
+
+export type ShellDialect = (typeof SHELL_DIALECTS)[number];
+
 /** What a decider is asked about. Everything the hook knows, in this package's own terms. */
 export interface DecisionRequest {
   readonly toolName: string;
@@ -46,6 +55,12 @@ export interface DecisionRequest {
    * map does not know is `other`, never left out. Absent from a host one release behind.
    */
   readonly toolKind?: ToolKind | null;
+  /**
+   * The grammar the command runs in (protocol 16), stated by the runtime that knows which shell runs
+   * it. Present only when `toolKind` is `shell`. Absent from a host one release behind, and on any other
+   * call.
+   */
+  readonly shellDialect?: ShellDialect | null;
   /** The runtime the session runs on (protocol 15). Absent from a host one release behind. */
   readonly runtime?: string | null;
   readonly toolUseId: string;

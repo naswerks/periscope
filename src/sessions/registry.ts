@@ -174,6 +174,12 @@ export interface SessionRequest {
    * is the host's own, composed from its operator's configuration.
    */
   readonly hostEnv?: Readonly<Record<string, string>>;
+  /**
+   * The session's gate, built by its composer for a runtime driven by a process of its own, which the
+   * runtime's start reads; never reaches the agent process otherwise.
+   * @internal
+   */
+  readonly nativeGate?: unknown;
 }
 
 /** How many sessions one host holds at once, live and opening together, unless told otherwise. */
@@ -227,12 +233,13 @@ export interface SessionRegistryOptions {
 export interface NativeRuntime<M = unknown> {
   /**
    * Start the process. `degrade` names, on the session, something the process lost without ending;
-   * `route` names the model endpoint the session opens on, which a native runtime routes itself.
+   * `route` names the model endpoint the session opens on, which a native runtime routes itself, and the
+   * session's gate its composer built, which the runtime's start reads.
    */
   start(
     request: AgentProcessRequest,
     degrade: (detail: string) => void,
-    route: { readonly endpoint: string | null },
+    route: { readonly endpoint: string | null; readonly gate?: unknown },
   ): AgentProcess<M>;
   readInit(message: M): AgentInitFacts | null;
 }
@@ -368,6 +375,7 @@ export class SessionRegistry {
         ? this.#startProcess(processRequest)
         : native.start(processRequest, (detail) => session.degrade('runtime_degraded', detail), {
             endpoint: request.endpoint ?? null,
+            gate: request.nativeGate ?? null,
           }),
       this.#clock,
       cwd.value,

@@ -48,6 +48,7 @@ import { readConfigFile } from '../host/config-file.js';
 import { readModelEndpoints } from '../host/model-endpoints.js';
 import type { CodexRuntimeRead, ReadCodexRuntimeOptions } from '../host/codex-runtime.js';
 import { codexNativeRuntime, readCodexRuntime } from '../host/codex-runtime.js';
+import { codexHookLines, pendingCodexHookState, probeCodexHook } from '../host/codex-hook.js';
 import { CODEX_RUNTIME } from '../sessions/runtimes.js';
 import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
 import { MAX_PLUGIN_DIRS } from '../control/frames.js';
@@ -464,6 +465,9 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
   for (const ignored of endpoints?.ignored ?? []) {
     report({ kind: 'endpoint-members-ignored', endpoint: ignored.endpoint, members: ignored.members }, hold);
   }
+  for (const listed of endpoints?.unmappedAliases ?? []) {
+    report({ kind: 'endpoint-aliases-unmapped', endpoint: listed.endpoint, aliases: listed.members }, hold);
+  }
 
   // The one line status prints whole, from the same description, so the two cannot disagree.
   const reading = readConfigFile(raw);
@@ -536,22 +540,53 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       : () => readCatalog({ env: composeSpawnEnv(raw), cwd: homeDir, timeoutMs: AGENT_CATALOG_TIMEOUT_MS });
   // Codex, read the way a session starts it: the same filtered environment, the runner-owned home.
   const codexConfigured = config.codex;
-  const codex =
+  // Periscope's own hook in the Codex home: written and probed by the start-up read, and asked by every
+  // Codex session's open whether it can run.
+  const codexHook =
     codexConfigured === null
+      ? null
+      : (() => {
+          const lines = codexHookLines(codexConfigured.home);
+          const probeEnv = { ...composeSpawnEnv(raw), CODEX_HOME: codexConfigured.home };
+          return pendingCodexHookState(lines, () =>
+            probeCodexHook(lines, { env: probeEnv, version: packageVersion() }),
+          );
+        })();
+  const codex =
+    codexConfigured === null || codexHook === null
       ? null
       : {
           runtime: {
             binary: codexConfigured.binary,
             home: codexConfigured.home,
             clientVersion: packageVersion(),
+            hook: codexHook,
           },
-          read: () =>
-            (deps.readCodexRuntime ?? readCodexRuntime)({
+          read: async () => {
+            const read = await (deps.readCodexRuntime ?? readCodexRuntime)({
               binary: codexConfigured.binary,
               home: codexConfigured.home,
               env: composeSpawnEnv(raw),
               clientVersion: packageVersion(),
-            }),
+              installHook: true,
+            });
+            codexHook.report(read.hook);
+            if (read.hook !== undefined) {
+              const problem = !read.hook.installed.ok
+                ? read.hook.installed.refusal.detail
+                : !read.hook.probed.ok
+                  ? read.hook.probed.refusal.detail
+                  : null;
+              log(
+                'codex',
+                problem === null
+                  ? `periscope's hook is written to ${codexHook.lines.hooksPath} and answered its probe`
+                  : "periscope's hook cannot run yet: every Codex session's open tries again and is refused codex-hook-not-active while it cannot",
+                problem,
+              );
+            }
+            return read;
+          },
         };
 
   let linkStateProblemSaid = false;
@@ -779,6 +814,14 @@ export function report(event: HostEvent, log: Logger): void {
               `${event.agent.models.length} model(s) in the hello`,
             null,
           );
+    case 'endpoint-aliases-unmapped':
+      // An alias listed and not mapped is offered in the hello and refused when named: said once, so
+      // the refusal is not the first anyone hears of it.
+      return log(
+        'endpoint',
+        `${event.endpoint}: ${event.aliases.join(', ')} listed and not mapped`,
+        'a session naming one is refused model-endpoint-mismatch; map it in "modelAliases" or remove it from "models"',
+      );
     case 'endpoint-members-ignored':
       // A member no runtime reaching the endpoint reads: said once, so a file that states one is not
       // read as applying it.

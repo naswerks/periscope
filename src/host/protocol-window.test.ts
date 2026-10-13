@@ -9,10 +9,11 @@
  * it. The frames it reads are the bytes a real link carried, from a host the peer welcomed at 15.
  * Protocol 16 adds what such a controller receives inside members it already reads: `codex` in the
  * hello's runtimes list, a Codex session's own messages and fragments with `runtime: "codex"`, a
- * transition caused by an `agent-event`, and five reasons for a runtime's JSON-RPC peer. So what is
+ * transition caused by an `agent-event`, five reasons for a runtime's JSON-RPC peer and the Codex
+ * gate's reasons. So what is
  * read here is a Claude session's traffic and a Codex session's, side by side on one link. The
- * decision request is unchanged at 16; its body is read with that release's `DecisionRequest`
- * (`V15_DECISION_REQUEST`).
+ * decision request gains one optional member at 16, `shellDialect`; its body is read with that
+ * release's `DecisionRequest` (`V15_DECISION_REQUEST`), which carries an unknown key.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -715,7 +716,7 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
       'a Codex turn record was sent',
     );
 
-    // The decision request a protocol-15 endpoint reads, unchanged at 16.
+    // The decision request a protocol-15 endpoint reads: 16's `shellDialect` rides as an unknown key.
     assert.equal(decided.length, 1, 'the tool call was not asked about');
     const body = JSON.parse(JSON.stringify(decided[0])) as Record<string, unknown>;
     const asV15 = V15_DECISION_REQUEST.safeParse(body);

@@ -7,9 +7,10 @@
  *   feeds, or says it rides alone. A row is `declined` when this host never receives it: a stable
  *   notification it opts out of at `initialize` (`optOutNotificationMethods`), or an experimental one,
  *   which reaches only a connection that opted into experimental API, and this host never does.
- * - A server-request row is `wired` when the adapter answers it, and the note says with what. Every
- *   answer is a refusal of what was asked: nothing decides a call for this runtime yet, and silence
- *   would hold the turn forever. A `declined` request is answered `-32601`.
+ * - A server-request row is `wired` when the adapter answers it, and the note says with what: the
+ *   session's gate decides an approval, and nothing is ever granted wider than the one call. Every
+ *   request is answered, because silence would hold the turn forever. A `declined` request is answered
+ *   `-32601`.
  * - An item-kind row is `wired` when the kind moves the machine, feeds a fact or fills a conversation
  *   item (`CODEX_ITEM_FILLS`, `host/codex-items.ts`), and `declined` when it only rides inside the native
  *   `item/started` and `item/completed`. Only the session's own thread fills items: a sub-agent's thread
@@ -79,7 +80,7 @@ export const CODEX_NOTIFICATION_COVERAGE = {
   },
   'hook/started': {
     handling: 'wired',
-    note: `${NATIVE_ONLY} until a gate is installed over this runtime, which correlates it with the call it is about`,
+    note: `${NATIVE_ONLY}; the gate's watch reads periscope's own hook runs from hook/completed`,
   },
   'turn/completed': {
     handling: 'wired',
@@ -87,7 +88,7 @@ export const CODEX_NOTIFICATION_COVERAGE = {
   },
   'hook/completed': {
     handling: 'wired',
-    note: `${NATIVE_ONLY} until a gate is installed over this runtime, which reads its outcome`,
+    note: "the gate's watch reads periscope's own runs: failed raises gate-hook-timed-out, gate-hook-output-rejected or gate-hook-unspawnable by the run's error; completed for a call the host never decided raises gate-hook-missing; blocked with no host decision is recorded as a refused or expired outcome",
   },
   'turn/diff/updated': {
     handling: 'declined',
@@ -99,15 +100,15 @@ export const CODEX_NOTIFICATION_COVERAGE = {
   },
   'item/started': {
     handling: 'wired',
-    note: 'a tool item opens a tool entry (state -> working) and fills its tool_call item; a contextCompaction item opens the compaction entry; the item kind rides the cause detail',
+    note: "a tool item opens a tool entry (state -> working) and fills its tool_call item; a contextCompaction item opens the compaction entry; the item kind rides the cause detail. The gate's watch raises gate-hook-missing for a command, patch or MCP item the host never decided, and gate-unhooked-call for a web search or an image generation",
   },
   'item/autoApprovalReview/started': {
     handling: 'wired',
-    note: `${NATIVE_ONLY}: the reviewer is pinned to the client, so it is not expected`,
+    note: `${NATIVE_ONLY}: the reviewer is pinned to the client, so it is not expected; its completion is what raises the degrade`,
   },
   'item/autoApprovalReview/completed': {
     handling: 'wired',
-    note: `${NATIVE_ONLY}: the reviewer is pinned to the client, so it is not expected`,
+    note: "raises gate-approval-auto-reviewed: an approval Codex's own reviewer decided. The reviewer is pinned to the client, so it is not expected",
   },
   'autoApprovalReview/strictReviewRequired': { handling: 'declined', note: EXPERIMENTAL },
   'item/completed': {
@@ -139,7 +140,7 @@ export const CODEX_NOTIFICATION_COVERAGE = {
   },
   'item/commandExecution/terminalInteraction': {
     handling: 'wired',
-    note: `${NATIVE_ONLY}: input written to a running command, which no gate saw`,
+    note: 'raises gate-unhooked-call, once per command: input written to a running command, which no hook sees, unless an approval this host decided covered it',
   },
   'item/fileChange/outputDelta': {
     handling: 'declined',
@@ -151,7 +152,7 @@ export const CODEX_NOTIFICATION_COVERAGE = {
   },
   'serverRequest/resolved': {
     handling: 'wired',
-    note: `${NATIVE_ONLY}: the close of a request this host answered`,
+    note: `${NATIVE_ONLY}: the close of a request this host answered; a decision still outstanding for it is abandoned`,
   },
   'item/mcpToolCall/progress': {
     handling: 'declined',
@@ -266,11 +267,11 @@ const NOT_HANDLED = 'answered -32601';
 export const CODEX_SERVER_REQUEST_COVERAGE = {
   'item/commandExecution/requestApproval': {
     handling: 'wired',
-    note: 'answered decline: nothing decides a call for this runtime yet, and an unanswered request holds the turn forever',
+    note: "decided by the session's gate: from the hook's decision for the same call when there is one, fresh otherwise; input for a running command always fresh; accept, decline or cancel only, decline at the host's deadline with gate-approval-unanswered",
   },
   'item/fileChange/requestApproval': {
     handling: 'wired',
-    note: 'answered decline: nothing decides a call for this runtime yet, and an unanswered request holds the turn forever',
+    note: "decided by the session's gate: from the hook's decision when it names every file the change lists, fresh as apply_patch over those files otherwise; accept, decline or cancel only, never the root it offers",
   },
   'item/permissions/requestApproval': {
     handling: 'wired',
@@ -278,7 +279,7 @@ export const CODEX_SERVER_REQUEST_COVERAGE = {
   },
   'mcpServer/elicitation/request': {
     handling: 'wired',
-    note: 'answered decline, with no content: an MCP tool approval, a form or a link, none of them granted. Every MCP server this host attaches asks here before each tool call (its default_tools_approval_mode is prompt), so every MCP tool call on a Codex session is declined until a gate decides them; the server still starts and lists its tools',
+    note: "an MCP tool approval (every MCP server this host attaches asks here before each tool call) is decided by the session's gate for the call pending on that server, from the hook's decision or fresh; with several pending, accept only if every one is allowed, else decline with gate-approval-ambiguous. A form or a link is declined, with no content",
   },
   'item/tool/requestUserInput': {
     handling: 'wired',

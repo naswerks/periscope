@@ -12,6 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ControllerLink } from './link.js';
+import { nextDelayMs } from './backoff.js';
 import type { Refusal } from '../core/refusal.js';
 import type { Frame } from './frames.js';
 import { PROTOCOL_VERSION, readWireRefusal } from './frames.js';
@@ -383,11 +384,16 @@ test('regression: a version the peer will never accept produces growing backoff,
 test('a handshake the peer accepts still resets the backoff — the reset lives on the accepted branch', async () => {
   // The other half. Without this, "backoff grows" could be satisfied by never resetting at all,
   // which would punish a link that recovers normally.
+  //
+  // The bound is the first grown delay, read from the backoff itself: a link that reset waits attempt
+  // 0's delay, and one that did not waits at least attempt 1's on its second reconnect. The factor puts
+  // a wide margin between the two, so a loaded machine's slower reconnect is not read as growth.
+  const backoff = { baseMs: 100, maxMs: 10_000, factor: 8 };
   const peer = await peerOn(PROTOCOL_VERSION);
   const link = new ControllerLink({
     url: `ws://127.0.0.1:${peer.port}`,
     hostId: 'test-host',
-    backoff: { baseMs: 30, maxMs: 10_000, factor: 2 },
+    backoff,
     heartbeatIntervalMs: 10_000,
     heartbeatTimeoutMs: 60_000,
     random: () => 1,
@@ -409,9 +415,10 @@ test('a handshake the peer accepts still resets the backoff — the reset lives 
 
     const gaps = peer.reconnectGapsMs();
     assert.ok(gaps.length >= 3, `too few reconnects to judge: ${gaps.join(', ')}`);
+    const grown = nextDelayMs(1, () => 1, backoff);
     assert.ok(
-      gaps.every((gap) => gap < 400),
-      `the backoff did not reset after good handshakes — it grew instead: ${gaps.join(', ')}ms`,
+      gaps.every((gap) => gap < grown),
+      `the backoff did not reset after good handshakes — a reconnect waited as long as a grown backoff (${grown}ms): ${gaps.join(', ')}ms`,
     );
   } finally {
     link.stop();

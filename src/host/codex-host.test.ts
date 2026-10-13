@@ -142,7 +142,7 @@ const opening = (request: Parameters<typeof sessionNewRequest>[0]): ReturnType<t
 // The hello
 // ---------------------------------------------------------------------------
 
-test("the hello lists Claude, then Codex: available, at tier none, with Codex's own vocabularies", async () => {
+test("the hello lists Claude, then Codex: available, at tier intercepted-with-residual, with Codex's own vocabularies", async () => {
   const { host, link } = await codexHost();
   const agents = link.announced?.agents ?? [];
   assert.deepEqual(
@@ -151,7 +151,7 @@ test("the hello lists Claude, then Codex: available, at tier none, with Codex's 
   );
   const codex = agents[1] as HostAgentEntry;
   assert.equal(codex.available, true);
-  assert.deepEqual(codex.controlTier, { level: 'none', degrades: [] });
+  assert.deepEqual(codex.controlTier, { level: 'intercepted-with-residual', degrades: [] });
   assert.deepEqual(codex.vocabularies.permissionModes, ['default', 'dontAsk', 'bypassPermissions']);
   assert.deepEqual(codex.vocabularies.efforts, ['low', 'medium', 'high', 'none']);
   assert.equal(codex.vocabularies.thinking, true, 'a listed model takes none, so thinking off is honoured');
@@ -228,7 +228,7 @@ test('an unavailable Codex lists its reason in the hello, and a session on it is
   host.stop();
 });
 
-test('a Codex session on the wire: its handle and receipt before ready, ready at tier none, its messages native and named', async () => {
+test('a Codex session on the wire: its handle and receipt before ready, ready at tier intercepted-with-residual, its messages native and named', async () => {
   const { host, link, fake } = await codexHost();
   link.deliver('handle-1', opening({}));
   await until(
@@ -254,7 +254,7 @@ test('a Codex session on the wire: its handle and receipt before ready, ready at
     'transition:ready',
   ]);
   const ready = link.transitions().find((transition) => transition.to === 'ready');
-  assert.deepEqual(ready?.controlTier, { level: 'none', degrades: [] });
+  assert.deepEqual(ready?.controlTier, { level: 'intercepted-with-residual', degrades: [] });
   assert.equal(`${ready?.cause.kind}/${ready?.cause.event}`, 'agent-event/codex:thread/started');
   assert.equal(ready?.sessionId, 'thread-1');
   const started = rows.find(({ body }) => readAgentMessage(body) !== null)?.body ?? {};

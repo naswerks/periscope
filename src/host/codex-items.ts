@@ -117,6 +117,13 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
   readonly #called = new Set<string>();
   /** How many items with no native id each source has filled, for their names. */
   readonly #counts = new Map<string, number>();
+  /** Calls this host's gate refused, by item id, which is the hook's call id. */
+  readonly #blocked = new Set<string>();
+
+  /** This host's gate refused the call `toolUseId`, so its result is `blocked`, whatever Codex reports. */
+  gateBlocked(toolUseId: string): void {
+    this.#blocked.add(toolUseId);
+  }
 
   fromMessage(message: CodexMessage): readonly AgentItem[] {
     if (message.kind === 'answer') {
@@ -304,7 +311,8 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
             itemId: `${id}:result`,
             turnId,
             toolUseId: id,
-            status,
+            // A call this host's gate refused ended because of that, however Codex words its end.
+            status: this.#blocked.has(id) ? 'blocked' : status,
             output,
             exitCode: item['type'] === 'commandExecution' ? integerOrNull(item['exitCode']) : null,
             durationMs: integerOrNull(item['durationMs']),

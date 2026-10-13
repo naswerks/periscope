@@ -184,10 +184,19 @@ export function credentialPaths(
     (typeof endpointsFile === 'string' && endpointsFile.trim() !== '' ? [endpointsFile.trim()] : []);
   for (const file of endpointFiles) add(file);
 
-  // The Codex home this host runs Codex sessions from: the sign-in every Codex session uses. Its
-  // config, rollouts and state stay readable; its two credential files do not.
+  // The Codex home this host runs Codex sessions from: the sign-in every Codex session uses, and the
+  // files that make periscope's hook the gate on that runtime. The hook definitions, the shim they run
+  // and the config that records their trust are protected as credential material: on Codex the hook is
+  // all that stands between the agent's shell and the sign-in files above, and rewriting any of the
+  // three would take it away. Rollouts and state stay readable.
   const codexHome = options.codexHome ?? env['PERISCOPE_CODEX_HOME'] ?? null;
-  if (typeof codexHome === 'string' && codexHome.trim() !== '') codexHomeFiles(codexHome.trim());
+  if (typeof codexHome === 'string' && codexHome.trim() !== '') {
+    const runnerHome = codexHome.trim();
+    codexHomeFiles(runnerHome);
+    add(join(runnerHome, 'hooks.json'));
+    add(join(runnerHome, 'hooks'));
+    add(join(runnerHome, 'config.toml'));
+  }
 
   return paths;
 }

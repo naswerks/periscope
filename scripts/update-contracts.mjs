@@ -76,6 +76,7 @@ const status = run(
     at('dist/pins/wire-vectors.test.js'),
     at('dist/pins/public-api.test.js'),
     at('dist/host/fact-replay.test.js'),
+    at('dist/host/claude-wire-replay.test.js'),
   ],
   {
     PERISCOPE_UPDATE_CONTRACTS: '1',
