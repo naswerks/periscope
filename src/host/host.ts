@@ -91,6 +91,12 @@ import type { FrameSink } from '../control/stream.js';
 import { forwardNativeSession, forwardSession } from '../control/stream.js';
 import { CODEX_PINNED_VERSION } from './codex-binary.js';
 import type { CodexRuntimeConfig } from './codex-process.js';
+import { ClaudeItemFill } from './claude-items.js';
+import { CodexFactLift } from './codex-facts.js';
+import { CodexItemFill } from './codex-items.js';
+import { codexEndpointEnv, codexEndpointRoutes } from './codex-endpoints.js';
+import { codexMcpConfig } from './codex-mcp.js';
+import { codexSkillRoots } from './codex-pack.js';
 import type { CodexRuntimeRead } from './codex-runtime.js';
 import { CODEX_MESSAGE_BINDING, codexNativeRuntime, unavailableCodexEntry } from './codex-runtime.js';
 import type { CodexMessage } from './codex-wire.js';
@@ -105,7 +111,7 @@ import type { McpServerOptions } from '../mcp/server.js';
 import type { SessionRequest } from '../sessions/registry.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { factLiftFor } from '../sessions/fact-lift.js';
-import { CODEX_RUNTIME, controlTierFor, runtimeOf } from '../sessions/runtimes.js';
+import { CODEX_RUNTIME, agentSkillsFor, controlTierFor, runtimeOf } from '../sessions/runtimes.js';
 import type { HostedSession, SessionDegrade, Unsubscribe } from '../sessions/session.js';
 import { SessionStateMachine } from '../state/machine.js';
 import type { SessionTransition, TransitionWhere } from '../state/model.js';
@@ -292,6 +298,10 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     return composeCodexSession(options, machine, observer, clock);
   }
 
+  // The conversation items: read from the session's messages, with the prompt its hook reports and the
+  // calls this host's gate refused, which end in a `blocked` result.
+  const items = runtime === DEFAULT_RUNTIME ? new ClaudeItemFill(options.sessionKey) : null;
+
   // The gate records every outcome on the machine. That emission is what makes a deny, an outage and
   // an expiry visible off-box at all, so it is unconditional and the embedder's listener is extra.
   const gate = permissionHooks({
@@ -302,6 +312,9 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     runtime,
     onOutcome: (outcome) => {
       recordGateOutcome(machine, outcome);
+      if (outcome.kind === 'deny' || outcome.kind === 'refused' || outcome.kind === 'expired') {
+        items?.gateBlocked(outcome.request.toolUseId);
+      }
       options.onOutcome?.(outcome);
     },
     ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
@@ -333,6 +346,9 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     }),
     gate,
     modelSwitchHooks(),
+    items === null
+      ? {}
+      : items.hooks((error) => options.onHookFailure?.({ event: 'UserPromptSubmit', error })),
   );
 
   const created = options.registry.create({ ...(options.request ?? {}), cwd: options.cwd, hooks });
@@ -351,6 +367,7 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
     clock,
     ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
     ...(lift === null ? {} : { lift }),
+    ...(items === null ? {} : { items }),
   });
 
   observer.created(`a session was requested in ${options.cwd}`);
@@ -369,7 +386,11 @@ function composeCodexSession(
   if (!created.ok) return refuse<ComposedSession>(created.refusal.reason, created.refusal.detail);
   // The registry started this session on Codex's own process, so its messages are Codex's.
   const session = created.value as unknown as HostedSession<CodexMessage>;
-  const lift = factLiftFor<CodexMessage>(CODEX_RUNTIME);
+  // The session's plugin directories this host cannot hand Codex are reported in its receipt.
+  const undeliveredPlugins = codexSkillRoots(
+    (options.request?.plugins ?? []).map((plugin) => plugin.path),
+  ).problems;
+  const lift = new CodexFactLift({ undeliveredPlugins });
   const detach = forwardNativeSession(
     {
       sessionKey: options.sessionKey,
@@ -378,7 +399,8 @@ function composeCodexSession(
       sink: options.sink,
       clock,
       ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
-      ...(lift === null ? {} : { lift }),
+      lift,
+      items: new CodexItemFill(),
     },
     CODEX_MESSAGE_BINDING,
   );
@@ -706,6 +728,16 @@ export type HostEvent =
       readonly runtime: string;
       readonly entry: HostAgentEntry;
       readonly detail: string | null;
+    }
+  /**
+   * Members an operator's model endpoint states that no runtime reaching it reads, so the host
+   * applies none of them: a model alias or the first-party marker on an endpoint only Codex reaches.
+   * Once per such endpoint, where the endpoints file is read; never a refusal.
+   */
+  | {
+      readonly kind: 'endpoint-members-ignored';
+      readonly endpoint: string;
+      readonly members: readonly string[];
     };
 
 /**
@@ -886,7 +918,14 @@ export class PeriscopeHost {
         ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
         ...(options.codex === undefined
           ? {}
-          : { runtimes: { [CODEX_RUNTIME]: codexNativeRuntime(options.codex.runtime) } }),
+          : {
+              runtimes: {
+                [CODEX_RUNTIME]: codexNativeRuntime({
+                  ...options.codex.runtime,
+                  endpoints: codexEndpointRoutes(options.endpoints ?? []),
+                }),
+              },
+            }),
       });
 
     const handlers: LinkHandlers = {
@@ -1282,7 +1321,12 @@ export class PeriscopeHost {
       endpointName === undefined
         ? null
         : (this.#options.endpoints?.find((one) => one.name === endpointName) ?? null);
-    const hostEnv = endpoint === null ? undefined : endpointSpawnEnv(endpoint);
+    const hostEnv =
+      endpoint === null
+        ? undefined
+        : requested.value.runtime === CODEX_RUNTIME
+          ? codexEndpointEnv(endpoint)
+          : endpointSpawnEnv(endpoint);
 
     const provider = this.#workspaces;
 
@@ -1429,6 +1473,11 @@ export class PeriscopeHost {
 
     const servers = mergeMcpServers(requested.value.mcpServers, tools.value);
     if (!servers.ok) return giveBack(servers.refusal);
+    // A Codex session takes the merged servers in Codex's own form; the host's own server is in it now.
+    if (requested.value.runtime === CODEX_RUNTIME) {
+      const codexServers = codexMcpConfig(servers.value);
+      if (!codexServers.ok) return giveBack(codexServers.refusal);
+    }
 
     // The host's plugin directories, checked now: one that vanished since it was configured refuses
     // this open by name. The agent would report it in its init message's `plugin_errors`, but only
@@ -2126,11 +2175,14 @@ export class PeriscopeHost {
   #withAgent(configuration: HostConfiguration): HostConfiguration {
     const endpoints = this.#hostEndpoints === null ? {} : { endpoints: this.#hostEndpoints };
     if (this.#agent === undefined) return { ...configuration, ...endpoints };
+    const agents = this.#agent === null ? null : [...hostAgentEntries(this.#agent), ...this.#otherEntries];
     return {
       ...configuration,
       agent: this.#agent,
-      agents: this.#agent === null ? null : [...hostAgentEntries(this.#agent), ...this.#otherEntries],
+      agents,
       ...endpoints,
+      // How each listed runtime takes plugin directories, read with the list it describes.
+      agentSkills: agents === null ? null : agentSkillsFor(agents.map((entry) => entry.runtime)),
     };
   }
 

@@ -438,6 +438,17 @@ export const REFUSAL_REASONS = [
   'endpoint-incompatible',
   'model-endpoint-mismatch',
 
+  // The plugin directories a session is asked to load, handed to a runtime that takes them from its
+  // own server rather than from the agent SDK.
+  //
+  //   plugins-undeliverable     The runtime refused the call that hands it the session's plugin
+  //                             directories (Codex: `skills/extraRoots/set`), so the session would
+  //                             run without the plugins it was opened with. The open ends before the
+  //                             session is ready; the detail names the runtime's answer. A directory
+  //                             that does not exist is not this: the runtime takes it and finds no
+  //                             skills, and the session's receipt names it among its plugin errors.
+  'plugins-undeliverable',
+
   // A repository's own agent settings, read when the session's directory is known. The agent CLI
   // applies a settings file's `env` to itself after every screen this host runs, so a key there would
   // reach the agent's environment past them.

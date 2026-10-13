@@ -34,12 +34,14 @@ import assert from 'node:assert/strict';
 import { decode, encode } from '../control/codec.js';
 import {
   MAX_AGENT_ENTRIES,
+  MAX_AGENT_ITEM_BYTES,
   MAX_ENDPOINTS,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_MIN,
   agentFactsUpdate,
   agentFragmentDelta,
+  agentItemUpdate,
   agentMessageDelta,
   agentMessageUpdate,
   bulkDelivered,
@@ -73,6 +75,7 @@ import {
   workspaceReleaseResult,
 } from '../control/frames.js';
 import type {
+  AgentItem,
   AgentReceiptFact,
   CompactionFact,
   ControlPayload,
@@ -80,6 +83,7 @@ import type {
   Frame,
   HostAgent,
   HostAgentEntry,
+  HostAgentSkills,
   HostEndpoint,
   SessionHandleFact,
   SessionPayload,
@@ -445,6 +449,88 @@ const FACT_COMPACTION: CompactionFact = {
   tokensAfter: 21000,
 };
 
+/** One item of each kind, every member stated, the way each runtime's fill writes it. */
+const ITEM_TURN: AgentItem = {
+  kind: 'turn',
+  itemId: 'turn-1:completed',
+  turnId: 'turn-1',
+  status: 'failed',
+  detail: 'quota (usageLimitExceeded)',
+  truncated: false,
+};
+
+const ITEM_USER_TEXT: AgentItem = {
+  kind: 'user_text',
+  itemId: 'handle-1:prompt:1',
+  turnId: null,
+  text: 'List the files.',
+  truncated: false,
+};
+
+const ITEM_AGENT_TEXT: AgentItem = {
+  kind: 'agent_text',
+  itemId: 'item-2',
+  turnId: 'turn-1',
+  text: 'Two files.',
+  final: true,
+  truncated: false,
+};
+
+const ITEM_THINKING: AgentItem = {
+  kind: 'thinking',
+  itemId: 'item-3',
+  turnId: 'turn-1',
+  text: 'The listing first.',
+  summary: true,
+  truncated: false,
+};
+
+const ITEM_TOOL_CALL: AgentItem = {
+  kind: 'tool_call',
+  itemId: 'call-1',
+  turnId: 'turn-1',
+  toolUseId: 'call-1',
+  toolName: 'Bash',
+  toolKind: 'shell',
+  input: { command: 'ls', cwd: '/work/repo' },
+  truncated: false,
+};
+
+const ITEM_TOOL_RESULT: AgentItem = {
+  kind: 'tool_result',
+  itemId: 'call-1:result',
+  turnId: 'turn-1',
+  toolUseId: 'call-1',
+  status: 'completed',
+  output: 'a.ts\nb.ts',
+  exitCode: 0,
+  durationMs: 31,
+  changes: [{ path: '/work/repo/b.ts', change: 'update', movePath: '/work/repo/c.ts', diff: '@@ -1 +1 @@' }],
+  truncated: false,
+};
+
+const ITEM_PLAN: AgentItem = {
+  kind: 'plan',
+  itemId: 'turn-1:plan:1',
+  turnId: 'turn-1',
+  text: '- [completed] read\n- [inProgress] write',
+  truncated: false,
+};
+
+const ITEM_NOTICE: AgentItem = {
+  kind: 'notice',
+  itemId: 'turn-1:error:1',
+  turnId: 'turn-1',
+  level: 'warning',
+  text: 'slow (serverOverloaded)',
+  truncated: true,
+};
+
+const AGENT_SKILLS: HostAgentSkills[] = [
+  { runtime: 'claude', naming: 'namespaced', delivery: 'per-session' },
+  { runtime: 'codex', naming: 'namespaced', delivery: 'per-process' },
+];
+
 const AUTHORED = {
   session_update: [
     { name: 'session_update.state-transition', frame: session(stateTransitionUpdate(TRANSITION_READY)) },
@@ -499,6 +585,57 @@ const AUTHORED = {
       name: 'session_update.agent-facts-compaction',
       frame: session(agentFactsUpdate(FACT_COMPACTION, null, AT)),
     },
+    // The members protocol 16 adds to facts, each stated.
+    {
+      name: 'session_update.agent-facts-agent-receipt-effort-reported',
+      frame: session(
+        agentFactsUpdate(
+          { ...FACT_AGENT_RECEIPT, effort: null, effortReported: false },
+          'message-uuid-1',
+          AT,
+        ),
+      ),
+    },
+    {
+      name: 'session_update.agent-facts-usage-sample-cache-read',
+      frame: session(
+        agentFactsUpdate({ ...FACT_USAGE_SAMPLE, cacheReadTokens: 132488 }, 'message-uuid-3', AT),
+      ),
+    },
+    {
+      name: 'session_update.agent-facts-tasks-settled',
+      frame: session(
+        agentFactsUpdate(
+          { ...FACT_TASKS, settled: [{ taskId: 'agent-2', type: 'local_agent', status: 'failed' }] },
+          'message-uuid-4',
+          AT,
+        ),
+      ),
+    },
+    // The conversation item stream: one item of each kind.
+    { name: 'session_update.agent-item-turn', frame: session(agentItemUpdate('codex', ITEM_TURN, AT)) },
+    {
+      name: 'session_update.agent-item-user-text',
+      frame: session(agentItemUpdate('claude', ITEM_USER_TEXT, AT)),
+    },
+    {
+      name: 'session_update.agent-item-agent-text',
+      frame: session(agentItemUpdate('codex', ITEM_AGENT_TEXT, AT)),
+    },
+    {
+      name: 'session_update.agent-item-thinking',
+      frame: session(agentItemUpdate('codex', ITEM_THINKING, AT)),
+    },
+    {
+      name: 'session_update.agent-item-tool-call',
+      frame: session(agentItemUpdate('codex', ITEM_TOOL_CALL, AT)),
+    },
+    {
+      name: 'session_update.agent-item-tool-result',
+      frame: session(agentItemUpdate('codex', ITEM_TOOL_RESULT, AT)),
+    },
+    { name: 'session_update.agent-item-plan', frame: session(agentItemUpdate('codex', ITEM_PLAN, AT)) },
+    { name: 'session_update.agent-item-notice', frame: session(agentItemUpdate('codex', ITEM_NOTICE, AT)) },
     {
       name: 'session_update.state-transition-control-tier',
       frame: session(stateTransitionUpdate(TRANSITION_READY_WITH_TIER)),
@@ -1195,6 +1332,24 @@ const AUTHORED = {
         protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
       }),
     },
+    {
+      name: 'link_hello.agent-skills',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: {
+          ...unsetHostConfiguration(),
+          agent: AGENT,
+          agents: [CLAUDE_ENTRY, CODEX_ENTRY],
+          agentSkills: AGENT_SKILLS,
+        },
+        pendingRestart: [],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
     // A hello from a host one release behind, as such a host sends it: it decodes here unchanged.
     {
       name: 'link_hello.protocol-15',
@@ -1348,6 +1503,34 @@ interface AuthoredMalformed {
 }
 
 const AUTHORED_MALFORMED: readonly AuthoredMalformed[] = [
+  // The well-formed twin is `session_update.agent-item-tool-result`; only the status differs.
+  {
+    name: 'refused.encode.undeclared-tool-result-status',
+    frame: session(
+      agentItemUpdate('codex', { ...ITEM_TOOL_RESULT, status: 'skipped' } as unknown as AgentItem, AT),
+    ),
+    reason: 'frame-malformed',
+  },
+  // The well-formed twin is `link_hello.agent-skills`; only one delivery word differs.
+  {
+    name: 'refused.encode.undeclared-skill-delivery',
+    frame: control({
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration: {
+        ...unsetHostConfiguration(),
+        agentSkills: [
+          { runtime: 'claude', naming: 'namespaced', delivery: 'per-turn' } as unknown as HostAgentSkills,
+        ],
+      },
+      pendingRestart: [],
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    }),
+    reason: 'frame-malformed',
+  },
   {
     name: 'refused.encode.seq-zero',
     frame: { frame: 'session', sessionId: 'session-1', seq: 0, at: AT, payload: { kind: 'session_cancel' } },
@@ -1534,6 +1717,34 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
     name: 'refused.over-limit',
     wire: `{"padding":"${'x'.repeat(MAX_FRAME_BYTES)}"}`,
     expect: refused('frame-too-large'),
+  },
+  // The well-formed twin is `session_update.agent-item-tool-result`; only the exit code differs.
+  {
+    name: 'refused.malformed-agent-item',
+    wire: sessionWire({
+      kind: 'session_update',
+      body: {
+        update: 'agent_item',
+        runtime: 'codex',
+        item: { ...ITEM_TOOL_RESULT, exitCode: 0.5 },
+        observedAt: AT,
+      },
+    }),
+    expect: refused('frame-malformed'),
+  },
+  // The well-formed twin is `session_update.agent-item-agent-text`; only the text's length differs.
+  {
+    name: 'refused.agent-item-over-budget',
+    wire: sessionWire({
+      kind: 'session_update',
+      body: {
+        update: 'agent_item',
+        runtime: 'codex',
+        item: { ...ITEM_AGENT_TEXT, text: 'x'.repeat(MAX_AGENT_ITEM_BYTES) },
+        observedAt: AT,
+      },
+    }),
+    expect: refused('frame-malformed'),
   },
   // The well-formed twin is `session_update.agent-facts-usage-sample`; only the count differs.
   {

@@ -34,7 +34,7 @@ import { DEFAULT_RUNTIME } from '../control/frames.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import type { SessionRequest } from '../sessions/registry.js';
-import { wireApisFor } from '../sessions/runtimes.js';
+import { CODEX_RUNTIME, wireApisFor } from '../sessions/runtimes.js';
 import type { SpawnEnvPolicy } from '../sessions/spawn-env.js';
 import type {
   McpServerConfig,
@@ -44,6 +44,7 @@ import type {
   ThinkingConfig,
 } from './agent-process.js';
 import type { SessionConfigure } from '../control/frames.js';
+import { codexMcpConfig } from './codex-mcp.js';
 import type { ModelEndpoint } from './model-endpoints.js';
 import { endpointModelProblem } from './model-endpoints.js';
 
@@ -469,6 +470,12 @@ export function readSessionRequest(
   if (request.mcpServers !== null) {
     const servers = readMcpServers(request.mcpServers);
     if (!servers.ok) return refuse<ComposableRequest>(servers.refusal.reason, servers.refusal.detail);
+    // Codex takes a server only in a form it has a setting for; one it has none for is refused here,
+    // by name, before anything is reserved.
+    if (runtime === CODEX_RUNTIME) {
+      const codex = codexMcpConfig(servers.value);
+      if (!codex.ok) return refuse<ComposableRequest>(codex.refusal.reason, codex.refusal.detail);
+    }
     composed['mcpServers'] = servers.value;
   }
 

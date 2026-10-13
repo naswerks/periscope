@@ -17,8 +17,11 @@
  *     spend. `inputTokens` is the input minus the cached input, floored at zero, by Codex's own split,
  *     so it counts uncached input only, as on every runtime.
  *   - `usage_sample`: each `thread/tokenUsage/updated`. The context is the last call's total, Codex's
- *     own counting rule; cached tokens are part of input there, not added to it.
- *   - `tasks`: the running sub-agents, composed from collaboration tool calls and sub-agent activity.
+ *     own counting rule; cached tokens are part of input there, not added to it. The cache reads are
+ *     the last call's cached input.
+ *   - `tasks`: the running sub-agents, composed from collaboration tool calls and sub-agent activity,
+ *     and the sub-agents settled since the turn began, with how each ended where the item says; the
+ *     next `turn/started` clears them.
  *   - `compaction`: the observer's report of the compaction entry, as for every runtime.
  * And one fragment per text or reasoning delta.
  *
@@ -31,8 +34,11 @@ import type {
   AgentFragmentDelta,
   AgentReceiptFact,
   ModelSpendFact,
+  ReceiptPluginError,
   RunningTaskEntry,
+  SettledTaskEntry,
   SpendFacts,
+  TaskSettlement,
 } from '../control/frames.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
@@ -60,8 +66,19 @@ const NOTHING: LiftedFacts = { facts: [], fragments: [] };
 /** The type every running Codex sub-agent is reported under. */
 const SUBAGENT_TASK_TYPE = 'subagent';
 
-/** Collaboration states that end a sub-agent. */
-const SETTLED_AGENT_STATES: readonly string[] = ['completed', 'errored', 'shutdown', 'notFound'];
+/** Collaboration states that end a sub-agent, and how each says it ended. */
+const SETTLED_AGENT_STATES: Readonly<Record<string, TaskSettlement>> = {
+  completed: 'completed',
+  errored: 'failed',
+  shutdown: 'stopped',
+  notFound: 'stopped',
+};
+
+/** Sub-agent activity that ends a sub-agent, and how each says it ended. */
+const SETTLED_ACTIVITY: Readonly<Record<string, TaskSettlement>> = {
+  completed: 'completed',
+  interrupted: 'stopped',
+};
 
 type Breakdown = z.infer<typeof TokenUsageBreakdown>;
 
@@ -72,6 +89,13 @@ interface TurnUsage {
 }
 
 export class CodexFactLift implements FactLift<CodexMessage> {
+  /** The plugin directories this host could not hand the session, reported among its plugin errors. */
+  readonly #undelivered: readonly ReceiptPluginError[];
+
+  constructor(options: { readonly undeliveredPlugins?: readonly ReceiptPluginError[] } = {}) {
+    this.#undelivered = options.undeliveredPlugins ?? [];
+  }
+
   /** The session's own thread, from the answer that opened it. */
   #thread: string | null = null;
   #handleSent = false;
@@ -89,7 +113,10 @@ export class CodexFactLift implements FactLift<CodexMessage> {
   #receipt = '';
   readonly #usage = new Map<string, TurnUsage>();
   readonly #running = new Map<string, RunningTaskEntry>();
-  #runningSent = '[]';
+  /** The sub-agents settled since the turn began, by thread. */
+  readonly #settled = new Map<string, SettledTaskEntry>();
+  /** The tasks fact last sent, as its key: none yet reads as nothing running and nothing settled. */
+  #runningSent = JSON.stringify([[], []]);
   /** A sub-agent's thread, mapped to the collaboration call that started it. */
   readonly #spawnedBy = new Map<string, string>();
 
@@ -100,6 +127,13 @@ export class CodexFactLift implements FactLift<CodexMessage> {
     switch (method) {
       case 'thread/tokenUsage/updated':
         return this.#fromUsage(params);
+      case 'turn/started': {
+        // A sub-agent settled in the turn before no longer stands; said once, when one had settled.
+        const thread = params['threadId'];
+        if (typeof thread !== 'string' || !this.#onThread(thread) || this.#settled.size === 0) return NOTHING;
+        this.#settled.clear();
+        return facts(this.#tasksIfChanged());
+      }
       case 'turn/completed':
         return this.#fromTurnCompleted(params);
       case 'model/rerouted': {
@@ -174,11 +208,21 @@ export class CodexFactLift implements FactLift<CodexMessage> {
           listed === null
             ? null
             : bounded(listed.data.flatMap((entry) => entry.skills.map((skill) => text(skill.name))));
+        // The directories this host left out first, then what Codex reported for the ones it took.
+        const undelivered = this.#undelivered.map((error) => ({
+          plugin: text(error.plugin),
+          type: error.type,
+          message: text(error.message),
+          path: error.path === null ? null : text(error.path),
+        }));
         this.#pluginErrors =
           listed === null
-            ? null
-            : bounded(
-                listed.data.flatMap((entry) =>
+            ? undelivered.length === 0
+              ? null
+              : bounded(undelivered)
+            : bounded([
+                ...undelivered,
+                ...listed.data.flatMap((entry) =>
                   entry.errors.map((error) => ({
                     plugin: text(error.path),
                     type: 'skill',
@@ -186,7 +230,7 @@ export class CodexFactLift implements FactLift<CodexMessage> {
                     path: text(error.path),
                   })),
                 ),
-              );
+              ]);
         if (this.#opened) out.push(...this.#receiptIfChanged('runtime'));
         break;
       }
@@ -245,6 +289,8 @@ export class CodexFactLift implements FactLift<CodexMessage> {
         ? bounded([...this.#mcpServers].map(([name, status]) => ({ name: text(name), status })))
         : null,
       source,
+      // The thread's answer always states its effort, null when none is in force.
+      effortReported: true,
     };
     const { source: _source, ...members } = receipt;
     const key = JSON.stringify(members);
@@ -268,6 +314,7 @@ export class CodexFactLift implements FactLift<CodexMessage> {
         contextWindow: wholeOrNull(window),
         cacheTtl: null,
         mainThread: main,
+        cacheReadTokens: wholeOrNull(usage.tokenUsage.last.cachedInputTokens),
       },
     ]);
   }
@@ -336,8 +383,10 @@ export class CodexFactLift implements FactLift<CodexMessage> {
       if (typeof states === 'object' && states !== null) {
         for (const [agent, state] of Object.entries(states as Record<string, unknown>)) {
           const status = (state as { status?: unknown } | null)?.status;
-          if (typeof status === 'string' && SETTLED_AGENT_STATES.includes(status))
-            this.#running.delete(agent);
+          const settled = typeof status === 'string' ? settlementOf(SETTLED_AGENT_STATES, status) : null;
+          if (settled === null) continue;
+          this.#running.delete(agent);
+          this.#settle(agent, settled);
         }
       }
       return facts(this.#tasksIfChanged());
@@ -349,18 +398,29 @@ export class CodexFactLift implements FactLift<CodexMessage> {
       if (kind === 'started' && !this.#running.has(agent)) {
         this.#running.set(agent, { taskId: agent, type: SUBAGENT_TASK_TYPE, description: null });
       }
-      if (kind === 'completed' || kind === 'interrupted') this.#running.delete(agent);
+      const settled = typeof kind === 'string' ? settlementOf(SETTLED_ACTIVITY, kind) : null;
+      if (settled !== null) {
+        this.#running.delete(agent);
+        this.#settle(agent, settled);
+      }
       return facts(this.#tasksIfChanged());
     }
     return NOTHING;
   }
 
+  /** A sub-agent ended, as `status` says; the first ending the turn reports for it stands. */
+  #settle(agent: string, status: TaskSettlement): void {
+    if (!this.#settled.has(agent))
+      this.#settled.set(agent, { taskId: agent, type: SUBAGENT_TASK_TYPE, status });
+  }
+
   #tasksIfChanged(): AgentFact[] {
     const running = bounded([...this.#running.values()]);
-    const key = JSON.stringify(running);
+    const settled = bounded([...this.#settled.values()]);
+    const key = JSON.stringify([running, settled]);
     if (key === this.#runningSent) return [];
     this.#runningSent = key;
-    return [{ kind: 'tasks', runtime: CODEX_RUNTIME, running }];
+    return [{ kind: 'tasks', runtime: CODEX_RUNTIME, running, settled }];
   }
 
   #fragment(channel: 'text' | 'thinking', params: Readonly<Record<string, unknown>>): LiftedFacts {
@@ -378,6 +438,11 @@ export class CodexFactLift implements FactLift<CodexMessage> {
     };
     return { facts: [], fragments: [fragment] };
   }
+}
+
+/** How a word in `table` says a sub-agent ended, or null for a word that ends none. */
+function settlementOf(table: Readonly<Record<string, TaskSettlement>>, word: string): TaskSettlement | null {
+  return Object.hasOwn(table, word) ? (table[word] ?? null) : null;
 }
 
 function facts(list: readonly AgentFact[]): LiftedFacts {

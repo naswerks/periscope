@@ -12,7 +12,10 @@
  *   app-server runs in the session's worktree, so Codex takes that as its cwd and never records the
  *   project as trusted, which keeps the repository's own `.codex/` layer closed and still loads its
  *   `AGENTS.md`. Then the skills and the MCP servers, and only then what arrived meanwhile, in arrival
- *   order: the receipt is built before the thread's `ready`.
+ *   order: the receipt is built before the thread's `ready`. The session's plugin directories are
+ *   handed over before the thread opens (`skills/extraRoots/set`), so its first turn sees their
+ *   skills; a refused call ends the open by name (`plugins-undeliverable`). Its MCP servers ride the
+ *   thread's own config (`codexMcpConfig`), never the command line.
  * - **Queue semantics.** A `turn/start` while a turn is running steers that turn, so a prompt is held
  *   here, in order, up to `MAX_PENDING_PROMPTS`, and sent only once no turn is running or starting.
  *   An interrupt stops the running turn; held prompts stay held and run after it.
@@ -31,8 +34,12 @@ import type { Result } from '../core/result.js';
 import type { AgentInitFacts, AgentProcess, AgentProcessRequest, ThinkingConfig } from './agent-process.js';
 import { MAX_PENDING_PROMPTS, isRuntimeDefaultPrompt } from './agent-process.js';
 import { CODEX_PINNED_VERSION, codexCommand, codexVersionProblem, userAgentVersion } from './codex-binary.js';
+import type { CodexEndpointRoute } from './codex-endpoints.js';
+import { codexEndpointExcludes, codexProviderConfig } from './codex-endpoints.js';
 import { codexAppServerArgs, codexSessionFlags, samePath } from './codex-home.js';
+import { codexMcpConfig } from './codex-mcp.js';
 import { CODEX_NAMES } from './codex-names.js';
+import { codexSkillRoots } from './codex-pack.js';
 import type { CodexMessage } from './codex-wire.js';
 import {
   CodexModel,
@@ -84,6 +91,8 @@ export interface CodexRuntimeConfig {
   readonly spawn?: SpawnChild;
   readonly killTree?: (pid: number) => Promise<void>;
   readonly closeGraceMs?: number;
+  /** The operator's model endpoints a Codex session may open on (`codexEndpointRoutes`). */
+  readonly endpoints?: readonly CodexEndpointRoute[];
 }
 
 /** The stable notifications a Codex session opts out of: every declined row a stable connection receives. */
@@ -159,6 +168,7 @@ export function startCodexProcess(
   request: AgentProcessRequest,
   runtime: CodexRuntimeConfig,
   degrade: (detail: string) => void = () => undefined,
+  endpoint: string | null = null,
 ): AgentProcess<CodexMessage> {
   const output = new AsyncQueue<CodexMessage>();
   let failure: Error | null = null;
@@ -194,15 +204,25 @@ export function startCodexProcess(
     else arrived.push(message);
   };
 
+  // The endpoint the session opens on, as this host routes it; its variables are kept from the shell.
+  const route =
+    endpoint === null ? null : ((runtime.endpoints ?? []).find((one) => one.name === endpoint) ?? null);
+  const unrouted =
+    endpoint !== null && route === null
+      ? `endpoint-unknown: ${endpoint} is not one this Codex runtime routes`
+      : null;
   const problem = codexRequestProblem(request);
   const mode: CodexPermissionMode =
     request.permissionMode !== null && isCodexPermissionMode(request.permissionMode)
       ? request.permissionMode
       : CODEX_PERMISSION_MODES[0];
-  const command = codexCommand(runtime.binary, codexAppServerArgs(codexSessionFlags(mode)));
+  const excluded = route === null ? [] : codexEndpointExcludes(route);
+  const command = codexCommand(runtime.binary, codexAppServerArgs(codexSessionFlags(mode, excluded)));
 
   let peer: StdioRpcPeer | null = null;
-  if (problem === null) {
+  if (unrouted !== null) {
+    failure = new Error(unrouted);
+  } else if (problem === null) {
     const started = startStdioRpc({
       command: command.command,
       args: command.args,
@@ -313,6 +333,23 @@ export function startCodexProcess(
     await readCatalog();
     if (closed) return;
 
+    // The plugin directories, before the thread opens, so its first turn sees their skills. A
+    // directory this host cannot hand over is left out and reported in the receipt.
+    const skillRoots = codexSkillRoots((request.plugins ?? []).map((plugin) => plugin.path));
+    if (skillRoots.roots.length > 0) {
+      const rootParams: JsonObject = { extraRoots: [...skillRoots.roots] };
+      const set = await ask('skills/extraRoots/set', rootParams, CODEX_HANDSHAKE_DEADLINE_MS);
+      if (!set.ok) {
+        return fail(
+          `plugins-undeliverable: Codex refused the session's plugin directories (${set.refusal.reason}: ${set.refusal.detail})`,
+        );
+      }
+      output.push({ kind: 'answer', method: 'skills/extraRoots/set', params: rootParams, result: set.value });
+    }
+
+    const attached = codexMcpConfig(request.mcpServers);
+    if (!attached.ok) return fail(`${attached.refusal.reason}: ${attached.refusal.detail}`);
+
     const selected = request.model ?? null;
     // Thinking off at the start is the effort `none`, which only a model listing it takes.
     if (request.thinking?.type === 'disabled') {
@@ -326,11 +363,14 @@ export function startCodexProcess(
       effort = 'none';
     }
     const flags = {
-      ...codexSessionFlags(mode),
+      ...codexSessionFlags(mode, excluded),
       ...(effort === null ? {} : { model_reasoning_effort: effort }),
+      ...attached.value,
+      ...(route === null ? {} : codexProviderConfig(route)),
     };
     const overrides: JsonObject = {
       ...(selected === null ? {} : { model: selected }),
+      ...(route === null ? {} : { modelProvider: route.key }),
       approvalPolicy: CODEX_MODE_MAP[mode].approvalPolicy,
       sandbox: CODEX_MODE_MAP[mode].sandbox,
       approvalsReviewer: CODEX_APPROVALS_REVIEWER,
@@ -367,7 +407,7 @@ export function startCodexProcess(
       params: mcpParams,
       result: servers.ok ? servers.value : {},
     });
-    resolvePlugins(skillsLoaded);
+    resolvePlugins(skillsLoaded && skillRoots.problems.length === 0);
 
     opened = true;
     for (const message of arrived.splice(0)) output.push(message);

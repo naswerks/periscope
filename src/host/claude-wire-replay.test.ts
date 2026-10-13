@@ -28,6 +28,11 @@ import { composeSession } from './host.js';
 const FIXTURES = fileURLToPath(new URL('../../src/test-support/fixtures/', import.meta.url));
 const FRAMES_FILE = `${FIXTURES}session.34.frames.jsonl`;
 const WIRE_FILE = `${FIXTURES}session.34.wire.jsonl`;
+/**
+ * The same wire without the conversation items and without the fact members that ride beside the
+ * others (`ADDED_FACT_MEMBERS`). Held apart so that carrying them is proven to move no other frame.
+ */
+const BASE_FILE = `${FIXTURES}session.34.base.jsonl`;
 const UPDATE = process.env['PERISCOPE_UPDATE_CONTRACTS'] === '1';
 
 const AT = '2000-01-01T00:00:00.000Z';
@@ -175,4 +180,88 @@ test('the wire file carries the request, every lane and the gate: messages, fact
   ]) {
     assert.ok(text.includes(marker), `the wire file lacks ${marker}`);
   }
+});
+
+/** The fact members a Claude session's facts carry beside the members the base wire holds. */
+const ADDED_FACT_MEMBERS: readonly string[] = ['effortReported', 'cacheReadTokens', 'settled'];
+
+/**
+ * The wire without its additions: every `agent_item` frame left out, every added fact member removed,
+ * and a tasks fact that then restates the running set before it left out (its only news was a
+ * settlement); the frames that remain are numbered again from one. Every other line is as it was.
+ */
+function withoutAdditions(text: string): string {
+  const out: string[] = [];
+  let seq = 0;
+  let lastTasks = JSON.stringify({ kind: 'tasks', runtime: 'claude', running: [] });
+  for (const line of text.split('\n')) {
+    if (line === '') continue;
+    const parsed = JSON.parse(line) as Frame;
+    if (parsed['frame'] !== 'session') {
+      out.push(line);
+      continue;
+    }
+    const payload = parsed['payload'] as Frame;
+    const body = payload['body'] as Frame | undefined;
+    if (body?.['update'] === 'agent_item') continue;
+    if (body?.['update'] === 'agent_facts') {
+      const fact = body['fact'] as Frame;
+      for (const member of ADDED_FACT_MEMBERS) delete fact[member];
+      if (fact['kind'] === 'tasks') {
+        const key = JSON.stringify(fact);
+        if (key === lastTasks) continue;
+        lastTasks = key;
+      }
+    }
+    seq += 1;
+    parsed['seq'] = seq;
+    out.push(JSON.stringify(parsed));
+  }
+  return `${out.join('\n')}\n`;
+}
+
+test('the wire without its conversation items and its added fact members is the base wire, byte for byte', async () => {
+  const stripped = withoutAdditions(await recorded);
+  if (UPDATE) writeFileSync(BASE_FILE, stripped);
+  assert.equal(
+    stripped,
+    readFileSync(BASE_FILE, 'utf8'),
+    'adding the items moved a frame the wire already had',
+  );
+});
+
+test('control: the base comparison can fail: a member added to an agent message moves an existing frame', async () => {
+  const moved = (await recorded).replace(
+    '"update":"agent_message","message":{',
+    '"update":"agent_message","message":{"added":1,',
+  );
+  assert.notEqual(withoutAdditions(moved), readFileSync(BASE_FILE, 'utf8'));
+});
+
+test("the recording's items: one per main-thread block, result and compaction, nothing for a subagent", async () => {
+  const items = (await recorded)
+    .split('\n')
+    .filter((line) => line.includes('"update":"agent_item"'))
+    .map(
+      (line) => ((JSON.parse(line) as Frame)['payload'] as { body: { item: { kind: string } } }).body.item,
+    );
+  const count = (kind: string): number => items.filter((item) => item.kind === kind).length;
+  const main = FRAMES.filter(
+    (frame) => frame['parent_tool_use_id'] === null || frame['parent_tool_use_id'] === undefined,
+  );
+  const blocks = (type: string, role: string): number =>
+    main
+      .filter((frame) => frame['type'] === role)
+      .flatMap((frame) => {
+        const content = (frame['message'] as { content?: unknown } | undefined)?.content;
+        return Array.isArray(content) ? (content as { type?: unknown }[]) : [];
+      })
+      .filter((block) => block.type === type).length;
+  assert.equal(count('agent_text'), blocks('text', 'assistant'));
+  assert.equal(count('thinking'), blocks('thinking', 'assistant') + blocks('redacted_thinking', 'assistant'));
+  assert.equal(count('tool_call'), blocks('tool_use', 'assistant'));
+  assert.equal(count('tool_result'), blocks('tool_result', 'user'));
+  assert.equal(count('turn'), FRAMES.filter((frame) => frame['type'] === 'result').length);
+  assert.equal(count('notice'), FRAMES.filter((frame) => frame['subtype'] === 'compact_boundary').length);
+  assert.equal(count('user_text'), 0, 'the recording sends no prompt through the hook');
 });

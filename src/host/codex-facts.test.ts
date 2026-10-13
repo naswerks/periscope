@@ -95,6 +95,7 @@ test('the opening yields one handle and one receipt, the receipt only once every
       pluginErrors: [],
       mcpServers: [{ name: 'docs', status: 'connected' }],
       source: 'runtime',
+      effortReported: true,
     },
   ]);
 });
@@ -112,6 +113,7 @@ test('a turn record carries the running total as Codex reported it, turn and tur
         contextWindow: 272000,
         cacheTtl: null,
         mainThread: true,
+        cacheReadTokens: 600,
       },
     ],
   );
@@ -275,6 +277,7 @@ test('the running tasks: spawned sub-agents join, a closed or settled one leaves
         { taskId: 'agent-a', type: 'subagent', description: 'Review it.' },
         { taskId: 'agent-b', type: 'subagent', description: 'Review it.' },
       ],
+      settled: [],
     },
   ]);
   const settled = lift.fromMessage(
@@ -370,5 +373,71 @@ test('a compaction report becomes a compaction fact with no figures Codex did no
         tokensAfter: null,
       },
     ],
+  );
+});
+
+test('settled sub-agents: an errored agent failed, an interrupted one stopped, and the next turn clears them', () => {
+  const { lift } = openedLift();
+  const settledOf = (message: CodexMessage): unknown =>
+    lift.fromMessage(message).facts.flatMap((fact) => (fact.kind === 'tasks' ? [fact.settled ?? null] : []));
+  lift.fromMessage(
+    notification('item/completed', {
+      threadId: THREAD,
+      turnId: 't',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'call-1',
+        tool: 'spawnAgent',
+        receiverThreadIds: ['agent-a'],
+        agentsStates: {},
+      },
+    }),
+  );
+  assert.deepEqual(
+    settledOf(
+      notification('item/completed', {
+        threadId: THREAD,
+        turnId: 't',
+        item: {
+          type: 'collabAgentToolCall',
+          id: 'call-2',
+          tool: 'wait',
+          receiverThreadIds: [],
+          agentsStates: { 'agent-a': { status: 'errored', message: 'it broke' } },
+        },
+      }),
+    ),
+    [[{ taskId: 'agent-a', type: 'subagent', status: 'failed' }]],
+  );
+  assert.deepEqual(
+    settledOf(
+      notification('item/completed', {
+        threadId: THREAD,
+        turnId: 't',
+        item: {
+          type: 'subAgentActivity',
+          id: 'act-1',
+          kind: 'interrupted',
+          agentThreadId: 'agent-b',
+          agentPath: 'p',
+        },
+      }),
+    ),
+    [
+      [
+        { taskId: 'agent-a', type: 'subagent', status: 'failed' },
+        { taskId: 'agent-b', type: 'subagent', status: 'stopped' },
+      ],
+    ],
+  );
+  assert.deepEqual(
+    settledOf(notification('turn/started', { threadId: THREAD, turn: { id: 't2', status: 'inProgress' } })),
+    [[]],
+    'the next turn begins',
+  );
+  assert.deepEqual(
+    settledOf(notification('turn/started', { threadId: THREAD, turn: { id: 't3', status: 'inProgress' } })),
+    [],
+    'nothing settled, nothing said',
   );
 });

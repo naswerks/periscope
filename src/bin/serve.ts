@@ -460,6 +460,11 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     );
   }
 
+  // An endpoint member no runtime reaching it reads is applied by nobody: said once, after the summary.
+  for (const ignored of endpoints?.ignored ?? []) {
+    report({ kind: 'endpoint-members-ignored', endpoint: ignored.endpoint, members: ignored.members }, hold);
+  }
+
   // The one line status prints whole, from the same description, so the two cannot disagree.
   const reading = readConfigFile(raw);
   const cachePath = tokenCachePath(raw);
@@ -774,6 +779,14 @@ export function report(event: HostEvent, log: Logger): void {
               `${event.agent.models.length} model(s) in the hello`,
             null,
           );
+    case 'endpoint-members-ignored':
+      // A member no runtime reaching the endpoint reads: said once, so a file that states one is not
+      // read as applying it.
+      return log(
+        'endpoint',
+        `${event.endpoint}: ${event.members.join(', ')} ignored`,
+        'no runtime that reaches this endpoint reads it',
+      );
     case 'runtime-catalog':
       // A runtime beside Claude, said once: what the hello lists for it, and what is wrong, if anything.
       return log(

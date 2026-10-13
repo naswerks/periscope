@@ -291,8 +291,8 @@ export const CODEX_MESSAGE_BINDING: MessageBinding<CodexMessage> = {
 /** The registry's way of starting a session on Codex. */
 export function codexNativeRuntime(config: CodexRuntimeConfig): NativeRuntime<CodexMessage> {
   return {
-    start(request, degrade) {
-      return startCodexProcess(request, config, degrade);
+    start(request, degrade, route) {
+      return startCodexProcess(request, config, degrade, route.endpoint);
     },
     readInit(message) {
       return codexInitFacts(message);

@@ -225,8 +225,15 @@ export interface SessionRegistryOptions {
  * @internal
  */
 export interface NativeRuntime<M = unknown> {
-  /** Start the process. `degrade` names, on the session, something the process lost without ending. */
-  start(request: AgentProcessRequest, degrade: (detail: string) => void): AgentProcess<M>;
+  /**
+   * Start the process. `degrade` names, on the session, something the process lost without ending;
+   * `route` names the model endpoint the session opens on, which a native runtime routes itself.
+   */
+  start(
+    request: AgentProcessRequest,
+    degrade: (detail: string) => void,
+    route: { readonly endpoint: string | null },
+  ): AgentProcess<M>;
   readInit(message: M): AgentInitFacts | null;
 }
 
@@ -359,7 +366,9 @@ export class SessionRegistry {
     const session = new HostedSession<unknown>(
       native === null
         ? this.#startProcess(processRequest)
-        : native.start(processRequest, (detail) => session.degrade('runtime_degraded', detail)),
+        : native.start(processRequest, (detail) => session.degrade('runtime_degraded', detail), {
+            endpoint: request.endpoint ?? null,
+          }),
       this.#clock,
       cwd.value,
       trust,

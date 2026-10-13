@@ -9,10 +9,12 @@ removed export. The package version and the wire protocol version are separate n
 ## [Unreleased]
 
 Protocol 16; the window is `[15, 16]`, so a version-15 controller is still spoken to. Version 16
-adds a runtime, a cause kind, a preset value and refusal reasons, no payload kind and no member: a
+adds a runtime, a cause kind, a preset value and refusal reasons, and optional members only: the
+conversation item stream's `agent_item` body, the hello's `agentSkills` and three fact members. A
 version-15 controller reads a transition's cause unnarrowed, a runtime as a word, the preset as a
-value of a member that already carries any JSON, and a reason it does not know as such; every frame
-it sends decodes unchanged.
+value of a member that already carries any JSON, and a reason it does not know as such; it leaves an
+`agent_item` body alone as an update it does not model and carries the other members without reading
+them; every frame it sends decodes unchanged.
 
 - Added: Codex as a second runtime. With `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME` set, the
   hello's `agents` lists Codex after Claude (its version, the models its app-server lists, the
@@ -34,17 +36,51 @@ it sends decodes unchanged.
   `rpc-request-failed` and `rpc-server-overloaded`, for a runtime's JSON-RPC peer.
 - Added: `request-key-unsupported` is raised. A Codex session naming a member that is Claude's alone
   (`settingSources`, `forwardSubagentText`, the `claude_code` preset) or a value Codex's vocabularies
-  lack is refused before anything is spawned, naming the member; one naming an endpoint is refused
-  `endpoint-unknown` or `endpoint-incompatible`. `plugins` and `mcpServers` are accepted on a Codex
-  session and held.
+  lack is refused before anything is spawned, naming the member.
+- Added: the conversation item stream. Every Claude and Codex session's conversation also rides the
+  update lane as `agent_item` bodies, `{ update: 'agent_item', runtime, item, observedAt? }`, read
+  through `readAgentItem`: a turn's start and end, the prompt, the agent's text and thinking, each
+  tool call and its result, the plan, and the notices the runtime reports, one shape for every
+  runtime (`AgentItem`; `TURN_ITEM_STATUSES`, `TOOL_RESULT_STATUSES`, `FILE_CHANGE_KINDS`,
+  `NOTICE_LEVELS`). Each is reported, never synthesized; an item past `MAX_AGENT_ITEM_BYTES` (32 KiB)
+  is cut and says so in `truncated`, and a tool call's input is left out whole rather than cut. Every
+  frame a Claude session sent before is unchanged; the native messages ride beside the items. Only
+  the session's own thread fills items.
+- Added: the hello's `agentSkills`, one `HostAgentSkills` per runtime that takes plugin directories:
+  how it names their skills (`SKILL_NAMINGS`) and when it takes them (`SKILL_DELIVERIES`). Claude is
+  `namespaced` and `per-session`, Codex `namespaced` and `per-process`.
+- Added: three fact members. `tasks.settled` lists the tasks ended since the turn began, each with how
+  it ended (`TASK_SETTLEMENTS`: `completed`, `failed`, `stopped`); `usage_sample.cacheReadTokens` is
+  the tokens a call read from the cache; `agent_receipt.effortReported` says whether the runtime's
+  report stated an effort at all, so a null `effort` can be read.
+- Added: a Codex session takes its plugin directories and MCP servers. The directories reach its
+  app-server as skill roots before its thread opens, so their skills list as `plugin:skill`; one that
+  is not there is named among the receipt's `pluginErrors`, and Codex refusing the roots ends the open
+  with the new refusal reason `plugins-undeliverable`. MCP servers ride the thread's config, an HTTP
+  server's headers as static headers, never in the app-server's environment or on its command line;
+  a server Codex has no form for is refused `mcp-descriptor-invalid`. Each server's tool calls are
+  asked about first and, while Codex runs at tier `none`, declined: a Codex session's MCP tools do not
+  run yet.
+- Added: model endpoints for Codex. An `openai-responses` endpoint whose `runtimes` name `codex` is
+  offered to Codex in the hello, and a Codex session naming it opens on a provider of its own,
+  defined in its thread's config under an id the host derives from the endpoint's name, its key read
+  from `PERISCOPE_CODEX_ENDPOINT_KEY` in the app-server's environment and kept from the agent's shell,
+  its window from `contextWindow`. On an endpoint only Codex reaches, Claude's rules (the model tiers,
+  the first-party marker, `model-endpoint-mismatch`) do not apply; a stated `modelAliases` or
+  `firstParty` is ignored and reported once as a `endpoint-members-ignored` host event.
+- Changed: the endpoint boot refusal for a runtime outside the routed set names it as one "this host
+  routes no model endpoint for"; the routed runtimes are Claude and Codex, and the hello lists a
+  runtime on an endpoint only where it speaks the endpoint's wire API.
+- Changed: a Codex session's credential variables are excluded from the agent's shell by exact name
+  (`shell_environment_policy.exclude`), the form Codex matches: as a glob, without regard to case.
 - Added: `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME`, config-file keys never settable over the
   link: both or neither, each absolute, and the binary not a batch file, or start is refused. The
   host reads Codex once at start, bounded at 20 seconds, and prints one `[codex]` line.
 - Added: Codex's sign-in files (`auth.json`, `.credentials.json`) in the runner's Codex home and in
   `~/.codex` join the protected set; `credentialPaths` takes `codexHome`.
-- Changed: `EXTRA_ENV_FLOOR` gains eight exact names: `CODEX_HOME`, `CODEX_SQLITE_HOME`,
-  `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_ACCESS_TOKEN`
-  and `CODEX_CA_CERTIFICATE`. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses start,
+- Changed: `EXTRA_ENV_FLOOR` gains nine exact names: `CODEX_HOME`, `CODEX_SQLITE_HOME`,
+  `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_ACCESS_TOKEN`,
+  `CODEX_CA_CERTIFICATE` and `PERISCOPE_CODEX_ENDPOINT_KEY`. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses start,
   a `session_new` whose `env` names one refuses `env-key-refused`, and a repository settings file
   whose `env` names one refuses `settings-route-refused`.
 - Changed: the hello's runtimes list places Claude's entry first, and a later entry that would push
@@ -57,6 +93,10 @@ it sends decodes unchanged.
   does not declare. `SessionDegrade.kind` gains `runtime_degraded`, `HostEvent` gains
   `runtime-catalog`, `CompactionReport` gains an optional `sourceId`, and `CONTROL_TIERS` and
   `RUNTIME_WIRE_APIS` gain a `codex` row.
+- Added: `ItemFill`, a runtime's item fill, and `ForwardSessionOptions.items`, which forwards a
+  session's items behind each message's facts; `AGENT_SKILLS` and `agentSkillsFor`; `HostEvent` gains
+  `endpoint-members-ignored`, and a model endpoints reading carries `ignored`. `endpointModelProblem`
+  holds only on an endpoint Claude reaches.
 
 ## [1.6.0] - 2026-10-11
 

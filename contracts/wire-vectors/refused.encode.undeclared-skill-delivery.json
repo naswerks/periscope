@@ -1,0 +1,42 @@
+{
+  "expect": {
+    "encode": "refused",
+    "reason": "frame-malformed"
+  },
+  "frame": {
+    "frame": "control",
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "link_hello",
+      "protocolVersion": 16,
+      "hostId": "host-1",
+      "capabilities": [],
+      "cursors": [],
+      "configuration": {
+        "repositoryRoot": null,
+        "workspaceRoot": null,
+        "branchScheme": null,
+        "transcriptsRoot": null,
+        "controllerUrl": null,
+        "decisionUrl": null,
+        "agentHome": null,
+        "plugins": [],
+        "agentSkills": [
+          {
+            "runtime": "claude",
+            "naming": "namespaced",
+            "delivery": "per-turn"
+          }
+        ]
+      },
+      "pendingRestart": [],
+      "protocolRange": {
+        "min": 15,
+        "max": 16
+      }
+    }
+  },
+  "name": "refused.encode.undeclared-skill-delivery",
+  "protocolVersion": 16,
+  "wire": null
+}

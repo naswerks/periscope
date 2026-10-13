@@ -9,7 +9,7 @@
  * the check a session's endpoint meets at open, so an endpoint the hello offers a runtime is one that
  * runtime can open on.
  */
-import type { EndpointWireApi } from '../control/frames.js';
+import type { EndpointWireApi, HostAgentSkills, SkillDelivery, SkillNaming } from '../control/frames.js';
 import { DEFAULT_RUNTIME } from '../control/frames.js';
 import type { ControlTier } from '../state/model.js';
 
@@ -38,11 +38,33 @@ export const RUNTIME_WIRE_APIS = {
 } as const satisfies Readonly<Record<keyof typeof CONTROL_TIERS, readonly EndpointWireApi[]>>;
 
 /**
- * The runtimes a model endpoint may name: the ones this host builds an endpoint's route for. A runtime
- * this host spawns with no route built yet is absent, so an endpoints file that names it is refused at
- * start and the hello never offers an endpoint no session on that runtime could use.
+ * How each runtime takes plugin directories, keyed like the tiers: both name a plugin's skills under
+ * the plugin's own name. Claude takes them with each session's request (the agent CLI's plugin
+ * directories); Codex takes them when its app-server starts, as skill roots, and this host starts one
+ * app-server per session.
  */
-export const ENDPOINT_ROUTED_RUNTIMES: readonly string[] = [DEFAULT_RUNTIME];
+export const AGENT_SKILLS = {
+  [DEFAULT_RUNTIME]: { naming: 'namespaced', delivery: 'per-session' },
+  [CODEX_RUNTIME]: { naming: 'namespaced', delivery: 'per-process' },
+} as const satisfies Readonly<
+  Record<keyof typeof CONTROL_TIERS, { readonly naming: SkillNaming; readonly delivery: SkillDelivery }>
+>;
+
+/** The hello's `agentSkills` for `runtimes`: one entry for each that takes plugin directories, in order. */
+export function agentSkillsFor(runtimes: readonly string[]): HostAgentSkills[] {
+  const table = AGENT_SKILLS as Readonly<Record<string, Omit<HostAgentSkills, 'runtime'> | undefined>>;
+  return runtimes.flatMap((runtime) => {
+    const row = Object.hasOwn(table, runtime) ? table[runtime] : undefined;
+    return row === undefined ? [] : [{ runtime, ...row }];
+  });
+}
+
+/**
+ * The runtimes a model endpoint may name: the ones this host builds an endpoint's route for. A runtime
+ * outside it is refused at start, so the hello never offers an endpoint no session on that runtime
+ * could use.
+ */
+export const ENDPOINT_ROUTED_RUNTIMES: readonly string[] = [DEFAULT_RUNTIME, CODEX_RUNTIME];
 
 /** The wire APIs `runtime` speaks; empty for a runtime this host does not spawn. */
 export function wireApisFor(runtime: string): readonly EndpointWireApi[] {

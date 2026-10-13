@@ -16,7 +16,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 import { decode } from '../control/codec.js';
@@ -941,4 +943,19 @@ test('control: the protocol-15 decision request refuses a body with no sessionKe
     false,
     'a tool kind that release does not declare',
   );
+});
+
+test('a controller on protocol 15 decodes every item, every added fact member and the skills list this build writes', () => {
+  const corpus = fileURLToPath(new URL('../../contracts/wire-vectors/', import.meta.url));
+  const added = readdirSync(corpus).filter((file) =>
+    /^(session_update\.agent-item-|session_update\.agent-facts-(tasks-settled|usage-sample-cache-read|agent-receipt-effort-reported)|link_hello\.agent-skills)/.test(
+      file,
+    ),
+  );
+  assert.equal(added.length, 12, `the vectors this reads: ${added.join(', ')}`);
+  for (const file of added) {
+    const wire = (JSON.parse(readFileSync(`${corpus}${file}`, 'utf8')) as { wire: string }).wire;
+    const read = V15.safeParse(JSON.parse(wire));
+    assert.ok(read.success, `${file}: ${read.success ? '' : JSON.stringify(read.error.issues)}`);
+  }
 });

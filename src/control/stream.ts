@@ -43,6 +43,11 @@
  * transitions. A compaction's fact rides right behind the transition that recorded it. Without one,
  * the wire carries exactly the messages and the transitions.
  *
+ * With an item fill, the conversation items a message carries ride after its fragments and before its
+ * transitions, each held to the item budget (`fitAgentItem`) and naming the session's runtime. An item
+ * the fill learns off the message stream (a prompt the runtime took) rides when the fill pushes it.
+ * Every other frame is as it would be without one: items are an addition.
+ *
  * What differs per runtime is bound in one place (`MessageBinding`): which lane a message rides and
  * with what body, which native id its facts name, and how the observer reads it. Claude's binding is
  * `CLAUDE_MESSAGE_BINDING`, and `forwardSession` forwards with it; a session on another runtime is
@@ -50,22 +55,26 @@
  */
 import type { SDKMessage } from '../host/agent-process.js';
 import type { FactLift } from '../sessions/fact-lift.js';
+import type { ItemFill } from '../sessions/item-fill.js';
 import type { HostedSession, SessionEnded, Unsubscribe } from '../sessions/session.js';
 import type { SessionObserver } from '../state/observer.js';
 import type { SessionTransition } from '../state/model.js';
-import type { AgentFact } from './frames.js';
+import type { AgentFact, AgentItem } from './frames.js';
 import type { Refusal } from '../core/refusal.js';
 import type { Result } from '../core/result.js';
 import type { Clock } from '../core/time.js';
 import { systemClock } from '../core/time.js';
 import type { JsonObject, SessionPayload } from './frames.js';
 import {
+  DEFAULT_RUNTIME,
   agentFactsUpdate,
   agentFragmentDelta,
+  agentItemUpdate,
   agentMessageDelta,
   agentMessageUpdate,
   stateTransitionUpdate,
 } from './frames.js';
+import { fitAgentItem } from './item-budget.js';
 import { laneFor } from './stream-routing.js';
 
 /**
@@ -109,6 +118,11 @@ export interface ForwardSessionOptions<M = SDKMessage> {
    * observer reports by its fact. Without one, nothing but messages and transitions is forwarded.
    */
   readonly lift?: FactLift<M>;
+  /**
+   * The session's item fill. With one, each message is followed on the wire by the conversation items
+   * it carries, after its facts and fragments; without one, no item is forwarded.
+   */
+  readonly items?: ItemFill<M>;
 }
 
 /** How one runtime's messages reach the wire and the session's machine. */
@@ -190,12 +204,24 @@ function forwardWith<M>(options: ForwardSessionOptions<M>, binding: MessageBindi
   };
 
   const lift = options.lift;
+  const items = options.items;
+  const runtime = binding.runtime ?? DEFAULT_RUNTIME;
+  const emitItem = (item: AgentItem, observedAt: string): void =>
+    emit(agentItemUpdate(runtime, fitAgentItem(item), observedAt));
+
+  // Items learned off the message stream ride when the fill learns them, stamped with that instant, and
+  // only while this forwarding stands.
+  let forwarding = true;
+  items?.attach?.((item) => {
+    if (forwarding) emitItem(item, clock());
+  });
 
   const dropMessages = session.onMessage((message: M) => {
-    // The message first, then the facts it carries, then what it caused. See this file's header.
+    // The message first, then the facts and items it carries, then what it caused. See this file's header.
     const observedAt = clock();
     forwardMessage(binding, message, observedAt, emit);
     if (lift !== undefined) forwardFacts(binding, lift, message, observedAt, emit);
+    if (items !== undefined) for (const item of items.fromMessage(message)) emitItem(item, observedAt);
     reportRejected(binding.observe(observer, message));
   });
 
@@ -219,6 +245,7 @@ function forwardWith<M>(options: ForwardSessionOptions<M>, binding: MessageBindi
   });
 
   return () => {
+    forwarding = false;
     dropMessages();
     dropEnd();
     dropCompactions();

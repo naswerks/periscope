@@ -120,6 +120,7 @@ test('an init yields the handle and the receipt, in that order, from what the ag
     pluginErrors: null,
     mcpServers: [{ name: 'docs', status: 'connected' }],
     source: 'runtime',
+    effortReported: true,
   });
 });
 
@@ -340,6 +341,7 @@ test('a main-thread call is sampled with its context, its cache lifetime and no 
     contextWindow: null,
     cacheTtl: '1h',
     mainThread: true,
+    cacheReadTokens: 100,
   });
 });
 
@@ -472,7 +474,12 @@ test('control: a notification removes its edge and never a level entry', () => {
     level([{ task_id: 'a', task_type: 'local_agent', description: 'a' }]),
     started('e', 'local_agent'),
   );
-  assert.deepEqual(running(factsOf(lift, notified('a'))), [], 'the level still lists a, so nothing moved');
+  const settledA = only(factsOf(lift, notified('a')), 'tasks');
+  assert.deepEqual(
+    settledA.map((fact) => fact.running.map((task) => task.taskId)),
+    [['a', 'e']],
+    'the level still lists a, so the running set did not move; the fact carries only the settlement',
+  );
   assert.deepEqual(running(factsOf(lift, notified('e'))), [['a']], 'the edge went');
 });
 
@@ -570,4 +577,64 @@ test('a message that carries no fact yields nothing', () => {
     message({ type: 'user', uuid: 'u', message: { content: [] } }),
   );
   assert.deepEqual(lifted, { facts: [], fragments: [] });
+});
+
+// ---------------------------------------------------------------------------
+// The members protocol 16 adds: settled tasks, cache reads, whether an effort was reported
+// ---------------------------------------------------------------------------
+
+const settledOf = (facts: readonly AgentFact[]): unknown[] =>
+  only(facts, 'tasks').map((fact) => fact.settled ?? null);
+
+test('a failed task settles with its status and the type it started with; the next turn clears it', () => {
+  const lift = new ClaudeFactLift();
+  factsOf(lift, init(), started('agent-1', 'local_agent'));
+  const failed = message({
+    type: 'system',
+    subtype: 'task_notification',
+    uuid: 'done-agent-1',
+    task_id: 'agent-1',
+    status: 'failed',
+  });
+  assert.deepEqual(settledOf(factsOf(lift, failed)), [
+    [{ taskId: 'agent-1', type: 'local_agent', status: 'failed' }],
+  ]);
+  assert.deepEqual(settledOf(factsOf(lift, init({ uuid: 'init-2' }))), [[]], 'the next turn begins');
+  assert.deepEqual(settledOf(factsOf(lift, init({ uuid: 'init-3' }))), [], 'nothing settled, nothing said');
+});
+
+test('control: a task the lift never saw start settles with no type, and an unknown status settles nothing', () => {
+  const lift = new ClaudeFactLift();
+  assert.deepEqual(settledOf(factsOf(lift, notified('bash-9'))), [
+    [{ taskId: 'bash-9', type: null, status: 'completed' }],
+  ]);
+  const odd = message({
+    type: 'system',
+    subtype: 'task_notification',
+    uuid: 'x',
+    task_id: 'y',
+    status: 'paused',
+  });
+  assert.deepEqual(settledOf(factsOf(lift, odd)), [], 'no word this build does not know is stated');
+});
+
+test('a sample states the cache reads the call reported, and null when it reported none', () => {
+  const [read] = only(factsOf(new ClaudeFactLift(), assistant('msg-1', callUsage())), 'usage_sample');
+  assert.equal(read?.cacheReadTokens, 100);
+  const [none] = only(
+    factsOf(new ClaudeFactLift(), assistant('msg-2', callUsage({ cache_read_input_tokens: undefined }))),
+    'usage_sample',
+  );
+  assert.equal(none?.cacheReadTokens, null);
+});
+
+test('effortReported tells an init that stated no effort from one that carried none at all', () => {
+  const stated = only(factsOf(new ClaudeFactLift(), init({ effort: null })), 'agent_receipt')[0];
+  assert.equal(stated?.effort, null);
+  assert.equal(stated?.effortReported, true, 'the init said no effort will be sent');
+  const silent = init();
+  delete (silent as unknown as Record<string, unknown>)['effort'];
+  const absent = only(factsOf(new ClaudeFactLift(), silent), 'agent_receipt')[0];
+  assert.equal(absent?.effort, null);
+  assert.equal(absent?.effortReported, false, 'the init carried no effort: its null says nothing');
 });

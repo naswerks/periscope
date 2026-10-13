@@ -198,10 +198,39 @@ test('the recording yields one handle, one receipt, a record per result, a sampl
 
 test("the recording's running tasks: each level, a subagent edge outliving its level, nothing for a bash start", async () => {
   const { bodies } = await recorded;
-  const running = bodies.flatMap((body) =>
+  const sets = bodies.flatMap((body) =>
     body.fact.kind === 'tasks' ? [body.fact.running.map((task) => task.taskId)] : [],
   );
+  // A tasks fact that reports only a settled task restates the running set; each change of it is what
+  // this reads, from the nothing a session starts with.
+  const running = sets.filter((ids, index) => JSON.stringify(ids) !== JSON.stringify(sets[index - 1] ?? []));
   assert.deepEqual(running, [['aea05d375a29eaa82'], [], ['b5cwk2a74'], [], ['bofwxth9n'], []]);
+  const stated = bodies.flatMap((body) =>
+    body.fact.kind === 'tasks' ? [JSON.stringify([body.fact.running, body.fact.settled])] : [],
+  );
+  const repeated = stated.filter((key, index) => index > 0 && key === stated[index - 1]);
+  assert.deepEqual(repeated, [], 'every tasks fact carries news: its running or its settled set changed');
+});
+
+test("the recording's settled tasks: each notification's task with its status, cleared as the next turn begins", async () => {
+  const { bodies } = await recorded;
+  const word = (value: unknown): string => (typeof value === 'string' ? value : '');
+  const notified = FRAMES.filter((frame) => frame['subtype'] === 'task_notification').map((frame) =>
+    [word(frame['task_id']), word(frame['status'])].join(' '),
+  );
+  const settled = new Map<string, string>();
+  for (const body of bodies) {
+    if (body.fact.kind !== 'tasks') continue;
+    for (const task of body.fact.settled ?? []) settled.set(task.taskId, task.status);
+  }
+  assert.ok(notified.length > 0, 'the recording holds task notifications');
+  assert.deepEqual(
+    [...settled].map(([id, status]) => `${id} ${status}`).sort(),
+    [...new Set(notified)].sort(),
+    'every notification settled its task with the status it reported',
+  );
+  const last = bodies.filter((body) => body.fact.kind === 'tasks').at(-1);
+  assert.deepEqual(last?.fact.kind === 'tasks' ? last.fact.settled : null, [], 'the next turn cleared them');
 });
 
 test('every fact frame the replay put on the wire encodes and decodes back unchanged', async () => {

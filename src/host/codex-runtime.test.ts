@@ -121,7 +121,7 @@ test('the home is created when absent, and a file where it should be is refused'
   }
 });
 
-test('the session flags pin the reviewer, web search and hooks, and exclude every credential variable by an anchored pattern', () => {
+test('the session flags pin the reviewer, web search and hooks, and exclude every credential variable by its exact name', () => {
   const flags = codexSessionFlags('dontAsk', ['OPENAI_API_KEY', 'MY.KEY']);
   assert.deepEqual(flags, {
     approvals_reviewer: 'user',
@@ -129,7 +129,7 @@ test('the session flags pin the reviewer, web search and hooks, and exclude ever
     sandbox_mode: 'workspace-write',
     web_search: 'disabled',
     'features.hooks': true,
-    'shell_environment_policy.exclude': ['^OPENAI_API_KEY$', '^MY\\.KEY$'],
+    'shell_environment_policy.exclude': ['OPENAI_API_KEY', 'MY.KEY'],
   });
   assert.deepEqual(codexOverrideArgs({ web_search: 'disabled', 'features.hooks': true }), [
     '-c',

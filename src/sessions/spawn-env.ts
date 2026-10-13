@@ -98,6 +98,9 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'CODEX_ACCESS_TOKEN',
   // The certificate authority Codex trusts.
   'CODEX_CA_CERTIFICATE',
+  // The key a Codex session's model endpoint is reached with: this host sets it, from its operator's
+  // endpoint, and nothing else may.
+  'PERISCOPE_CODEX_ENDPOINT_KEY',
 ];
 
 /**

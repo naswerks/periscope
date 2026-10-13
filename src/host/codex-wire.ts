@@ -52,6 +52,7 @@ export const CODEX_CLIENT_METHODS = [
   'thread/start',
   'thread/resume',
   'thread/fork',
+  'skills/extraRoots/set',
   'skills/list',
   'mcpServerStatus/list',
   'turn/start',

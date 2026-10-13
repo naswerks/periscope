@@ -279,9 +279,22 @@ instead:
   The one residual: a trust entry already in the runner home's `config.toml` that covers the
   session's repository opens that layer; keep the runner home's trust list empty.
 - **The model route and identity are beneath the floor.** `CODEX_HOME`, `CODEX_SQLITE_HOME`,
-  `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_ACCESS_TOKEN`
-  and `CODEX_CA_CERTIFICATE` are exact names in `EXTRA_ENV_FLOOR`, so no controller can move a Codex
-  session's home, model server, credential or certificate authority.
+  `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_ACCESS_TOKEN`,
+  `CODEX_CA_CERTIFICATE` and `PERISCOPE_CODEX_ENDPOINT_KEY` are exact names in `EXTRA_ENV_FLOOR`, so no
+  controller can move a Codex session's home, model server, credential or certificate authority.
+- **An endpoint's credential is kept from the agent's shell.** A Codex session on a named endpoint
+  reads its key from `PERISCOPE_CODEX_ENDPOINT_KEY`, which the host sets, with the endpoint's own
+  `env`, in the app-server's environment only. Codex hands a shell command the app-server's whole
+  environment unless told otherwise, and its own exclusion of `*KEY*`, `*SECRET*` and `*TOKEN*` names
+  is off unless asked for, so the host names each of those variables in
+  `shell_environment_policy.exclude`, exactly; Codex matches each entry as a glob without regard to
+  case, so each removes that one variable. Codex's hooks still receive the whole environment.
+- **A tool server's ticket stays out of the environment and off the command line.** A session's HTTP
+  MCP servers ride its thread's config, sent over the app-server's stdin, with their headers as
+  static `http_headers`: never `env_http_headers`, which reads a header from the app-server's
+  environment where the agent's shell could read it too, and never a `-c` argument, which a process
+  listing shows. Each server's tools are asked about before every call, and at tier `none` every such
+  ask is declined, so a Codex session's MCP tools do not run until a gate decides them.
 - **A pinned binary.** The host runs one Codex release (`CODEX_PINNED_VERSION`), checks its
   `--version` and the version its app-server reports, and lists any other version unavailable. It
   never installs or updates Codex, and it never runs a batch file.

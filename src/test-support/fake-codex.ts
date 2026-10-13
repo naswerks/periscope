@@ -7,6 +7,8 @@
  * an in-process child for unit tests; `fake-codex-server.ts` binds it to a real process's stdio.
  */
 import type { ChildProcess } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { JsonObject, JsonValue } from '../control/frames.js';
 import { fakeChild, spawnerFor } from './fake-child.js';
@@ -96,6 +98,8 @@ export class FakeCodexServer {
   /** The turn running now, as this server last reported it. */
   currentTurn: string | null = null;
   thread: string | null = null;
+  /** The skill roots the client set, as `skills/extraRoots/set` last named them. */
+  extraRoots: string[] = [];
 
   constructor(options: FakeCodexOptions, cwd: string, write: (line: string) => void) {
     this.#options = options;
@@ -225,10 +229,30 @@ export class FakeCodexServer {
         this.notify('thread/started', { thread: { id: thread, cliVersion: this.version } });
         return;
       }
+      case 'skills/extraRoots/set': {
+        const roots = params['extraRoots'];
+        this.extraRoots = Array.isArray(roots)
+          ? roots.filter((root): root is string => typeof root === 'string')
+          : [];
+        reply({});
+        this.notify('skills/changed', {});
+        return;
+      }
       case 'skills/list':
         return reply(
           this.#options.skills ?? {
-            data: [{ cwd: this.#cwd, skills: [{ name: 'example:skill' }], errors: [] }],
+            data: [
+              {
+                cwd: this.#cwd,
+                skills:
+                  this.extraRoots.length === 0
+                    ? [{ name: 'example:skill' }]
+                    : this.extraRoots.flatMap((root) =>
+                        rootSkills(root).map((name) => ({ name, path: root })),
+                      ),
+                errors: [],
+              },
+            ],
           },
         );
       case 'mcpServerStatus/list':
@@ -254,6 +278,23 @@ export class FakeCodexServer {
         this.send({ id, error: { code: -32601, message: `${method} is not handled by the fake` } });
     }
   }
+}
+
+/**
+ * The skills one root lists, named as Codex names a skill under a plugin root: the name of the
+ * manifest at the root, a colon, and the skill's directory under `skills/`. A root with no manifest
+ * lists its skills bare.
+ */
+function rootSkills(root: string): string[] {
+  const manifest = join(root, '.claude-plugin', 'plugin.json');
+  const named = existsSync(manifest)
+    ? (JSON.parse(readFileSync(manifest, 'utf8')) as { name?: unknown }).name
+    : null;
+  const skills = join(root, 'skills');
+  if (!existsSync(skills)) return [];
+  return readdirSync(skills, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(skills, entry.name, 'SKILL.md')))
+    .map((entry) => (typeof named === 'string' && named !== '' ? `${named}:${entry.name}` : entry.name));
 }
 
 export interface FakeCodex {

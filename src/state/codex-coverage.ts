@@ -10,8 +10,10 @@
  * - A server-request row is `wired` when the adapter answers it, and the note says with what. Every
  *   answer is a refusal of what was asked: nothing decides a call for this runtime yet, and silence
  *   would hold the turn forever. A `declined` request is answered `-32601`.
- * - An item-kind row is `wired` when the kind moves the machine or feeds a fact, `declined` when it
- *   only rides inside the native `item/started` and `item/completed`.
+ * - An item-kind row is `wired` when the kind moves the machine, feeds a fact or fills a conversation
+ *   item (`CODEX_ITEM_FILLS`, `host/codex-items.ts`), and `declined` when it only rides inside the native
+ *   `item/started` and `item/completed`. Only the session's own thread fills items: a sub-agent's thread
+ *   rides its native messages, because an item has no member naming the call that started it.
  *
  * Kept honest by `pins/codex-coverage.test.ts`: the keys of each table equal the names the release
  * declares (`contracts/codex-protocol-names.json`), in both directions; every experimental name is
@@ -31,7 +33,7 @@ const EXPERIMENTAL = 'experimental: not received without the opt-in, which this 
 export const CODEX_NOTIFICATION_COVERAGE = {
   error: {
     handling: 'wired',
-    note: 'willRetry false: the turn failed, state -> errored with the error in the detail. willRetry true: the runtime retries on its own, and the native message is all that rides',
+    note: 'willRetry false: the turn failed, state -> errored with the error in the detail, and an error notice item. willRetry true: the runtime retries on its own, and a warning notice item rides with the native message',
   },
   'thread/started': {
     handling: 'wired',
@@ -71,14 +73,17 @@ export const CODEX_NOTIFICATION_COVERAGE = {
     handling: 'wired',
     note: 'a usage sample (context tokens are the last call total, Codex own rule); the newest one for a turn is that turn record totals. It names no model, so the model is the session model register. inputTokens is input minus cached input, floored at zero: Codex own split, so it counts uncached input only',
   },
-  'turn/started': { handling: 'wired', note: 'state -> working: a turn this host started is running' },
+  'turn/started': {
+    handling: 'wired',
+    note: 'state -> working: a turn this host started is running; a turn item, started; the sub-agents settled in the turn before are cleared from the tasks fact',
+  },
   'hook/started': {
     handling: 'wired',
     note: `${NATIVE_ONLY} until a gate is installed over this runtime, which correlates it with the call it is about`,
   },
   'turn/completed': {
     handling: 'wired',
-    note: 'turn.status completed -> idle, interrupted -> interrupted, failed -> errored with the error in the detail; a turn record; the next held prompt starts',
+    note: 'turn.status completed -> idle, interrupted -> interrupted, failed -> errored with the error in the detail; a turn record; a turn item with the same status and the error as its detail (inProgress, or a status this host does not know, fills none); the next held prompt starts',
   },
   'hook/completed': {
     handling: 'wired',
@@ -88,10 +93,13 @@ export const CODEX_NOTIFICATION_COVERAGE = {
     handling: 'declined',
     note: `${OPTED_OUT}: the aggregate diff; each fileChange item carries its own`,
   },
-  'turn/plan/updated': { handling: 'wired', note: NATIVE_ONLY },
+  'turn/plan/updated': {
+    handling: 'wired',
+    note: 'a plan item: the explanation, then one line per step with its status; each update is a whole plan of its own',
+  },
   'item/started': {
     handling: 'wired',
-    note: 'a tool item opens a tool entry (state -> working); a contextCompaction item opens the compaction entry; the item kind rides the cause detail',
+    note: 'a tool item opens a tool entry (state -> working) and fills its tool_call item; a contextCompaction item opens the compaction entry; the item kind rides the cause detail',
   },
   'item/autoApprovalReview/started': {
     handling: 'wired',
@@ -104,7 +112,7 @@ export const CODEX_NOTIFICATION_COVERAGE = {
   'autoApprovalReview/strictReviewRequired': { handling: 'declined', note: EXPERIMENTAL },
   'item/completed': {
     handling: 'wired',
-    note: 'closes the tool entry or the compaction entry the item opened; a collab tool call or sub-agent activity changes the running tasks',
+    note: 'closes the tool entry or the compaction entry the item opened; a collab tool call or sub-agent activity changes the running tasks; the completed item fills its conversation items (CODEX_ITEM_FILLS)',
   },
   'rawResponseItem/completed': {
     handling: 'declined',
@@ -206,10 +214,22 @@ export const CODEX_NOTIFICATION_COVERAGE = {
     handling: 'declined',
     note: `${OPTED_OUT}: not a fact a controller acts on`,
   },
-  warning: { handling: 'wired', note: NATIVE_ONLY },
-  guardianWarning: { handling: 'wired', note: NATIVE_ONLY },
-  deprecationNotice: { handling: 'wired', note: NATIVE_ONLY },
-  configWarning: { handling: 'wired', note: NATIVE_ONLY },
+  warning: {
+    handling: 'wired',
+    note: "a warning notice item, when it names no thread or the session's own; it moves nothing and feeds no fact",
+  },
+  guardianWarning: {
+    handling: 'wired',
+    note: "a warning notice item, on the session's own thread; it moves nothing and feeds no fact",
+  },
+  deprecationNotice: {
+    handling: 'wired',
+    note: 'an info notice item: the summary and its details; it moves nothing and feeds no fact',
+  },
+  configWarning: {
+    handling: 'wired',
+    note: 'a warning notice item: the summary and its details; it moves nothing and feeds no fact',
+  },
   'fuzzyFileSearch/sessionUpdated': {
     handling: 'declined',
     note: `${OPTED_OUT}: this host starts no file search session`,
@@ -258,7 +278,7 @@ export const CODEX_SERVER_REQUEST_COVERAGE = {
   },
   'mcpServer/elicitation/request': {
     handling: 'wired',
-    note: 'answered decline, with no content: an MCP tool approval, a form or a link, none of them granted',
+    note: 'answered decline, with no content: an MCP tool approval, a form or a link, none of them granted. Every MCP server this host attaches asks here before each tool call (its default_tools_approval_mode is prompt), so every MCP tool call on a Codex session is declined until a gate decides them; the server still starts and lists its tools',
   },
   'item/tool/requestUserInput': {
     handling: 'wired',
@@ -295,60 +315,66 @@ const ITEM_NATIVE_ONLY =
   'rides inside the native item/started and item/completed; it moves nothing and feeds no fact';
 
 export const CODEX_ITEM_COVERAGE = {
-  userMessage: { handling: 'declined', note: `${ITEM_NATIVE_ONLY}: the prompt this host sent, echoed` },
-  hookPrompt: { handling: 'declined', note: `${ITEM_NATIVE_ONLY}: context a hook added` },
+  userMessage: {
+    handling: 'wired',
+    note: 'a user_text item: the prompt as Codex took it, its text inputs joined; other inputs fill nothing',
+  },
+  hookPrompt: {
+    handling: 'wired',
+    note: 'an info notice item: the context a hook added, its fragments joined',
+  },
   agentMessage: {
-    handling: 'declined',
-    note: `${ITEM_NATIVE_ONLY}: the text already rode as fragments, from its deltas`,
+    handling: 'wired',
+    note: "an agent_text item, final read from the message stage: final_answer true, commentary and partial_answer false, and no stage or any other word null (never guessed). The turn's answer is the last agent_text with final true, else the last with final null: the consumer's reading, never this host's. The text also rode as fragments",
   },
   functionCallOutput: {
     handling: 'declined',
     note: `${ITEM_NATIVE_ONLY}: the output of a tool this host would have answered, and it answers none`,
   },
-  plan: { handling: 'declined', note: `${ITEM_NATIVE_ONLY}: the plan text` },
+  plan: { handling: 'wired', note: 'a plan item: the plan text' },
   reasoning: {
-    handling: 'declined',
-    note: `${ITEM_NATIVE_ONLY}: the thinking already rode as fragments, from its deltas`,
+    handling: 'wired',
+    note: 'thinking items: the summary (summary true) and the reasoning text (summary false, its id with :raw), each where non-empty; one empty item where both are. The text also rode as fragments',
   },
   commandExecution: {
     handling: 'wired',
-    note: 'opens and closes a tool entry, tool:Bash, keyed by the item id',
+    note: 'opens and closes a tool entry, tool:Bash, keyed by the item id; a tool_call (shell, input command and cwd) and a tool_result (status, aggregatedOutput, exitCode and durationMs as reported, null where not)',
   },
   fileChange: {
     handling: 'wired',
-    note: 'opens and closes a tool entry, tool:apply_patch, keyed by the item id',
+    note: 'opens and closes a tool entry, tool:apply_patch, keyed by the item id; a tool_call (file_edit, input paths) and a tool_result with each change (path, change, movePath, diff as reported)',
   },
   mcpToolCall: {
     handling: 'wired',
-    note: 'opens and closes a tool entry, tool:mcp__{server}__{tool}, keyed by the item id',
+    note: 'opens and closes a tool entry, tool:mcp__{server}__{tool}, keyed by the item id; a tool_call (mcp, input its arguments) and a tool_result (the error message, else the result content as JSON)',
   },
   dynamicToolCall: { handling: 'declined', note: `${ITEM_NATIVE_ONLY}: this host registers no dynamic tool` },
   collabAgentToolCall: {
     handling: 'wired',
-    note: 'opens and closes a tool entry named by its tool word; spawnAgent adds each receiver thread to the running tasks, and closeAgent or a settled agent state removes it',
+    note: 'opens and closes a tool entry named by its tool word; spawnAgent adds each receiver thread to the running tasks, and closeAgent or a settled agent state removes it and states how it settled; a tool_call (other) and a tool_result (interrupted reads failed)',
   },
   subAgentActivity: {
     handling: 'wired',
-    note: 'started adds the agent thread to the running tasks; completed or interrupted removes it',
+    note: 'started adds the agent thread to the running tasks; completed or interrupted removes it and states how it settled; an info notice item',
   },
   webSearch: {
     handling: 'wired',
-    note: 'opens and closes a tool entry, tool:web_search, keyed by the item id; hosted search runs at the provider and is disabled in the session flags',
+    note: 'opens and closes a tool entry, tool:web_search, keyed by the item id; a tool_call (web) and a tool_result; hosted search runs at the provider and is disabled in the session flags',
   },
   imageView: {
     handling: 'wired',
-    note: 'opens and closes a tool entry, tool:view_image, keyed by the item id',
+    note: 'opens and closes a tool entry, tool:view_image, keyed by the item id; a tool_call (file_read, input path) and a tool_result',
   },
   sleep: { handling: 'declined', note: `${ITEM_NATIVE_ONLY}: a wait the runtime chose` },
   imageGeneration: {
     handling: 'wired',
-    note: 'opens and closes a tool entry, tool:image_generation, keyed by the item id',
+    note: 'opens and closes a tool entry, tool:image_generation, keyed by the item id; a tool_call (other) and a tool_result (failed when it reports a failure)',
   },
   enteredReviewMode: { handling: 'declined', note: `${ITEM_NATIVE_ONLY}: this host starts no review` },
   exitedReviewMode: { handling: 'declined', note: `${ITEM_NATIVE_ONLY}: this host starts no review` },
   contextCompaction: {
     handling: 'wired',
-    note: 'opens and closes the compaction entry, and its compaction fact (trigger auto; no token counts, since the item reports none)',
+    note: 'opens and closes the compaction entry, and its compaction fact (trigger auto; no token counts, since the item reports none); an info notice item',
   },
 } as const satisfies Readonly<Record<string, CoverageRow>>;
 

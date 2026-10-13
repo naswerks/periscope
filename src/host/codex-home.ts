@@ -50,8 +50,11 @@ export function ensureCodexHome(home: string): Result<string> {
  * - `approval_policy` and `sandbox_mode` are the mode's row of `CODEX_MODE_MAP`.
  * - `web_search` is off: hosted search runs at the provider, where no hook can see it.
  * - `features.hooks` is on, so nothing can switch the hook layer off.
- * - `shell_environment_policy.exclude` names, as anchored patterns, every credential variable this
- *   host puts in the app-server's environment: the agent's shell inherits that environment otherwise.
+ * - `shell_environment_policy.exclude` names every credential variable this host puts in the
+ *   app-server's environment, each by its exact name: the agent's shell inherits that environment
+ *   otherwise. Codex matches each entry as a glob, without regard to case, and a name holds no `*` or
+ *   `?`, so each entry removes that one variable and nothing else. Its own default exclusions are off
+ *   unless asked for, so nothing else removes them.
  */
 export function codexSessionFlags(
   mode: CodexPermissionMode,
@@ -64,7 +67,7 @@ export function codexSessionFlags(
     sandbox_mode: row.sandbox,
     web_search: 'disabled',
     'features.hooks': true,
-    'shell_environment_policy.exclude': credentialVariables.map((name) => `^${escapeRegex(name)}$`),
+    'shell_environment_policy.exclude': [...credentialVariables],
   };
 }
 
@@ -86,8 +89,4 @@ export function samePath(left: string, right: string): boolean {
   const a = resolve(left);
   const b = resolve(right);
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
-}
-
-function escapeRegex(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
