@@ -57,6 +57,9 @@ const SHADOWING_OPTIONS = SHADOWING_LANES.filter((lane) => lane !== 'permissionM
  *
  * The class excludes a backtick, so naming these options in a doc comment (as the comment above
  * does) is not a violation. Prose explains the rule; only code can break it.
+ *
+ * It errs both ways: a local variable named like an option (`settings = x`, `settings => x`) fires it,
+ * and a quoted key (`'allowedTools': x`), a shorthand property (`{ settings }`) or a computed key passes.
  */
 const SETS = new RegExp(String.raw`(?:^|[\s{,(.])(${SHADOWING_OPTIONS.join('|')})\s*[:=][^:=]`);
 

@@ -90,9 +90,18 @@ What refuses locally, and only locally: a write that escapes the session's works
 jailed: a read goes anywhere the host's OS user can read except the protected set. A search (`Grep`,
 `Glob`) is refused when its root (`path`, else the workspace) is at or beneath a protected path and
 also when a protected path sits beneath its root. The shell scan matches a protected path written
-literally or through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE` or `%USERPROFILE%`, and
-every protected-path comparison folds case. A boundary-crossing shell shape (`shell-boundary-command`: a
-push, a force, a remote change, a branch deletion, a hard reset, a merge) is classified locally and then
+literally, through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}`
+spellings or `%USERPROFILE%`, or through a variable of the session's spawn environment whose value is
+one absolute path (`$NAME`, `${NAME}`, `$env:NAME`, `${env:NAME}`, `%NAME%`; PowerShell's and `cmd`'s
+names read without regard to case, a POSIX shell's exactly), and every protected-path comparison folds
+case. The environment is the session's as far as the host knows it, read at each decision: what it
+knows before anything spawns, the environment the registry composes, and the variables a runtime's
+process adds as it starts (`LocalGateOptions.spawnEnv`, internal). Outside the scan: a path a command
+builds at run time, a variable the command or the runtime sets itself (pi's `PI_SESSION_FILE`), a
+variable read through a command (`$(printenv NAME)`) or an expansion operator (`${NAME:-...}`), a
+list variable such as `PATH`, and a recursive search of an ancestor. A boundary-crossing shell shape
+(`shell-boundary-command`: a push, a force, a remote change, a branch deletion, a hard reset, a merge)
+is classified locally and then
 escalated like any other call, because a controller may hold it for a person to answer; refusing it
 in-process would make that answer impossible to give. With the controller unreachable it refuses at
 the decision deadline.
@@ -105,7 +114,8 @@ the decision deadline.
   the embedder chooses tool families and protected paths at construction.
 - Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
   workspace, with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome, piHome })` as the protected set and the home directory
-  the shell scan expands from `homeDirectory(env)`. That set, stated once (`src/host/paths.ts`): the
+  the shell scan expands from `homeDirectory(env)`, and the session's spawn environment its path
+  variables are read from. That set, stated once (`src/host/paths.ts`): the
   host's own config directory (`PERISCOPE_CONFIG_DIR` or `~/.periscope`, which holds the token
   cache, the paired credential and the config file); the agent CLI's token cache and configuration
   file (`.credentials.json` and `.claude.json`) in `~/.claude`, in `CLAUDE_CONFIG_DIR` when set and

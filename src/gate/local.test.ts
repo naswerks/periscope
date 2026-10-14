@@ -176,6 +176,40 @@ test('a shell command naming a protected path through a home-directory form refu
   }
 });
 
+test("a home form in PowerShell's braced spelling refuses as the bare spelling does", () => {
+  for (const command of ['Get-Content ${env:USERPROFILE}\\.claude\\x', 'Get-Content ${env:HOME}/.claude/x']) {
+    assert.equal(homed(request({ toolInput: { command } }))?.reason, 'credential-path-denied', command);
+  }
+});
+
+test("regression: the session's spawn environment is read at each decision, so a variable told after the gate was built is spelled out", () => {
+  // The gate is built before a runtime's process starts, and the runtime's own variables exist only then.
+  let env: Readonly<Record<string, string>> = {};
+  const told = localGate({
+    workspaceRoot: WORKSPACE,
+    resolve: fakeResolve,
+    protectedPaths: [CREDENTIALS],
+    spawnEnv: () => env,
+  });
+  const reading = request({ toolInput: { command: 'cat "$AGENT_HOME/.credentials.json"' } });
+  assert.equal(told(reading), null, 'no variable is known yet, so nothing names the protected path');
+  env = { AGENT_HOME: CREDENTIALS };
+  assert.equal(told(reading)?.reason, 'credential-path-denied');
+  // Both readings of a `cmd` command see the variables: the raw text and the caret-stripped one.
+  const cmd = localGate({
+    workspaceRoot: WORKSPACE,
+    resolve: fakeResolve,
+    protectedPaths: [CREDENTIALS],
+    readsShellDialect: true,
+    spawnEnv: () => env,
+  });
+  assert.equal(
+    cmd(request({ shellDialect: 'cmd', toolInput: { command: 'ty^pe "%AGENT_HOME%\\.credentials.json"' } }))
+      ?.reason,
+    'credential-path-denied',
+  );
+});
+
 test('control: the expansion is what refuses; with no home known the same command has no credential opinion', () => {
   assert.equal(gate(request({ toolInput: { command: 'cat ~/.claude/.credentials.json' } })), null);
   assert.equal(homed(request({ toolInput: { command: 'cat ~/notes.txt' } })), null);

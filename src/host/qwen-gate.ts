@@ -77,7 +77,10 @@ export interface QwenSessionGate {
   decide(request: JsonObject, signal: AbortSignal): Promise<QwenControlAnswer>;
   /** Told the session's id once the CLI has named it. */
   identify(sessionId: string): void;
-  /** Told the environment the CLI is started with: it decides which shell the CLI's commands run in. */
+  /**
+   * Told the environment the CLI is started with: it decides which shell the CLI's commands run in, and
+   * the local gate reads its path variables.
+   */
   spawnedWith(env: Readonly<Record<string, string | undefined>>): void;
   /** Told every `system/init`'s tools and mode; the first one's tools are checked against the rules. */
   observeInit(tools: readonly string[] | null, mode: string | null): void;
@@ -103,6 +106,8 @@ export interface QwenSessionGateOptions {
   readonly onDegrade: (name: RefusalReason, detail: string) => void;
   /** The degrades known at the open, for the opening tier. */
   readonly onSpawnDegrades: (names: readonly RefusalReason[]) => void;
+  /** Told every environment the session's process is started with, for the local gate. */
+  readonly spawnedWith?: (env: Readonly<Record<string, string | undefined>>) => void;
   readonly platform?: string;
 }
 
@@ -195,6 +200,7 @@ export function createQwenSessionGate(options: QwenSessionGateOptions): QwenSess
     },
     spawnedWith(env) {
       shellDialect = qwenShellDialect(platform, env);
+      options.spawnedWith?.(env);
     },
     observeInit(tools, mode) {
       if (mode !== null && !QWEN_ADMITTED_MODES.includes(mode)) {

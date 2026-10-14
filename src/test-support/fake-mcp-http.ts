@@ -1,11 +1,12 @@
 /**
  * A streamable HTTP MCP server with one tool, on a loopback port, that answers `initialize` with the
  * protocol version it is given and records what the client sent: the version the client asked for, its
- * `clientInfo`, and the `mcp-protocol-version` header on every later request. It stands in for a
+ * `clientInfo`, the `mcp-protocol-version` header on every later request, and every request's headers
+ * as they arrived, so a ticket a session's server carries can be read back verbatim. It stands in for a
  * controller's MCP surface that answers an older version, to show what a client negotiates with it.
  */
 import { createServer } from 'node:http';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import type { JsonObject } from '../control/frames.js';
@@ -19,6 +20,8 @@ export interface FakeMcpHttp {
   readonly versionHeaders: (string | null)[];
   /** Each tool call's arguments. */
   readonly calls: JsonObject[];
+  /** Every request's JSON-RPC method and headers, in arrival order: a header's value exactly as it arrived. */
+  readonly requests: { readonly method: string; readonly headers: IncomingHttpHeaders }[];
   close(): Promise<void>;
 }
 
@@ -43,6 +46,7 @@ export async function fakeMcpHttp(answerVersion = '2024-11-05'): Promise<FakeMcp
   const initialized: FakeMcpHttp['initialized'][number][] = [];
   const versionHeaders: (string | null)[] = [];
   const calls: JsonObject[] = [];
+  const requests: FakeMcpHttp['requests'][number][] = [];
   const answer = (response: ServerResponse, id: unknown, result: JsonObject): void => {
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
@@ -55,6 +59,7 @@ export async function fakeMcpHttp(answerVersion = '2024-11-05'): Promise<FakeMcp
       }
       const message = JSON.parse(await body(request)) as JsonObject;
       const method = message['method'];
+      requests.push({ method: textOf(method), headers: { ...request.headers } });
       if (method !== 'initialize') {
         const header = request.headers['mcp-protocol-version'];
         versionHeaders.push(typeof header === 'string' ? header : null);
@@ -104,6 +109,7 @@ export async function fakeMcpHttp(answerVersion = '2024-11-05'): Promise<FakeMcp
     initialized,
     versionHeaders,
     calls,
+    requests,
     close: () =>
       new Promise((resolve) => {
         server.closeAllConnections();

@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import type {
   HostAgent,
@@ -84,6 +85,8 @@ async function qwenHost(
     fake?: FakeQwenOptions;
     workspaces?: WorkspaceProvider;
     env?: Readonly<Record<string, string>>;
+    /** The protected set, from the runtime's base. Absent: none. */
+    protect?: (base: string) => readonly string[];
   } = {},
 ): Promise<QwenHost> {
   const base = await tempDir('qwen-host');
@@ -98,7 +101,7 @@ async function qwenHost(
       decided.push(request);
       return Promise.resolve({ behavior: 'allow' });
     },
-    protectedPaths: [],
+    protectedPaths: options.protect?.(base) ?? [],
     baseEnv: { PATH: 'p', ...(options.env ?? {}) },
     homeDir: base,
     link: (handlers) => {
@@ -229,6 +232,53 @@ test('a Qwen Code session on the wire: handle and receipt, ready at its tier, a 
   });
   assert.ok(natives.some((message) => message['type'] === 'result'));
   assert.ok(natives.some((message) => message['type'] === 'control_request'));
+  await stopped(run);
+});
+
+test("regression: the session's settings file named through its own variable is refused in each shell's spelling; the shared runtime directory is not", async () => {
+  const spellings = [
+    'cat "$QWEN_CODE_SYSTEM_SETTINGS_PATH"',
+    'type "%QWEN_CODE_SYSTEM_SETTINGS_PATH%"',
+    'Get-Content "$env:QWEN_CODE_SYSTEM_SETTINGS_PATH"',
+  ];
+  const run = await qwenHost({
+    env: { ComSpec: 'C:\\Windows\\system32\\cmd.exe' },
+    // The protected set as `credentialPaths` states it for a Qwen Code base: its sessions' homes.
+    protect: (base) => [join(base, 'sessions')],
+    fake: {
+      calls: () => [
+        ...spellings.map((command) => ({ name: 'run_shell_command', input: { command } })),
+        // Control: the same spelling of a directory the protected set leaves out (the chats a resume reads).
+        { name: 'run_shell_command', input: { command: 'ls "$QWEN_RUNTIME_DIR"' } },
+      ],
+    },
+  });
+  run.link.deliver('handle-1', opening());
+  await until(() => run.link.transitions().some((transition) => transition.to === 'ready'), 'ready');
+  run.link.deliver('handle-1', { kind: 'session_prompt', text: 'look' }, 2);
+  await until(() => run.link.transitions().some((transition) => transition.to === 'idle'), 'the turn to end');
+
+  const settings = run.fake.child.spawned?.env['QWEN_CODE_SYSTEM_SETTINGS_PATH'] ?? '';
+  assert.ok(
+    settings.startsWith(join(run.base, 'sessions')),
+    `the settings file ${settings} is not in a session's home, so the refusals below would prove nothing`,
+  );
+  const refused = run.link
+    .transitions()
+    .filter(
+      (transition) =>
+        transition.cause.kind === 'refusal' && transition.cause.event === 'credential-path-denied',
+    );
+  assert.equal(
+    refused.length,
+    spellings.length,
+    refused.map((transition) => transition.cause.detail).join('\n'),
+  );
+  assert.deepEqual(
+    run.decided.map((request) => (request.toolInput as { command?: unknown }).command),
+    ['ls "$QWEN_RUNTIME_DIR"'],
+    'only the control reached the decider',
+  );
   await stopped(run);
 });
 

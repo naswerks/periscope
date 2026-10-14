@@ -61,6 +61,8 @@ export interface PiSessionGate {
   hello(deadlineMs: number): Promise<PiHello | null>;
   /** Told pi's session id once pi has named it. */
   identify(sessionId: string): void;
+  /** Told the environment pi is started with: the local gate reads its path variables. */
+  spawnedWith(env: Readonly<Record<string, string | undefined>>): void;
   /** A named degrade on the session's state lane, once per (name, key). */
   raise(name: RefusalReason, detail: string, key: string): void;
   /** The degrades known at the open: in the opening tier, at its lowered level, each raised once. */
@@ -87,6 +89,8 @@ export interface PiSessionGateOptions {
   readonly onSpawnDegrades: (names: readonly RefusalReason[], level: ControlTierLevel) => void;
   /** A request the channel refused before deciding anything. */
   readonly onChannelRefused?: (detail: string) => void;
+  /** Told every environment the session's process is started with, for the local gate. */
+  readonly spawnedWith?: (env: Readonly<Record<string, string | undefined>>) => void;
   readonly platform?: string;
 }
 
@@ -284,6 +288,9 @@ export function createPiSessionGate(options: PiSessionGateOptions): PiSessionGat
     },
     identify(id) {
       sessionId = id;
+    },
+    spawnedWith(env) {
+      options.spawnedWith?.(env);
     },
     raise,
     stateSpawnDegrades(found) {

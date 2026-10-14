@@ -75,6 +75,8 @@ export const CODEX_OPEN_DEADLINE_MS = 60_000;
 export const CODEX_TURN_DEADLINE_MS = 30_000;
 /** The longest prompt Codex takes, in characters. */
 export const CODEX_MAX_INPUT_CHARS = 1_048_576;
+/** The variable that names a Codex process's home: set on the app-server, kept from the agent's shell. */
+export const CODEX_HOME_VARIABLE = 'CODEX_HOME';
 /** How many times the hook listing is read after the trust write, while Codex reloads its config. */
 const HOOK_TRUST_ATTEMPTS = 5;
 /** The wait between those reads. */
@@ -233,9 +235,11 @@ export function startCodexProcess(
       ? request.permissionMode
       : CODEX_PERMISSION_MODES[0];
   // The endpoint's variables and the hook's ride the app-server's environment; neither reaches its shell.
+  // Nor does the runner's home: its value names the directory the sign-in files sit in.
   const excluded = [
     ...(route === null ? [] : codexEndpointExcludes(route)),
     ...(gate?.excludedVariables ?? []),
+    CODEX_HOME_VARIABLE,
   ];
   const hookLines: CodexHookLines = runtime.hook?.lines ?? codexHookLines(runtime.home);
   /** How many times the session's mode has moved to one with no sandbox, for the degrade's key. */
@@ -246,11 +250,13 @@ export function startCodexProcess(
   if (unrouted !== null) {
     failure = new Error(unrouted);
   } else if (problem === null) {
+    const env = { ...request.env, [CODEX_HOME_VARIABLE]: runtime.home };
+    gate?.spawnedWith(env);
     const started = startStdioRpc({
       command: command.command,
       args: command.args,
       cwd: request.cwd,
-      env: { ...request.env, CODEX_HOME: runtime.home },
+      env,
       onNotification: (method, params) => onNotification(method, params),
       onRequest: (method, params, id) => onRequest(method, params, id),
       onStderr: (line) => request.onStderr?.(line),
@@ -722,11 +728,12 @@ export function startCodexProcess(
     prompt(text: string): boolean {
       if (closed || peer === null || held.length >= MAX_PENDING_PROMPTS) return false;
       if (text.length > CODEX_MAX_INPUT_CHARS) {
-        // Codex refuses a longer input outright; said here by name rather than sent to fail there.
+        // Codex refuses a longer input outright; said here by name rather than sent to fail there, and
+        // answered as not taken, so the caller does not count a turn that will never run.
         degrade(
           `a prompt of ${text.length} characters is past the ${CODEX_MAX_INPUT_CHARS} Codex takes, and was not sent`,
         );
-        return true;
+        return false;
       }
       held.push(text);
       next();

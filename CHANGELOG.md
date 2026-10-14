@@ -8,6 +8,40 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+No wire or API change: the protocol, the window and the public exports are as they were.
+
+- Fixed: the shell scan reads a protected path named through a variable of the session's spawn
+  environment. Each variable whose value is one absolute path is spelled out before the scan, written
+  `$NAME`, `${NAME}`, `$env:NAME`, `${env:NAME}` or `%NAME%`, its name read as each shell reads it:
+  the homes this host sets for Codex, Qwen Code and pi (`CODEX_HOME`, `QWEN_HOME`,
+  `QWEN_CODE_SYSTEM_SETTINGS_PATH`, `PI_CODING_AGENT_DIR` and their kin) and the variables it passes
+  through (`USERPROFILE`, and `CLAUDE_CONFIG_DIR` when it is set). So each of
+  `cat "$QWEN_CODE_SYSTEM_SETTINGS_PATH"`, `cat "$PI_CODING_AGENT_DIR/models.json"`,
+  `Get-Content "$env:CODEX_HOME\auth.json"` and `cat "$USERPROFILE/.env"` is refused
+  `credential-path-denied`, as the literal path is. A command that only shows such a variable is
+  refused like one that mentions the path (`echo "$PI_CODING_AGENT_DIR"`). The home forms gain
+  PowerShell's braced `${env:HOME}` and `${env:USERPROFILE}`. A session composed by hand scans the
+  home forms only: the variables reach the local gate through `PeriscopeHost`'s own composition.
+  `SECURITY.md` and `docs/gate.md` name what the scan still cannot see.
+- Fixed: a Codex session's `CODEX_HOME` is excluded from the agent's shell, beside the hook's and
+  the endpoint's variables; the app-server and its hooks still receive it.
+- Fixed: a Codex prompt longer than Codex takes is answered as not taken (`prompt()` returns false),
+  and is still named in the host's log.
+- Fixed: periscope's own Codex hook is recognised by its whole line, its POSIX line for any Node and
+  any install of this package or its shim in the runner home. A foreign hook that only contains its
+  words, or a shim of the same name elsewhere, is kept in the hooks file rather than replaced.
+- Changed: the wire vectors that list Codex (`link_hello.agents-codex.json`,
+  `link_hello.agents-qwen-code.json`, `link_hello.agents-pi.json`, `link_hello.agent-skills.json`)
+  state its tier as its hello does, `intercepted-with-residual`.
+- Changed: `SECURITY.md` names the Codex gate's own code (`dist/bin/periscope.js` and the Node
+  binary, run from disk on every call) as outside the protected set, and Codex's coverage row says a
+  resumed or forked thread's totals include its source thread's tokens. The docs say that Codex and
+  pi read no `strictMcpConfig`, that pi's spawn exit ends a session `process/process_failed` with
+  pi's last line, that Qwen Code with no endpoint exits before it answers `initialize`, and that
+  version 17 adds pi's words beside Qwen Code's.
+- Changed: the test MCP server records every request's headers, so a live probe reads a ticket back
+  as it arrived.
+
 ## [1.8.0] - 2026-10-14
 
 Protocol 17; the window is `[16, 17]`, so a version-16 controller is still spoken to. Version 17 adds

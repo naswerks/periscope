@@ -374,6 +374,7 @@ export function startPiProcess(
 
     const extensionPath = runtime.extensionPath ?? piExtensionPath();
     const env = { ...request.env, ...run.env };
+    live.spawnedWith(env);
     const command = piCommand(
       runtime.binary,
       piArgs(request, {

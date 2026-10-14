@@ -125,6 +125,42 @@ test("the hooks file keeps every hook that is not periscope's, and replaces an e
   assert.equal(codexHooksFile({ hooks: { PreToolUse: 'x' } }, lines), null);
 });
 
+test("regression: a foreign hook that only contains periscope's words, or a shim of the same name elsewhere, is kept; periscope's own line from another install is replaced", () => {
+  const lines = codexHookLines('C:/runner/home', 'C:/node/node.exe', 'C:/pkg/dist/bin/periscope.js', 'win32');
+  const foreignWords = { hooks: [{ type: 'command', command: "/opt/audit/run.sh --then ' hook codex'" }] };
+  const foreignShim = {
+    hooks: [{ type: 'command', command: 'true', commandWindows: 'C:/elsewhere/hooks/periscope-hook.cmd' }],
+  };
+  const earlierInstall = {
+    hooks: [
+      {
+        type: 'command',
+        command:
+          "NODE_OPTIONS= '/usr/old/node' --no-warnings '/usr/lib/node_modules/@naswerks/periscope/dist/bin/periscope.js' hook codex",
+      },
+    ],
+  };
+  const merged = codexHooksFile(
+    { hooks: { PreToolUse: [foreignWords, foreignShim, earlierInstall] } },
+    lines,
+  ) as {
+    hooks: Record<string, JsonObject[]>;
+  };
+  assert.deepEqual(
+    merged.hooks['PreToolUse']?.slice(0, -1),
+    [foreignWords, foreignShim],
+    'a hook that is not periscope was dropped, or an earlier periscope hook was kept',
+  );
+  assert.equal(merged.hooks['PreToolUse']?.length, 3);
+});
+
+test("control: periscope's own current lines are recognised whole, so a second install replaces rather than adds", () => {
+  const lines = codexHookLines('C:/runner/home', "C:/it's/node.exe", 'C:/pkg/dist/bin/periscope.js', 'win32');
+  const once = codexHooksFile({}, lines);
+  const twice = codexHooksFile(once, lines) as { hooks: Record<string, JsonObject[]> };
+  assert.equal(twice.hooks['PreToolUse']?.length, 1, 'the current hook was not recognised as periscope');
+});
+
 test('install writes the shim and the hooks file, leaves an unreadable hooks file alone, and refuses a home it cannot use', () => {
   const home = scratch();
   try {

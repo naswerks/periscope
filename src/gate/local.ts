@@ -129,6 +129,14 @@ export interface LocalGateOptions {
   readonly protectedPaths: readonly string[];
   /** The home directory a shell command's `~` and `$HOME` forms name. */
   readonly home?: string | null;
+  /**
+   * The session's spawn environment as far as the host knows it, read at every decision: a runtime's own
+   * variables exist only once its process starts, after this gate is built. Each variable whose value is
+   * one absolute path is spelled out where a shell command names it, before the protected-path scan.
+   * Absent: only the home-directory forms are.
+   * @internal
+   */
+  readonly spawnEnv?: () => Readonly<Record<string, string | undefined>>;
   /** Defaults to `DEFAULT_TOOL_FAMILIES`. */
   readonly toolFamilies?: ToolFamilies;
   /**
@@ -184,9 +192,12 @@ export function localGate(options: LocalGateOptions): LocalGate {
   const checksShellDirectory = options.checksShellDirectory ?? false;
   const resolvesAgainstCallCwd = options.resolvesAgainstCallCwd ?? false;
   const resolvesWritesAgainstCallCwd = options.resolvesWritesAgainstCallCwd ?? false;
+  const spawnEnv = options.spawnEnv;
 
   return (request: DecisionRequest): Refusal | null => {
     if (shellTools.has(request.toolName)) {
+      // The shell scan reads the session's variables as they stand now, not as they stood at construction.
+      const shellJail: JailOptions = spawnEnv === undefined ? jail : { ...jail, variables: spawnEnv() };
       const command = commandFromToolInput(request.toolInput);
       if (command === null) {
         return refusal(
@@ -202,7 +213,7 @@ export function localGate(options: LocalGateOptions): LocalGate {
       // One parse, both consumers. The credential check runs first because a command naming the
       // token cache is the more serious of the two answers and should be the one the reader gets.
       const parsed = parseCommand(command);
-      const posix = checkShellForProtectedPaths(command, jail) ?? classifyShellCommand(command, parsed);
+      const posix = checkShellForProtectedPaths(command, shellJail) ?? classifyShellCommand(command, parsed);
       if (!readsShellDialect) return posix;
       if (request.shellDialect === 'powershell') {
         return strongerRefusal(posix, classifyShellCommand(command, parseCommand(command, 'powershell')));
@@ -212,7 +223,8 @@ export function localGate(options: LocalGateOptions): LocalGate {
         const read = readCmdCommand(command);
         return strongerRefusal(
           posix,
-          checkShellForProtectedPaths(read, jail) ?? classifyShellCommand(read, parseCommand(command, 'cmd')),
+          checkShellForProtectedPaths(read, shellJail) ??
+            classifyShellCommand(read, parseCommand(command, 'cmd')),
         );
       }
       return posix;

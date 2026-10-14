@@ -451,11 +451,11 @@ lists Qwen Code after Claude and Codex ([the wire protocol](protocol.md)).
 - **The model is an endpoint's.** Qwen Code has no sign-in of its own here: a session reaches its
   model through a [model endpoint](#model-endpoints) whose `runtimes` name `qwen-code`, over any of the
   three wire APIs. The endpoint's credential is written only into the session's settings file, never
-  into the CLI's environment or onto its command line. A session opened on no endpoint starts, and its
-  first turn ends in an error naming the missing auth type or key (the sign-in marker
-  [the wire protocol](protocol.md) names), unless a variables file the CLI loads (below) names a
-  route of its own. The hello's entry carries no model catalog; a session names
-  its model.
+  into the CLI's environment or onto its command line. A session opened on no endpoint is started, and
+  the CLI writes one error result naming the missing auth type or key (the sign-in marker
+  [the wire protocol](protocol.md) names) before it answers `initialize`, then exits: no turn runs,
+  and the session ends with the CLI's exit. A variables file the CLI loads (below) that names a route
+  of its own is the exception. The hello's entry carries no model catalog; a session names its model.
 - **The home is the runner's own, one per session.** The host writes each session's home beneath
   `PERISCOPE_QWEN_HOME` and points the CLI at it, so the operator's own `~/.qwen` (its sign-in, its
   settings, its trusted folders) is never what a session runs from. The home's settings file sits at
