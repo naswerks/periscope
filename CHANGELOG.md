@@ -8,6 +8,8 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-14
+
 Protocol 17; the window is `[16, 17]`, so a version-16 controller is still spoken to. Version 17 adds
 two runtimes, their causes, refusal reasons and a dialect word, and no payload kind or member. A
 version-16 controller reads a runtime as a word, a cause unnarrowed and a reason it does not know as
