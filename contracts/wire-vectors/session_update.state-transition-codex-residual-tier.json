@@ -42,6 +42,6 @@
     }
   },
   "name": "session_update.state-transition-codex-residual-tier",
-  "protocolVersion": 16,
+  "protocolVersion": 17,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"state_transition\",\"transition\":{\"sessionId\":\"thread-1\",\"seq\":2,\"at\":\"2000-01-01T00:00:00.000Z\",\"from\":\"spawning\",\"to\":\"ready\",\"activity\":null,\"entryId\":null,\"cause\":{\"kind\":\"agent-event\",\"event\":\"codex:thread/started\",\"detail\":\"the thread reported itself on Codex 0.162.1\"},\"where\":{\"cwd\":\"/work/repo\",\"worktree\":\"/work/repo\",\"branch\":\"main\",\"unknownReason\":null},\"correlationId\":\"correlation-1\",\"controlTier\":{\"level\":\"intercepted-with-residual\",\"degrades\":[\"gate-sandbox-absent\"]}}}}}"
 }

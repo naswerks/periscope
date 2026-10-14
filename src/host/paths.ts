@@ -120,6 +120,8 @@ export function credentialPaths(
     readonly agentHome?: string | null;
     readonly modelEndpointFiles?: readonly string[];
     readonly codexHome?: string | null;
+    readonly qwenHome?: string | null;
+    readonly piHome?: string | null;
   } = {},
 ): string[] {
   const home = homeDirectory(env);
@@ -136,6 +138,24 @@ export function credentialPaths(
   const codexHomeFiles = (directory: string): void => {
     add(join(directory, 'auth.json'));
     add(join(directory, '.credentials.json'));
+  };
+  // The files of a Qwen Code home that hold or can hold a credential: its sign-in, the MCP servers'
+  // tokens in both their forms, the store of its extensions' secrets, its settings (whose `env` and
+  // `security.auth` carry keys in plain text) and the variables it loads.
+  const qwenHomeFiles = (directory: string): void => {
+    add(join(directory, 'oauth_creds.json'));
+    add(join(directory, 'mcp-oauth-tokens.json'));
+    add(join(directory, 'mcp-oauth-tokens-v2.json'));
+    add(join(directory, 'extension-secrets-v1.json'));
+    add(join(directory, 'settings.json'));
+    add(join(directory, '.env'));
+  };
+  // The files of a pi agent home that hold a credential: its sign-in and API keys, the MCP servers'
+  // tokens, and the models file, whose providers carry their keys in plain text.
+  const piAgentFiles = (directory: string): void => {
+    add(join(directory, 'auth.json'));
+    add(join(directory, 'mcp-auth.json'));
+    add(join(directory, 'models.json'));
   };
 
   // The host's own credential directory, first, and derived rather than spelled out. The
@@ -161,7 +181,18 @@ export function credentialPaths(
     add(join(home, '.ssh'));
     // The operator's own Codex home, whether or not this host runs Codex: its sign-in is this user's.
     codexHomeFiles(join(home, '.codex'));
+    // The operator's own Qwen Code home, whether or not this host runs Qwen Code, likewise.
+    qwenHomeFiles(join(home, '.qwen'));
+    // The operator's own pi agent home, whether or not this host runs pi, likewise.
+    piAgentFiles(join(home, '.pi', 'agent'));
+    // The variables file in the home directory itself: many tools read it, Qwen Code loads it whatever
+    // its own home is, and it is where keys are commonly kept.
+    add(join(home, '.env'));
   }
+
+  // An explicitly configured Qwen Code home of the operator's own keeps its credential files there.
+  const ownQwenHome = env['QWEN_HOME'];
+  if (typeof ownQwenHome === 'string' && ownQwenHome.trim() !== '') qwenHomeFiles(ownQwenHome.trim());
 
   // An explicitly configured CLI home keeps its credential files there instead.
   const configured = env['CLAUDE_CONFIG_DIR'];
@@ -197,6 +228,23 @@ export function credentialPaths(
     add(join(runnerHome, 'hooks'));
     add(join(runnerHome, 'config.toml'));
   }
+
+  // The Qwen Code home this host runs Qwen Code sessions from: every session's own home beneath it, whose
+  // settings carry the endpoint's key and the ask rules that make every call ask this host, and the
+  // credential files a home of that shape keeps. The shared runtime directory, where the sessions' chats
+  // are kept, stays readable.
+  const qwenHome = options.qwenHome ?? env['PERISCOPE_QWEN_HOME'] ?? null;
+  if (typeof qwenHome === 'string' && qwenHome.trim() !== '') {
+    const runnerHome = qwenHome.trim();
+    add(join(runnerHome, 'sessions'));
+    qwenHomeFiles(runnerHome);
+  }
+
+  // The pi home this host runs pi sessions from, whole: its agent home holds the sign-in and the
+  // endpoints' keys, its sessions store every session's conversation, and each session's run directory
+  // the channel's token and the session's MCP tickets. Nothing in it is anything a session's tools need.
+  const piHome = options.piHome ?? env['PERISCOPE_PI_HOME'] ?? null;
+  if (typeof piHome === 'string' && piHome.trim() !== '') add(piHome.trim());
 
   return paths;
 }

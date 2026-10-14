@@ -161,6 +161,33 @@ export function isCodexPermissionMode(mode: string): mode is CodexPermissionMode
 }
 
 /**
+ * The permission modes a Qwen Code session admits: three of the six, by name, beside the map that reads
+ * each one as Qwen Code's own approval mode.
+ */
+export const QWEN_PERMISSION_MODES = ['bypassPermissions', 'default', 'plan'] as const;
+
+export type QwenPermissionMode = (typeof QWEN_PERMISSION_MODES)[number];
+
+/**
+ * Each admitted mode as Qwen Code's own approval mode. Only `default` and `plan` are ever sent. Under
+ * `default` every call the session's ask rules name reaches this host's gate, which is what bypass means
+ * under a gate, so `bypassPermissions` is `default` too; `plan` is Qwen's own plan mode, which refuses an
+ * asked edit before it is asked about.
+ *
+ * The other three are refused by name: `acceptEdits` and `dontAsk` would be Qwen's `auto-edit` or
+ * `yolo`, which approve calls without asking, and `auto` would hand approvals to Qwen's own classifier.
+ */
+export const QWEN_MODE_MAP = {
+  bypassPermissions: 'default',
+  default: 'default',
+  plan: 'plan',
+} as const satisfies Readonly<Record<QwenPermissionMode, 'default' | 'plan'>>;
+
+export function isQwenPermissionMode(mode: string): mode is QwenPermissionMode {
+  return (QWEN_PERMISSION_MODES as readonly string[]).includes(mode);
+}
+
+/**
  * The one mode under which a granting gate and loaded operator settings are NOT two authorities: the
  * mode already allows everything the grant would, and a hook deny survives every mode. Named here, in
  * the one module that holds the vocabulary, so nothing else has to spell the mode.

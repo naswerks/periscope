@@ -54,7 +54,9 @@ export type EnvSource = Readonly<Record<string, string | undefined>>;
  * `ANTHROPIC_`, `CLAUDE_CODE_USE_`, `CLAUDE_CODE_SKIP_..._AUTH`, `CLAUDE_CODE_CLIENT_`, `SSL_CERT_` and
  * `_PROXY` is covered, and so is the next one it adds. Matched by upper-cased name, as Windows matches.
  * Codex's are exact names: its home and state databases, its local-model route, its model route and
- * identity, and the certificate authority it trusts.
+ * identity, and the certificate authority it trusts. Qwen Code's own are one family (`QWEN_*`), and so
+ * are pi's (`PI_*`); the routes each reads beside them are families where a provider's names grow and
+ * exact names where they do not.
  *
  * It screens the controller's lanes only. What a spawn inherits from this host's own environment is
  * the allow-list's business below, so a proxy or a certificate directory the operator set still
@@ -107,6 +109,58 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'PERISCOPE_HOOK_CHANNEL',
   'PERISCOPE_HOOK_TOKEN',
   'PERISCOPE_HOOK_DEADLINE_MS',
+  // Qwen Code's own variables: its home and runtime directory, the settings files it reads, whether it
+  // restarts itself, whether it drops every permission rule, its sign-in, its model and its prompt files.
+  'QWEN_*',
+  // The model routes and identities Qwen Code reads beside OpenAI's and Anthropic's above: the model an
+  // OpenAI-compatible route names, Gemini's, Vertex's and Google's, DashScope's, Bailian's and
+  // OpenRouter's.
+  'OPENAI_MODEL',
+  'GEMINI_*',
+  'GOOGLE_API_KEY',
+  'GOOGLE_MODEL',
+  'GOOGLE_CLOUD_PROJECT',
+  'GOOGLE_CLOUD_LOCATION',
+  'GOOGLE_GENAI_USE_VERTEXAI',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'DASHSCOPE_*',
+  'BAILIAN_*',
+  'OPENROUTER_API_KEY',
+  // pi's own variables: its agent home and sessions store, its package directory, whether it reaches
+  // the network at start, its telemetry and the rest of its process settings.
+  'PI_*',
+  // The file the extension this host loads into pi reads its channel and its token from: this host sets
+  // it per session, and a controller that could place it could point the extension somewhere else.
+  'PERISCOPE_PI_EXTENSION_CONFIG',
+  // The model routes and identities pi reads beside those above, as its provider list names them:
+  // exact names where a provider has one or two, a family where a provider's names grow.
+  'ANT_LING_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'NVIDIA_API_KEY',
+  'COPILOT_GITHUB_TOKEN',
+  'MISTRAL_API_KEY',
+  'GROQ_API_KEY',
+  'CEREBRAS_API_KEY',
+  'XAI_API_KEY',
+  'AI_GATEWAY_API_KEY',
+  'OPENCODE_API_KEY',
+  'RADIUS_API_KEY',
+  'TYPESAFE_API_KEY',
+  'HF_TOKEN',
+  'FIREWORKS_API_KEY',
+  'TOGETHER_API_KEY',
+  'BASETEN_API_KEY',
+  'KIMI_API_KEY',
+  'META_API_KEY',
+  'MOONSHOT_API_KEY',
+  'GOOGLE_CLOUD_API_KEY',
+  'GCLOUD_PROJECT',
+  'ZAI_*',
+  'MINIMAX_*',
+  'XIAOMI_*',
+  'AZURE_OPENAI_*',
+  'AWS_*',
+  'CLOUDFLARE_*',
 ];
 
 /**

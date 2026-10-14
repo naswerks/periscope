@@ -32,6 +32,20 @@ A Codex session reports itself with `thread/started`, which makes it `ready` and
 thread id as the session id; a turn is `turn/started` to `working` and `turn/completed` to `idle`,
 `interrupted` or `errored` by its status. The arm that reads them is `src/state/codex-observer.ts`.
 
+A Qwen Code session is `ready` once its CLI answers the host's `initialize`, the answer naming the
+session id: the CLI writes `system/init` at the start of each user message it processes, never
+before the first. Each `system/init` makes the session `working`, and its `result` makes it `idle`,
+`interrupted` (the CLI's `Operation cancelled.`) or `errored`. A tool's entry opens on the assistant's
+`tool_use` and closes on its `tool_result`; only the main thread moves the session. The arm that reads
+them is `src/state/qwen-observer.ts`.
+
+A pi session is `ready` once pi answers the host's `get_state`, which the host asks only after its
+extension has said hello and pi's commands were read; the answer names the session id. A run is
+`agent_start` to `working` and `agent_settled` to `idle`, `interrupted` (pi says the run was aborted)
+or `errored` (the run's last answer ended on an error); a prompt pi did not take (`success: false`)
+makes it `errored`. A tool's entry opens on `tool_execution_start` and closes on
+`tool_execution_end`. The arm that reads them is `src/state/pi-observer.ts`.
+
 Two notes for a consumer of the `ended` edge:
 
 - A refused open is emitted as `spawning` to `ended` with cause `{ kind: 'refusal', event: <reason> }`.
@@ -72,7 +86,13 @@ two are not symmetric.
 - `agent-event` is the seventh: an event a runtime other than Claude reported in its own vocabulary,
   named `{runtime}:{native name}`. Codex's are `codex:` and the notification's method, one per
   notification `CODEX_COVERAGE` wires (`AGENT_EVENTS`); an item's kind rides `detail`, never the
-  name. A hook event such a runtime reports in Claude's spelling keeps the kind `hook`.
+  name. Qwen Code's are `qwen-code:` and the message's type, with its subtype where it has one
+  (`qwen-code:system/init`, `qwen-code:result`), or the answer to one of the host's own control
+  requests by its subtype (`qwen-code:initialize`, the answer that makes it `ready`), one per row
+  `QWEN_COVERAGE` wires. pi's are `pi:` and the event's type (`pi:agent_start`, `pi:agent_settled`),
+  or the host's own command its answer is to (`pi:get_state`, the answer that makes it `ready`), one
+  per event or command row `PI_COVERAGE` wires. A hook event such a runtime reports in Claude's
+  spelling keeps the kind `hook`.
 - `kind` and `event` are validated independently, never as a pair: `nameable()`
   (`src/state/machine.ts`) accepts `{ kind: 'hook', event: 'permission_denied' }` although it is
   incoherent. Coherence is the author's job, stated at `CONTROL_EVENTS`.
@@ -176,7 +196,19 @@ experimental one declined as such. `pins/codex-coverage.test.ts` holds it to
 `contracts/codex-protocol-names.json` in both directions, holds `AGENT_EVENTS` equal to the wired
 notifications, and drives every wired one through a real machine.
 
-A Codex session's gate records on the same machine. Its decisions take the five outcomes' causes, as a
+`src/state/qwen-coverage.ts` does the same for Qwen Code: `QWEN_COVERAGE` lists every message type,
+system subtype, stream event, content block, control request the CLI sends and answer to the host's
+own, wired or declined with a reason. `pins/qwen-coverage.test.ts` holds it to
+`contracts/qwen-code-names.json` in both directions, holds the `qwen-code:*` entries of `AGENT_EVENTS`
+equal to the wired rows, and drives every wired one through a real machine.
+
+`src/state/pi-coverage.ts` does the same for pi: `PI_COVERAGE` lists every event, RPC record, RPC
+command, extension UI method and message delta the pinned release declares, wired or declined with a
+reason. `pins/pi-coverage.test.ts` holds it to `contracts/pi-names.json` in both directions, holds
+the `pi:*` entries of `AGENT_EVENTS` equal to the wired event and command rows, and drives every
+transition the arm makes through a real machine.
+
+A Codex, Qwen Code or pi session's gate records on the same machine. Its decisions take the five outcomes' causes, as a
 Claude call's do; a residual path it names (a degrade) is a same-state transition with cause
 `refusal/<degrade>`, recorded once per call (`observer.refused`, the lane a refused configure uses);
 and the degrades known when the session opens join the tier its first `ready` states
@@ -190,17 +222,21 @@ which sessions are interesting; a host that judges gets rebuilt per product. Do 
 
 ## Where things live
 
-| Path                                | What                                                                                                   |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `src/state/model.ts`                | States, activities, the closed cause vocabularies, `SessionTransition`, `OpenEntry`                    |
-| `src/state/machine.ts`              | `SessionStateMachine`: derive from the last transition; `record`, `onTransition`, `onRejected`         |
-| `src/state/observer.ts`             | The one translation site from SDK hooks and messages to transition requests, and the compaction report |
-| `src/state/store.ts`                | `TransitionStore`, the bounded in-memory ring that retains rejections and drops its oldest             |
-| `src/persistence/transition-log.ts` | The durable append-only log; `markAbandoned`; the cause-survives-or-refuse decoder                     |
-| `src/state/coverage.ts`             | `HOOK_COVERAGE` and `MESSAGE_COVERAGE`, wired or declined with reasons                                 |
-| `src/state/codex-coverage.ts`       | `CODEX_COVERAGE`, every Codex notification, server request and item kind, wired or declined            |
-| `src/state/codex-observer.ts`       | The Codex arm: its messages to transition requests and the compaction report                           |
-| `src/state/reporter.ts`             | Enumeration of this host's sessions                                                                    |
-| `src/host/hooks.ts`                 | `observationHooks()`, derived from the table, and `mergeHooks()`                                       |
-| `src/host/git-facts.ts`             | Read-only `where`, including the linked-worktree `.git` file                                           |
-| `src/pins/state-record.test.ts`     | The no-suppressing-branch structural pin                                                               |
+| Path                                | What                                                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `src/state/model.ts`                | States, activities, the closed cause vocabularies, `SessionTransition`, `OpenEntry`                           |
+| `src/state/machine.ts`              | `SessionStateMachine`: derive from the last transition; `record`, `onTransition`, `onRejected`                |
+| `src/state/observer.ts`             | The one translation site from SDK hooks and messages to transition requests, and the compaction report        |
+| `src/state/store.ts`                | `TransitionStore`, the bounded in-memory ring that retains rejections and drops its oldest                    |
+| `src/persistence/transition-log.ts` | The durable append-only log; `markAbandoned`; the cause-survives-or-refuse decoder                            |
+| `src/state/coverage.ts`             | `HOOK_COVERAGE` and `MESSAGE_COVERAGE`, wired or declined with reasons                                        |
+| `src/state/codex-coverage.ts`       | `CODEX_COVERAGE`, every Codex notification, server request and item kind, wired or declined                   |
+| `src/state/codex-observer.ts`       | The Codex arm: its messages to transition requests and the compaction report                                  |
+| `src/state/qwen-coverage.ts`        | `QWEN_COVERAGE`, every Qwen Code message, subtype, stream event, block and control request, wired or declined |
+| `src/state/qwen-observer.ts`        | The Qwen Code arm: its messages to transition requests                                                        |
+| `src/state/pi-coverage.ts`          | `PI_COVERAGE`, every pi event, RPC record, RPC command, UI method and delta, wired or declined                |
+| `src/state/pi-observer.ts`          | The pi arm: its messages to transition requests and the compaction report                                     |
+| `src/state/reporter.ts`             | Enumeration of this host's sessions                                                                           |
+| `src/host/hooks.ts`                 | `observationHooks()`, derived from the table, and `mergeHooks()`                                              |
+| `src/host/git-facts.ts`             | Read-only `where`, including the linked-worktree `.git` file                                                  |
+| `src/pins/state-record.test.ts`     | The no-suppressing-branch structural pin                                                                      |

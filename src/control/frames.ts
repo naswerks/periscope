@@ -36,7 +36,7 @@ import type { ControlTier, SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -46,20 +46,20 @@ export const PROTOCOL_VERSION = 16;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 16 adds the `agent-event` cause kind, whose events are a runtime's own notifications named
- * `{runtime}:{native name}` (`AGENT_EVENTS`); `codex` as a runtime a hello may list and a session may
- * name, whose forwarded messages are its own JSON-RPC traffic with `runtime: "codex"`; the
- * `runtime-default` system-prompt preset, which every runtime reads as its own base instructions with
- * an append; and five refusal reasons for a runtime's stdio JSON-RPC peer (`rpc-line-malformed`,
- * `rpc-line-too-large`, `rpc-request-timed-out`, `rpc-request-failed`, `rpc-server-overloaded`). A
- * transition's cause is carried unnarrowed, a runtime is a word, the preset is a value of a member
- * that already carries any JSON, and a reason a controller does not know is read tolerantly. So a
- * version-15 controller is still spoken to: what it sends decodes here unchanged, and what it receives
- * decodes on its side. The narrowing of `session_new.request.env` that version 14 made (a key a
- * controller places in the spawn environment must be one this host's operator declared, above the
- * floor) holds at every version this host negotiates.
+ * Version 17 adds `qwen-code` as a runtime a hello may list and a session may name, whose forwarded
+ * messages are its own stream-json messages and control requests with `runtime: "qwen-code"`; its
+ * agent events (`qwen-code:{type}`, `qwen-code:system/{subtype}` and `qwen-code:{answer}`); four refusal
+ * reasons (`qwen-ask-rules-not-active`, `gate-tool-unruled`, `gate-mode-widened`,
+ * `gate-credential-in-shell`); and `cmd` as the grammar of a decision request's shell call. A
+ * transition's cause is carried unnarrowed, a runtime is a word, and a reason a controller does not
+ * know is read tolerantly, so a version-16 controller is still spoken to: what it sends decodes here
+ * unchanged, and what it receives decodes on its side. The one closed word it would refuse, `cmd`, is
+ * never sent on a link negotiated below 17: a decision request names no dialect there. The narrowing of
+ * `session_new.request.env` that version 14 made (a key a controller places in the spawn environment
+ * must be one this host's operator declared, above the floor) holds at every version this host
+ * negotiates.
  */
-export const PROTOCOL_VERSION_MIN = 15;
+export const PROTOCOL_VERSION_MIN = 16;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {

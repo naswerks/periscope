@@ -49,7 +49,12 @@ import { readModelEndpoints } from '../host/model-endpoints.js';
 import type { CodexRuntimeRead, ReadCodexRuntimeOptions } from '../host/codex-runtime.js';
 import { codexNativeRuntime, readCodexRuntime } from '../host/codex-runtime.js';
 import { codexHookLines, pendingCodexHookState, probeCodexHook } from '../host/codex-hook.js';
-import { CODEX_RUNTIME } from '../sessions/runtimes.js';
+import { CODEX_RUNTIME, PI_RUNTIME, QWEN_RUNTIME } from '../sessions/runtimes.js';
+import type { QwenRuntimeRead, ReadQwenRuntimeOptions } from '../host/qwen-runtime.js';
+import { qwenNativeRuntime, readQwenRuntime } from '../host/qwen-runtime.js';
+import type { PiRuntimeRead, ReadPiRuntimeOptions } from '../host/pi-runtime.js';
+import { piNativeRuntime, readPiRuntime } from '../host/pi-runtime.js';
+import { piEndpointRoutes } from '../host/pi-endpoints.js';
 import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
 import { MAX_PLUGIN_DIRS } from '../control/frames.js';
 import { writeLinkState } from '../host/link-state-file.js';
@@ -121,6 +126,10 @@ export interface ServeDeps {
   readonly readAgentCatalog?: (options: AgentCatalogOptions) => Promise<AgentCatalog>;
   /** Reads the Codex runtime at start, when one is configured. Defaults to the real read. */
   readonly readCodexRuntime?: (options: ReadCodexRuntimeOptions) => Promise<CodexRuntimeRead>;
+  /** Reads the Qwen Code runtime at start, when one is configured. Defaults to the real read. */
+  readonly readQwenRuntime?: (options: ReadQwenRuntimeOptions) => Promise<QwenRuntimeRead>;
+  /** Reads the pi runtime at start, when one is configured. Defaults to the real read. */
+  readonly readPiRuntime?: (options: ReadPiRuntimeOptions) => Promise<PiRuntimeRead>;
 }
 
 export type ServeOutcome =
@@ -155,6 +164,10 @@ interface Config {
   readonly modelEndpoints: string | null;
   /** The Codex binary and its runner-owned home; both, or neither. Null = Codex is not offered. */
   readonly codex: { readonly binary: string; readonly home: string } | null;
+  /** The Qwen Code CLI and its runner-owned home; both, or neither. Null = Qwen Code is not offered. */
+  readonly qwen: { readonly binary: string; readonly home: string } | null;
+  /** The pi CLI and its runner-owned home; both, or neither. Null = pi is not offered. */
+  readonly pi: { readonly binary: string; readonly home: string } | null;
 }
 
 function readConfig(env: NodeJS.ProcessEnv): Config | string {
@@ -218,6 +231,40 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     if (problem !== null) return problem;
   }
 
+  // Qwen Code likewise: a CLI with no home would write its settings into the operator's own, and a home
+  // with no CLI offers nothing to run.
+  const qwenBinary = nonEmpty(env['PERISCOPE_QWEN_BIN']);
+  const qwenHome = nonEmpty(env['PERISCOPE_QWEN_HOME']);
+  if ((qwenBinary === null) !== (qwenHome === null)) {
+    return qwenBinary === null
+      ? 'PERISCOPE_QWEN_HOME is set without PERISCOPE_QWEN_BIN: Qwen Code is offered with both or neither'
+      : "PERISCOPE_QWEN_BIN is set without PERISCOPE_QWEN_HOME: Qwen Code is offered with both or neither, and never from the operator's own home";
+  }
+  for (const [key, value] of [
+    ['PERISCOPE_QWEN_BIN', qwenBinary],
+    ['PERISCOPE_QWEN_HOME', qwenHome],
+  ] as const) {
+    const problem = value === null ? null : configValueProblem(key, value);
+    if (problem !== null) return problem;
+  }
+
+  // pi likewise: a CLI with no home would run from the operator's own agent home, with its sign-in and
+  // its extensions, and a home with no CLI offers nothing to run.
+  const piBinary = nonEmpty(env['PERISCOPE_PI_BIN']);
+  const piHome = nonEmpty(env['PERISCOPE_PI_HOME']);
+  if ((piBinary === null) !== (piHome === null)) {
+    return piBinary === null
+      ? 'PERISCOPE_PI_HOME is set without PERISCOPE_PI_BIN: pi is offered with both or neither'
+      : "PERISCOPE_PI_BIN is set without PERISCOPE_PI_HOME: pi is offered with both or neither, and never from the operator's own home";
+  }
+  for (const [key, value] of [
+    ['PERISCOPE_PI_BIN', piBinary],
+    ['PERISCOPE_PI_HOME', piHome],
+  ] as const) {
+    const problem = value === null ? null : configValueProblem(key, value);
+    if (problem !== null) return problem;
+  }
+
   const configuredHostId = env['PERISCOPE_HOST_ID'];
   return {
     controllerUrl,
@@ -237,6 +284,8 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     controllerEnvKeys: parseControllerEnvKeys(controllerEnvKeys),
     modelEndpoints: modelEndpoints === undefined || modelEndpoints === '' ? null : modelEndpoints,
     codex: codexBinary === null || codexHome === null ? null : { binary: codexBinary, home: codexHome },
+    qwen: qwenBinary === null || qwenHome === null ? null : { binary: qwenBinary, home: qwenHome },
+    pi: piBinary === null || piHome === null ? null : { binary: piBinary, home: piHome },
   };
 }
 
@@ -589,6 +638,42 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
           },
         };
 
+  // Qwen Code, read the way a session starts it: the same filtered environment, the runner-owned home.
+  const qwenConfigured = config.qwen;
+  const qwen =
+    qwenConfigured === null
+      ? null
+      : {
+          runtime: {
+            binary: qwenConfigured.binary,
+            base: qwenConfigured.home,
+            operatorHome: homeDir,
+          },
+          read: () =>
+            (deps.readQwenRuntime ?? readQwenRuntime)({
+              binary: qwenConfigured.binary,
+              base: qwenConfigured.home,
+              env: composeSpawnEnv(raw),
+            }),
+        };
+
+  // pi, read the way a session starts it: the same filtered environment, the runner-owned home, and the
+  // endpoints a pi session may open on, written into its agent home.
+  const piConfigured = config.pi;
+  const pi =
+    piConfigured === null
+      ? null
+      : {
+          runtime: { binary: piConfigured.binary, base: piConfigured.home },
+          read: () =>
+            (deps.readPiRuntime ?? readPiRuntime)({
+              binary: piConfigured.binary,
+              base: piConfigured.home,
+              env: composeSpawnEnv(raw),
+              endpoints: piEndpointRoutes(endpoints === null ? [] : endpoints.endpoints),
+            }),
+        };
+
   let linkStateProblemSaid = false;
   const onEvent = (event: HostEvent): void => {
     if (event.kind === 'link') {
@@ -677,6 +762,8 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       agentHome,
       ...(endpoints === null ? {} : { modelEndpointFiles: endpoints.files }),
       ...(config.codex === null ? {} : { codexHome: config.codex.home }),
+      ...(config.qwen === null ? {} : { qwenHome: config.qwen.home }),
+      ...(config.pi === null ? {} : { piHome: config.pi.home }),
     }),
     // The home the shell check expands `~` and `$HOME` to, from the same environment as the set above.
     home: homeDirectory(raw),
@@ -733,12 +820,29 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
             baseEnv: raw,
             homeDir,
             startProcess: deps.startProcess,
-            ...(codex === null ? {} : { runtimes: { [CODEX_RUNTIME]: codexNativeRuntime(codex.runtime) } }),
+            ...(codex === null && qwen === null && pi === null
+              ? {}
+              : {
+                  runtimes: {
+                    ...(codex === null ? {} : { [CODEX_RUNTIME]: codexNativeRuntime(codex.runtime) }),
+                    ...(qwen === null ? {} : { [QWEN_RUNTIME]: qwenNativeRuntime(qwen.runtime) }),
+                    ...(pi === null
+                      ? {}
+                      : {
+                          [PI_RUNTIME]: piNativeRuntime({
+                            ...pi.runtime,
+                            endpoints: piEndpointRoutes(endpoints === null ? [] : endpoints.endpoints),
+                          }),
+                        }),
+                  },
+                }),
           }),
         }),
     ...(deps.link === undefined ? {} : { link: deps.link }),
     ...(agentCatalog === undefined ? {} : { agentCatalog }),
     ...(codex === null ? {} : { codex }),
+    ...(qwen === null ? {} : { qwen }),
+    ...(pi === null ? {} : { pi }),
     report: onEvent,
   });
 

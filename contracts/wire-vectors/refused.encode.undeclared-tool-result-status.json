@@ -37,6 +37,6 @@
     }
   },
   "name": "refused.encode.undeclared-tool-result-status",
-  "protocolVersion": 16,
+  "protocolVersion": 17,
   "wire": null
 }

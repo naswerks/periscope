@@ -194,3 +194,70 @@ test('the only listening sockets this package opens are the hook channel, on a p
     'the channel listens on something other than its address',
   );
 });
+
+test('a hello with the session token, naming the channel runtime, is told to its listener with what it carried; one with the wrong token or another runtime is not', async () => {
+  const told: unknown[] = [];
+  const channel = openHookChannel({
+    runtime: 'pi',
+    version: '1.7.0',
+    decide: () => Promise.resolve({ allow: true }),
+    onHello: (event) => told.push(event),
+  });
+  try {
+    await channel.ready();
+    await exchange(
+      channel.address,
+      request('not-the-token', 'nonce-one', { reason: 'startup' }, 'hello', 'pi'),
+    );
+    await exchange(
+      channel.address,
+      request(channel.token, 'nonce-two', { reason: 'startup' }, 'hello', 'codex'),
+    );
+    assert.deepEqual(told, [], 'a hello that does not belong to the session was told');
+    const hello = await exchange(
+      channel.address,
+      request(channel.token, 'nonce-three', { reason: 'startup' }, 'hello', 'pi'),
+    );
+    assert.deepEqual(readHookAnswer(hello ?? '', channel.token, 'nonce-three'), {
+      ok: true,
+      version: '1.7.0',
+    });
+    assert.deepEqual(told, [{ reason: 'startup' }]);
+  } finally {
+    channel.close();
+  }
+});
+
+test(
+  'a channel that cannot listen refuses with the reason its runtime gave it, and with the hook reason when none was given',
+  {
+    skip:
+      process.platform === 'win32'
+        ? false
+        : 'a channel is made to fail to listen only on Windows, where a socket path is no pipe name',
+  },
+  async () => {
+    const given = openHookChannel({
+      runtime: 'pi',
+      version: '1.7.0',
+      platform: 'linux',
+      unavailableReason: 'pi-extension-not-active',
+      decide: () => Promise.resolve({ allow: true }),
+    });
+    const unnamed = openHookChannel({
+      runtime: 'codex',
+      version: '1.7.0',
+      platform: 'linux',
+      decide: () => Promise.resolve({ allow: true }),
+    });
+    try {
+      const refused = await given.ready();
+      assert.equal(refused.ok ? null : refused.refusal.reason, 'pi-extension-not-active');
+      const defaulted = await unnamed.ready();
+      assert.equal(defaulted.ok ? null : defaulted.refusal.reason, 'codex-hook-not-active');
+    } finally {
+      given.close();
+      unnamed.close();
+    }
+  },
+);

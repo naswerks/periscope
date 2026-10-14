@@ -428,7 +428,8 @@ export async function killProcessTree(pid: number, seams: KillTreeSeams = {}): P
   send(-pid);
 }
 
-const defaultSpawn: SpawnChild = (command, args, options) =>
+/** The default spawner: the program with an explicit argv, no shell and no window. */
+export const defaultSpawn: SpawnChild = (command, args, options) =>
   nodeSpawn(command, [...args], {
     cwd: options.cwd,
     env: { ...options.env },
@@ -684,14 +685,15 @@ export function startStdioRpc(options: StdioRpcOptions): Result<StdioRpcPeer> {
   return ok(StdioRpcPeer.start(options));
 }
 
-function describeExit(exit: ChildExit): string {
+/** How a child ended, in words: its error, its signal or its exit code. */
+export function describeExit(exit: ChildExit): string {
   if (exit.error !== null) return exit.error;
   if (exit.signal !== null) return `signal ${exit.signal}`;
   return `exit code ${String(exit.code)}`;
 }
 
 /** Splits stderr into lines; a line longer than the bound is passed on in pieces. */
-class LineSplitter {
+export class LineSplitter {
   readonly #emit: (line: string) => void;
   readonly #utf8 = new TextDecoder('utf-8');
   #held = '';

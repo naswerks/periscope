@@ -39,11 +39,12 @@ export const TOOL_KINDS = ['shell', 'file_read', 'file_write', 'file_edit', 'mcp
 export type ToolKind = (typeof TOOL_KINDS)[number];
 
 /**
- * The grammar a shell call's command runs in: a POSIX shell, or PowerShell. A command read in the wrong
- * grammar is read as different text from the one that runs. No runtime this package drives runs a tool
- * under `cmd.exe`, so there is no word for it.
+ * The grammar a shell call's command runs in: a POSIX shell, PowerShell, or `cmd.exe` (protocol 17).
+ * A command read in the wrong grammar is read as different text from the one that runs. Qwen Code's
+ * shell tool runs `cmd.exe` on Windows unless its environment names another shell, which is where
+ * `cmd` comes from.
  */
-export const SHELL_DIALECTS = ['posix', 'powershell'] as const;
+export const SHELL_DIALECTS = ['posix', 'powershell', 'cmd'] as const;
 
 export type ShellDialect = (typeof SHELL_DIALECTS)[number];
 
@@ -58,7 +59,7 @@ export interface DecisionRequest {
   /**
    * The grammar the command runs in (protocol 16), stated by the runtime that knows which shell runs
    * it. Present only when `toolKind` is `shell`. Absent from a host one release behind, and on any other
-   * call.
+   * call. `cmd` is protocol 17's: a decider on a link at an earlier version is sent none for it.
    */
   readonly shellDialect?: ShellDialect | null;
   /** The runtime the session runs on (protocol 15). Absent from a host one release behind. */

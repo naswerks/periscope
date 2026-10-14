@@ -7,7 +7,9 @@ session's state model in [state-machine.md](state-machine.md), the permission ga
 ## What it is
 
 Periscope runs where the code lives, hosts Claude Code sessions through the Claude Agent SDK and,
-when its operator configures it, Codex sessions through Codex's app-server, and reports to a
+when its operator configures them, Codex sessions through Codex's app-server, Qwen Code sessions
+through the Qwen Code CLI's stream-json control protocol and pi sessions through pi's RPC mode, and
+reports to a
 controller anywhere else over one outbound WebSocket. The controller decides what a session means;
 the host carries what it did. Three properties follow, each enforced rather than promised:
 
@@ -83,8 +85,9 @@ everything as arguments, so it is checkable without a socket or a process, and r
   - A `stop()` before the read settles means the link never dials.
   - Every configure answer and later hello keep the catalog, though the file they are rebuilt from
     has none.
-  - With `codex`, the same wait covers Codex's read (`readCodexRuntime`), and the runtimes list
-    names Claude first, then Codex. An entry that would push the list past its byte budget rides
+  - With `codex`, the same wait covers Codex's read (`readCodexRuntime`), with `qwen`, Qwen
+    Code's (`readQwenRuntime`), and with `pi`, pi's (`readPiRuntime`); the runtimes list names Claude
+    first, then Codex, then Qwen Code, then pi. An entry that would push the list past its byte budget rides
     with `models: []` and a `runtime-catalog` event, so one runtime's catalog never empties
     another's.
 - Each session's hooks are the observation hooks, the gate, then `modelSwitchHooks`, which answers
@@ -108,16 +111,19 @@ something is about the daemon; the other verbs are where interactive work lives.
   there and refuses by name when they are not. It prints one `[host]` posture line, reads the agent's
   model catalog (bounded at 20 seconds, one `[agent]` line saying what the hello carries) and, with
   `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME` set, Codex's (bounded at 20 seconds, one
-  `[codex]` line), then dials, and writes the link's state to `link-state.json` beside the
-  credentials on every transition. One of the two Codex keys without the other refuses start by
-  name.
+  `[codex]` line), with `PERISCOPE_QWEN_BIN` and `PERISCOPE_QWEN_HOME` set, Qwen Code's (one
+  `[qwen-code]` line), and with `PERISCOPE_PI_BIN` and `PERISCOPE_PI_HOME` set, pi's (one `[pi]`
+  line), then dials, and writes the link's state to `link-state.json` beside the credentials on every
+  transition. One of the two keys of any of the three without the other refuses start by name.
 - `login` runs the sign-in and writes the token cache. `pair <code>`, with `--controller <origin>`
   and `--label <name>`, redeems a controller-minted code for a paired credential and writes the
   controller's addresses to the config file. `config` shows or edits `config.json`. `status` prints
   the whole posture from the link record, the credentials and the settings, and never dials.
 - `config.json` lives beside the credentials under a closed key allowlist (`CONFIG_KEYS`: the two
   control-plane URLs, the host id, both roots, the branch scheme, the workspace key, the agent home,
-  the plugin directories, the Codex binary and home; `PERISCOPE_CONFIG_DIR` is excluded, a file
+  the plugin directories, the Codex binary and home, the Qwen Code CLI and base, the pi CLI and
+  home;
+  `PERISCOPE_CONFIG_DIR` is excluded, a file
   cannot move itself). `serve`, `login`, `pair` and
   `status` read the environment with the file filling its absences; the environment always wins. A
   corrupt file is fatal by name for all four. `config` itself reads the raw environment so it can
@@ -165,6 +171,11 @@ registers, refused in the open's `finally` on every failure path, or withdrawn b
 during the open; it is never dropped. The hold is bounded at `MAX_HELD_TURNS`; overflow refuses
 `session-unknown` with the bound in its detail. A cancel during the open withdraws the turn and does
 not stop the open. `HostEvent` reports `prompt-held`, `prompt-delivered` and `prompt-withdrawn`.
+
+A `session_configure` arriving while its session is still opening is refused, never applied: the
+session's settings are not yet its own. The refusal (`session-unknown`) is reported at once and held,
+up to the turns' own bound, and once the session registers it is recorded on the session's own state
+lane as a same-state refusal, so the controller hears it on that session.
 
 ## Codex
 
@@ -250,6 +261,134 @@ gate).
   notification, server request, item kind and client method; `CODEX_COVERAGE`
   (`src/state/codex-coverage.ts`) holds a row for each (`pins/codex-coverage.test.ts`), and a live
   test holds the snapshot to the installed binary.
+
+## Qwen Code
+
+A session naming `runtime: "qwen-code"` runs the Qwen Code CLI in the session's worktree with
+`--input-format stream-json --output-format stream-json --channel=SDK`, and the host speaks its
+control protocol over stdio: one JSON value per line each way, `control_request` and
+`control_response` in both directions. Qwen Code is offered only when the operator sets
+`PERISCOPE_QWEN_BIN` and `PERISCOPE_QWEN_HOME` ([configuration.md](configuration.md)). Its control
+tier is `intercepted-with-residual`: the settings the host writes send every call to ask, the CLI
+asks the host before each, and every path that can still run undecided is named on the session's
+state lane ([gate.md](gate.md), the Qwen Code gate).
+
+- The transport is runtime-neutral (`StdioLinePeer`, `startStdioLines`, `src/host/stdio-lines.ts`):
+  one JSON value per line, the line reader, the bound, the batch-file refusal and the close (stdin
+  end, a grace, the process tree) the JSON-RPC transport uses, and no id discipline of its own. The
+  control protocol rides it (`QwenControl`, `src/host/qwen-control.ts`): the host's requests carry ids
+  it mints and deadlines it sets, a request the CLI makes is answered by a handler or with an error,
+  a cancel aborts the handler, and a line that is not JSON is dropped and named
+  (`rpc-line-malformed`). `initialize` is the first line the host writes.
+- The CLI is pinned (`QWEN_PINNED_VERSION`, `src/host/qwen-binary.ts`). Its `--version` must name the
+  pinned release, or Qwen Code is listed unavailable with the path, the version found and the version
+  pinned. The path is the npm package's `cli-entry.js`, run under this Node. Nothing installs it. At
+  start the host reads that version once (`readQwenRuntime`, `src/host/qwen-runtime.ts`) and never
+  starts a session to do so, so the entry lists no models.
+- Each session has a home of its own (`createQwenSessionHome`, `src/host/qwen-home.ts`) beneath the
+  base: `QWEN_HOME`, the system-scope settings file and its defaults, the trusted-folders and MCP
+  approvals files, all set in the CLI's environment and removed at close; `QWEN_RUNTIME_DIR` is the
+  base's shared `runtime`, where the chats a resume reads are kept. The settings are read back before
+  the CLI starts, and an open whose settings do not read back is refused `qwen-ask-rules-not-active`.
+- The process (`startQwenProcess`, `src/host/qwen-process.ts`) is an `AgentProcess<QwenMessage>`. A
+  prompt is a user line on stdin, held until the CLI answers `initialize` and bounded in the host;
+  the model, mode and effort setters are control requests (`set_model`, `set_permission_mode`,
+  `set_effort`), applied as they arrive; thinking has no switch and is refused by name; an interrupt is
+  `interrupt`. After each `result` the host asks the CLI's context usage (`get_context_usage`). A
+  request member Qwen Code cannot honour (Claude's settings tiers, its hooks and spawner,
+  `forwardSubagentText`, a store) is refused `request-key-unsupported`, naming it.
+- The gate (`createQwenSessionGate`, `src/host/qwen-gate.ts`) answers each `can_use_tool` through the
+  per-call decision every runtime shares (`createCallDecision`), with `canRewriteInput: false`: an
+  allow is answered as asked. The CLI's own wait for the answer is set in `initialize` beyond the
+  host's deadline. The shell a call runs in is read from the CLI's environment at spawn
+  (`qwenShellDialect`, `src/gate/tool-kind.ts`), and on a link negotiated below 17 a request whose
+  dialect is `cmd` is sent with none (`decideAtLinkVersion`, `src/host/host.ts`).
+- A session's plugin directories reach its settings as skill directories, each directory's `skills/`
+  (`qwenSkillDirectories`, `src/host/qwen-pack.ts`), its skills listed by name alone. Its MCP servers
+  ride `initialize` (`qwenMcpServers`, `src/host/qwen-mcp.ts`): an HTTP server's headers beside its
+  URL, never in the CLI's environment or on its command line, and each server's tools asked about.
+  A named endpoint reaches the CLI as its auth type and base URL, on the command line and in the
+  session's settings, and its key, in those settings alone (`src/host/qwen-endpoints.ts`). `ENDPOINT_ROUTED_RUNTIMES` is
+  Claude, Codex and Qwen Code.
+- Its messages ride as the CLI wrote them (`QWEN_MESSAGE_BINDING`): each stream message and each
+  control request it made is an `agent_message` with `runtime: "qwen-code"`, a `stream_event` on the
+  delta lane; the answers to the host's own requests and the prompts it wrote are not forwarded. The
+  observer arm (`src/state/qwen-observer.ts`) records the transitions they cause under `agent-event`
+  events (`AGENT_EVENTS`: `qwen-code:` and the message's type and subtype, or the answered request's
+  subtype), `QwenFactLift` (`src/host/qwen-facts.ts`) lifts the facts, and `QwenItemFill`
+  (`src/host/qwen-items.ts`) fills the conversation items with the same block tables Claude's do.
+- What the pinned release declares is pinned name by name. `contracts/qwen-code-names.json`,
+  regenerated by `scripts/derive-qwen-names.mjs` from the release's source, holds every built-in tool,
+  message type, result and system subtype, stream event, delta, content block and control request in
+  each direction; `QWEN_COVERAGE` (`src/state/qwen-coverage.ts`) holds a row for each
+  (`pins/qwen-coverage.test.ts`), and the ask rules are built from the same tool list.
+
+## pi
+
+A session naming `runtime: "pi"` runs pi in RPC mode (`--mode rpc`) in the session's worktree, under a
+launch rule that loads periscope's own extension and pi's built-in MCP extension and nothing else of
+pi's finding, and the host speaks its RPC over stdio: one JSON value per line each way, commands in,
+events, answers and records out. pi is offered only when the operator sets `PERISCOPE_PI_BIN` and
+`PERISCOPE_PI_HOME` ([configuration.md](configuration.md)). pi has no permission system; its gate is
+periscope's extension, which asks the host about every tool call before it runs. Its control tier is
+`intercepted` ([gate.md](gate.md), the pi gate).
+
+- The RPC rides the same line transport (`PiRpc`, `src/host/pi-rpc.ts`, over `startStdioLines`): the
+  host's commands carry ids it mints and deadlines it sets, an answer is matched to its command by id,
+  an extension's dialog request is answered cancelled, and a line that is not JSON is dropped and
+  named (`rpc-line-malformed`).
+- The CLI is pinned (`PI_PINNED_VERSION`, `src/host/pi-binary.ts`). Its `--version` must name the
+  pinned release, or pi is listed unavailable with the path, the version found and the version
+  pinned. The path is the npm package's `dist/bundle/cli.js`, run under this Node. Nothing installs
+  it. At start the host reads that version, writes the agent home's `models.json` and `mcp.json`, and
+  runs pi once with nothing of its own and no session to list the models it reaches
+  (`readPiRuntime`, `src/host/pi-runtime.ts`), closing it without a prompt.
+- The base is the runner's own (`src/host/pi-home.ts`): `agent` is pi's agent home
+  (`PI_CODING_AGENT_DIR`), `sessions` the store every session's file is kept in, and `run/<id>` one
+  session's run directory, holding its extension's configuration (written only the runner can read,
+  deleted once the extension has said hello) and its system prompt file, removed at close. A resume
+  is resolved to the file in the store that carries its id and the session's working directory.
+- The process (`startPiProcess`, `src/host/pi-process.ts`) is an `AgentProcess<PiMessage>`. The open
+  runs in order: the session's hook channel listens, the run directory is written, pi starts, the
+  extension's hello arrives (`PI_HELLO_DEADLINE_MS`), the configuration is deleted, `get_commands`
+  and `get_state` are read, and the sources they and the hello name are checked; only then is the
+  session ready and the first prompt written. A prompt is `prompt` with `streamingBehavior:
+'followUp'`, one in flight at a time, held until the open and bounded in the host. The model and
+  effort setters are `set_model` and `set_thinking_level`, thinking switches between `off` and the
+  last level, and an interrupt is `abort`. After each run settles the host asks the session's
+  totals (`get_session_stats`). A request member pi cannot honour (Claude's settings tiers, its hooks
+  and spawner, `forwardSubagentText`, a store, a permission mode) is refused `request-key-unsupported`,
+  naming it.
+- The gate (`createPiSessionGate`, `src/host/pi-gate.ts`) answers the extension's asks through the
+  per-call decision every runtime shares (`createCallDecision`), with `canRewriteInput: true`: the
+  extension applies a rewrite to the call's input in place. Its hello is handed to the gate by the
+  channel (`onHello`, `src/host/hook-channel.ts`), and the open's check (`piForeignSources`) names
+  any other code `gate-foreign-extension`, lowering the opening tier (`stateSpawnDegrades`,
+  `src/state/observer.ts`, with the level). A `bash` call is read as `posix` and a `powershell` call as
+  `powershell` (`piShellDialect`, `src/gate/tool-kind.ts`).
+- The extension (`src/host/pi-extension.ts`, built to `dist/host/pi-extension.js`) imports nothing
+  from pi; its types are declared locally (`src/host/pi-extension-api.ts`, types only), and what it
+  loads at run time is itself, the hook exchange (`src/gate/hook-exchange.ts`) and Node's own modules
+  (`host/pi-extension.test.ts` pins that closure). It is neither a command of the package nor an
+  entry point; the host finds it beside its own module (`piExtensionPath`).
+- A session's plugin directories reach pi as `--skill` directories, each directory's `skills/`
+  (`piSkillDirectories`, `src/host/pi-pack.ts`), its skills listed by name alone. Its MCP servers ride
+  the extension's configuration (`piMcpServers`, `src/host/pi-mcp.ts`) and are registered with
+  `direct` exposure. A named endpoint is written into `models.json` as a provider, its key in that
+  file alone, and named on the command line by `--provider` (`src/host/pi-endpoints.ts`).
+  `ENDPOINT_ROUTED_RUNTIMES` is Claude, Codex, Qwen Code and pi.
+- Its messages ride as pi wrote them (`PI_MESSAGE_BINDING`): each event and record, and the answers to
+  the host's own commands, is an `agent_message` with `runtime: "pi"`, a `message_update` on the delta
+  lane and only for a session that asked for partial messages; the extension's hello is not
+  forwarded. The observer arm (`src/state/pi-observer.ts`) records the transitions they cause under
+  `agent-event` events (`AGENT_EVENTS`: `pi:` and the event's type, or the answered command's),
+  `PiFactLift` (`src/host/pi-facts.ts`) lifts the facts, and `PiItemFill` (`src/host/pi-items.ts`)
+  fills the conversation items, one turn from `agent_start` to `agent_settled`.
+- What the pinned release declares is pinned name by name. `contracts/pi-names.json`, regenerated by
+  `scripts/derive-pi-names.mjs` from the release's source, holds every event, RPC command, RPC record,
+  extension UI method, message delta and built-in tool; `PI_COVERAGE` (`src/state/pi-coverage.ts`)
+  holds a row for each (`pins/pi-coverage.test.ts`), and a live test holds the snapshot to the
+  installed package.
 
 ## The two read-only doors
 

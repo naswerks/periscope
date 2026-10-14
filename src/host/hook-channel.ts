@@ -5,7 +5,9 @@
  * It is a named pipe on Windows and a Unix socket in a directory only this user can enter elsewhere, and
  * never a TCP port, so this host still opens no listening port on any interface. The hook process finds
  * it, and proves it belongs to the session, through two variables this host sets in the runtime's own
- * environment (`PERISCOPE_HOOK_CHANNEL`, `PERISCOPE_HOOK_TOKEN`), which the runtime's tools never see.
+ * environment (`PERISCOPE_HOOK_CHANNEL`, `PERISCOPE_HOOK_TOKEN`), which the runtime's tools never see;
+ * an extension this host loads into the runtime's own process reads the same two from a file in the
+ * protected set instead, so the runtime's environment never holds them.
  *
  * The agent shares this host's OS user, so it can find the channel and could read the token out of the
  * runtime's memory. What the token buys is asking: the host decides the call with the same local gate,
@@ -24,6 +26,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { RefusalReason } from '../core/refusal.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import type { HookDecision, HookRequest } from '../gate/hook-exchange.js';
@@ -50,6 +53,14 @@ export interface HookChannelOptions {
   readonly version: string;
   /** A request this channel refused before deciding anything: the wrong token, a malformed line. */
   readonly onRefused?: (detail: string) => void;
+  /**
+   * A `hello` that carried the session's token and named this channel's runtime, with what it carried
+   * beside them. Told before the hello is answered. A plugin that must be proven loaded before the
+   * session runs says so this way.
+   */
+  readonly onHello?: (event: unknown) => void;
+  /** The reason `ready()` refuses with when the channel cannot listen. Defaults to `codex-hook-not-active`. */
+  readonly unavailableReason?: RefusalReason;
   /** The platform the address is chosen for. Defaults to this process's. */
   readonly platform?: string;
   /** How long a connection may take to send its request. Milliseconds. */
@@ -158,6 +169,11 @@ export function openHookChannel(options: HookChannelOptions): HookChannel {
       return;
     }
     if (request.kind === 'hello') {
+      try {
+        options.onHello?.(request.event);
+      } catch {
+        // A listener that throws must not cost the plugin its answer.
+      }
       socket.end(hookAnswerLine(token, request.nonce, { ok: true, version: options.version }));
       return;
     }
@@ -177,7 +193,10 @@ export function openHookChannel(options: HookChannelOptions): HookChannel {
   const listening = new Promise<Result<void>>((resolve) => {
     server.once('error', (error) => {
       resolve(
-        refuse('codex-hook-not-active', `the hook channel ${address} could not listen: ${String(error)}`),
+        refuse(
+          options.unavailableReason ?? 'codex-hook-not-active',
+          `the hook channel ${address} could not listen: ${String(error)}`,
+        ),
       );
     });
     server.listen(address, () => resolve(ok(undefined)));

@@ -8,6 +8,110 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-14
+
+Protocol 17; the window is `[16, 17]`, so a version-16 controller is still spoken to. Version 17 adds
+two runtimes, their causes, refusal reasons and a dialect word, and no payload kind or member. A
+version-16 controller reads a runtime as a word, a cause unnarrowed and a reason it does not know as
+such; the one word it does not declare, the dialect `cmd`, is never sent to it: a decision request
+naming it goes to a controller at 16 with no `shellDialect`. Every frame it sends decodes unchanged.
+
+- Added: Qwen Code as a third runtime. With `PERISCOPE_QWEN_BIN` (the npm package's `cli-entry.js`)
+  and `PERISCOPE_QWEN_HOME` (a base of the runner's own) set, the hello's `agents` lists Qwen Code
+  after Codex: its version, no models, the permission modes `bypassPermissions`, `default` and
+  `plan`, the efforts `low` to `max`, no thinking control, and the tier `intercepted-with-residual`;
+  `agentSkills` lists it `bare`, `per-session`. A `session_new` naming `runtime: "qwen-code"` runs the
+  CLI over its stream-json control protocol on stdio, in the session's directory, from a home of its
+  own beneath the base. The CLI is pinned to Qwen Code 0.25.1: another version or an absent CLI is
+  listed unavailable with its reason, and a session naming it is refused `runtime-unavailable`. Its
+  messages ride as the CLI wrote them, with `runtime: "qwen-code"`, a `stream_event` on the delta
+  lane; its events move the session as `qwen-code:*` causes (`AGENT_EVENTS` gains sixteen), it fills
+  the facts and the conversation items, and `QWEN_COVERAGE` holds every name the pinned release
+  declares (`contracts/qwen-code-names.json`, derived by `scripts/derive-qwen-names.mjs`).
+- Added: Qwen Code's gate. Each session's settings sit at the CLI's system scope and send every
+  built-in tool, and every attached MCP server's, to ask, with every hook off; the CLI asks the host
+  before each such call, and the host decides it through the same per-call decision as a Claude call
+  and answers as asked, never rewritten. The settings are read back before the CLI starts, and an open
+  whose settings do not read back that way is refused with the new reason
+  `qwen-ask-rules-not-active`. The new degrades `gate-tool-unruled` (a tool no ask rule names) and
+  `gate-mode-widened` (a mode that approves calls itself) ride the state lane, and
+  `gate-credential-in-shell` (a variables file the CLI loads, or an endpoint's variables, reaching the
+  agent's shell) rides the opening tier. A Qwen Code session whose `decisionTimeoutMs` leaves no room
+  inside the CLI's own ten-minute bound is refused `gate-deadlines-inverted`.
+- Added: model endpoints for Qwen Code. An endpoint whose `runtimes` name `qwen-code` may speak any
+  of the three wire APIs; its key is written into the session's settings file alone, never the CLI's
+  environment or command line.
+- Added: `cmd` in `SHELL_DIALECTS`, the grammar of a shell call Qwen Code runs through `cmd.exe` on
+  Windows, and its reading in the local gate (carets unescaped outside double quotes, no comment, no
+  heredoc). A Qwen Code session's command is read in its dialect and as POSIX, and refused when either
+  reading refuses. `LocalGateOptions` gains `checksShellDirectory`, which holds the directory a
+  command runs in to the protected set.
+- Added: `PERISCOPE_QWEN_BIN` and `PERISCOPE_QWEN_HOME`, config-file keys never settable over the
+  link; one without the other refuses start. The host reads Qwen Code's version once at start and
+  prints one `[qwen-code]` line.
+- Changed: the protected set gains every Qwen Code session's home, Qwen Code's sign-in, token,
+  extension-secret, settings and variables files in `~/.qwen` and in an operator's `QWEN_HOME`, and
+  `~/.env`, which Qwen Code loads whatever its home. `~/.env` is protected on every host, so a Claude
+  or Codex session is now refused reading it too. `credentialPaths` takes `qwenHome`.
+- Changed: `EXTRA_ENV_FLOOR` gains `QWEN_*`, `OPENAI_MODEL`, `GEMINI_*`, `GOOGLE_API_KEY`,
+  `GOOGLE_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_GENAI_USE_VERTEXAI`,
+  `GOOGLE_APPLICATION_CREDENTIALS`, `DASHSCOPE_*`, `BAILIAN_*` and `OPENROUTER_API_KEY`. A
+  `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses start, a `session_new` whose `env`
+  names one refuses `env-key-refused`, and a repository settings file whose `env` names one refuses
+  `settings-route-refused`.
+- Changed: `CONTROL_TIERS`, `RUNTIME_WIRE_APIS` and `AGENT_SKILLS` gain a `qwen-code` row, and
+  `SessionObserver` gains `observeQwenMessage`.
+- Added: pi as a fourth runtime. With `PERISCOPE_PI_BIN` (the npm package's `dist/bundle/cli.js`)
+  and `PERISCOPE_PI_HOME` (a home of the runner's own) set, the hello's `agents` lists pi after Qwen
+  Code: its version, the models it reaches as `provider/id`, no permission modes, the efforts
+  `minimal` to `max`, a thinking control, and the tier `intercepted`; `agentSkills` lists it `bare`,
+  `per-session`. A `session_new` naming `runtime: "pi"` runs pi in RPC mode on stdio, in the
+  session's directory, from the home's own agent directory. pi is pinned to 1.2.0: another version or
+  an absent CLI is listed unavailable with its reason, and a session naming it is refused
+  `runtime-unavailable`. Its events, records and answers ride as pi wrote them, with
+  `runtime: "pi"`, a `message_update` on the delta lane; its events and the host's commands move the
+  session as `pi:*` causes (`AGENT_EVENTS` gains twenty), it fills the facts (its spend as pi's own
+  running totals, `catalogue-estimated`) and the conversation items (a turn from `agent_start` to
+  `agent_settled`), and `PI_COVERAGE` holds every name the pinned release declares
+  (`contracts/pi-names.json`, derived by `scripts/derive-pi-names.mjs`).
+- Added: pi's gate. pi has no permission system, so the package ships an extension pi loads
+  (`dist/host/pi-extension.js`, neither a command nor an entry point) whose handler asks the host
+  about every tool call over the session's hook channel, runs after pi's own handlers, and blocks the
+  call on a deny, its own deadline, an interrupt or a reply that does not verify; an allow may rewrite
+  the input. pi starts under a launch rule that loads nothing of its own finding, and no prompt is
+  written until the extension says hello: an open where it does not, or where pi will not load it, is
+  refused with the new reason `pi-extension-not-active`. Code found at the open that this host did
+  not load is named by the new degrade `gate-foreign-extension` and lowers the opening tier to
+  `intercepted-with-residual`. pi's own `bash` command is refused.
+- Added: model endpoints for pi. An endpoint whose `runtimes` name `pi` may speak any of the three
+  wire APIs; it is written into pi's `models.json` as a provider, its key in that file alone, never in
+  pi's environment or on its command line. An endpoint with variables of its own sets them in pi's
+  environment, and a session opened on it names them `gate-credential-in-shell` at the residual tier.
+- Added: `PERISCOPE_PI_BIN` and `PERISCOPE_PI_HOME`, config-file keys never settable over the link;
+  one without the other refuses start. The host reads pi's version and models at start and prints one
+  `[pi]` line.
+- Changed: the protected set gains the whole of `PERISCOPE_PI_HOME` (pi's agent home, its session
+  store and every session's run directory), and pi's sign-in, MCP token and models files in
+  `~/.pi/agent` on every host. `credentialPaths` takes `piHome`.
+- Changed: `EXTRA_ENV_FLOOR` gains `PI_*`, `PERISCOPE_PI_EXTENSION_CONFIG`, the provider names pi
+  reads (`ANT_LING_API_KEY`, `DEEPSEEK_API_KEY`, `NVIDIA_API_KEY`, `COPILOT_GITHUB_TOKEN`,
+  `MISTRAL_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `XAI_API_KEY`, `AI_GATEWAY_API_KEY`,
+  `OPENCODE_API_KEY`, `RADIUS_API_KEY`, `TYPESAFE_API_KEY`, `HF_TOKEN`, `FIREWORKS_API_KEY`,
+  `TOGETHER_API_KEY`, `BASETEN_API_KEY`, `KIMI_API_KEY`, `META_API_KEY`, `MOONSHOT_API_KEY`,
+  `GOOGLE_CLOUD_API_KEY`, `GCLOUD_PROJECT`) and the families `ZAI_*`, `MINIMAX_*`, `XIAOMI_*`,
+  `AZURE_OPENAI_*`, `AWS_*` and `CLOUDFLARE_*`. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one
+  now refuses start, a `session_new` whose `env` names one refuses `env-key-refused`, and a
+  repository settings file whose `env` names one refuses `settings-route-refused`. The floor holds for
+  every runtime, so neither a controller nor a repository's settings can now set `AWS_*` for a Claude
+  session either; a value in this host's own environment still passes as before.
+- Changed: `CONTROL_TIERS`, `RUNTIME_WIRE_APIS` and `AGENT_SKILLS` gain a `pi` row,
+  `SessionObserver` gains `observePiMessage` and its `stateSpawnDegrades` takes the level the
+  opening tier drops to, and `LocalGateOptions` gains `resolvesWritesAgainstCallCwd`, which places a
+  relative write path where the call runs.
+- Fixed: a `session_configure` that arrives while its session is still opening is refused
+  `session-unknown` at once, and once the session opens the refusal is recorded on that session's own
+  state lane, so the controller hears it there; nothing is applied.
+
 ## [1.7.0] - 2026-10-13
 
 Protocol 16; the window is `[15, 16]`, so a version-15 controller is still spoken to. Version 16

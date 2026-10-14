@@ -254,6 +254,61 @@ const TRANSITION_CODEX_DEGRADE: SessionTransition = {
   },
 };
 
+/**
+ * A Qwen Code session's first `ready`: caused by the answer to the host's `initialize`, at the residual
+ * tier, naming the degrade known when it opened.
+ */
+const TRANSITION_READY_QWEN_CODE: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'qwen-session-1',
+  cause: {
+    kind: 'agent-event',
+    event: 'qwen-code:initialize',
+    detail: 'the CLI answered initialize',
+  },
+  controlTier: { level: 'intercepted-with-residual', degrades: ['gate-credential-in-shell'] },
+};
+
+/** A degrade a Qwen Code session meets once it runs: a same-state transition naming it. */
+const qwenDegrade = (event: RefusalReason, detail: string): SessionTransition => ({
+  ...TRANSITION_TOOL,
+  sessionId: 'qwen-session-1',
+  from: 'working',
+  to: 'working',
+  activity: null,
+  entryId: null,
+  cause: { kind: 'refusal', event, detail },
+});
+
+/**
+ * A pi session's first `ready`: caused by the answer to the host's `get_state`, at the residual tier,
+ * naming the code found at the open that this host did not load.
+ */
+const TRANSITION_READY_PI: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'pi-session-a',
+  cause: {
+    kind: 'agent-event',
+    event: 'pi:get_state',
+    detail: "pi's state was read, after this host's extension said hello and pi's commands were read",
+  },
+  controlTier: { level: 'intercepted-with-residual', degrades: ['gate-foreign-extension'] },
+};
+
+/** That code, named on the state lane once, before the first `ready`. */
+const TRANSITION_PI_FOREIGN_EXTENSION: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'pi-session-a',
+  seq: 1,
+  to: 'spawning',
+  cause: {
+    kind: 'refusal',
+    event: 'gate-foreign-extension',
+    detail:
+      'code this host did not load is in this pi session, outside its gate: the command example-command from /srv/example/extension.ts',
+  },
+};
+
 /** An open refused before any process existed, for one of the runtime and endpoint reasons. */
 const openRefused = (event: RefusalReason, detail: string): SessionTransition => ({
   ...TRANSITION_OPEN_REFUSED,
@@ -548,6 +603,49 @@ const ITEM_NOTICE: AgentItem = {
   truncated: true,
 };
 
+/** Qwen Code's entry: no SDK, no catalog (its models are its endpoints'), and its own vocabularies. */
+const QWEN_CODE_ENTRY: HostAgentEntry = {
+  runtime: 'qwen-code',
+  version: '0.25.1',
+  sdkVersion: null,
+  models: [],
+  vocabularies: {
+    permissionModes: ['bypassPermissions', 'default', 'plan'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    thinking: false,
+  },
+  controlTier: { level: 'intercepted-with-residual', degrades: [] },
+  available: true,
+  unavailableReason: null,
+};
+
+/** pi's entry: no SDK, its models as `provider/id`, no permission mode, its thinking ladder as efforts. */
+const PI_ENTRY: HostAgentEntry = {
+  runtime: 'pi',
+  version: '1.2.0',
+  sdkVersion: null,
+  models: [
+    {
+      value: 'example-provider/example-model',
+      resolvedModel: null,
+      displayName: 'Example Model',
+      description: null,
+      supportedEffortLevels: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+      supportsFastMode: null,
+      supportsAutoMode: null,
+      supportsAdaptiveThinking: null,
+    },
+  ],
+  vocabularies: {
+    permissionModes: [],
+    efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    thinking: true,
+  },
+  controlTier: { level: 'intercepted', degrades: [] },
+  available: true,
+  unavailableReason: null,
+};
+
 const AGENT_SKILLS: HostAgentSkills[] = [
   { runtime: 'claude', naming: 'namespaced', delivery: 'per-session' },
   { runtime: 'codex', naming: 'namespaced', delivery: 'per-process' },
@@ -784,6 +882,91 @@ const AUTHORED = {
         ),
       ),
     },
+    // Qwen Code: its first ready at the residual tier with the degrade known at open, the two it can
+    // meet once it runs, the open refused when its ask rules cannot be read back, and a native message.
+    {
+      name: 'session_update.state-transition-qwen-code-ready',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_QWEN_CODE)),
+    },
+    {
+      name: 'session_update.state-transition-qwen-code-tool-unruled',
+      frame: session(
+        stateTransitionUpdate(
+          qwenDegrade(
+            'gate-tool-unruled',
+            'Qwen Code lists the tool example_tool, which no ask rule names, so a call to it the CLI allows by default runs without asking this host',
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.state-transition-qwen-code-mode-widened',
+      frame: session(
+        stateTransitionUpdate(
+          qwenDegrade(
+            'gate-mode-widened',
+            'Qwen Code reports permission mode yolo, which approves calls itself',
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.open-refused-qwen-code-ask-rules-not-active',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'qwen-ask-rules-not-active',
+            '/srv/periscope/qwen/sessions/example/system-settings.json has no ask rule for 1 name(s): read_file',
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.agent-message-qwen-code',
+      frame: session(
+        agentMessageUpdate(
+          { type: 'system', subtype: 'init', session_id: 'qwen-session-1', qwen_code_version: '0.25.1' },
+          AT,
+          'qwen-code',
+        ),
+      ),
+    },
+    // pi: its first ready at the residual tier with the degrade known at open, that degrade named, the
+    // open refused when its extension does not say hello, and a native event.
+    {
+      name: 'session_update.state-transition-pi-ready',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_PI)),
+    },
+    {
+      name: 'session_update.state-transition-pi-foreign-extension',
+      frame: session(stateTransitionUpdate(TRANSITION_PI_FOREIGN_EXTENSION)),
+    },
+    {
+      name: 'session_update.open-refused-pi-extension-not-active',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'pi-extension-not-active',
+            "this host's extension did not say hello over its channel within 30000ms, so pi may be running with no gate",
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.agent-message-pi',
+      frame: session(
+        agentMessageUpdate(
+          {
+            type: 'tool_execution_start',
+            toolCallId: 'call_1',
+            toolName: 'bash',
+            args: { command: 'git status' },
+          },
+          AT,
+          'pi',
+        ),
+      ),
+    },
   ],
   session_delta: [
     {
@@ -812,6 +995,42 @@ const AUTHORED = {
           'codex',
         ),
       ),
+    },
+    {
+      name: 'session_delta.agent-message-qwen-code',
+      frame: session(
+        agentMessageDelta(
+          {
+            type: 'stream_event',
+            session_id: 'qwen-session-1',
+            event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hel' } },
+          },
+          AT,
+          'qwen-code',
+        ),
+      ),
+    },
+    {
+      name: 'session_delta.agent-fragment-qwen-code',
+      frame: session(agentFragmentDelta('qwen-code', 'text', 'Hel', null)),
+    },
+    {
+      name: 'session_delta.agent-message-pi',
+      frame: session(
+        agentMessageDelta(
+          {
+            type: 'message_update',
+            message: { role: 'assistant', content: [] },
+            assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Hel' },
+          },
+          AT,
+          'pi',
+        ),
+      ),
+    },
+    {
+      name: 'session_delta.agent-fragment-pi',
+      frame: session(agentFragmentDelta('pi', 'text', 'Hel', null)),
     },
   ],
   session_new: [
@@ -1371,6 +1590,46 @@ const AUTHORED = {
         capabilities: [],
         cursors: [],
         configuration: { ...unsetHostConfiguration(), agent: AGENT, agents: [CLAUDE_ENTRY, CODEX_ENTRY] },
+        pendingRestart: [],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    {
+      name: 'link_hello.agents-qwen-code',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: {
+          ...unsetHostConfiguration(),
+          agent: AGENT,
+          agents: [CLAUDE_ENTRY, CODEX_ENTRY, QWEN_CODE_ENTRY],
+          agentSkills: [...AGENT_SKILLS, { runtime: 'qwen-code', naming: 'bare', delivery: 'per-session' }],
+        },
+        pendingRestart: [],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    {
+      name: 'link_hello.agents-pi',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: {
+          ...unsetHostConfiguration(),
+          agent: AGENT,
+          agents: [CLAUDE_ENTRY, CODEX_ENTRY, QWEN_CODE_ENTRY, PI_ENTRY],
+          agentSkills: [
+            ...AGENT_SKILLS,
+            { runtime: 'qwen-code', naming: 'bare', delivery: 'per-session' },
+            { runtime: 'pi', naming: 'bare', delivery: 'per-session' },
+          ],
+        },
         pendingRestart: [],
         protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
       }),

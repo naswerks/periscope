@@ -61,6 +61,52 @@ test('the Codex names snapshot ships: the host reads it at load, so a package wi
   );
 });
 
+test('the Qwen Code names snapshot ships: the host reads it at load, so a package without it cannot offer Qwen Code', () => {
+  const files = manifest.files ?? [];
+  const reader = readFileSync(at('src/host/qwen-names.ts'), 'utf8');
+  assert.ok(
+    reader.includes("'../../contracts/qwen-code-names.json'"),
+    'the names reader no longer reads the snapshot from the package root; this pin is about nothing',
+  );
+  assert.ok(
+    files.includes('contracts/qwen-code-names.json'),
+    'the allowlist does not ship contracts/qwen-code-names.json, which src/host/qwen-names.ts reads at load',
+  );
+});
+
+test('the pi names snapshot ships: the host reads it at load, so a package without it cannot offer pi', () => {
+  const files = manifest.files ?? [];
+  const reader = readFileSync(at('src/host/pi-names.ts'), 'utf8');
+  assert.ok(
+    reader.includes("'../../contracts/pi-names.json'"),
+    'the names reader no longer reads the snapshot from the package root; this pin is about nothing',
+  );
+  assert.ok(
+    files.includes('contracts/pi-names.json'),
+    'the allowlist does not ship contracts/pi-names.json, which src/host/pi-names.ts reads at load',
+  );
+});
+
+test('the pi extension ships beside the module that names it to pi, and is neither a command nor an entry point', () => {
+  const files = manifest.files ?? [];
+  const locator = readFileSync(at('src/host/pi-binary.ts'), 'utf8');
+  assert.ok(
+    locator.includes("new URL('./pi-extension.js', import.meta.url)"),
+    'the host no longer finds the extension beside its own module; this pin is about nothing',
+  );
+  assert.ok(files.includes('dist/'), 'the allowlist does not ship dist/, where the built extension is');
+  assert.ok(
+    !files.some((entry) => /pi-extension/.test(entry) && entry.startsWith('!')),
+    'the allowlist excludes the extension',
+  );
+  assert.ok(readFileSync(at('dist/host/pi-extension.js'), 'utf8').includes('export default function'));
+  const manifestText = JSON.stringify({
+    bin: manifest.bin,
+    exports: (manifest as { exports?: unknown }).exports,
+  });
+  assert.ok(!manifestText.includes('pi-extension'), 'the extension is a command or an entry point');
+});
+
 test('the package declares no side effects, so a consumer bundler can drop what it does not use', () => {
   assert.equal(manifest.sideEffects, false);
 });

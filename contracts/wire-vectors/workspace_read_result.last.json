@@ -17,6 +17,6 @@
     }
   },
   "name": "workspace_read_result.last",
-  "protocolVersion": 16,
+  "protocolVersion": 17,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"workspace_read_result\",\"requestId\":\"request-11\",\"text\":\"done\\n\",\"sizeBytes\":81920,\"nextOffset\":null,\"refusal\":null}}"
 }

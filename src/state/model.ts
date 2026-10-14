@@ -219,12 +219,17 @@ export type MessageEventName = (typeof MESSAGE_EVENTS)[number];
 
 /**
  * The events a runtime other than Claude can move a session with, each `{runtime}:{native name}`:
- * Codex's are its app-server notifications, `codex:{method}`. An item's kind rides a cause's
- * `detail`, never its name.
+ * Codex's are its app-server notifications, `codex:{method}`; Qwen Code's are its stream messages,
+ * `qwen-code:{type}` and `qwen-code:system/{subtype}`, and the answers to the control requests this
+ * host sends it, `qwen-code:{subtype}` (protocol 17); pi's are its RPC events, `pi:{type}`, and the
+ * answers to the commands this host sends it, `pi:{command}`. An item's kind rides a cause's `detail`,
+ * never its name.
  *
- * The set is a runtime's received notifications exactly: `pins/codex-coverage.test.ts` holds it equal
- * to the wired rows of `CODEX_NOTIFICATION_COVERAGE`, in both directions, and holds every event the
- * Codex observer emits to it.
+ * Each runtime's set is its wired rows exactly: `pins/codex-coverage.test.ts` holds the `codex:` names
+ * equal to the wired rows of `CODEX_NOTIFICATION_COVERAGE`, `pins/qwen-coverage.test.ts` the
+ * `qwen-code:` names equal to the wired message and answer rows of `QWEN_COVERAGE`, and
+ * `pins/pi-coverage.test.ts` the `pi:` names equal to the wired event and command rows of `PI_COVERAGE`,
+ * each in both directions, and each holds every event its runtime's observer emits to it.
  */
 export const AGENT_EVENTS = [
   'codex:error',
@@ -258,6 +263,42 @@ export const AGENT_EVENTS = [
   'codex:deprecationNotice',
   'codex:configWarning',
   'codex:windows/worldWritableWarning',
+  'qwen-code:user',
+  'qwen-code:assistant',
+  'qwen-code:result',
+  'qwen-code:stream_event',
+  'qwen-code:system/init',
+  'qwen-code:system/task_started',
+  'qwen-code:system/task_notification',
+  'qwen-code:system/retry',
+  'qwen-code:system/model_fallback',
+  'qwen-code:system/session_recording_degraded',
+  'qwen-code:initialize',
+  'qwen-code:interrupt',
+  'qwen-code:set_model',
+  'qwen-code:set_permission_mode',
+  'qwen-code:set_effort',
+  'qwen-code:get_context_usage',
+  'pi:agent_start',
+  'pi:message_update',
+  'pi:message_end',
+  'pi:tool_execution_start',
+  'pi:tool_execution_end',
+  'pi:agent_settled',
+  'pi:compaction_start',
+  'pi:thinking_level_changed',
+  'pi:compaction_end',
+  'pi:auto_retry_start',
+  'pi:auto_retry_end',
+  'pi:summarization_retry_scheduled',
+  'pi:prompt',
+  'pi:abort',
+  'pi:get_state',
+  'pi:set_model',
+  'pi:get_available_models',
+  'pi:set_thinking_level',
+  'pi:get_session_stats',
+  'pi:get_commands',
 ] as const;
 
 export type AgentEventName = (typeof AGENT_EVENTS)[number];

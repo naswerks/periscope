@@ -5,6 +5,6 @@
   },
   "frame": null,
   "name": "refused.malformed-agent-item",
-  "protocolVersion": 16,
+  "protocolVersion": 17,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_item\",\"runtime\":\"codex\",\"item\":{\"kind\":\"tool_result\",\"itemId\":\"call-1:result\",\"turnId\":\"turn-1\",\"toolUseId\":\"call-1\",\"status\":\"completed\",\"output\":\"a.ts\\nb.ts\",\"exitCode\":0.5,\"durationMs\":31,\"changes\":[{\"path\":\"/work/repo/b.ts\",\"change\":\"update\",\"movePath\":\"/work/repo/c.ts\",\"diff\":\"@@ -1 +1 @@\"}],\"truncated\":false},\"observedAt\":\"2000-01-01T00:00:00.000Z\"}}}"
 }

@@ -17,6 +17,18 @@ import type { ControlTier } from '../state/model.js';
 export const CODEX_RUNTIME = 'codex';
 
 /**
+ * Qwen Code's name on the wire: the runtime this host drives through the `qwen` CLI's stream-json control
+ * protocol (protocol 17). Not `qwen`, which names the models, run on any runtime through an endpoint.
+ */
+export const QWEN_RUNTIME = 'qwen-code';
+
+/**
+ * pi's name on the wire: the runtime this host drives as a `pi --mode rpc` child, gated by an extension
+ * of this host's own that it loads into it.
+ */
+export const PI_RUNTIME = 'pi';
+
+/**
  * The control tier a session starts at, per runtime, keyed by the runtime's name: what holds for every
  * session on it. A session's own opening transition adds the degrades known for it alone when it opens
  * (its sandbox, a hook this host did not install, the workspace's own configuration), so a hello and a
@@ -30,6 +42,14 @@ export const CONTROL_TIERS = {
   // Codex asks for are decided by the same gate. Codex runs its hook fail-open on the hook's own failure
   // and a few calls never reach any hook, so each such path is named as a degrade when it occurs.
   [CODEX_RUNTIME]: { level: 'intercepted-with-residual', degrades: [] },
+  // Every call Qwen Code's rules send to ask is decided by this host's gate before it runs, and the
+  // session's settings send every built-in tool and attached server there. A tool the CLI lists that no
+  // rule names, or a mode in which the CLI approves calls itself, is named as a degrade when it occurs.
+  [QWEN_RUNTIME]: { level: 'intercepted-with-residual', degrades: [] },
+  // Every pi tool call reaches this host's extension before it runs, and the extension's answer holds:
+  // the runtime is launched so that no other extension loads, and its own MCP extension only waits for
+  // its servers. A session in which code this host did not load is found running starts below this.
+  [PI_RUNTIME]: { level: 'intercepted', degrades: [] },
 } as const satisfies Readonly<Record<string, ControlTier>>;
 
 /**
@@ -41,17 +61,26 @@ export const RUNTIME_WIRE_APIS = {
   [DEFAULT_RUNTIME]: ['anthropic-messages'],
   // Codex calls its model through OpenAI's Responses API only.
   [CODEX_RUNTIME]: ['openai-responses'],
+  // Qwen Code calls an OpenAI-compatible chat endpoint, OpenAI's Responses API or Anthropic's Messages API.
+  [QWEN_RUNTIME]: ['openai-chat', 'openai-responses', 'anthropic-messages'],
+  // pi calls an OpenAI-compatible chat endpoint, OpenAI's Responses API or Anthropic's Messages API.
+  [PI_RUNTIME]: ['openai-chat', 'openai-responses', 'anthropic-messages'],
 } as const satisfies Readonly<Record<keyof typeof CONTROL_TIERS, readonly EndpointWireApi[]>>;
 
 /**
- * How each runtime takes plugin directories, keyed like the tiers: both name a plugin's skills under
- * the plugin's own name. Claude takes them with each session's request (the agent CLI's plugin
- * directories); Codex takes them when its app-server starts, as skill roots, and this host starts one
- * app-server per session.
+ * How each runtime takes plugin directories, keyed like the tiers. Claude and Codex name a plugin's
+ * skills under the plugin's own name; Qwen Code names each by its own `name`, bare. Claude takes them
+ * with each session's request (the agent CLI's plugin directories); Codex takes them when its app-server
+ * starts, as skill roots, and this host starts one app-server per session; Qwen Code takes them with each
+ * session's request too, as the skill directories of the settings this host writes for that session; pi
+ * takes them with each session's process, as the skill directories on its command line, and this host
+ * starts one process per session.
  */
 export const AGENT_SKILLS = {
   [DEFAULT_RUNTIME]: { naming: 'namespaced', delivery: 'per-session' },
   [CODEX_RUNTIME]: { naming: 'namespaced', delivery: 'per-process' },
+  [QWEN_RUNTIME]: { naming: 'bare', delivery: 'per-session' },
+  [PI_RUNTIME]: { naming: 'bare', delivery: 'per-session' },
 } as const satisfies Readonly<
   Record<keyof typeof CONTROL_TIERS, { readonly naming: SkillNaming; readonly delivery: SkillDelivery }>
 >;
@@ -70,7 +99,12 @@ export function agentSkillsFor(runtimes: readonly string[]): HostAgentSkills[] {
  * outside it is refused at start, so the hello never offers an endpoint no session on that runtime
  * could use.
  */
-export const ENDPOINT_ROUTED_RUNTIMES: readonly string[] = [DEFAULT_RUNTIME, CODEX_RUNTIME];
+export const ENDPOINT_ROUTED_RUNTIMES: readonly string[] = [
+  DEFAULT_RUNTIME,
+  CODEX_RUNTIME,
+  QWEN_RUNTIME,
+  PI_RUNTIME,
+];
 
 /** The wire APIs `runtime` speaks; empty for a runtime this host does not spawn. */
 export function wireApisFor(runtime: string): readonly EndpointWireApi[] {
