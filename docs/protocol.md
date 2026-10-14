@@ -88,46 +88,29 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[15, 16]`. Version 16 adds:
+`[16, 17]`. Version 17 adds:
 
-- `codex`, a runtime the hello's `agents` may list and a `session_new` may name, whose messages
-  are its app-server's own JSON-RPC traffic with `runtime: "codex"` (below);
-- the cause kind `agent-event`, whose events are a runtime's own notifications named
-  `{runtime}:{native name}` (`AGENT_EVENTS`; [state-machine.md](state-machine.md));
-- the `runtime-default` preset for `session_new.request.systemPrompt` (below);
-- five refusal reasons for a runtime's JSON-RPC peer: `rpc-line-malformed`, `rpc-line-too-large`,
-  `rpc-request-timed-out`, `rpc-request-failed` and `rpc-server-overloaded` (below);
-- the conversation item stream, `agent_item` bodies on the update lane, filled for Claude and Codex
-  ([The conversation item stream](#the-conversation-item-stream));
-- the hello's `agentSkills`, how each runtime takes plugin directories (below);
-- three fact members: `tasks.settled`, `usage_sample.cacheReadTokens` and
-  `agent_receipt.effortReported` ([The fact layer](#the-fact-layer));
-- the refusal reason `plugins-undeliverable` ([Refusals](#refusals));
-- Codex's gate: the refusal reason `codex-hook-not-active` and the degrades `gate-hook-timed-out`,
-  `gate-hook-unspawnable`, `gate-hook-output-rejected`, `gate-hook-missing`, `gate-hook-foreign`,
-  `gate-unhooked-call`, `gate-approval-unanswered`, `gate-approval-auto-reviewed`,
-  `gate-approval-ambiguous`, `gate-project-config-active` and `gate-sandbox-absent`, raised on the
-  session's state lane ([The control tier](#the-control-tier)), and Codex at
-  `intercepted-with-residual`;
-- `shellDialect` on the decision request (`SHELL_DIALECTS`: `posix`, `powershell`), the grammar a
-  shell call's command runs in, stated only when `toolKind` is `shell`. Claude's `Bash` is `posix` and
-  its `PowerShell` is `powershell`; Codex's `Bash` is `powershell` on Windows and `posix` elsewhere.
-  No runtime here runs a tool under `cmd.exe`, so there is no word for it. A decision that allows a
-  Codex call with rewritten input is refused `permission-decision-unrecognised`: Codex's hook can only
-  let a call proceed as asked or block it.
+- `qwen-code`, a runtime the hello's `agents` may list and a `session_new` may name, whose messages
+  are the Qwen Code CLI's own stream-json messages with `runtime: "qwen-code"` (below), with its row in
+  `agentSkills` and its events among the causes (`qwen-code:*` in `AGENT_EVENTS`;
+  [state-machine.md](state-machine.md));
+- the refusal reason `qwen-ask-rules-not-active`, which refuses a Qwen Code open, and the degrades
+  `gate-tool-unruled`, `gate-mode-widened` and `gate-credential-in-shell`
+  ([The control tier](#the-control-tier));
+- `cmd` in `SHELL_DIALECTS`, the grammar of a shell call Qwen Code runs through `cmd.exe` on Windows.
 
-Each is optional, so a version-15 controller reads what this build sends: an `agent_item` body is an
-`update` it does not model and leaves alone, and the rest are members it carries without reading.
-
-It adds no payload kind and no member. A version-15 controller is still spoken to: a transition's
-cause is carried unnarrowed and `readStateTransition` reads it whatever its kind, a runtime is a
-word, the preset is a value of a member that already carries any JSON, and a reason it does not know
-is read as such; every frame it sends decodes here unchanged. Version 14 narrowed
+It adds no payload kind and no member. A version-16 controller reads what this build sends: a
+runtime is a word, a transition's cause is carried unnarrowed, and a reason or a degrade it does not
+know is read as such. The one word it could not read is `cmd`, because its `DecisionRequest` declares
+`posix` and `powershell` only: on a link negotiated below 17 the host sends a decision request whose
+dialect is `cmd` with no `shellDialect` at all, and the controller reads that call by its tool's name.
+Every frame a version-16 controller sends decodes here unchanged. Version 14 narrowed
 `session_new.request.env` (below), and the narrowing holds at every version the host negotiates.
 `src/host/protocol-window.test.ts` holds both directions over a real link: every frame this host
-sends, a Claude session's and a Codex session's on one link, decodes with the protocol-15 decoder
-v1.6.0 shipped, and the decision request it posts reads as that release's `DecisionRequest`; a
-version-15 controller's `session_new` and `session_configure` decode here and apply.
+sends, a Claude session's, a Codex session's and a Qwen Code session's on one link, decodes with the
+protocol-16 decoder v1.7.0 shipped, and every decision request it posts reads as that release's
+`DecisionRequest`; each wire vector version 17 adds decodes with that decoder; and a version-16
+controller's `session_new` and `session_configure` decode here and apply.
 
 Two close reasons carry meaning. A close with code 1002 whose reason starts with `seq gap` is a
 replay request: the controller names the position it holds, and the host's next dial replays from
@@ -166,10 +149,11 @@ A `host_configure_result` carries the same `agent`.
 From v15, `configuration.agents` lists the runtimes the host can spawn sessions on, one
 `HostAgentEntry` each, at most `MAX_AGENT_ENTRIES`, and is optional:
 
-- `runtime`: the name a `session_new` names it by (`claude`, `codex`).
+- `runtime`: the name a `session_new` names it by (`claude`, `codex`, `qwen-code`).
 - `version` and `sdkVersion`: the runtime's own version, and the version of the library the host
   drives it through, null when there is none. Claude's are `agent`'s `claudeCodeVersion` and
-  `sdkVersion`; Codex's `version` is its app-server's, and its `sdkVersion` is null.
+  `sdkVersion`; Codex's `version` is its app-server's and Qwen Code's its CLI's, and the
+  `sdkVersion` of both is null.
 - `models`: the models it offers, each a `HostModel` as above.
 - `vocabularies`: `{ permissionModes, efforts, thinking }`, the words a `session_new` or
   `session_configure` may name for it, and whether it takes a thinking control.
@@ -178,14 +162,16 @@ From v15, `configuration.agents` lists the runtimes the host can spawn sessions 
   or off its pinned version, its sign-in missing) is listed `available: false` with the reason, and a
   `session_new` naming it is refused `runtime-unavailable`. Claude is always available.
 
-This host lists Claude, built from the same catalog read `agent` carries, then Codex when its
-operator configured it ([configuration](configuration.md)), so `agents` is null when `agent` is
-null and absent when it is absent. Codex's entry is its pinned version, the models its app-server
+This host lists Claude, built from the same catalog read `agent` carries, then Codex and then Qwen
+Code when its operator configured each ([configuration](configuration.md)), so `agents` is null when
+`agent` is null and absent when it is absent. Codex's entry is its pinned version, the models its app-server
 lists, the permission modes `default`, `dontAsk` and `bypassPermissions`, the efforts its models
 list, `thinking` true only when a listed model takes the effort `none`, and the tier
 `intercepted-with-residual`, with `gate-sandbox-absent` among its degrades where Windows reports no
-sandbox ready. The
-whole list is held to `MAX_AGENT_CATALOG_BYTES` as JSON. Claude's entry is placed first, and a later
+sandbox ready. Qwen Code's entry is its pinned version, no models (a Qwen Code session's model is
+an endpoint's, and the session names it), the permission modes `bypassPermissions`, `default` and
+`plan`, the efforts `low`, `medium`, `high`, `xhigh` and `max`, `thinking` false, and the tier
+`intercepted-with-residual`. The whole list is held to `MAX_AGENT_CATALOG_BYTES` as JSON. Claude's entry is placed first, and a later
 entry that would push the list past the budget rides with `models: []`, named once, so one
 runtime's catalog never empties another's; a list Claude's entry alone cannot fit takes the catalog
 with it, both riding null. A `host_configure_result` carries the same `agents`.
@@ -198,7 +184,8 @@ From v15, `configuration.endpoints` lists the model endpoints the host's operato
   `openai-responses`, `openai-chat`). A wire API a newer peer adds is read; the host sends only the
   ones it declares.
 - `runtimes`: the runtimes that can reach it. Each speaks the endpoint's wire API (Claude speaks
-  `anthropic-messages`, Codex `openai-responses`), and the host refuses at start an endpoint naming
+  `anthropic-messages`, Codex `openai-responses`, Qwen Code all three), and the host refuses at start
+  an endpoint naming
   one that does not, and lists a runtime only where it routes it and it speaks the API, so a
   controller filters its picker on `runtimes` with no table of its own.
 - `models`: every model id a session may name on it, at most `MAX_ENDPOINT_MODELS`: the endpoint's
@@ -225,7 +212,9 @@ absent when it is absent. A runtime it does not list cannot take plugin director
   `workspace` when the runtime takes only what is already in the session's directory.
 
 Claude is `namespaced`, `per-session`: the agent CLI's plugin directories. Codex is `namespaced`,
-`per-process`: each directory is a skill root of the session's own app-server. A word a newer peer
+`per-process`: each directory is a skill root of the session's own app-server. Qwen Code is `bare`,
+`per-session`: each directory's `skills/` is a skill directory in the session's own settings, and the
+CLI lists its skills by name alone. A word a newer peer
 adds is read; the host sends only the words it declares.
 
 ## The credential on the three transports
@@ -334,6 +323,16 @@ sent: a notification as `{ method, params }`, a request it made of the host as
 else the update lane; the answers to the host's own requests are not forwarded. Which notifications
 move the session is `CODEX_COVERAGE` ([state-machine.md](state-machine.md)).
 
+A Qwen Code session's messages carry `runtime: "qwen-code"`, and each `message` is what its CLI wrote
+on stdout: a stream message as the CLI wrote it (`system`, `assistant`, `user`, `result`,
+`stream_event`), and a control request it made of the host as
+`{ type: 'control_request', request_id, request }`. A `stream_event` rides the delta lane and
+everything else the update lane; the answers to the host's own control requests, and the prompts the
+host wrote, are not forwarded. Which messages move the session is `QWEN_COVERAGE`
+([state-machine.md](state-machine.md)). A session whose CLI has no model it can reach ends its first
+turn in an error `result` whose `num_turns` is 0 and whose `error.message` names the missing auth type
+or key: that is a Qwen Code session's sign-in marker.
+
 A forwarded message's body, on either lane, carries `observedAt` (v12): the instant, ISO-8601 in
 UTC, this host took the message off the agent's stream. Date a message by it rather than by its
 arrival: a message replayed after a reconnect arrives late, and a clock started at arrival runs
@@ -381,6 +380,16 @@ change, an MCP server's status, and a setter applied on a `turn/start` (`source:
 sub-agents, and the sub-agents settled since the turn began. Codex's usage names no model, so its
 figures are filed under the model the thread opened on, moved by a model a `turn/start` sends and by
 a reroute.
+
+Qwen Code's sources: `session_handle` is the session id the answer to the host's `initialize` names,
+and again when an init names another (a resume or a fork); `agent_receipt` is composed by the host at
+that answer (`source: 'host'`, the skills it handed over), then the CLI's own once its context usage
+lists the skills it found (`source: 'runtime'`), and again whenever an init moves a member, the
+permission mode in Qwen Code's own word; `turn_record` is each `result`, its `totals` the CLI's
+running total for the session and its `turn` and `turnScope` null, a resumed or forked session's total
+including the source's tokens, with no cost and no cache writes; `usage_sample` is each answer to the
+context-usage request the host sends after each `result`; `tasks` is the background tasks the CLI
+reports started and settled. `inputTokens` is the CLI's input less its cached input, floored at zero.
 
 Every fact carries `runtime`. `sourceId` is the id of the native message the fact was lifted from
 (Claude: the message's `uuid`, the same id its `agent_message` carries) and null for a fact lifted
@@ -547,8 +556,11 @@ known for it alone when it opens. A Claude session is `{ level: 'intercepted', d
 tool call reaches the `PreToolUse` gate under every permission mode. A Codex session is
 `intercepted-with-residual`: every call Codex's hook sees, and every approval it asks for, is decided
 by the gate, and its opening `degrades` name `gate-hook-foreign`, `gate-project-config-active` and
-`gate-sandbox-absent` when they hold for it. The tier is stated, never negotiated, and the host decides
-nothing by it.
+`gate-sandbox-absent` when they hold for it. A Qwen Code session is `intercepted-with-residual`:
+the settings the host writes for it send every tool the CLI ships, and each attached MCP server's,
+to ask, and the gate decides every ask; its opening `degrades` name `gate-credential-in-shell` when a
+variables file the CLI loads, or the endpoint's own variables, would reach the agent's shell. The tier
+is stated, never negotiated, and the host decides nothing by it.
 
 **Degrades raised mid-session.** A degrade is a `RefusalReason` that names a path where a call ran
 undecided, or where the session lost a guarantee; it never means the call was stopped, and it never
@@ -559,9 +571,14 @@ Codex's are `gate-hook-timed-out`, `gate-hook-unspawnable`, `gate-hook-output-re
 the host's deadline), `gate-approval-auto-reviewed` and `gate-approval-ambiguous` (an MCP approval
 that could not be tied to one call, declined); the three known at the open are also raised once each,
 with their detail. A Codex session's transport refusals (`rpc-*`) ride the same lane, once per reason.
-None of these is `permission-decision-unavailable`, which means the tool did not run. A Codex open
-whose hook is not trusted and enabled is refused `codex-hook-not-active`: a refusal transition on
-this lane, then the session's end.
+Qwen Code's are `gate-tool-unruled` (its first init lists a tool no ask rule names, so a call to it
+the CLI allows by default runs without asking; once per tool) and `gate-mode-widened` (the CLI reports
+a mode other than `default` or `plan`; once per mode); the one known at the open is also raised once,
+with its detail. None of these is `permission-decision-unavailable`, which means the tool did not run.
+A Codex open whose hook is not trusted and enabled is refused `codex-hook-not-active`, and a Qwen Code
+open whose settings could not be written, or do not read back asking about every built-in tool with
+every hook off, is refused `qwen-ask-rules-not-active`: a refusal transition on this lane, then the
+session's end.
 
 A level outside `CONTROL_TIER_LEVELS` is read on the way in, so a newer peer's added level survives,
 and refused on the way out. The codec checks a transition's `controlTier` and nothing else in it.
@@ -661,6 +678,26 @@ On `codex`, every other member is read as Codex's own:
   the host. The endpoint must carry `codex` and speak `openai-responses`; otherwise it is refused
   `endpoint-unknown` or `endpoint-incompatible`. `model-endpoint-mismatch` is Claude's rule and a
   Codex session never meets it.
+
+On `qwen-code`, every other member is read as Qwen Code's own:
+
+- `permissionMode` takes `default`, `plan` or `bypassPermissions`, which runs as `default`, every
+  call still asked; another word is refused `request-key-unsupported`. `effort` takes the entry's
+  words. `thinking` other than adaptive is refused: Qwen Code has no thinking switch.
+- A member that is Claude's alone is refused `request-key-unsupported`, naming it: `settingSources`,
+  `forwardSubagentText`, and a `systemPrompt` that is the `claude_code` preset. A string
+  `systemPrompt` replaces Qwen Code's base prompt, the `runtime-default` preset's `append` is added to
+  it, and either is held to `QWEN_MAX_PROMPT_ARGUMENT_CHARS`, since it rides the CLI's command line.
+- `plugins` reach the session's settings as skill directories, each directory's `skills/`. A
+  directory without one is named among the receipt's `pluginErrors`.
+- `mcpServers` ride the first control message on the CLI's stdin: an HTTP server's `headers` beside
+  its URL, a stdio server's command, arguments and environment. Every server's tools are asked about,
+  and the session's gate decides each ask. A server Qwen Code has no form for (SSE, an in-process
+  server, a name outside letters, digits, `-` and `_`) is refused `mcp-descriptor-invalid`, naming it.
+  `strictMcpConfig` on (the default) admits only those servers.
+- `endpoint` opens the session on that endpoint, over any of the three wire APIs; its credential is
+  written only into the session's settings file. A Qwen Code session opened on no endpoint ends its
+  first turn at the sign-in marker (above).
 
 `endpoint` names the model endpoint the session's model traffic goes to, by a name the hello's
 `endpoints` lists. Null or absent is the runtime's own route. A controller names an endpoint and
@@ -897,6 +934,8 @@ The reasons a controller meets most, and what each is not:
 | `runtime-unavailable`                                                                                                                                                                                                                                                                  | a `session_new` naming a runtime the host cannot spawn: unknown, or listed `available: false`; the detail names it and what the host offers                                                                                                                                              |
 | `codex-hook-not-active`                                                                                                                                                                                                                                                                | a Codex open whose periscope hook is not trusted and enabled, whose hook channel could not listen, or whose hook command fails its probe; the detail says what to fix. Without the hook nothing enforces the protected set on Codex                                                      |
 | `gate-hook-timed-out`, `gate-hook-unspawnable`, `gate-hook-output-rejected`, `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call`, `gate-approval-unanswered`, `gate-approval-auto-reviewed`, `gate-approval-ambiguous`, `gate-project-config-active`, `gate-sandbox-absent` | degrades on a Codex session's state lane: a call went on undecided, or the session lost a guarantee ([The control tier](#the-control-tier)). Never a stop                                                                                                                                |
+| `qwen-ask-rules-not-active`                                                                                                                                                                                                                                                            | a Qwen Code open whose settings could not be written, or do not read back asking about every built-in tool and every attached MCP server with every hook off; the detail names the file and what it lacks. Without them a call the CLI allows by default runs undecided                  |
+| `gate-tool-unruled`, `gate-mode-widened`, `gate-credential-in-shell`                                                                                                                                                                                                                   | degrades on a Qwen Code session's state lane: a tool no ask rule names, a mode that approves calls itself, a variables file or endpoint variable that reaches the agent's shell ([The control tier](#the-control-tier)). Never a stop                                                    |
 | `request-key-unsupported`                                                                                                                                                                                                                                                              | a `session_new` member the named runtime does not honour, or a value of one its vocabularies lack; the detail names the key. Every member is Claude's own, so a session on Claude never meets it                                                                                         |
 | `plugins-undeliverable`                                                                                                                                                                                                                                                                | the runtime refused the call that hands it a session's plugin directories (Codex's `skills/extraRoots/set`); the open ends before `ready`, the detail carrying the runtime's answer. A directory that is not there is not this: it is named among the receipt's `pluginErrors`           |
 | `rpc-line-malformed`, `rpc-line-too-large`, `rpc-request-timed-out`, `rpc-request-failed`, `rpc-server-overloaded`                                                                                                                                                                     | a runtime's JSON-RPC peer: a line that is no JSON-RPC message, a line past what the host reads (dropped whole), a request with no answer by the host's deadline, an error answer, and the peer's own overload code. They reach a controller in a cause's detail, never as a wire refusal |

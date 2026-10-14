@@ -59,6 +59,6 @@
     }
   },
   "name": "session_update.agent-facts-turn-record-totals-only",
-  "protocolVersion": 16,
+  "protocolVersion": 17,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_facts\",\"fact\":{\"kind\":\"turn_record\",\"runtime\":\"claude\",\"totals\":{\"cost\":1.234567,\"currency\":\"USD\",\"costBasis\":\"guessed\",\"byModel\":[{\"model\":\"model-id-1[1m]\",\"canonicalModel\":\"model-id-1\",\"provider\":\"firstParty\",\"inputTokens\":28,\"outputTokens\":33957,\"cacheReadTokens\":1435200,\"cacheWriteTokens\":133244,\"reasoningTokens\":812,\"cost\":1.2,\"costBasis\":\"list\",\"contextWindow\":1000000},{\"model\":\"model-id-2\",\"canonicalModel\":null,\"provider\":null,\"inputTokens\":9,\"outputTokens\":40,\"cacheReadTokens\":0,\"cacheWriteTokens\":0,\"reasoningTokens\":null,\"cost\":0.034567,\"costBasis\":\"guessed\",\"contextWindow\":null}]},\"turn\":null,\"turnScope\":null,\"numTurns\":3,\"durationMs\":41250,\"sourceSessionId\":\"agent-session-1\"},\"sourceId\":\"message-uuid-2\",\"observedAt\":\"2000-01-01T00:00:00.000Z\"}}}"
 }

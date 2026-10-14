@@ -42,6 +42,7 @@
     "!src/test-support/",
     "contracts/wire-vectors/",
     "contracts/codex-protocol-names.json",
+    "contracts/qwen-code-names.json",
     "docs/",
     "examples/",
     "README.md",

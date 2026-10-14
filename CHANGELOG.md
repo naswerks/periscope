@@ -8,6 +8,61 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+Protocol 17; the window is `[16, 17]`, so a version-16 controller is still spoken to. Version 17 adds
+a runtime, its causes, refusal reasons and a dialect word, and no payload kind or member. A
+version-16 controller reads a runtime as a word, a cause unnarrowed and a reason it does not know as
+such; the one word it does not declare, the dialect `cmd`, is never sent to it: a decision request
+naming it goes to a controller at 16 with no `shellDialect`. Every frame it sends decodes unchanged.
+
+- Added: Qwen Code as a third runtime. With `PERISCOPE_QWEN_BIN` (the npm package's `cli-entry.js`)
+  and `PERISCOPE_QWEN_HOME` (a base of the runner's own) set, the hello's `agents` lists Qwen Code
+  after Codex: its version, no models, the permission modes `bypassPermissions`, `default` and
+  `plan`, the efforts `low` to `max`, no thinking control, and the tier `intercepted-with-residual`;
+  `agentSkills` lists it `bare`, `per-session`. A `session_new` naming `runtime: "qwen-code"` runs the
+  CLI over its stream-json control protocol on stdio, in the session's directory, from a home of its
+  own beneath the base. The CLI is pinned to Qwen Code 0.25.1: another version or an absent CLI is
+  listed unavailable with its reason, and a session naming it is refused `runtime-unavailable`. Its
+  messages ride as the CLI wrote them, with `runtime: "qwen-code"`, a `stream_event` on the delta
+  lane; its events move the session as `qwen-code:*` causes (`AGENT_EVENTS` gains sixteen), it fills
+  the facts and the conversation items, and `QWEN_COVERAGE` holds every name the pinned release
+  declares (`contracts/qwen-code-names.json`, derived by `scripts/derive-qwen-names.mjs`).
+- Added: Qwen Code's gate. Each session's settings sit at the CLI's system scope and send every
+  built-in tool, and every attached MCP server's, to ask, with every hook off; the CLI asks the host
+  before each such call, and the host decides it through the same per-call decision as a Claude call
+  and answers as asked, never rewritten. The settings are read back before the CLI starts, and an open
+  whose settings do not read back that way is refused with the new reason
+  `qwen-ask-rules-not-active`. The new degrades `gate-tool-unruled` (a tool no ask rule names) and
+  `gate-mode-widened` (a mode that approves calls itself) ride the state lane, and
+  `gate-credential-in-shell` (a variables file the CLI loads, or an endpoint's variables, reaching the
+  agent's shell) rides the opening tier. A Qwen Code session whose `decisionTimeoutMs` leaves no room
+  inside the CLI's own ten-minute bound is refused `gate-deadlines-inverted`.
+- Added: model endpoints for Qwen Code. An endpoint whose `runtimes` name `qwen-code` may speak any
+  of the three wire APIs; its key is written into the session's settings file alone, never the CLI's
+  environment or command line.
+- Added: `cmd` in `SHELL_DIALECTS`, the grammar of a shell call Qwen Code runs through `cmd.exe` on
+  Windows, and its reading in the local gate (carets unescaped outside double quotes, no comment, no
+  heredoc). A Qwen Code session's command is read in its dialect and as POSIX, and refused when either
+  reading refuses. `LocalGateOptions` gains `checksShellDirectory`, which holds the directory a
+  command runs in to the protected set.
+- Added: `PERISCOPE_QWEN_BIN` and `PERISCOPE_QWEN_HOME`, config-file keys never settable over the
+  link; one without the other refuses start. The host reads Qwen Code's version once at start and
+  prints one `[qwen-code]` line.
+- Changed: the protected set gains every Qwen Code session's home, Qwen Code's sign-in, token,
+  extension-secret, settings and variables files in `~/.qwen` and in an operator's `QWEN_HOME`, and
+  `~/.env`, which Qwen Code loads whatever its home. `~/.env` is protected on every host, so a Claude
+  or Codex session is now refused reading it too. `credentialPaths` takes `qwenHome`.
+- Changed: `EXTRA_ENV_FLOOR` gains `QWEN_*`, `OPENAI_MODEL`, `GEMINI_*`, `GOOGLE_API_KEY`,
+  `GOOGLE_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_GENAI_USE_VERTEXAI`,
+  `GOOGLE_APPLICATION_CREDENTIALS`, `DASHSCOPE_*`, `BAILIAN_*` and `OPENROUTER_API_KEY`. A
+  `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses start, a `session_new` whose `env`
+  names one refuses `env-key-refused`, and a repository settings file whose `env` names one refuses
+  `settings-route-refused`.
+- Changed: `CONTROL_TIERS`, `RUNTIME_WIRE_APIS` and `AGENT_SKILLS` gain a `qwen-code` row, and
+  `SessionObserver` gains `observeQwenMessage`.
+- Fixed: a `session_configure` that arrives while its session is still opening is refused
+  `session-unknown` at once, and once the session opens the refusal is recorded on that session's own
+  state lane, so the controller hears it there; nothing is applied.
+
 ## [1.7.0] - 2026-10-13
 
 Protocol 16; the window is `[15, 16]`, so a version-15 controller is still spoken to. Version 16

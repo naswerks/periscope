@@ -42,6 +42,11 @@ import { startCodexProcess } from './codex-process.js';
 import type { CodexMessage } from './codex-wire.js';
 import { packageVersion } from './package-facts.js';
 import { startStdioRpc } from './stdio-rpc.js';
+import {
+  LiveStream,
+  closeAndWait as closeLiveProcess,
+  removeScratch as removeLiveScratch,
+} from '../test-support/live-session.js';
 
 const LIVE = process.env['PERISCOPE_LIVE'] === '1';
 const BINARY = process.env['PERISCOPE_CODEX_BIN'] ?? '';
@@ -166,49 +171,8 @@ function hookShell(): string | null {
   }
 }
 
-/**
- * One process's messages, read in order. A read that outlives a wait is kept for the next wait, never
- * abandoned: an async generator hands its next message to the oldest read asked of it, so a read
- * dropped at a timeout would swallow a message.
- */
-class Stream {
-  readonly seen: CodexMessage[] = [];
-  ended = false;
-  error: string | null = null;
-  readonly #iterator: AsyncIterator<CodexMessage>;
-  #pending: Promise<IteratorResult<CodexMessage> | 'failed'> | null = null;
-
-  constructor(messages: AsyncIterable<CodexMessage>) {
-    this.#iterator = messages[Symbol.asyncIterator]();
-  }
-
-  /** Read until `done` holds, the stream ends, or `ms` passes; whether `done` holds. */
-  async until(done: () => boolean, ms: number): Promise<boolean> {
-    const deadline = Date.now() + ms;
-    while (!done() && !this.ended && Date.now() < deadline) {
-      this.#pending ??= this.#iterator.next().catch((error: unknown) => {
-        this.error = String(error);
-        return 'failed' as const;
-      });
-      let timer: ReturnType<typeof setTimeout> | undefined = undefined;
-      const next = await Promise.race([
-        this.#pending,
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), Math.max(1, Math.min(1000, deadline - Date.now())));
-        }),
-      ]);
-      clearTimeout(timer);
-      if (next === null) continue;
-      this.#pending = null;
-      if (next === 'failed' || next.done === true) {
-        this.ended = true;
-        break;
-      }
-      this.seen.push(next.value);
-    }
-    return done();
-  }
-
+/** One Codex process's messages, read in order by the shared reader, with Codex's two lookups. */
+class Stream extends LiveStream<CodexMessage> {
   answered(method: string): boolean {
     return this.seen.some((message) => message.kind === 'answer' && message.method === method);
   }
@@ -218,26 +182,14 @@ class Stream {
   }
 }
 
-/**
- * Close a process and wait for its stream to end, which it does once the app-server has exited: a
- * directory it ran in is not removed while it still holds it.
- */
+/** Close a process and wait for its stream to end, recorded among this file's receipts. */
 async function closeAndWait(process: { close(): void }, stream: Stream): Promise<void> {
-  process.close();
-  await stream.until(() => false, 30_000);
-  receipt('closed', { ended: stream.ended, error: stream.error });
+  await closeLiveProcess(process, stream, receipt);
 }
 
-/**
- * Remove a scratch directory, retrying while a process that ran in it lets go. A removal that still
- * fails is a receipt, never a throw: it must not stand in for the test's own result.
- */
+/** Remove a scratch directory, a failure recorded among this file's receipts. */
 function removeScratch(dir: string): void {
-  try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-  } catch (error) {
-    receipt('scratch directory left behind', { dir, error: String(error) });
-  }
+  removeLiveScratch(dir, receipt);
 }
 
 /** What a session saw, in order: printed when a test fails, so the failure says what happened. */

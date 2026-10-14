@@ -1,11 +1,12 @@
 # Security
 
 Periscope runs Claude Code sessions on your machine on behalf of a remote controller, and Codex
-sessions when you configure Codex. That is a serious thing to install, and this document is written
-to be read _before_ you do. It states the posture, what each control covers, and what it does not.
-Everything about the gate below is about Claude sessions; a Codex session is gated through its own
-hook, with residual paths named as they happen, and [Codex sessions](#codex-sessions) says what holds
-and what does not.
+and Qwen Code sessions when you configure them. That is a serious thing to install, and this document
+is written to be read _before_ you do. It states the posture, what each control covers, and what it
+does not. Everything about the gate below is about Claude sessions; a Codex session is gated through
+its own hook and a Qwen Code session through its CLI's own permission requests, each with residual
+paths named as they happen, and [Codex sessions](#codex-sessions) and
+[Qwen Code sessions](#qwen-code-sessions) say what holds and what does not.
 
 ## The permission model
 
@@ -339,6 +340,64 @@ the Codex gate). What holds, and what does not:
   `--version` and the version its app-server reports, and lists any other version unavailable. It
   never installs or updates Codex, and it never runs a batch file.
 
+## Qwen Code sessions
+
+Qwen Code is offered only when you set `PERISCOPE_QWEN_BIN` and `PERISCOPE_QWEN_HOME`
+([configuration](docs/configuration.md#qwen-code)). A Qwen Code session's control tier is
+`intercepted-with-residual`, and the hello says so: every call the CLI asks about is decided by the
+same gate as a Claude call (the local refusals above, then your controller), the settings the host
+writes send every call to ask, and the paths that can still run undecided are named as they are found
+([gate.md](docs/gate.md), the Qwen Code gate). What holds, and what does not:
+
+- **Every call asks, and the host checks that it will.** The CLI runs a call without asking only when
+  its rules allow it. Each session's settings file sits at the CLI's system scope, which it applies
+  over your user settings and the repository's `.qwen/settings.json`, and asks about every built-in
+  tool of the pinned release and every attached MCP server, with every hook off. The host reads it
+  back through the environment the CLI will start with before anything runs, and an open whose file
+  does not read back that way is refused `qwen-ask-rules-not-active`. `QWEN_CODE_SAFE_MODE`, which
+  drops every rule, is removed from the CLI's environment.
+- **An allow runs the call as asked.** The CLI does not run a rewritten input, so an allow that
+  carries one is refused (`permission-decision-unrecognised`). At its own deadline, set past the
+  host's, the CLI cancels the call.
+- **What still runs undecided is named.** A tool the CLI lists that no ask rule names (a tool a newer
+  CLI adds, or an extension's) runs without asking when the CLI allows it by default:
+  `gate-tool-unruled`, once per tool. A mode the CLI reports that approves calls itself:
+  `gate-mode-widened`. Both are degrades on the session's state lane, never a stop.
+- **Your `~/.env` reaches the agent's shell.** The CLI loads `~/.env`, and `~/.qwen/.env`, into its own
+  environment whatever its home, and every command the agent runs inherits that environment. Both
+  files are in the protected set, so no session reads them, and so are Claude's and Codex's: a session
+  on any runtime is refused reading `~/.env`. A Qwen Code session that opens while one exists names
+  the variables it adds, never their values, as `gate-credential-in-shell` in its opening tier, and so
+  does a session whose endpoint sets variables of its own. Keep credentials out of both files on a
+  runner.
+- **A home of the runner's own, one per session.** Each session runs from a home beneath
+  `PERISCOPE_QWEN_HOME`, made at its open and removed at its close, so a session never runs from your
+  own `~/.qwen`, its sign-in or its settings. The sessions' homes are in the protected set, and so are
+  the sign-in, token, extension-secret, settings and variables files in `~/.qwen` and in a `QWEN_HOME`
+  you set yourself. The base's shared `runtime` directory, where the chats a resume reads are kept,
+  is not protected: a session can read another session's chat there.
+- **An endpoint's credential is written once, outside the environment.** A Qwen Code session reaches
+  its model only through an endpoint you declared, and the endpoint's key is written into the
+  session's settings file alone: never the CLI's environment, which the agent's shell inherits, and
+  never its command line, which a process listing shows. The endpoint's base URL and auth type ride
+  the command line.
+- **A tool server's ticket stays out of the environment and off the command line.** A session's HTTP
+  MCP servers ride the first control message on the CLI's stdin, their headers beside their URLs. Each
+  server's tools are asked about before every call.
+- **The model route and identity are beneath the floor.** `QWEN_*` (the CLI's home, runtime
+  directory, settings files, relaunch and safe-mode switches, sign-in, model and prompt files),
+  `OPENAI_MODEL`, `GEMINI_*`, `GOOGLE_API_KEY`, `GOOGLE_MODEL`, `GOOGLE_CLOUD_PROJECT`,
+  `GOOGLE_CLOUD_LOCATION`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_APPLICATION_CREDENTIALS`,
+  `DASHSCOPE_*`, `BAILIAN_*` and `OPENROUTER_API_KEY` are in `EXTRA_ENV_FLOOR`, so no controller can
+  move a Qwen Code session's home, settings, model server or credential.
+- **The shell on Windows is `cmd.exe`.** Unless the host was started from Git Bash, or with `ComSpec`
+  naming PowerShell, the CLI runs the agent's commands through `cmd.exe`. The local gate reads each
+  command in `cmd`'s grammar and as POSIX, and refuses when either reading refuses; the decision
+  request names the dialect to a controller that reads protocol 17.
+- **A pinned CLI.** The host runs one Qwen Code release (`QWEN_PINNED_VERSION`), checks its
+  `--version`, and lists any other version unavailable. It never installs or updates Qwen Code, and it
+  never runs a batch file.
+
 ## The outbound-only posture
 
 There is no inbound port anywhere in this package. Periscope dials out to your controller over a
@@ -394,7 +453,8 @@ over the link and without a further credential:
   `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`,
   `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
   `ANTHROPIC_API_KEY`, Codex's home, model route, credentials and certificate authority (the eight
-  names [Codex sessions](#codex-sessions) lists), and the families `ANTHROPIC_*` (the model endpoint, its tokens and headers,
+  names [Codex sessions](#codex-sessions) lists), Qwen Code's own variables and the model routes it
+  reads (the names [Qwen Code sessions](#qwen-code-sessions) lists), and the families `ANTHROPIC_*` (the model endpoint, its tokens and headers,
   every provider's base URL), `CLAUDE_CODE_USE_*` (the provider switches),
   `CLAUDE_CODE_SKIP_*_AUTH`, `CLAUDE_CODE_CLIENT_*` (the client certificate), `SSL_CERT_*` and
   `*_PROXY` (`EXTRA_ENV_FLOOR`). So a controller cannot change which server the model call goes

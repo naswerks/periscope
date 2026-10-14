@@ -97,9 +97,9 @@ export const REFUSAL_REASONS = [
   //                                      running ahead of a host, a new tier, a rolled-back deploy.
   //                                      Also a decision this build reads but the session's runtime
   //                                      cannot carry out: an allow that rewrites the call's input, on
-  //                                      a runtime whose hook can only let a call proceed as asked or
-  //                                      block it. Carrying out half of it would run the call with
-  //                                      arguments nobody approved.
+  //                                      a runtime that cannot carry out a rewrite and can only let a
+  //                                      call proceed as asked or block it. Carrying out half of it
+  //                                      would run the call with arguments nobody approved.
   // An outage is an infrastructure fix and an unrecognised value is a controller-version fix, so
   // telling them apart is the difference between two different investigations. Both block the tool.
   //   permission-grant-shadows-settings  A composition this package will not assemble, refused
@@ -534,6 +534,30 @@ export const REFUSAL_REASONS = [
   'gate-approval-ambiguous',
   'gate-project-config-active',
   'gate-sandbox-absent',
+
+  // The gate over a runtime that asks this host about every call its own rules send to ask (Qwen
+  // Code's `can_use_tool`), where the host writes those rules for each session. The first is a refusal;
+  // the others are degrades, raised on the session's state lane and never stopping it.
+  //
+  //   qwen-ask-rules-not-active    Refused: the open ends because the settings this host wrote for the
+  //                                session, the rules that send every built-in tool to ask, did not read
+  //                                back whole before the first prompt, or the runtime would not load
+  //                                them. Without them a read the runtime allows by default runs
+  //                                undecided, past the protected set. The detail says what is missing.
+  //   gate-tool-unruled            The runtime listed a tool no ask rule names, so a call to it the
+  //                                runtime allows by default runs without asking this host. Raised once
+  //                                per tool, when the runtime first lists its tools.
+  //   gate-mode-widened            The runtime reported a permission mode other than the two this host
+  //                                admits, one in which it approves calls itself.
+  //   gate-credential-in-shell     A file of variables the runtime loads into its own environment is
+  //                                present, and every command the agent runs inherits that environment,
+  //                                so whatever the file holds is readable by the agent's shell. Known
+  //                                when the session opens; the detail names the file and its variables,
+  //                                never their values.
+  'qwen-ask-rules-not-active',
+  'gate-tool-unruled',
+  'gate-mode-widened',
+  'gate-credential-in-shell',
 ] as const;
 
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];

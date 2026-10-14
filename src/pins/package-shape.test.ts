@@ -61,6 +61,19 @@ test('the Codex names snapshot ships: the host reads it at load, so a package wi
   );
 });
 
+test('the Qwen Code names snapshot ships: the host reads it at load, so a package without it cannot offer Qwen Code', () => {
+  const files = manifest.files ?? [];
+  const reader = readFileSync(at('src/host/qwen-names.ts'), 'utf8');
+  assert.ok(
+    reader.includes("'../../contracts/qwen-code-names.json'"),
+    'the names reader no longer reads the snapshot from the package root; this pin is about nothing',
+  );
+  assert.ok(
+    files.includes('contracts/qwen-code-names.json'),
+    'the allowlist does not ship contracts/qwen-code-names.json, which src/host/qwen-names.ts reads at load',
+  );
+});
+
 test('the package declares no side effects, so a consumer bundler can drop what it does not use', () => {
   assert.equal(manifest.sideEffects, false);
 });

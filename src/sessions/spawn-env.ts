@@ -54,7 +54,9 @@ export type EnvSource = Readonly<Record<string, string | undefined>>;
  * `ANTHROPIC_`, `CLAUDE_CODE_USE_`, `CLAUDE_CODE_SKIP_..._AUTH`, `CLAUDE_CODE_CLIENT_`, `SSL_CERT_` and
  * `_PROXY` is covered, and so is the next one it adds. Matched by upper-cased name, as Windows matches.
  * Codex's are exact names: its home and state databases, its local-model route, its model route and
- * identity, and the certificate authority it trusts.
+ * identity, and the certificate authority it trusts. Qwen Code's own are one family (`QWEN_*`), and the
+ * routes it reads beside them are families where a provider's names grow and exact names where they do
+ * not.
  *
  * It screens the controller's lanes only. What a spawn inherits from this host's own environment is
  * the allow-list's business below, so a proxy or a certificate directory the operator set still
@@ -107,6 +109,23 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'PERISCOPE_HOOK_CHANNEL',
   'PERISCOPE_HOOK_TOKEN',
   'PERISCOPE_HOOK_DEADLINE_MS',
+  // Qwen Code's own variables: its home and runtime directory, the settings files it reads, whether it
+  // restarts itself, whether it drops every permission rule, its sign-in, its model and its prompt files.
+  'QWEN_*',
+  // The model routes and identities Qwen Code reads beside OpenAI's and Anthropic's above: the model an
+  // OpenAI-compatible route names, Gemini's, Vertex's and Google's, DashScope's, Bailian's and
+  // OpenRouter's.
+  'OPENAI_MODEL',
+  'GEMINI_*',
+  'GOOGLE_API_KEY',
+  'GOOGLE_MODEL',
+  'GOOGLE_CLOUD_PROJECT',
+  'GOOGLE_CLOUD_LOCATION',
+  'GOOGLE_GENAI_USE_VERTEXAI',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'DASHSCOPE_*',
+  'BAILIAN_*',
+  'OPENROUTER_API_KEY',
 ];
 
 /**

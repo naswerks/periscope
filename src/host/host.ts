@@ -100,10 +100,22 @@ import { codexSkillRoots } from './codex-pack.js';
 import type { CodexRuntimeRead } from './codex-runtime.js';
 import { CODEX_MESSAGE_BINDING, codexNativeRuntime, unavailableCodexEntry } from './codex-runtime.js';
 import type { CodexMessage } from './codex-wire.js';
+import { QWEN_PINNED_VERSION } from './qwen-binary.js';
+import { qwenEndpointEnv, qwenEndpointRoutes } from './qwen-endpoints.js';
+import { QwenFactLift } from './qwen-facts.js';
+import { createQwenSessionGate, qwenDeadlineOrderRefusal } from './qwen-gate.js';
+import { qwenAskRules } from './qwen-home.js';
+import { QwenItemFill } from './qwen-items.js';
+import { qwenMcpServers } from './qwen-mcp.js';
+import { qwenHandedOverSkills, qwenSkillDirectories } from './qwen-pack.js';
+import type { QwenRuntimeConfig } from './qwen-process.js';
+import type { QwenRuntimeRead } from './qwen-runtime.js';
+import { QWEN_MESSAGE_BINDING, qwenNativeRuntime, unavailableQwenEntry } from './qwen-runtime.js';
+import type { QwenMessage } from './qwen-wire.js';
 import type { Decider } from '../gate/decision.js';
 import type { LocalGate } from '../gate/local.js';
 import type { ToolFamilies } from '../gate/local.js';
-import { CODEX_TOOL_FAMILIES, localGate } from '../gate/local.js';
+import { CODEX_TOOL_FAMILIES, QWEN_TOOL_FAMILIES, localGate } from '../gate/local.js';
 import type { GateOutcome } from '../gate/outcome.js';
 import { recordGateOutcome } from '../gate/outcome.js';
 import {
@@ -119,7 +131,13 @@ import type { McpServerOptions } from '../mcp/server.js';
 import type { SessionRequest } from '../sessions/registry.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { factLiftFor } from '../sessions/fact-lift.js';
-import { CODEX_RUNTIME, agentSkillsFor, controlTierFor, runtimeOf } from '../sessions/runtimes.js';
+import {
+  CODEX_RUNTIME,
+  QWEN_RUNTIME,
+  agentSkillsFor,
+  controlTierFor,
+  runtimeOf,
+} from '../sessions/runtimes.js';
 import type { HostedSession, SessionDegrade, Unsubscribe } from '../sessions/session.js';
 import { SessionStateMachine } from '../state/machine.js';
 import type { SessionTransition, TransitionWhere } from '../state/model.js';
@@ -136,7 +154,14 @@ import { createToolServer } from './mcp-server.js';
 import { listTranscripts, tailTranscript } from './claude-transcripts.js';
 import { listRepositoryDirectory, readRepositoryFile, readWorkspaceFile } from './repository-read.js';
 import { homeDirectory, nodePathResolver } from './paths.js';
-import { isBypassMode, mergeMcpServers, readSessionConfigure, readSessionRequest } from './wire-request.js';
+import {
+  QWEN_MODE_MAP,
+  isBypassMode,
+  isQwenPermissionMode,
+  mergeMcpServers,
+  readSessionConfigure,
+  readSessionRequest,
+} from './wire-request.js';
 import { mergePlugins, pluginDirsProblem } from './plugin-dirs.js';
 import { settingsRouteRefusal } from './repository-settings.js';
 import type { ModelEndpoint } from './model-endpoints.js';
@@ -311,6 +336,9 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   if (runtime === CODEX_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
     return composeCodexSession(options, machine, observer, clock);
   }
+  if (runtime === QWEN_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
+    return composeQwenSession(options, machine, observer, clock);
+  }
 
   // The conversation items: read from the session's messages, with the prompt its hook reports and the
   // calls this host's gate refused, which end in a `blocked` result.
@@ -465,6 +493,81 @@ function composeCodexSession(
       items,
     },
     CODEX_MESSAGE_BINDING,
+  );
+  observer.created(`a session was requested in ${options.cwd}`);
+  return ok({ sessionKey: options.sessionKey, session: created.value, machine, observer, detach });
+}
+
+/**
+ * `composeSession` for a session on Qwen Code: no SDK hooks, Qwen Code's own forwarding, and the session's
+ * gate, which every permission request the CLI sends asks. The gate's decision is the one a Claude call
+ * gets: the same local gate, decider, deadlines and outcome record.
+ */
+function composeQwenSession(
+  options: ComposeSessionOptions,
+  machine: SessionStateMachine,
+  observer: SessionObserver,
+  clock: Clock,
+): Result<ComposedSession> {
+  const decisionTimeoutMs = options.gate?.decisionTimeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS;
+  const inverted = qwenDeadlineOrderRefusal(decisionTimeoutMs);
+  if (inverted !== null) return refuse<ComposedSession>('gate-deadlines-inverted', inverted);
+
+  const items = new QwenItemFill(options.sessionKey);
+  const gate = createQwenSessionGate({
+    sessionKey: options.sessionKey,
+    cwd: options.cwd,
+    decide: options.decide,
+    ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+    decisionTimeoutMs,
+    holdAfterMs: options.gate?.holdAfterMs ?? DEFAULT_HOLD_AFTER_MS,
+    askRules: qwenAskRules(Object.keys(options.request?.mcpServers ?? {})),
+    onOutcome: (outcome) => {
+      recordGateOutcome(machine, outcome);
+      if (outcome.kind === 'deny' || outcome.kind === 'refused' || outcome.kind === 'expired') {
+        items.gateBlocked(outcome.request.toolUseId);
+      }
+      options.onOutcome?.(outcome);
+    },
+    // A degrade is recorded on the session's own machine, so it rides the wire as the session's state,
+    // and reaches the host's log beside it.
+    onDegrade: (name, detail) => {
+      observer.refused({ kind: 'refusal', event: name, detail });
+      options.onRefusal?.(refusal(name, detail));
+    },
+    onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
+  });
+
+  const created = options.registry.create({
+    ...(options.request ?? {}),
+    cwd: options.cwd,
+    nativeGate: gate,
+  });
+  if (!created.ok) return refuse<ComposedSession>(created.refusal.reason, created.refusal.detail);
+  // The registry started this session on Qwen Code's own process, so its messages are Qwen's.
+  const session = created.value as unknown as HostedSession<QwenMessage>;
+  // The session's plugin directories as the process hands them over: their skills by name, and the
+  // directories it could not hand over, reported in the receipt.
+  const skills = qwenSkillDirectories((options.request?.plugins ?? []).map((plugin) => plugin.path));
+  const mode = options.request?.permissionMode;
+  const lift = new QwenFactLift({
+    undeliveredPlugins: skills.problems,
+    handedOverSkills: qwenHandedOverSkills(skills.directories),
+    startModel: options.request?.model ?? null,
+    startMode: mode !== undefined && isQwenPermissionMode(mode) ? QWEN_MODE_MAP[mode] : QWEN_MODE_MAP.default,
+  });
+  const detach = forwardNativeSession(
+    {
+      sessionKey: options.sessionKey,
+      session,
+      observer,
+      sink: options.sink,
+      clock,
+      ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
+      lift,
+      items,
+    },
+    QWEN_MESSAGE_BINDING,
   );
   observer.created(`a session was requested in ${options.cwd}`);
   return ok({ sessionKey: options.sessionKey, session: created.value, machine, observer, detach });
@@ -725,6 +828,16 @@ export interface PeriscopeHostOptions {
    * @internal
    */
   readonly codex?: PeriscopeCodexOptions;
+  /**
+   * Qwen Code, offered beside Claude: how a Qwen Code session's CLI is started, and the read at start
+   * that decides its entry in the hello (`readQwenRuntime`). The host builds its registry with Qwen Code's
+   * own process when it builds one; an embedder passing its own `registry` gives it the runtime itself.
+   * Omitted, the hello does not list Qwen Code and a session naming `qwen-code` is refused
+   * `runtime-unavailable`. The daemon composes it from its two config keys.
+   *
+   * @internal
+   */
+  readonly qwen?: PeriscopeQwenOptions;
   readonly registry?: SessionRegistry;
   /** How the link is built. Defaults to the real `ControllerLink`. See `HostLink`. */
   readonly link?: (handlers: LinkHandlers) => HostLink;
@@ -747,6 +860,18 @@ export interface PeriscopeCodexOptions {
   readonly runtime: CodexRuntimeConfig;
   /** The read at start; the binary composes `readCodexRuntime` over the same binary and home. */
   readonly read: () => Promise<CodexRuntimeRead>;
+}
+
+/**
+ * Qwen Code, as a host offers it.
+ *
+ * @internal
+ */
+export interface PeriscopeQwenOptions {
+  /** The CLI, the base home and the seams a session's CLI starts with. */
+  readonly runtime: QwenRuntimeConfig;
+  /** The read at start; the binary composes `readQwenRuntime` over the same CLI and base home. */
+  readonly read: () => Promise<QwenRuntimeRead>;
 }
 
 /** What a host reports. Data rather than log lines, so an embedder decides the format. */
@@ -889,6 +1014,12 @@ export class PeriscopeHost {
    */
   readonly #held = new Map<string, string[]>();
   /**
+   * Configures refused while their session was still opening, by handle, recorded on the session's own
+   * lane when it opens. An open that produces no session drops them: its own refusal ends the session on
+   * the wire, and each was reported here when it arrived.
+   */
+  readonly #heldConfigures = new Map<string, Refusal[]>();
+  /**
    * Which workspace key each live-or-opening session provisioned at (protocol v5).
    *
    * Two consumers, and both exist because keys can alias. The release sites read it so a session
@@ -945,6 +1076,8 @@ export class PeriscopeHost {
   #pendingStart: object | null = null;
   /** Codex's entry as its read at start left it; undefined on a host that does not offer Codex. */
   #codexEntry: HostAgentEntry | undefined;
+  /** Qwen Code's entry as its read at start left it; undefined on a host that does not offer Qwen Code. */
+  #qwenEntry: HostAgentEntry | undefined;
   /**
    * The entries the hello lists after Claude's, fitted to the runtimes list's bound with Claude's
    * first: an entry that would push the list past it rides with no models, so one runtime's catalog
@@ -988,14 +1121,26 @@ export class PeriscopeHost {
         homeDir: options.homeDir ?? '',
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
-        ...(options.codex === undefined
+        ...(options.codex === undefined && options.qwen === undefined
           ? {}
           : {
               runtimes: {
-                [CODEX_RUNTIME]: codexNativeRuntime({
-                  ...options.codex.runtime,
-                  endpoints: codexEndpointRoutes(options.endpoints ?? []),
-                }),
+                ...(options.codex === undefined
+                  ? {}
+                  : {
+                      [CODEX_RUNTIME]: codexNativeRuntime({
+                        ...options.codex.runtime,
+                        endpoints: codexEndpointRoutes(options.endpoints ?? []),
+                      }),
+                    }),
+                ...(options.qwen === undefined
+                  ? {}
+                  : {
+                      [QWEN_RUNTIME]: qwenNativeRuntime({
+                        ...options.qwen.runtime,
+                        endpoints: qwenEndpointRoutes(options.endpoints ?? []),
+                      }),
+                    }),
               },
             }),
       });
@@ -1061,7 +1206,8 @@ export class PeriscopeHost {
   start(): void {
     const readCatalog = this.#options.agentCatalog;
     const readCodex = this.#options.codex?.read;
-    if (readCatalog === undefined && readCodex === undefined) {
+    const readQwen = this.#options.qwen?.read;
+    if (readCatalog === undefined && readCodex === undefined && readQwen === undefined) {
       this.#link.start();
       return;
     }
@@ -1070,7 +1216,8 @@ export class PeriscopeHost {
     void Promise.all([
       readCatalog === undefined ? Promise.resolve(undefined) : settledCatalog(readCatalog),
       readCodex === undefined ? Promise.resolve(undefined) : settledCodexRead(readCodex),
-    ]).then(([catalog, codex]) => {
+      readQwen === undefined ? Promise.resolve(undefined) : settledQwenRead(readQwen),
+    ]).then(([catalog, codex, qwen]) => {
       if (this.#pendingStart !== pending) return;
       this.#pendingStart = null;
       if (codex !== undefined) {
@@ -1080,6 +1227,15 @@ export class PeriscopeHost {
           runtime: CODEX_RUNTIME,
           entry: codex.entry,
           detail: codex.detail,
+        });
+      }
+      if (qwen !== undefined) {
+        this.#qwenEntry = qwen.entry;
+        this.#report({
+          kind: 'runtime-catalog',
+          runtime: QWEN_RUNTIME,
+          entry: qwen.entry,
+          detail: qwen.detail,
         });
       }
       if (catalog !== undefined) this.#stampAgent(catalog);
@@ -1153,8 +1309,13 @@ export class PeriscopeHost {
       case 'session_configure': {
         // Protocol v6: the SDK's live setters. For a live session both failures answer on its own
         // state lane: a value this host refuses (`frame-malformed`) and a setter the agent refuses
-        // (`session-configure-failed`). A session still opening has no query to configure yet, and
-        // that refusal, like any other for a handle this host does not hold, is reported here only.
+        // (`session-configure-failed`). A session still opening has no process to configure yet: it is
+        // refused as a handle this host does not hold yet (`session-unknown`), reported here, and put on
+        // that session's own lane once it opens, so the controller that asked reads why nothing changed.
+        // Any other handle this host does not hold is reported here only.
+        if (!this.#sessions.has(frame.sessionId) && this.#opening.has(frame.sessionId)) {
+          return this.#refuseConfigureWhileOpening(frame.sessionId);
+        }
         const composed = this.session(frame.sessionId);
         if (!composed.ok) return this.#refuse(frame.sessionId, composed.refusal);
         const runtime = composed.value.session.runtime;
@@ -1245,6 +1406,33 @@ export class PeriscopeHost {
     const sent = composed.session.prompt(text);
     if (!sent.ok) return this.#refuse(sessionKey, sent.refusal);
     composed.observer.promptSubmitted('the controller sent a turn');
+  }
+
+  /**
+   * A configure for a session still opening: refused, reported here, and held to be recorded on the
+   * session's own lane when it opens (`#answerHeldConfigures`). Held up to the turns' own bound; past it
+   * the refusal is reported here only. Nothing is applied either way.
+   */
+  #refuseConfigureWhileOpening(sessionKey: string): void {
+    const refused = refusal(
+      'session-unknown',
+      `${sessionKey} was still opening when the configure arrived, so nothing was applied; send it again once the session is ready`,
+    );
+    this.#refuse(sessionKey, refused);
+    const waiting = this.#heldConfigures.get(sessionKey) ?? [];
+    if (waiting.length >= MAX_HELD_TURNS) return;
+    waiting.push(refused);
+    this.#heldConfigures.set(sessionKey, waiting);
+  }
+
+  /** The configures refused while the session opened, recorded on its own lane now that it has one. */
+  #answerHeldConfigures(sessionKey: string, composed: ComposedSession): void {
+    const waiting = this.#heldConfigures.get(sessionKey);
+    if (waiting === undefined) return;
+    this.#heldConfigures.delete(sessionKey);
+    for (const refused of waiting) {
+      composed.observer.refused({ kind: 'refusal', event: refused.reason, detail: refused.detail });
+    }
   }
 
   /** Hold a turn for a session still opening, or refuse it when the bound is already reached. */
@@ -1354,6 +1542,7 @@ export class PeriscopeHost {
       );
     } finally {
       this.#opening.delete(sessionKey);
+      if (!this.#sessions.has(sessionKey)) this.#heldConfigures.delete(sessionKey);
       // An end asked for during the open is served now. A refused open produced no session, so there
       // is nothing to end and the mark simply goes.
       if (this.#endOnOpen.delete(sessionKey)) {
@@ -1398,7 +1587,9 @@ export class PeriscopeHost {
         ? undefined
         : requested.value.runtime === CODEX_RUNTIME
           ? codexEndpointEnv(endpoint)
-          : endpointSpawnEnv(endpoint);
+          : requested.value.runtime === QWEN_RUNTIME
+            ? qwenEndpointEnv(endpoint)
+            : endpointSpawnEnv(endpoint);
 
     const provider = this.#workspaces;
 
@@ -1550,6 +1741,11 @@ export class PeriscopeHost {
       const codexServers = codexMcpConfig(servers.value);
       if (!codexServers.ok) return giveBack(codexServers.refusal);
     }
+    // A Qwen Code session takes them in Qwen Code's own form, the same way.
+    if (requested.value.runtime === QWEN_RUNTIME) {
+      const qwenServers = qwenMcpServers(servers.value);
+      if (!qwenServers.ok) return giveBack(qwenServers.refusal);
+    }
 
     // The host's plugin directories, checked now: one that vanished since it was configured refuses
     // this open by name. The agent would report it in its init message's `plugin_errors`, but only
@@ -1567,7 +1763,12 @@ export class PeriscopeHost {
       sessionKey,
       cwd,
       sink: this.#link,
-      decide: this.#options.decide,
+      // A Qwen Code session's shell calls name `cmd`, a word a controller below protocol 17 does not
+      // read; its decider is sent none for it there, and the local gate still reads it.
+      decide:
+        runtimeOf(requested.value) === QWEN_RUNTIME
+          ? decideAtLinkVersion(this.#options.decide, () => this.#link.negotiatedVersion ?? null)
+          : this.#options.decide,
       // Jailed to its own workspace by default, and the default is the whole point: a host whose
       // local gate is opt-in is a host most embedders run without one.
       localGate: localGate({
@@ -1579,9 +1780,19 @@ export class PeriscopeHost {
         // in, and its paths relative to where the call runs.
         ...(runtimeOf(requested.value) === CODEX_RUNTIME
           ? { toolFamilies: CODEX_TOOL_FAMILIES, readsShellDialect: true, resolvesAgainstCallCwd: true }
-          : this.#options.toolFamilies === undefined
-            ? {}
-            : { toolFamilies: this.#options.toolFamilies }),
+          : runtimeOf(requested.value) === QWEN_RUNTIME
+            ? // A Qwen Code session's tools are Qwen's: its own names, its shell read in the grammar it
+              // runs in, the directory a command runs in held to the protected set, and its relative
+              // paths placed where the call runs.
+              {
+                toolFamilies: QWEN_TOOL_FAMILIES,
+                readsShellDialect: true,
+                checksShellDirectory: true,
+                resolvesAgainstCallCwd: true,
+              }
+            : this.#options.toolFamilies === undefined
+              ? {}
+              : { toolFamilies: this.#options.toolFamilies }),
       }),
       ...(this.#options.codex === undefined
         ? {}
@@ -1640,6 +1851,7 @@ export class PeriscopeHost {
     // After the open is reported, so the trace reads in causal order: held, opened, delivered. The
     // gap between the first and the last is the provisioning window, stated rather than inferred.
     this.#drain(sessionKey, composed.value);
+    this.#answerHeldConfigures(sessionKey, composed.value);
   }
 
   /**
@@ -2231,7 +2443,7 @@ export class PeriscopeHost {
    */
   #fittedOthers(first: readonly HostAgentEntry[]): HostAgentEntry[] {
     const fitted: HostAgentEntry[] = [];
-    for (const entry of this.#codexEntry === undefined ? [] : [this.#codexEntry]) {
+    for (const entry of this.#offeredRuntimes()) {
       if (hostAgentsProblem([...first, ...fitted, entry]) === null) {
         fitted.push(entry);
         continue;
@@ -2254,7 +2466,10 @@ export class PeriscopeHost {
 
   /** The entries a session may name a runtime from, beside Claude: what this host offers, whole. */
   #offeredRuntimes(): readonly HostAgentEntry[] {
-    return this.#codexEntry === undefined ? [] : [this.#codexEntry];
+    return [
+      ...(this.#codexEntry === undefined ? [] : [this.#codexEntry]),
+      ...(this.#qwenEntry === undefined ? [] : [this.#qwenEntry]),
+    ];
   }
 
   #withAgent(configuration: HostConfiguration): HostConfiguration {
@@ -2501,6 +2716,39 @@ function describe(error: unknown): string {
 }
 
 /** An embedder's catalog read, settled: a read that throws or rejects is a failed reading, never a lost start. */
+/** The first protocol a decision request's `shellDialect` may be `cmd` at. */
+const FIRST_PROTOCOL_CARRYING_CMD_DIALECT = 17;
+
+/**
+ * `decide`, sending a controller only the dialect words the link's protocol carries: on a link at a
+ * version before `cmd` was a word, a request naming it is sent with no dialect, which a controller reads
+ * by the tool's name. Unknown until the first handshake, and then whatever was negotiated.
+ */
+export function decideAtLinkVersion(decide: Decider, version: () => number | null): Decider {
+  return (request, signal) => {
+    const negotiated = version();
+    if (
+      request.shellDialect !== 'cmd' ||
+      negotiated === null ||
+      negotiated >= FIRST_PROTOCOL_CARRYING_CMD_DIALECT
+    ) {
+      return decide(request, signal);
+    }
+    const { shellDialect: _dialect, ...older } = request;
+    return decide(older, signal);
+  };
+}
+
+/** The Qwen Code read, settled: a read that throws is reported as an unavailable runtime, never a failed start. */
+async function settledQwenRead(read: () => Promise<QwenRuntimeRead>): Promise<QwenRuntimeRead> {
+  try {
+    return await read();
+  } catch (error) {
+    const reason = `the Qwen Code runtime could not be read: ${describe(error)}`;
+    return { entry: unavailableQwenEntry(QWEN_PINNED_VERSION, reason), detail: reason };
+  }
+}
+
 /** The Codex read, settled: a read that throws is reported as an unavailable runtime, never a failed start. */
 async function settledCodexRead(read: () => Promise<CodexRuntimeRead>): Promise<CodexRuntimeRead> {
   try {

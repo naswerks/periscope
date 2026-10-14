@@ -1,0 +1,41 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_update",
+      "body": {
+        "update": "state_transition",
+        "transition": {
+          "sessionId": "qwen-session-1",
+          "seq": 3,
+          "at": "2000-01-01T00:00:00.000Z",
+          "from": "working",
+          "to": "working",
+          "activity": null,
+          "entryId": null,
+          "cause": {
+            "kind": "refusal",
+            "event": "gate-tool-unruled",
+            "detail": "Qwen Code lists the tool example_tool, which no ask rule names, so a call to it the CLI allows by default runs without asking this host"
+          },
+          "where": {
+            "cwd": "/work/plain",
+            "worktree": null,
+            "branch": null,
+            "unknownReason": "not-a-repository"
+          },
+          "correlationId": null
+        }
+      }
+    }
+  },
+  "name": "session_update.state-transition-qwen-code-tool-unruled",
+  "protocolVersion": 17,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"state_transition\",\"transition\":{\"sessionId\":\"qwen-session-1\",\"seq\":3,\"at\":\"2000-01-01T00:00:00.000Z\",\"from\":\"working\",\"to\":\"working\",\"activity\":null,\"entryId\":null,\"cause\":{\"kind\":\"refusal\",\"event\":\"gate-tool-unruled\",\"detail\":\"Qwen Code lists the tool example_tool, which no ask rule names, so a call to it the CLI allows by default runs without asking this host\"},\"where\":{\"cwd\":\"/work/plain\",\"worktree\":null,\"branch\":null,\"unknownReason\":\"not-a-repository\"},\"correlationId\":null}}}}"
+}

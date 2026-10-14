@@ -26,6 +26,8 @@ import type {
 import type { EntryOp, SessionStateMachine, TransitionRequest } from './machine.js';
 import type { CodexMessage } from '../host/codex-wire.js';
 import { CodexArmState, codexRequestsFor } from './codex-observer.js';
+import type { QwenMessage } from '../host/qwen-wire.js';
+import { QwenArmState, qwenRequestsFor } from './qwen-observer.js';
 
 /**
  * How this observer keys a permission entry. `PermissionRequest` carries no tool_use_id — see below.
@@ -93,6 +95,8 @@ export class SessionObserver {
   #controlTier: ControlTier | null;
   /** What the Codex lane remembers; untouched on a Claude session. */
   readonly #codex = new CodexArmState();
+  /** What the Qwen Code lane remembers; untouched on any other session. */
+  readonly #qwen = new QwenArmState();
 
   constructor(machine: SessionStateMachine, options: SessionObserverOptions = {}) {
     this.#machine = machine;
@@ -210,6 +214,21 @@ export class SessionObserver {
       for (const listener of this.#compactionListeners) listener(report);
     }
     return recorded;
+  }
+
+  /**
+   * Every message a Qwen Code process yields: Qwen's lane, translated by `qwen-observer.ts` and recorded
+   * here, so its first `ready` carries the tier. Qwen Code reports no compaction on its stream. Returns
+   * what it recorded.
+   */
+  observeQwenMessage(message: QwenMessage): Result<SessionTransition>[] {
+    const requests = qwenRequestsFor(message, this.#qwen, {
+      state: this.#machine.state,
+      controlTier: this.#controlTier,
+      isOpen: (entryId) => this.#isOpen(entryId),
+    });
+    if (requests.some((request) => request.to === 'ready')) this.#reported = true;
+    return requests.map((request) => this.#machine.record(request));
   }
 
   /** A report when the compaction entry moved across one source's records, and nothing otherwise. */

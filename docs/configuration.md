@@ -85,6 +85,8 @@ workspace provider live, except while a session is open or opening.
 | `PERISCOPE_MODEL_ENDPOINTS`          | The absolute path of the model endpoints file ([model endpoints](#model-endpoints)). Read, checked and its credentials resolved at start; a file this host could not honour refuses start. The file and every credential file it names join the gate's protected set. Config-file key; never settable over the link.                                                                                                                                                                                                                                                                                      |
 | `PERISCOPE_CODEX_BIN`                | The Codex binary sessions naming `codex` run, by absolute path: the native `codex` binary, or the npm package's `bin/codex.js`, which runs under this Node. A batch file (`.cmd`, `.bat`) is refused, because it runs only through a shell. Set with `PERISCOPE_CODEX_HOME` or not at all; one without the other refuses start. Read at start ([Codex](#codex)). Config-file key; never settable over the link.                                                                                                                                                                                           |
 | `PERISCOPE_CODEX_HOME`               | The Codex home every Codex session runs from (`CODEX_HOME`), by absolute path: the runner's own, never the operator's `~/.codex`. Created when absent. Its sign-in files, and the files that make periscope's hook the gate there (`hooks.json`, `hooks/`, `config.toml`), join the gate's protected set. A path holding a space or any of `&                                                                                                                                                                                                                                                             | < > ^ % ! ( ) ; , = ' "`or a backtick cannot carry the hook's line, so Codex is listed unavailable, naming the character; the host still starts. Set with`PERISCOPE_CODEX_BIN`. Config-file key; never settable over the link. |
+| `PERISCOPE_QWEN_BIN`                 | The Qwen Code CLI sessions naming `qwen-code` run, by absolute path: the npm package's `cli-entry.js`, which runs under this Node. A batch file (`.cmd`, `.bat`) is refused, because it runs only through a shell. Set with `PERISCOPE_QWEN_HOME` or not at all; one without the other refuses start. Read at start ([Qwen Code](#qwen-code)). Config-file key; never settable over the link.                                                                                                                                                                                                             |
+| `PERISCOPE_QWEN_HOME`                | The base every Qwen Code session's home is made beneath, by absolute path: the runner's own, never the operator's `~/.qwen`. Created when absent. Each session runs from `<base>/sessions/<id>`, made at its open and removed at its close, and every session shares `<base>/runtime`, where the CLI keeps the chats a resume reads. `<base>/sessions` joins the gate's protected set. Set with `PERISCOPE_QWEN_BIN`. Config-file key; never settable over the link.                                                                                                                                      |
 | `PERISCOPE_CODEX_ENDPOINT_KEY`       | Never read from this host's own environment, and not a config-file key: the host sets it, in the app-server environment of a Codex session opened on a [model endpoint](#model-endpoints), to that endpoint's credential, and the session's provider reads its key from it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                        |
 | `PERISCOPE_HOOK_CHANNEL`             | Never read from this host's own environment, and not a config-file key: the host sets it, in a Codex session's app-server environment, to the address of that session's hook channel (a named pipe on Windows, a Unix socket elsewhere), and `periscope hook codex` reads it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                      |
 | `PERISCOPE_HOOK_TOKEN`               | Never read from this host's own environment, and not a config-file key: the host sets it, in a Codex session's app-server environment, to that session's random token for its hook channel, and `periscope hook codex` presents it and verifies the host's answer by it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                           |
@@ -108,7 +110,9 @@ workspace provider live, except while a session is open or opening.
 The agent CLI's token cache and configuration file in `CLAUDE_CONFIG_DIR`, when set, and in
 `PERISCOPE_AGENT_HOME`, when it is not the default, are added to the gate's protected paths, and so are
 the model endpoints file and every credential file it names, and `auth.json` and `.credentials.json`
-in `PERISCOPE_CODEX_HOME` and in `<user home>/.codex`; the full set is listed in [the gate](gate.md).
+in `PERISCOPE_CODEX_HOME` and in `<user home>/.codex`, and the session homes beneath
+`PERISCOPE_QWEN_HOME`, Qwen Code's sign-in, token and settings files in `<user home>/.qwen` and in an
+operator's own `QWEN_HOME`, and `<user home>/.env`; the full set is listed in [the gate](gate.md).
 
 ## What a controller can set over the link
 
@@ -125,7 +129,8 @@ link, and neither are the names a controller may place in a session's environmen
 the model endpoints file (`PERISCOPE_MODEL_ENDPOINTS`): a controller able to point it elsewhere would
 choose where a session's model calls go, and with which credential. Nor are the Codex binary and
 home (`PERISCOPE_CODEX_BIN`, `PERISCOPE_CODEX_HOME`): a controller able to point them elsewhere would
-choose what runs as a session, and whose sign-in it runs under. A controller can also list one directory or read the head of one text file under the
+choose what runs as a session, and whose sign-in it runs under; and the Qwen Code CLI and base
+(`PERISCOPE_QWEN_BIN`, `PERISCOPE_QWEN_HOME`), for the same reason. A controller can also list one directory or read the head of one text file under the
 repository root (`repository_list` / `repository_read`), jailed to that root and to the protected
 set, bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
 a time, by the workspace's key (`workspace_read`), under the same jail and protected set. [The wire
@@ -426,6 +431,61 @@ and the hello's `agents` lists Codex after Claude ([the wire protocol](protocol.
   Each server's tool calls are asked about first, and the session's gate decides each ask.
 - **Endpoints.** An endpoint whose `runtimes` name `codex` (above, [Model endpoints](#model-endpoints)).
 
+## Qwen Code
+
+A host offers Qwen Code beside Claude when `PERISCOPE_QWEN_BIN` and `PERISCOPE_QWEN_HOME` are both
+set. Then a `session_new` naming `runtime: "qwen-code"` runs the Qwen Code CLI in the session's
+directory, driven over its stream-json control protocol on stdin and stdout, and the hello's `agents`
+lists Qwen Code after Claude and Codex ([the wire protocol](protocol.md)).
+
+- **The version is pinned.** This release runs Qwen Code 0.25.1 (`QWEN_PINNED_VERSION`). Install that
+  version (`npm install -g @qwen-code/qwen-code@0.25.1`) and point `PERISCOPE_QWEN_BIN` at the
+  package's `cli-entry.js`. A CLI that reports another version, or none, is listed unavailable with
+  the path, the version it reports and the version pinned; the host still starts, and a session naming
+  `qwen-code` is refused `runtime-unavailable` with that reason. Nothing installs or updates it.
+- **The model is an endpoint's.** Qwen Code has no sign-in of its own here: a session reaches its
+  model through a [model endpoint](#model-endpoints) whose `runtimes` name `qwen-code`, over any of the
+  three wire APIs. The endpoint's credential is written only into the session's settings file, never
+  into the CLI's environment or onto its command line. A session opened on no endpoint starts, and its
+  first turn ends in an error naming the missing auth type or key (the sign-in marker
+  [the wire protocol](protocol.md) names), unless a variables file the CLI loads (below) names a
+  route of its own. The hello's entry carries no model catalog; a session names
+  its model.
+- **The home is the runner's own, one per session.** The host writes each session's home beneath
+  `PERISCOPE_QWEN_HOME` and points the CLI at it, so the operator's own `~/.qwen` (its sign-in, its
+  settings, its trusted folders) is never what a session runs from. The home's settings file sits at
+  the system scope, which the CLI applies over every user and project settings file: it asks about
+  every tool the CLI ships and every attached MCP server, turns hooks and usage statistics off, and
+  carries the endpoint. The host reads it back before the CLI starts, and a file that does not ask
+  about every tool, or does not turn hooks off, refuses the open `qwen-ask-rules-not-active`.
+- **Its control tier is `intercepted-with-residual`.** Every call the CLI asks about is decided by
+  the session's gate, through the same gate as a Claude call, and the gate's answer is the CLI's: an
+  allow runs the call as the CLI asked it, never rewritten. The paths that can still run undecided are
+  named on the session's state lane as they are found ([gate.md](gate.md), the Qwen Code gate;
+  [SECURITY.md](../SECURITY.md)). The permission modes are `default` and `plan`; `bypassPermissions`
+  runs as `default`, every call still asked.
+- **The deadlines.** A Qwen Code session waits for each decision for its `decisionTimeoutMs`, and the
+  CLI for that plus `QWEN_PERMISSION_MARGIN_MS`, at most `QWEN_MAX_PERMISSION_TIMEOUT_MS` (ten
+  minutes). A session whose `decisionTimeoutMs` leaves no room inside that is refused
+  `gate-deadlines-inverted`.
+- **The read at start.** The host creates the base, asks the CLI its version, and lists it in the
+  hello; it never starts a session to do so.
+- **The shell.** On Windows the CLI runs its shell calls through `cmd.exe` unless the host itself was
+  started from Git Bash (`bash`) or with `ComSpec` naming PowerShell; the gate reads each call in the
+  grammar of the shell it will run in, worked out per session from the environment the CLI starts
+  with.
+- **Plugins.** The configured plugin directories (`PERISCOPE_PLUGIN_DIRS`) and a session's own
+  `plugins` reach its CLI as skill directories in its settings file: each directory's `skills/`, its
+  skills listed by their bare names. A directory without one is named in the session's receipt.
+- **MCP servers.** A session's servers ride its first control message on stdin: an HTTP server's
+  headers beside its URL, never in the CLI's environment or on its command line, and a stdio server's
+  command. Each server's tool calls are asked about, and the session's gate decides each ask.
+- **A variables file the CLI loads.** The CLI loads `<user home>/.env` (and `<user home>/.qwen/.env`)
+  into its own environment, whatever its home. Both are in the protected set, so no agent reads them,
+  but a key in either reaches the CLI's shell; a session that opens while one exists names the
+  variables it holds, never their values, as `gate-credential-in-shell`. Keep credentials out of them
+  on a runner.
+
 ## What the host prints
 
 Every line of output is `<ISO timestamp> [channel] message`, with a detail after a dash when there
@@ -447,7 +507,9 @@ only, and `[endpoint] deepseek: default listed and not mapped` for an agent alia
 a model without mapping it, which a session naming it is refused (`model-endpoint-mismatch`). A host
 offering Codex prints `[codex] codex 0.162.1, 6 model(s) in the hello, control tier
 intercepted-with-residual`, or `[codex] codex is listed unavailable` with the reason, and then whether
-periscope's hook was written to the runner's home and answered its probe.
+periscope's hook was written to the runner's home and answered its probe. A host offering Qwen Code
+prints `[qwen-code] qwen-code 0.25.1, 0 model(s) in the hello, control tier intercepted-with-residual`,
+or `[qwen-code] qwen-code is listed unavailable` with the reason.
 
 A paired host prints `[credential] paired as <hostId> - the paired credential is presented on every
 dial` instead; a host on a signed-in token prints its first `[credential]` line (`cache-hit`,
@@ -492,7 +554,10 @@ With the reason on stderr and a non-zero exit, when:
   that is not first-party, a window in both forms, or a list past what the hello carries;
 - one of `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME` is set without the other, either is not
   an absolute path, or the binary is a batch file. A Codex that is set up but cannot run (absent,
-  off its pinned version, not signed in) does not refuse start: it is listed unavailable.
+  off its pinned version, not signed in) does not refuse start: it is listed unavailable;
+- one of `PERISCOPE_QWEN_BIN` and `PERISCOPE_QWEN_HOME` is set without the other, either is not an
+  absolute path, or the CLI is a batch file. A Qwen Code that is set up but cannot run (absent, off its
+  pinned version, a base that cannot be created) does not refuse start: it is listed unavailable.
 
 After start-up, one link event is fatal: `credential_rejected`. The controller or its identity
 provider has refused the host's material, so the process stops its sessions, prints the remedy

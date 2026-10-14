@@ -104,7 +104,7 @@ the decision deadline.
 - The vocabulary is owned locally, never received. The wire carries no policy in either direction;
   the embedder chooses tool families and protected paths at construction.
 - Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
-  workspace, with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome })` as the protected set and the home directory
+  workspace, with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome })` as the protected set and the home directory
   the shell scan expands from `homeDirectory(env)`. That set, stated once (`src/host/paths.ts`): the
   host's own config directory (`PERISCOPE_CONFIG_DIR` or `~/.periscope`, which holds the token
   cache, the paired credential and the config file); the agent CLI's token cache and configuration
@@ -114,8 +114,14 @@ the decision deadline.
   names; Codex's sign-in files (`auth.json` and `.credentials.json`) in the runner's Codex home
   (`PERISCOPE_CODEX_HOME`) and in `~/.codex`; and, in the runner's Codex home, the files that make
   periscope's hook the gate there (`hooks.json`, the `hooks` directory and `config.toml`, which records
-  the hook's trust). The rest of the CLI's home (its settings, skills and tool output) is the agent's to
-  read, and so is the rest of the operator's own `~/.codex` and the runner home's rollouts and state.
+  the hook's trust); Qwen Code's session homes (`sessions` beneath `PERISCOPE_QWEN_HOME`, each
+  holding the session's settings and the endpoint's key); Qwen Code's sign-in, token, extension-secret,
+  settings and variables files (`oauth_creds.json`, `mcp-oauth-tokens.json`,
+  `mcp-oauth-tokens-v2.json`, `extension-secrets-v1.json`, `settings.json`, `.env`) in `~/.qwen` and
+  in an operator's own `QWEN_HOME`; and `~/.env`, which Qwen Code loads into its own environment
+  whatever its home. The rest of the CLI's home (its settings, skills and tool output) is the agent's to
+  read, and so is the rest of the operator's own `~/.codex` and the runner home's rollouts and state,
+  and the Qwen Code base's shared `runtime` directory, where the chats a resume reads are kept.
   The host's own cache location derives from the same function, so the two cannot disagree about
   what is protected. The repository and workspace read doors honour the same set.
 - Shell commands are parsed before they are judged (`src/gate/command.ts`, `src/gate/shell.ts`):
@@ -199,8 +205,10 @@ A decider can hold one policy per kind across runtimes; `toolName` is unchanged 
 exactly which tool it is. The map names the shell, file and web tools and every `mcp__` tool; a tool
 it does not name is `other`, whatever its input carries, and never left without a kind. A shell call
 also carries `shellDialect` (`SHELL_DIALECTS`: `posix` or `powershell`), the grammar its command runs
-in: Claude's `Bash` is `posix` and its `PowerShell` is `powershell`. For Claude it is data for the
-decider only; the local gate reads Claude's commands as it always has. Both are
+in: Claude's `Bash` is `posix` and its `PowerShell` is `powershell`; Qwen Code's `run_shell_command`
+is `cmd` on Windows, unless the environment the CLI starts with names Git Bash (`posix`) or PowerShell
+(`powershell`) as its shell, and `posix` elsewhere. For Claude it is data for the decider only; the
+local gate reads Claude's commands as it always has. Both are
 filled where the hook input becomes a request (`readRequest`), so the local gate, an in-process
 decider and the escalated body see the same request; an input the gate cannot read is refused with
 a request that states `other`. The POST presents a credential per
@@ -274,6 +282,58 @@ hook channel, and Codex's approval channel.
 
 Codex is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
 
+## The Qwen Code gate
+
+Qwen Code is gated by its own permission request: in stream-json mode the CLI asks the host
+(`can_use_tool`, a control request on its stdout) before every call its rules send to ask, and runs
+the call only on the host's allow. So what decides coverage is which calls are sent to ask, and that
+is the settings file this host writes for each session (`src/host/qwen-home.ts`).
+
+- **Every call asks.** The session's settings sit at the system scope
+  (`QWEN_CODE_SYSTEM_SETTINGS_PATH`), which the CLI applies over every user and project settings
+  file, so a repository's own `.qwen/settings.json` cannot widen them. Their `permissions.ask` names
+  every built-in tool of the pinned release (`contracts/qwen-code-names.json`, derived by
+  `scripts/derive-qwen-names.mjs`) and `mcp__<server>` for each attached server; `disableAllHooks`
+  turns off every hook a settings file could add. The operator's own `~/.qwen` is never the session's
+  home.
+- **Read back before the CLI starts.** The host reads the file back through the environment the CLI
+  will start with: the environment names it, it parses, its ask rules cover every name, and its hooks
+  are off. Anything else refuses the open `qwen-ask-rules-not-active`, and no process starts.
+  `QWEN_CODE_SAFE_MODE`, which would drop every rule, is removed from the CLI's environment.
+- **One decision per call** (`src/host/qwen-gate.ts`). A `can_use_tool` request becomes a
+  `DecisionRequest` (`toolName`, `tool_use_id`, the input, the session id, the call's own directory
+  where the input names one, `toolKind`, `shellDialect`) and goes through the same call decision as
+  a Claude call: the local gate, then the decider, with the session's deadline and hold. An allow is
+  answered with no `updatedInput`, so the call runs exactly as the CLI asked it.
+- **An allow that rewrites the input is refused on Qwen Code** (`permission-decision-unrecognised`):
+  the CLI does not run a rewritten input, and running half the decision would run arguments nobody
+  approved.
+- **Qwen Code's tools in the local gate** (`QWEN_TOOL_FAMILIES`): `write_file`, `edit` and
+  `notebook_edit` through the jail; `read_file`, `zoom_image`, `display_image` and `list_directory`
+  through the protected set; `run_shell_command` and `monitor` through the shell rules, the
+  `directory` a command runs in through the protected set (`checksShellDirectory`); `glob` and
+  `grep_search` through the protected set, relative paths placed where the call runs. A `cmd` command
+  is read both ways, in `cmd`'s grammar (`readCmdCommand`, `src/gate/command.ts`: carets are escapes
+  outside double quotes, a `#` is no comment, and there is no heredoc) and as POSIX, and refused when
+  either reading refuses: the POSIX reading of `echo #& git push` takes the push for a comment.
+- **The deadline order**: the host's decision deadline, then the CLI's own wait for the answer
+  (`timeout.canUseTool` in `initialize`: the decision deadline plus `QWEN_PERMISSION_MARGIN_MS`, at
+  most `QWEN_MAX_PERMISSION_TIMEOUT_MS`), at which the CLI cancels the call. A Qwen Code session whose
+  decision deadline leaves no room inside that is refused `gate-deadlines-inverted`.
+  `matcherTimeoutSeconds` does not apply to Qwen Code.
+- **The modes.** `default` and `plan` are the CLI's own; `bypassPermissions` runs as `default`, every
+  call still asked. The CLI's other modes (`auto-edit`, `auto`, `yolo`) approve calls themselves, so
+  the host never asks for them, and a session that reports one is named.
+- **The residual, named as it happens.** Each is a degrade on the session's state lane, never a
+  refusal: `gate-tool-unruled` (the CLI's first init lists a tool no ask rule names, so a call to it
+  the CLI allows by default runs without asking), `gate-mode-widened` (the CLI reports a mode other
+  than `default` or `plan`). Known when the session opens, and named in its opening tier:
+  `gate-credential-in-shell` (a variables file the CLI loads into its own environment, `~/.env` or
+  `~/.qwen/.env`, or the endpoint's own variables, would reach every command the agent runs; the
+  detail names the variables, never their values). Each is raised once per tool, mode or session.
+
+Qwen Code is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
+
 ## What is deliberately not covered
 
 - `bypassPermissions` is composable, as the SDK's own `permissionMode` vocabulary. It travels wire
@@ -323,6 +383,8 @@ Codex is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
 | `src/host/codex-hook.ts`                   | The hook in the Codex home: its lines, its shim, its probe, its listing and its trust write                       |
 | `src/host/codex-gate.ts`                   | One Codex session's gate                                                                                          |
 | `src/host/codex-approvals.ts`              | Codex's approvals through the per-call decision                                                                   |
+| `src/host/qwen-home.ts`                    | A Qwen Code session's home and system-scope settings, their ask rules, and the read-back                          |
+| `src/host/qwen-gate.ts`                    | One Qwen Code session's gate: the ask, its answer, the deadline order and the residual                            |
 | `src/host/codex-gate-watch.ts`             | The residual, watched and named as it happens                                                                     |
 | `src/gate/outcome.ts`                      | `GateOutcome` (`holding`, `allow`, `deny`, `refused`, `expired`) to transitions, pure; `recordGateOutcome`        |
 | `src/gate/escalate.ts`                     | `escalatingDecider()`: status before body, `EscalationUnavailable`; the HTTP lane the link does not carry         |

@@ -35,7 +35,7 @@ import {
   pathFromToolInput,
 } from './jail.js';
 import { classifyShellCommand } from './shell.js';
-import { parseCommand } from './command.js';
+import { parseCommand, readCmdCommand } from './command.js';
 import { patchPaths } from './patch.js';
 import { isAbsolutePath } from '../core/paths.js';
 
@@ -94,6 +94,19 @@ export const CODEX_TOOL_FAMILIES: ToolFamilies = {
   patch: ['apply_patch'],
 };
 
+/**
+ * The names Qwen Code gives its tools: `run_shell_command` and `monitor` run a command, the file tools
+ * read or write the path they name (`file_path`, `notebook_path` or `path`), and `glob` and
+ * `grep_search` search under theirs. Every other Qwen tool has no local family and is asked about like
+ * any call this gate has no opinion on.
+ */
+export const QWEN_TOOL_FAMILIES: ToolFamilies = {
+  write: ['write_file', 'edit', 'notebook_edit'],
+  read: ['read_file', 'zoom_image', 'display_image', 'list_directory'],
+  shell: ['run_shell_command', 'monitor'],
+  search: ['glob', 'grep_search'],
+};
+
 export interface LocalGateOptions {
   /** The absolute root every path-taking call must resolve inside. */
   readonly workspaceRoot: string | null;
@@ -107,12 +120,19 @@ export interface LocalGateOptions {
   readonly toolFamilies?: ToolFamilies;
   /**
    * Read a shell command in the grammar its request names (`shellDialect`). Defaults to false, and
-   * then every command is read as a POSIX shell reads it. When set, a `powershell` command is read
-   * both ways and refused when either reading refuses: a command read in the wrong grammar is read as
-   * different text from the one that runs, and reading both never scans less than the POSIX reading
-   * alone. Set for a runtime whose shell tool runs PowerShell under a tool name that does not say so.
+   * then every command is read as a POSIX shell reads it. When set, a `powershell` or `cmd` command is
+   * read both ways and refused when either reading refuses: a command read in the wrong grammar is read
+   * as different text from the one that runs, and reading both never scans less than the POSIX reading
+   * alone. Set for a runtime whose shell tool runs a non-POSIX shell under a tool name that does not say
+   * so.
    */
   readonly readsShellDialect?: boolean;
+  /**
+   * Check the directory a shell call runs in (its input's `directory`) against the protected set, as a
+   * read of that directory. Defaults to false. Set for a runtime whose shell tool takes the directory
+   * beside the command: a relative path in the command is a path under it.
+   */
+  readonly checksShellDirectory?: boolean;
   /**
    * Resolve a relative path a read tool names against the call's own working directory (`cwd`), else
    * the workspace root, rather than this process's. Defaults to false. Set for a runtime whose file
@@ -142,6 +162,7 @@ export function localGate(options: LocalGateOptions): LocalGate {
   const searchTools = new Set(families.search ?? DEFAULT_TOOL_FAMILIES.search);
   const patchTools = new Set(families.patch ?? []);
   const readsShellDialect = options.readsShellDialect ?? false;
+  const checksShellDirectory = options.checksShellDirectory ?? false;
   const resolvesAgainstCallCwd = options.resolvesAgainstCallCwd ?? false;
 
   return (request: DecisionRequest): Refusal | null => {
@@ -153,12 +174,28 @@ export function localGate(options: LocalGateOptions): LocalGate {
           'this tool runs a command and the input carries none, so there is nothing to classify — refused rather than guessed',
         );
       }
+      if (checksShellDirectory) {
+        const directory = shellDirectoryOf(request.toolInput);
+        const inside = directory === null ? null : checkReadPath(directory, jail);
+        if (inside !== null) return inside;
+      }
       // One parse, both consumers. The credential check runs first because a command naming the
       // token cache is the more serious of the two answers and should be the one the reader gets.
       const parsed = parseCommand(command);
       const posix = checkShellForProtectedPaths(command, jail) ?? classifyShellCommand(command, parsed);
-      if (!readsShellDialect || request.shellDialect !== 'powershell') return posix;
-      return strongerRefusal(posix, classifyShellCommand(command, parseCommand(command, 'powershell')));
+      if (!readsShellDialect) return posix;
+      if (request.shellDialect === 'powershell') {
+        return strongerRefusal(posix, classifyShellCommand(command, parseCommand(command, 'powershell')));
+      }
+      if (request.shellDialect === 'cmd') {
+        // `cmd.exe` reads carets and quotes its own way, so a protected path can hide from the raw text.
+        const read = readCmdCommand(command);
+        return strongerRefusal(
+          posix,
+          checkShellForProtectedPaths(read, jail) ?? classifyShellCommand(read, parseCommand(command, 'cmd')),
+        );
+      }
+      return posix;
     }
 
     if (patchTools.has(request.toolName)) {
@@ -177,7 +214,9 @@ export function localGate(options: LocalGateOptions): LocalGate {
     }
 
     if (searchTools.has(request.toolName)) {
-      return checkSearch(request.toolInput, jail);
+      if (!resolvesAgainstCallCwd) return checkSearch(request.toolInput, jail);
+      const placed = placedSearchInput(request, jail.workspaceRoot);
+      return 'refused' in placed ? placed.refused : checkSearch(placed.input, jail);
     }
 
     // No opinion. The surrounding gate asks whoever it was going to ask.
@@ -255,4 +294,29 @@ export function patchInputPaths(toolInput: unknown): string[] | null {
       paths.push(entry['movePath']);
   }
   return paths.length === 0 ? null : paths;
+}
+
+/** The directory a shell call names to run in (its input's `directory`), or null when it names none. */
+export function shellDirectoryOf(toolInput: unknown): string | null {
+  if (typeof toolInput !== 'object' || toolInput === null) return null;
+  const directory = (toolInput as Record<string, unknown>)['directory'];
+  return typeof directory === 'string' && directory.trim() !== '' ? directory : null;
+}
+
+/**
+ * A search call's input with a relative `path` placed under where the call runs, as a runtime that
+ * resolves it there reads it; an absolute path, a home-relative one or none is left as it is.
+ */
+function placedSearchInput(
+  request: DecisionRequest,
+  workspaceRoot: string | null,
+): { readonly input: unknown } | { readonly refused: Refusal } {
+  const input = request.toolInput;
+  if (typeof input !== 'object' || input === null) return { input };
+  const path = (input as Record<string, unknown>)['path'];
+  if (typeof path !== 'string' || path.trim() === '' || path.startsWith('~') || isAbsolutePath(path)) {
+    return { input };
+  }
+  const placed = againstCallCwd(path, request.cwd, workspaceRoot);
+  return typeof placed === 'string' ? { input: { ...input, path: placed } } : { refused: placed };
 }

@@ -1,24 +1,27 @@
 /**
- * The window's promise, checked against the peer it is made to: a controller on protocol 15 reads
+ * The window's promise, checked against the peer it is made to: a controller on protocol 16 reads
  * everything this host sends it, and this host reads everything that controller sends.
  *
- * `V15` below is that controller's decoder: the protocol-15 schemas transcribed from the codec the
- * v1.6.0 tag ships (`git show v1.6.0:src/control/codec.ts`), cut to the kinds this file reads, with
+ * `V16` below is that controller's decoder: the protocol-16 schemas transcribed from the codec the
+ * v1.7.0 tag ships (`git show v1.7.0:src/control/codec.ts`), cut to the kinds this file reads, with
  * that release's bounds written as numbers. It describes a released peer, so it never changes to
  * follow this build; an edit here that turns a test green changes the contract rather than fixing
- * it. The frames it reads are the bytes a real link carried, from a host the peer welcomed at 15.
- * Protocol 16 adds what such a controller receives inside members it already reads: `codex` in the
- * hello's runtimes list, a Codex session's own messages and fragments with `runtime: "codex"`, a
- * transition caused by an `agent-event`, five reasons for a runtime's JSON-RPC peer and the Codex
- * gate's reasons. So what is
- * read here is a Claude session's traffic and a Codex session's, side by side on one link. The
- * decision request gains one optional member at 16, `shellDialect`; its body is read with that
- * release's `DecisionRequest` (`V15_DECISION_REQUEST`), which carries an unknown key.
+ * it. The frames it reads are the bytes a real link carried, from a host the peer welcomed at 16.
+ * Protocol 17 adds what such a controller receives inside members it already reads: `qwen-code` in
+ * the hello's runtimes list and its row in the pack list, a Qwen Code session's own messages and
+ * fragments with `runtime: "qwen-code"`, transitions caused by its events, and four reasons: one open
+ * refusal and three degrades, one of which rides the first `ready`'s control tier. So what is read
+ * here is a Claude session's traffic, a Codex session's and a Qwen Code session's, side by side on one
+ * link, and each word protocol 17 adds is shown read by that decoder (the vectors it adds, below).
+ * One word is not: the decision request's `shellDialect` gains `cmd`, which that release's
+ * `DecisionRequest` (`V16_DECISION_REQUEST`) does not declare, so a request naming it is sent to a
+ * controller at 16 with no dialect.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
@@ -38,219 +41,296 @@ import type { DecisionRequest } from '../gate/decision.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { fakeAgents, initMessage } from '../test-support/fake-agent.js';
 import { FAKE_MODELS, fakeCodex } from '../test-support/fake-codex.js';
+import { fakeQwen } from '../test-support/fake-qwen.js';
 import { tempDir } from '../test-support/temp-dir.js';
 import { peerOn, waitFor } from '../test-support/ws-peer.js';
 import type { HookInput, SDKMessage } from './agent-process.js';
 import { availableCodexEntry, codexHostModel, codexNativeRuntime } from './codex-runtime.js';
-import { PeriscopeHost } from './host.js';
+import { PeriscopeHost, decideAtLinkVersion } from './host.js';
 import type { ModelEndpoint } from './model-endpoints.js';
+import { availableQwenEntry, qwenNativeRuntime } from './qwen-runtime.js';
+import type { QwenRuntimeConfig } from './qwen-process.js';
+import { QWEN_NAMES } from './qwen-names.js';
 import { readSessionConfigure } from './wire-request.js';
 
 // ---------------------------------------------------------------------------
-// The protocol-15 decoder, as v1.6.0 shipped it.
+// The protocol-16 decoder, as v1.7.0 shipped it.
 // ---------------------------------------------------------------------------
 
-const V15_MAX_CONFIGURATION_VALUE_LENGTH = 1000;
-const V15_MAX_PLUGIN_DIRS = 8;
-const V15_MAX_CONFIGURE_ENTRIES = 8;
-const V15_MAX_AGENT_MODELS = 32;
-const V15_MAX_AGENT_ENTRIES = 8;
-const V15_MAX_ENDPOINTS = 8;
-const V15_MAX_ENDPOINT_MODELS = 32;
-const V15_MAX_FACT_LIST_ENTRIES = 256;
-const V15_MAX_FACT_TEXT_LENGTH = 1000;
-const V15_MAX_FACT_WORD_LENGTH = 64;
-const V15_TOOL_KINDS = ['shell', 'file_read', 'file_write', 'file_edit', 'mcp', 'web', 'other'] as const;
+const V16_MAX_CONFIGURATION_VALUE_LENGTH = 1000;
+const V16_MAX_PLUGIN_DIRS = 8;
+const V16_MAX_CONFIGURE_ENTRIES = 8;
+const V16_MAX_AGENT_MODELS = 32;
+const V16_MAX_AGENT_ENTRIES = 8;
+const V16_MAX_ENDPOINTS = 8;
+const V16_MAX_ENDPOINT_MODELS = 32;
+const V16_MAX_FACT_LIST_ENTRIES = 256;
+const V16_MAX_FACT_TEXT_LENGTH = 1000;
+const V16_MAX_FACT_WORD_LENGTH = 64;
+const V16_MAX_AGENT_ITEM_BYTES = 32 * 1024;
+const V16_TOOL_KINDS = ['shell', 'file_read', 'file_write', 'file_edit', 'mcp', 'web', 'other'] as const;
+const V16_SHELL_DIALECTS = ['posix', 'powershell'] as const;
 
-const v15JsonValue: z.ZodType<JsonValue> = z.lazy(() =>
+const v16JsonValue: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
     z.string(),
     z.number(),
     z.boolean(),
     z.null(),
-    z.array(v15JsonValue),
-    z.record(z.string(), v15JsonValue),
+    z.array(v16JsonValue),
+    z.record(z.string(), v16JsonValue),
   ]),
 );
-const v15JsonObject = z.record(z.string(), v15JsonValue);
-const v15Refusal = z.looseObject({ reason: z.string().min(1), detail: z.string() });
-const v15SessionCursor = z.looseObject({ sessionId: z.string().min(1), seq: z.number().int().nonnegative() });
-const v15ConfigurationValue = z.string().max(V15_MAX_CONFIGURATION_VALUE_LENGTH).nullable();
-const v15HostPlugin = z.looseObject({
+const v16JsonObject = z.record(z.string(), v16JsonValue);
+const v16Refusal = z.looseObject({ reason: z.string().min(1), detail: z.string() });
+const v16SessionCursor = z.looseObject({ sessionId: z.string().min(1), seq: z.number().int().nonnegative() });
+const v16ConfigurationValue = z.string().max(V16_MAX_CONFIGURATION_VALUE_LENGTH).nullable();
+const v16HostPlugin = z.looseObject({
   name: z.string().min(1).max(200),
   version: z.string().max(64).nullable(),
-  path: z.string().min(1).max(V15_MAX_CONFIGURATION_VALUE_LENGTH),
+  path: z.string().min(1).max(V16_MAX_CONFIGURATION_VALUE_LENGTH),
 });
-const v15AgentModelText = z.string().min(1).max(200);
-const v15HostModel = z.looseObject({
-  value: v15AgentModelText,
-  resolvedModel: v15AgentModelText.nullable(),
+const v16AgentModelText = z.string().min(1).max(200);
+const v16HostModel = z.looseObject({
+  value: v16AgentModelText,
+  resolvedModel: v16AgentModelText.nullable(),
   displayName: z.string().max(200),
-  description: z.string().max(V15_MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
+  description: z.string().max(V16_MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
   supportedEffortLevels: z.array(z.string().min(1).max(32)).max(16),
   supportsFastMode: z.boolean().nullable(),
   supportsAutoMode: z.boolean().nullable(),
   supportsAdaptiveThinking: z.boolean().nullable(),
 });
-const v15HostAgent = z.looseObject({
+const v16HostAgent = z.looseObject({
   claudeCodeVersion: z.string().min(1).max(64),
   sdkVersion: z.string().min(1).max(64),
-  models: z.array(v15HostModel).max(V15_MAX_AGENT_MODELS),
+  models: z.array(v16HostModel).max(V16_MAX_AGENT_MODELS),
 });
-const v15ControlTier = z.looseObject({
-  level: z.string().min(1).max(V15_MAX_FACT_WORD_LENGTH),
-  degrades: z.array(z.string().min(1).max(V15_MAX_FACT_WORD_LENGTH)).max(V15_MAX_FACT_LIST_ENTRIES),
+const v16ControlTier = z.looseObject({
+  level: z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH),
+  degrades: z.array(z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH)).max(V16_MAX_FACT_LIST_ENTRIES),
 });
-const v15VocabularyWords = z.array(z.string().min(1).max(32)).max(16);
-const v15HostAgentEntry = z.looseObject({
-  runtime: z.string().min(1).max(V15_MAX_FACT_WORD_LENGTH),
+const v16VocabularyWords = z.array(z.string().min(1).max(32)).max(16);
+const v16HostAgentEntry = z.looseObject({
+  runtime: z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH),
   version: z.string().min(1).max(64),
   sdkVersion: z.string().min(1).max(64).nullable(),
-  models: z.array(v15HostModel).max(V15_MAX_AGENT_MODELS),
+  models: z.array(v16HostModel).max(V16_MAX_AGENT_MODELS),
   vocabularies: z.looseObject({
-    permissionModes: v15VocabularyWords,
-    efforts: v15VocabularyWords,
+    permissionModes: v16VocabularyWords,
+    efforts: v16VocabularyWords,
     thinking: z.boolean(),
   }),
-  controlTier: v15ControlTier,
+  controlTier: v16ControlTier,
   available: z.boolean(),
-  unavailableReason: z.string().max(V15_MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
+  unavailableReason: z.string().max(V16_MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
 });
-const v15HostEndpoint = z.looseObject({
-  name: z.string().min(1).max(V15_MAX_FACT_WORD_LENGTH),
-  wireApi: z.string().min(1).max(V15_MAX_FACT_WORD_LENGTH),
-  runtimes: z.array(z.string().min(1).max(V15_MAX_FACT_WORD_LENGTH)).max(V15_MAX_AGENT_ENTRIES),
-  models: z.array(v15AgentModelText).max(V15_MAX_ENDPOINT_MODELS).nullable(),
+const v16HostEndpoint = z.looseObject({
+  name: z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH),
+  wireApi: z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH),
+  runtimes: z.array(z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH)).max(V16_MAX_AGENT_ENTRIES),
+  models: z.array(v16AgentModelText).max(V16_MAX_ENDPOINT_MODELS).nullable(),
 });
-const v15HostConfiguration = z.looseObject({
-  repositoryRoot: v15ConfigurationValue,
-  workspaceRoot: v15ConfigurationValue,
-  branchScheme: v15ConfigurationValue,
-  transcriptsRoot: v15ConfigurationValue,
-  controllerUrl: v15ConfigurationValue,
-  decisionUrl: v15ConfigurationValue,
-  agentHome: v15ConfigurationValue,
-  plugins: z.array(v15HostPlugin).max(V15_MAX_PLUGIN_DIRS),
-  agent: v15HostAgent.nullable().optional(),
-  agents: z.array(v15HostAgentEntry).max(V15_MAX_AGENT_ENTRIES).nullable().optional(),
-  endpoints: z.array(v15HostEndpoint).max(V15_MAX_ENDPOINTS).nullable().optional(),
+const v16HostAgentSkills = z.looseObject({
+  runtime: z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH),
+  naming: z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH),
+  delivery: z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH),
 });
-const v15PendingRestart = z.array(z.string().min(1).max(64)).max(V15_MAX_CONFIGURE_ENTRIES);
-const v15ProtocolRange = z.looseObject({ min: z.number().int().min(1), max: z.number().int().min(1) });
+const v16HostConfiguration = z.looseObject({
+  repositoryRoot: v16ConfigurationValue,
+  workspaceRoot: v16ConfigurationValue,
+  branchScheme: v16ConfigurationValue,
+  transcriptsRoot: v16ConfigurationValue,
+  controllerUrl: v16ConfigurationValue,
+  decisionUrl: v16ConfigurationValue,
+  agentHome: v16ConfigurationValue,
+  plugins: z.array(v16HostPlugin).max(V16_MAX_PLUGIN_DIRS),
+  agent: v16HostAgent.nullable().optional(),
+  agents: z.array(v16HostAgentEntry).max(V16_MAX_AGENT_ENTRIES).nullable().optional(),
+  endpoints: z.array(v16HostEndpoint).max(V16_MAX_ENDPOINTS).nullable().optional(),
+  agentSkills: z.array(v16HostAgentSkills).max(V16_MAX_AGENT_ENTRIES).nullable().optional(),
+});
+const v16PendingRestart = z.array(z.string().min(1).max(64)).max(V16_MAX_CONFIGURE_ENTRIES);
+const v16ProtocolRange = z.looseObject({ min: z.number().int().min(1), max: z.number().int().min(1) });
 
 // The fact layer's bodies, every declared member nullable and optional, every unknown key carried.
-const v15FactWord = z.string().max(V15_MAX_FACT_WORD_LENGTH);
-const v15FactText = z.string().max(V15_MAX_FACT_TEXT_LENGTH);
-const v15Count = z.number().int().nonnegative().nullable().optional();
-const v15FactList = <T extends z.ZodType>(entry: T) =>
-  z.array(entry).max(V15_MAX_FACT_LIST_ENTRIES).nullable().optional();
-const v15ModelSpend = z.looseObject({
-  model: v15FactText.nullable().optional(),
-  canonicalModel: v15FactText.nullable().optional(),
-  provider: v15FactWord.nullable().optional(),
-  inputTokens: v15Count,
-  outputTokens: v15Count,
-  cacheReadTokens: v15Count,
-  cacheWriteTokens: v15Count,
-  reasoningTokens: v15Count,
+const v16FactWord = z.string().max(V16_MAX_FACT_WORD_LENGTH);
+const v16FactText = z.string().max(V16_MAX_FACT_TEXT_LENGTH);
+const v16Count = z.number().int().nonnegative().nullable().optional();
+const v16FactList = <T extends z.ZodType>(entry: T) =>
+  z.array(entry).max(V16_MAX_FACT_LIST_ENTRIES).nullable().optional();
+const v16ModelSpend = z.looseObject({
+  model: v16FactText.nullable().optional(),
+  canonicalModel: v16FactText.nullable().optional(),
+  provider: v16FactWord.nullable().optional(),
+  inputTokens: v16Count,
+  outputTokens: v16Count,
+  cacheReadTokens: v16Count,
+  cacheWriteTokens: v16Count,
+  reasoningTokens: v16Count,
   cost: z.number().nonnegative().nullable().optional(),
-  costBasis: v15FactWord.nullable().optional(),
-  contextWindow: v15Count,
+  costBasis: v16FactWord.nullable().optional(),
+  contextWindow: v16Count,
 });
-const v15Spend = z.looseObject({
+const v16Spend = z.looseObject({
   cost: z.number().nonnegative().nullable().optional(),
-  currency: v15FactWord.nullable().optional(),
-  costBasis: v15FactWord.nullable().optional(),
-  byModel: v15FactList(v15ModelSpend),
+  currency: v16FactWord.nullable().optional(),
+  costBasis: v16FactWord.nullable().optional(),
+  byModel: v16FactList(v16ModelSpend),
 });
-const V15_FACTS: Readonly<Record<string, z.ZodType>> = {
+const V16_FACTS: Readonly<Record<string, z.ZodType>> = {
   session_handle: z.looseObject({
-    runtime: v15FactWord.nullable().optional(),
-    handle: v15FactText.nullable().optional(),
+    runtime: v16FactWord.nullable().optional(),
+    handle: v16FactText.nullable().optional(),
   }),
   agent_receipt: z.looseObject({
-    runtime: v15FactWord.nullable().optional(),
-    runtimeVersion: v15FactWord.nullable().optional(),
-    model: v15FactText.nullable().optional(),
-    permissionMode: v15FactWord.nullable().optional(),
-    effort: v15FactWord.nullable().optional(),
-    skills: v15FactList(v15FactText),
-    plugins: v15FactList(
+    runtime: v16FactWord.nullable().optional(),
+    runtimeVersion: v16FactWord.nullable().optional(),
+    model: v16FactText.nullable().optional(),
+    permissionMode: v16FactWord.nullable().optional(),
+    effort: v16FactWord.nullable().optional(),
+    skills: v16FactList(v16FactText),
+    plugins: v16FactList(
       z.looseObject({
-        name: v15FactText.nullable().optional(),
-        version: v15FactWord.nullable().optional(),
-        path: v15FactText.nullable().optional(),
+        name: v16FactText.nullable().optional(),
+        version: v16FactWord.nullable().optional(),
+        path: v16FactText.nullable().optional(),
       }),
     ),
-    pluginErrors: v15FactList(
+    pluginErrors: v16FactList(
       z.looseObject({
-        plugin: v15FactText.nullable().optional(),
-        type: v15FactWord.nullable().optional(),
-        message: v15FactText.nullable().optional(),
-        path: v15FactText.nullable().optional(),
+        plugin: v16FactText.nullable().optional(),
+        type: v16FactWord.nullable().optional(),
+        message: v16FactText.nullable().optional(),
+        path: v16FactText.nullable().optional(),
       }),
     ),
-    mcpServers: v15FactList(
-      z.looseObject({ name: v15FactText.nullable().optional(), status: v15FactWord.nullable().optional() }),
+    mcpServers: v16FactList(
+      z.looseObject({ name: v16FactText.nullable().optional(), status: v16FactWord.nullable().optional() }),
     ),
-    source: v15FactWord.nullable().optional(),
+    source: v16FactWord.nullable().optional(),
+    effortReported: z.boolean().nullable().optional(),
   }),
   turn_record: z.looseObject({
-    runtime: v15FactWord.nullable().optional(),
-    totals: v15Spend.nullable().optional(),
-    turn: v15Spend.nullable().optional(),
-    turnScope: v15FactWord.nullable().optional(),
-    numTurns: v15Count,
-    durationMs: v15Count,
-    sourceSessionId: v15FactText.nullable().optional(),
+    runtime: v16FactWord.nullable().optional(),
+    totals: v16Spend.nullable().optional(),
+    turn: v16Spend.nullable().optional(),
+    turnScope: v16FactWord.nullable().optional(),
+    numTurns: v16Count,
+    durationMs: v16Count,
+    sourceSessionId: v16FactText.nullable().optional(),
   }),
   usage_sample: z.looseObject({
-    runtime: v15FactWord.nullable().optional(),
-    model: v15FactText.nullable().optional(),
-    contextTokens: v15Count,
-    contextWindow: v15Count,
-    cacheTtl: v15FactWord.nullable().optional(),
+    runtime: v16FactWord.nullable().optional(),
+    model: v16FactText.nullable().optional(),
+    contextTokens: v16Count,
+    contextWindow: v16Count,
+    cacheTtl: v16FactWord.nullable().optional(),
     mainThread: z.boolean().nullable().optional(),
+    cacheReadTokens: v16Count,
   }),
   tasks: z.looseObject({
-    runtime: v15FactWord.nullable().optional(),
-    running: v15FactList(
+    runtime: v16FactWord.nullable().optional(),
+    running: v16FactList(
       z.looseObject({
-        taskId: v15FactText.nullable().optional(),
-        type: v15FactWord.nullable().optional(),
-        description: v15FactText.nullable().optional(),
+        taskId: v16FactText.nullable().optional(),
+        type: v16FactWord.nullable().optional(),
+        description: v16FactText.nullable().optional(),
+      }),
+    ),
+    settled: v16FactList(
+      z.looseObject({
+        taskId: v16FactText.nullable().optional(),
+        type: v16FactWord.nullable().optional(),
+        status: v16FactWord.nullable().optional(),
       }),
     ),
   }),
   compaction: z.looseObject({
-    runtime: v15FactWord.nullable().optional(),
-    status: v15FactWord.nullable().optional(),
-    trigger: v15FactWord.nullable().optional(),
-    tokensBefore: v15Count,
-    tokensAfter: v15Count,
+    runtime: v16FactWord.nullable().optional(),
+    status: v16FactWord.nullable().optional(),
+    trigger: v16FactWord.nullable().optional(),
+    tokensBefore: v16Count,
+    tokensAfter: v16Count,
   }),
 };
-const v15AgentFactsBody = z.looseObject({
+const v16AgentFactsBody = z.looseObject({
   update: z.literal('agent_facts'),
-  fact: z.looseObject({ kind: z.string().min(1).max(V15_MAX_FACT_WORD_LENGTH) }),
-  sourceId: v15FactText.nullable().optional(),
+  fact: z.looseObject({ kind: z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH) }),
+  sourceId: v16FactText.nullable().optional(),
   observedAt: z.string().min(1).nullable().optional(),
 });
-const v15AgentFragmentBody = z.looseObject({
+const v16AgentFragmentBody = z.looseObject({
   update: z.literal('agent_fragment'),
-  runtime: v15FactWord.nullable().optional(),
-  channel: v15FactWord.nullable().optional(),
+  runtime: v16FactWord.nullable().optional(),
+  channel: v16FactWord.nullable().optional(),
   text: z.string().nullable().optional(),
-  parentId: v15FactText.nullable().optional(),
+  parentId: v16FactText.nullable().optional(),
 });
-const v15AgentMessageRuntime = z.looseObject({ runtime: v15FactWord.nullable().optional() });
+const v16AgentMessageRuntime = z.looseObject({ runtime: v16FactWord.nullable().optional() });
 
-type V15Context = Parameters<Parameters<typeof v15JsonObject.superRefine>[0]>[1];
+// The conversation item stream's body: every declared member nullable and optional, every unknown key
+// carried, an item kind the release does not model carried with only its kind checked, and every item
+// held to the item budget.
+const v16ItemMembers = {
+  itemId: v16FactText.nullable().optional(),
+  turnId: v16FactText.nullable().optional(),
+  truncated: z.boolean().nullable().optional(),
+};
+const v16ItemText = z.string().nullable().optional();
+const V16_ITEMS: Readonly<Record<string, z.ZodType>> = {
+  turn: z.looseObject({ ...v16ItemMembers, status: v16FactWord.nullable().optional(), detail: v16ItemText }),
+  user_text: z.looseObject({ ...v16ItemMembers, text: v16ItemText }),
+  agent_text: z.looseObject({
+    ...v16ItemMembers,
+    text: v16ItemText,
+    final: z.boolean().nullable().optional(),
+  }),
+  thinking: z.looseObject({
+    ...v16ItemMembers,
+    text: v16ItemText,
+    summary: z.boolean().nullable().optional(),
+  }),
+  tool_call: z.looseObject({
+    ...v16ItemMembers,
+    toolUseId: v16FactText.nullable().optional(),
+    toolName: v16FactText.nullable().optional(),
+    toolKind: v16FactWord.nullable().optional(),
+    input: v16JsonObject.nullable().optional(),
+  }),
+  tool_result: z.looseObject({
+    ...v16ItemMembers,
+    toolUseId: v16FactText.nullable().optional(),
+    status: v16FactWord.nullable().optional(),
+    output: v16ItemText,
+    exitCode: z.number().int().nullable().optional(),
+    durationMs: z.number().int().nonnegative().nullable().optional(),
+    changes: v16FactList(
+      z.looseObject({
+        path: v16FactText.nullable().optional(),
+        change: v16FactWord.nullable().optional(),
+        movePath: v16FactText.nullable().optional(),
+        diff: z.string().nullable().optional(),
+      }),
+    ),
+  }),
+  plan: z.looseObject({ ...v16ItemMembers, text: v16ItemText }),
+  notice: z.looseObject({ ...v16ItemMembers, level: v16FactWord.nullable().optional(), text: v16ItemText }),
+};
+const v16AgentItemBody = z.looseObject({
+  update: z.literal('agent_item'),
+  runtime: v16FactWord.nullable().optional(),
+  item: z.looseObject({ kind: z.string().min(1).max(V16_MAX_FACT_WORD_LENGTH) }),
+  observedAt: z.string().min(1).nullable().optional(),
+});
+const V16_UTF8 = new TextEncoder();
 
-function v15Carry(
+type V16Context = Parameters<Parameters<typeof v16JsonObject.superRefine>[0]>[1];
+
+function v16Carry(
   result: { success: boolean; error?: { issues: readonly z.core.$ZodIssue[] } },
   prefix: readonly PropertyKey[],
-  ctx: V15Context,
+  ctx: V16Context,
 ): void {
   if (result.success) return;
   for (const issue of result.error?.issues ?? []) {
@@ -258,91 +338,104 @@ function v15Carry(
   }
 }
 
-/** The checks a body earns by its `update` at protocol 15; every other body is open JSON. */
-function v15CheckBody(body: JsonObject, lane: 'update' | 'delta', ctx: V15Context): void {
+/** The checks a body earns by its `update` at protocol 16; every other body is open JSON. */
+function v16CheckBody(body: JsonObject, lane: 'update' | 'delta', ctx: V16Context): void {
   const update = body['update'];
   if (update === 'agent_message') {
-    v15Carry(v15AgentMessageRuntime.safeParse(body), [], ctx);
+    v16Carry(v16AgentMessageRuntime.safeParse(body), [], ctx);
     return;
   }
   if (lane === 'update' && update === 'state_transition') {
     const transition = body['transition'];
     if (typeof transition !== 'object' || transition === null || Array.isArray(transition)) return;
-    v15Carry(
-      v15ControlTier.nullable().optional().safeParse(transition['controlTier']),
+    v16Carry(
+      v16ControlTier.nullable().optional().safeParse(transition['controlTier']),
       ['transition', 'controlTier'],
       ctx,
     );
     return;
   }
   if (lane === 'update' && update === 'agent_facts') {
-    const parsed = v15AgentFactsBody.safeParse(body);
-    v15Carry(parsed, [], ctx);
+    const parsed = v16AgentFactsBody.safeParse(body);
+    v16Carry(parsed, [], ctx);
     if (!parsed.success) return;
-    const schema = V15_FACTS[parsed.data.fact.kind];
-    if (schema !== undefined) v15Carry(schema.safeParse(parsed.data.fact), ['fact'], ctx);
+    const schema = V16_FACTS[parsed.data.fact.kind];
+    if (schema !== undefined) v16Carry(schema.safeParse(parsed.data.fact), ['fact'], ctx);
+    return;
+  }
+  if (lane === 'update' && update === 'agent_item') {
+    const parsed = v16AgentItemBody.safeParse(body);
+    v16Carry(parsed, [], ctx);
+    if (!parsed.success) return;
+    const schema = V16_ITEMS[parsed.data.item.kind];
+    if (schema !== undefined) v16Carry(schema.safeParse(parsed.data.item), ['item'], ctx);
+    const byteCount = V16_UTF8.encode(JSON.stringify(body['item']) ?? '').length;
+    if (byteCount > V16_MAX_AGENT_ITEM_BYTES) {
+      ctx.addIssue({ code: 'custom', message: `the item is ${byteCount} bytes as JSON`, path: ['item'] });
+    }
     return;
   }
   if (lane === 'delta' && update === 'agent_fragment') {
-    v15Carry(v15AgentFragmentBody.safeParse(body), [], ctx);
+    v16Carry(v16AgentFragmentBody.safeParse(body), [], ctx);
   }
 }
 
-const v15SessionPayload = z.discriminatedUnion('kind', [
+const v16SessionPayload = z.discriminatedUnion('kind', [
   z.looseObject({
     kind: z.literal('session_update'),
-    body: v15JsonObject.superRefine((body, ctx) => v15CheckBody(body, 'update', ctx)),
+    body: v16JsonObject.superRefine((body, ctx) => v16CheckBody(body, 'update', ctx)),
   }),
   z.looseObject({
     kind: z.literal('session_delta'),
-    body: v15JsonObject.superRefine((body, ctx) => v15CheckBody(body, 'delta', ctx)),
+    body: v16JsonObject.superRefine((body, ctx) => v16CheckBody(body, 'delta', ctx)),
   }),
   z.looseObject({
     kind: z.literal('host_configure_result'),
     requestId: z.string().min(1),
-    configuration: v15HostConfiguration,
+    configuration: v16HostConfiguration,
     overriddenByEnvironment: z.array(z.string()),
-    pendingRestart: v15PendingRestart,
-    refusal: v15Refusal.nullable(),
+    pendingRestart: v16PendingRestart,
+    refusal: v16Refusal.nullable(),
   }),
 ]);
 
-const v15ControlPayload = z.discriminatedUnion('kind', [
+const v16ControlPayload = z.discriminatedUnion('kind', [
   z.looseObject({
     kind: z.literal('link_hello'),
     protocolVersion: z.number().int(),
     hostId: z.string().min(1),
     capabilities: z.array(z.string()),
-    cursors: z.array(v15SessionCursor),
-    configuration: v15HostConfiguration,
-    pendingRestart: v15PendingRestart,
-    protocolRange: v15ProtocolRange,
+    cursors: z.array(v16SessionCursor),
+    configuration: v16HostConfiguration,
+    pendingRestart: v16PendingRestart,
+    protocolRange: v16ProtocolRange,
   }),
 ]);
 
-const V15 = z.discriminatedUnion('frame', [
+const V16 = z.discriminatedUnion('frame', [
   z.looseObject({
     frame: z.literal('session'),
     sessionId: z.string().min(1),
     seq: z.number().int().positive(),
     at: z.string().min(1),
-    payload: v15SessionPayload,
+    payload: v16SessionPayload,
   }),
-  z.looseObject({ frame: z.literal('control'), at: z.string().min(1), payload: v15ControlPayload }),
+  z.looseObject({ frame: z.literal('control'), at: z.string().min(1), payload: v16ControlPayload }),
 ]);
 
-/** The kinds `V15` models: everything this file's host is driven to send, bar the link's own chatter. */
-const V15_KINDS = ['link_hello', 'session_update', 'session_delta', 'host_configure_result'];
+/** The kinds `V16` models: everything this file's host is driven to send, bar the link's own chatter. */
+const V16_KINDS = ['link_hello', 'session_update', 'session_delta', 'host_configure_result'];
 
 /**
- * The decision request a protocol-15 controller's decision endpoint reads: `DecisionRequest` as
- * v1.6.0 declares it (`git show v1.6.0:src/gate/decision.ts`), the members that release added
- * optional, unknown keys carried. The body rides HTTP, not the link, so this is the shape rather than
- * a codec.
+ * The decision request a protocol-16 controller's decision endpoint reads: `DecisionRequest` as
+ * v1.7.0 declares it (`git show v1.7.0:src/gate/decision.ts`), the members added since protocol 14
+ * optional, unknown keys carried, and each closed vocabulary held to that release's words. The body
+ * rides HTTP, not the link, so this is the shape rather than a codec.
  */
-const V15_DECISION_REQUEST = z.looseObject({
+const V16_DECISION_REQUEST = z.looseObject({
   toolName: z.string(),
-  toolKind: z.enum(V15_TOOL_KINDS).nullable().optional(),
+  toolKind: z.enum(V16_TOOL_KINDS).nullable().optional(),
+  shellDialect: z.enum(V16_SHELL_DIALECTS).nullable().optional(),
   runtime: z.string().nullable().optional(),
   toolUseId: z.string(),
   toolInput: z.unknown(),
@@ -398,7 +491,10 @@ const CODEX_ENTRY = availableCodexEntry(
   FAKE_MODELS.filter((model) => model['hidden'] !== true).map((model) => codexHostModel(model as never)),
 );
 
-/** An endpoint this build's host declares; a protocol-15 controller reads the hello's list. */
+/** What the hello's runtimes list states for Qwen Code on the pinned CLI. */
+const QWEN_ENTRY = availableQwenEntry('0.25.1');
+
+/** An endpoint this build's host declares; a protocol-16 controller reads the hello's list. */
 const ENDPOINT: ModelEndpoint = {
   name: 'example-endpoint',
   wireApi: 'anthropic-messages',
@@ -453,11 +549,27 @@ function reached(raw: readonly string[], handle: string, to: string): boolean {
   );
 }
 
-test('a controller on protocol 15 decodes every frame a host of this build sends it', async () => {
-  const peer = await peerOn({ welcomeVersion: 15, ack: true });
+test('a controller on protocol 16 decodes every frame a host of this build sends it', async () => {
+  const peer = await peerOn({ welcomeVersion: 16, ack: true });
   const cwd = await tempDir('protocol-window');
   const agents = fakeAgents();
   const codex = fakeCodex({ codexHome: cwd });
+  // Qwen Code lists a tool its ask rules do not name and reports a mode that approves calls itself,
+  // and a variables file sits in the operator's home: the three degrades protocol 17 adds.
+  const qwen = fakeQwen({
+    tools: [...QWEN_NAMES.tools, 'example_unruled_tool'],
+    mode: 'yolo',
+    calls: () => [{ name: 'run_shell_command', input: { command: 'git status' } }],
+  });
+  writeFileSync(join(cwd, '.env'), 'EXAMPLE_TOKEN=x\n');
+  const qwenRuntime: QwenRuntimeConfig = {
+    binary: 'C:/tools/qwen/cli-entry.js',
+    base: join(cwd, 'qwen'),
+    operatorHome: cwd,
+    spawn: qwen.spawn,
+    killTree: () => Promise.resolve(),
+    closeGraceMs: 20,
+  };
   const decided: DecisionRequest[] = [];
   const host = new PeriscopeHost({
     controllerUrl: peer.url,
@@ -468,7 +580,8 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
     },
     protectedPaths: [],
     registry: new SessionRegistry({
-      baseEnv: {},
+      // The shell Qwen Code runs its commands through on Windows, which its decision request names.
+      baseEnv: { ComSpec: 'C:\\Windows\\system32\\cmd.exe' },
       homeDir: cwd,
       startProcess: agents.start,
       runtimes: {
@@ -480,6 +593,7 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
           killTree: () => Promise.resolve(),
           closeGraceMs: 20,
         }),
+        'qwen-code': qwenNativeRuntime(qwenRuntime),
       },
     }),
     agentCatalog: () => Promise.resolve({ ok: true, agent: AGENT }),
@@ -487,12 +601,13 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
       runtime: { binary: 'C:/tools/codex.exe', home: cwd, clientVersion: '1.7.0' },
       read: async () => ({ entry: CODEX_ENTRY, detail: null }),
     },
+    qwen: { runtime: qwenRuntime, read: async () => ({ entry: QWEN_ENTRY, detail: null }) },
     endpoints: [ENDPOINT],
   });
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 15, 'the welcome at 15', TIMEOUT_MS);
+    await waitFor(() => host.link.negotiatedVersion === 16, 'the welcome at 16', TIMEOUT_MS);
 
     // A Claude session, driven through the members protocol 12 added on the way out (a forwarded
     // message with its instant, a transition caused by a model switch and one by a refusal with no
@@ -559,8 +674,7 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
         await hook(toolCall, 'toolu_1', { signal: new AbortController().signal });
     }
 
-    // A Codex session, driven through a turn: what protocol 16 adds reaches the wire inside members a
-    // protocol-15 controller already reads.
+    // A Codex session, driven through a turn: what protocol 16 added, read natively at 16.
     peer.send('session-2', 1, sessionNew(cwd, { request: sessionNewRequest({ runtime: 'codex' }) }));
     await waitFor(() => reached(peer.raw, 'session-2', 'ready'), 'the Codex session to be ready', TIMEOUT_MS);
     peer.send('session-2', 2, { kind: 'session_prompt', text: 'hello' });
@@ -597,6 +711,21 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
     codex.server.completeTurn();
     await waitFor(() => reached(peer.raw, 'session-2', 'idle'), 'the Codex turn to end', TIMEOUT_MS);
 
+    // A Qwen Code session, driven through a turn with a shell call: what protocol 17 adds reaches the
+    // wire inside members a protocol-16 controller already reads.
+    peer.send(
+      'session-3',
+      1,
+      sessionNew(cwd, { request: sessionNewRequest({ runtime: 'qwen-code', includePartialMessages: true }) }),
+    );
+    await waitFor(
+      () => reached(peer.raw, 'session-3', 'ready'),
+      'the Qwen Code session to be ready',
+      TIMEOUT_MS,
+    );
+    peer.send('session-3', 2, { kind: 'session_prompt', text: 'hello' });
+    await waitFor(() => reached(peer.raw, 'session-3', 'idle'), 'the Qwen Code turn to end', TIMEOUT_MS);
+
     // A host-scoped answer, whose configuration carries the catalog. No seam is composed, so it is
     // refused, and the refusal answer still carries the whole configuration.
     peer.send(
@@ -625,9 +754,9 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
     );
 
     const sent = sentFrames(peer.raw);
-    const read = sent.filter((one) => V15_KINDS.includes(one.kind));
+    const read = sent.filter((one) => V16_KINDS.includes(one.kind));
     const refused = read.flatMap((one) => {
-      const decoded = V15.safeParse(JSON.parse(one.raw));
+      const decoded = V16.safeParse(JSON.parse(one.raw));
       return decoded.success
         ? []
         : [`${one.kind}: ${decoded.error.issues.map((issue) => issue.message).join('; ')}`];
@@ -635,7 +764,7 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
     assert.deepEqual(
       refused,
       [],
-      `a protocol-15 controller refuses what this host sent:\n  ${refused.join('\n  ')}`,
+      `a protocol-16 controller refuses what this host sent:\n  ${refused.join('\n  ')}`,
     );
 
     // What was read carries the members protocols 12 and 15 added, so the green above is about them too.
@@ -678,12 +807,28 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
       'the first ready states the tier',
     );
 
-    // The members protocol 16 adds were among what the protocol-15 decoder read, so the green above
-    // covers them too: Codex in the runtimes list, its messages and fragments named, and a transition
-    // an agent event caused.
-    const runtimes = [CLAUDE_ENTRY, JSON.parse(JSON.stringify(CODEX_ENTRY)) as unknown];
-    assert.deepEqual(helloConfiguration['agents'], runtimes, 'the hello lists Claude, then Codex');
-    assert.deepEqual(answerConfiguration['agents'], runtimes, 'the configure answer lists both');
+    // What protocol 16 added, read natively: Codex in the runtimes list beside Qwen Code, the pack
+    // list, Codex's messages and fragments named, and a transition an agent event caused.
+    const runtimes = [
+      CLAUDE_ENTRY,
+      JSON.parse(JSON.stringify(CODEX_ENTRY)) as unknown,
+      JSON.parse(JSON.stringify(QWEN_ENTRY)) as unknown,
+    ];
+    assert.deepEqual(
+      helloConfiguration['agents'],
+      runtimes,
+      'the hello lists Claude, then Codex, then Qwen Code',
+    );
+    assert.deepEqual(answerConfiguration['agents'], runtimes, 'the configure answer lists all three');
+    assert.deepEqual(
+      helloConfiguration['agentSkills'],
+      [
+        { runtime: 'claude', naming: 'namespaced', delivery: 'per-session' },
+        { runtime: 'codex', naming: 'namespaced', delivery: 'per-process' },
+        { runtime: 'qwen-code', naming: 'bare', delivery: 'per-session' },
+      ],
+      'the hello lists how each runtime takes plugins',
+    );
     const codexRead = read.filter((one) => one.sessionId === 'session-2');
     assert.ok(
       codexRead.some((one) => one.kind === 'session_update' && bodyOf(one)['runtime'] === 'codex'),
@@ -716,13 +861,54 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
       'a Codex turn record was sent',
     );
 
-    // The decision request a protocol-15 endpoint reads: 16's `shellDialect` rides as an unknown key.
-    assert.equal(decided.length, 1, 'the tool call was not asked about');
+    // What protocol 17 adds for Qwen Code, among what the protocol-16 decoder read: its messages,
+    // its fragments, transitions its events caused, its three degrades, and the one known when it
+    // opened riding the first ready's tier.
+    const qwenRead = read.filter((one) => one.sessionId === 'session-3');
+    assert.ok(
+      qwenRead.some((one) => one.kind === 'session_update' && bodyOf(one)['runtime'] === 'qwen-code'),
+      'a Qwen Code message was sent',
+    );
+    assert.ok(
+      qwenRead.some((one) => one.kind === 'session_delta' && bodyOf(one)['runtime'] === 'qwen-code'),
+      'a Qwen Code fragment was sent',
+    );
+    const qwenTransitions = qwenRead.flatMap((one) =>
+      one.kind === 'session_update' ? [readStateTransition(bodyOf(one) as JsonObject)] : [],
+    );
+    const qwenCauses = qwenTransitions.flatMap((transition) =>
+      transition === null ? [] : [`${transition.cause.kind}/${transition.cause.event}`],
+    );
+    for (const cause of [
+      'agent-event/qwen-code:initialize',
+      'agent-event/qwen-code:system/init',
+      'agent-event/qwen-code:result',
+      'refusal/gate-tool-unruled',
+      'refusal/gate-mode-widened',
+    ]) {
+      assert.ok(qwenCauses.includes(cause), `${cause} among ${qwenCauses.join(', ')}`);
+    }
+    assert.deepEqual(
+      qwenTransitions.find((transition) => transition?.to === 'ready')?.controlTier,
+      { level: 'intercepted-with-residual', degrades: ['gate-credential-in-shell'] },
+      'the first ready states the tier, the degrade known at open with it',
+    );
+
+    // The decision requests a protocol-16 endpoint reads: one for the Claude call and one for Qwen
+    // Code's. Qwen Code's shell on Windows is `cmd`, a word 16 does not declare, so its request is sent
+    // with no dialect at all.
+    assert.equal(decided.length, 2, 'a tool call was not asked about');
+    for (const request of decided) {
+      const asV16 = V16_DECISION_REQUEST.safeParse(JSON.parse(JSON.stringify(request)));
+      assert.ok(asV16.success, asV16.success ? '' : asV16.error.message);
+    }
     const body = JSON.parse(JSON.stringify(decided[0])) as Record<string, unknown>;
-    const asV15 = V15_DECISION_REQUEST.safeParse(body);
-    assert.ok(asV15.success, asV15.success ? '' : asV15.error.message);
     assert.equal(body['toolKind'], 'shell');
     assert.equal(body['runtime'], 'claude');
+    const qwenBody = JSON.parse(JSON.stringify(decided[1])) as Record<string, unknown>;
+    assert.equal(qwenBody['runtime'], 'qwen-code');
+    assert.equal(qwenBody['toolKind'], 'shell');
+    assert.equal(qwenBody['shellDialect'], process.platform === 'win32' ? undefined : 'posix');
   } finally {
     host.stop();
     await peer.close();
@@ -730,8 +916,8 @@ test('a controller on protocol 15 decodes every frame a host of this build sends
   }
 });
 
-test('a controller on protocol 15 is read in turn: its configure, effort included, applies what it asks', async () => {
-  const peer = await peerOn({ welcomeVersion: 15, ack: true });
+test('a controller on protocol 16 is read in turn: its configure, effort included, applies what it asks', async () => {
+  const peer = await peerOn({ welcomeVersion: 16, ack: true });
   const cwd = await tempDir('protocol-window');
   const agents = fakeAgents();
   const host = new PeriscopeHost({
@@ -745,14 +931,14 @@ test('a controller on protocol 15 is read in turn: its configure, effort include
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 15, 'the welcome at 15', TIMEOUT_MS);
-    // The first hello, sent with no catalog read, carries the endpoints, and the protocol-15 decoder
+    await waitFor(() => host.link.negotiatedVersion === 16, 'the welcome at 16', TIMEOUT_MS);
+    // The first hello, sent with no catalog read, carries the endpoints, and the protocol-16 decoder
     // reads it.
     const firstHello = sentFrames(peer.raw).find((one) => one.kind === 'link_hello');
     assert.ok(firstHello !== undefined, 'the hello was captured');
     assert.ok(
-      V15.safeParse(JSON.parse(firstHello.raw)).success,
-      'a protocol-15 controller refuses the hello',
+      V16.safeParse(JSON.parse(firstHello.raw)).success,
+      'a protocol-16 controller refuses the hello',
     );
     assert.deepEqual((firstHello.payload['configuration'] as Record<string, unknown>)['endpoints'], [
       ENDPOINT_ENTRY,
@@ -762,25 +948,25 @@ test('a controller on protocol 15 is read in turn: its configure, effort include
     const agent = agents.started[0]!;
     agent.emit(initMessage('agent-1'));
 
-    // The shape a protocol-15 controller sends: the effort member protocol 12 added, applied after
+    // The shape a protocol-16 controller sends: the effort member protocol 12 added, applied after
     // the model.
-    const fromV15 = {
+    const fromV16 = {
       kind: 'session_configure',
       model: 'model-b',
       permissionMode: null,
       thinking: null,
       effort: 'max',
     };
-    peer.send('session-1', 2, fromV15 as SessionConfigure);
+    peer.send('session-1', 2, fromV16 as SessionConfigure);
     await waitFor(() => agent.configured.length === 2, 'the configure to apply', TIMEOUT_MS);
     assert.deepEqual(agent.configured, [
       { setter: 'setModel', value: 'model-b' },
       { setter: 'setEffort', value: 'max' },
     ]);
 
-    // The `session_new` a protocol-15 controller sends: a request with every member that release
+    // The `session_new` a protocol-16 controller sends: a request with every member that release
     // declares, its runtime and endpoint unset, which opens on this host's default runtime.
-    const openedFromV15 = {
+    const openedFromV16 = {
       kind: 'session_new',
       cwd,
       workspaceKey: null,
@@ -805,8 +991,8 @@ test('a controller on protocol 15 is read in turn: its configure, effort include
         endpoint: null,
       },
     };
-    peer.send('session-2', 1, openedFromV15 as SessionNew);
-    await waitFor(() => agents.started.length === 2, 'the protocol-15 open to start a session', TIMEOUT_MS);
+    peer.send('session-2', 1, openedFromV16 as SessionNew);
+    await waitFor(() => agents.started.length === 2, 'the protocol-16 open to start a session', TIMEOUT_MS);
     assert.equal(agents.started[1]?.request.effort, 'high');
     // It names no endpoint, so it takes the runtime's own route on a host that declares one.
     assert.equal('ANTHROPIC_BASE_URL' in (agents.started[1]?.request.env ?? {}), false);
@@ -819,30 +1005,41 @@ test('a controller on protocol 15 is read in turn: its configure, effort include
 });
 
 test('a hello from a host one release behind, runtimes and endpoints and all, decodes on this build', () => {
+  const skills = [
+    { runtime: 'claude', naming: 'namespaced', delivery: 'per-session' },
+    { runtime: 'codex', naming: 'namespaced', delivery: 'per-process' },
+  ];
+  const codexEntry = JSON.parse(JSON.stringify(CODEX_ENTRY)) as unknown;
   const wire = JSON.stringify({
     frame: 'control',
     at: '2000-01-01T00:00:00.000Z',
     payload: {
       kind: 'link_hello',
-      protocolVersion: 15,
+      protocolVersion: 16,
       hostId: 'host-1',
       capabilities: [],
       cursors: [],
       configuration: {
         ...unsetHostConfiguration(),
         agent: AGENT,
-        agents: [CLAUDE_ENTRY],
+        agents: [CLAUDE_ENTRY, codexEntry],
         endpoints: [ENDPOINT_ENTRY],
+        agentSkills: skills,
       },
       pendingRestart: [],
-      protocolRange: { min: 14, max: 15 },
+      protocolRange: { min: 15, max: 16 },
     },
   });
   const decoded = decode(wire);
   assert.ok(decoded.ok, decoded.ok ? '' : decoded.refusal.detail);
   const payload = decoded.value.payload as unknown as { configuration: Record<string, unknown> };
   assert.deepEqual(payload.configuration['agent'], AGENT, 'the catalog is read as sent');
-  assert.deepEqual(payload.configuration['agents'], [CLAUDE_ENTRY], 'the runtimes list is read as sent');
+  assert.deepEqual(
+    payload.configuration['agents'],
+    [CLAUDE_ENTRY, codexEntry],
+    'the runtimes list is read as sent',
+  );
+  assert.deepEqual(payload.configuration['agentSkills'], skills, 'the pack list is read as sent');
 });
 
 test('an effort a controller names that the SDK does not is refused by name, not dropped', () => {
@@ -863,45 +1060,51 @@ test('an effort a controller names that the SDK does not is refused by name, not
 
 // The frozen decoder is only evidence if it can refuse. A released peer's shape that accepted
 // anything would pass every frame above whatever this host sent.
-test('control: the protocol-15 decoder refuses what a version-15 controller refuses', () => {
+test('control: the protocol-16 decoder refuses what a version-16 controller refuses', () => {
   const hello = (configuration: Record<string, unknown>): unknown => ({
     frame: 'control',
     at: '2000-01-01T00:00:00.000Z',
     payload: {
       kind: 'link_hello',
-      protocolVersion: 15,
+      protocolVersion: 16,
       hostId: 'host-1',
       capabilities: [],
       cursors: [],
       configuration,
       pendingRestart: [],
-      protocolRange: { min: 14, max: 15 },
+      protocolRange: { min: 15, max: 16 },
     },
   });
   const { plugins: _plugins, ...version10 } = unsetHostConfiguration();
   const { controlTier: _controlTier, ...untiered } = CLAUDE_ENTRY;
 
   assert.equal(
-    V15.safeParse(hello({ ...unsetHostConfiguration(), agent: AGENT, agents: [CLAUDE_ENTRY] })).success,
+    V16.safeParse(hello({ ...unsetHostConfiguration(), agent: AGENT, agents: [CLAUDE_ENTRY] })).success,
     true,
-    'a protocol-15 hello',
+    'a protocol-16 hello',
   );
   assert.equal(
-    V15.safeParse(hello({ ...unsetHostConfiguration(), agent: { ...AGENT, models: 'all' } })).success,
+    V16.safeParse(hello({ ...unsetHostConfiguration(), agent: { ...AGENT, models: 'all' } })).success,
     false,
     'a catalog whose models are not a list: the member protocol 12 added is checked',
   );
   assert.equal(
-    V15.safeParse(hello({ ...unsetHostConfiguration(), agents: [untiered] })).success,
+    V16.safeParse(hello({ ...unsetHostConfiguration(), agents: [untiered] })).success,
     false,
     'a runtime entry with no control tier: the members protocol 15 added are checked',
   );
   assert.equal(
-    V15.safeParse(hello({ ...unsetHostConfiguration(), plugins: 'loop' })).success,
+    V16.safeParse(hello({ ...unsetHostConfiguration(), agentSkills: [{ runtime: 'codex', naming: 'bare' }] }))
+      .success,
+    false,
+    'a pack row with no delivery: the member protocol 16 added is checked',
+  );
+  assert.equal(
+    V16.safeParse(hello({ ...unsetHostConfiguration(), plugins: 'loop' })).success,
     false,
     'a member whose type changed',
   );
-  assert.equal(V15.safeParse(hello(version10)).success, false, 'a protocol-10 hello, which has no plugins');
+  assert.equal(V16.safeParse(hello(version10)).success, false, 'a protocol-10 hello, which has no plugins');
 
   const update = (body: Record<string, unknown>): unknown => ({
     frame: 'session',
@@ -914,16 +1117,27 @@ test('control: the protocol-15 decoder refuses what a version-15 controller refu
     update: 'agent_facts',
     fact: { kind: 'turn_record', runtime: 'codex', totals: { byModel: [{ inputTokens }] } },
   });
-  assert.equal(V15.safeParse(update(record(30))).success, true, 'a turn record');
+  assert.equal(V16.safeParse(update(record(30))).success, true, 'a turn record');
   assert.equal(
-    V15.safeParse(update(record(-1))).success,
+    V16.safeParse(update(record(-1))).success,
     false,
     'a negative count in a fact: the bodies protocol 15 added are checked',
   );
+  const item = (exitCode: unknown): Record<string, unknown> => ({
+    update: 'agent_item',
+    runtime: 'codex',
+    item: { kind: 'tool_result', toolUseId: 'call-1', status: 'completed', exitCode },
+  });
+  assert.equal(V16.safeParse(update(item(0))).success, true, 'a tool result');
+  assert.equal(
+    V16.safeParse(update(item(0.5))).success,
+    false,
+    'an exit code that is not a whole number: the item body protocol 16 added is checked',
+  );
 });
 
-// The same for the decision request's shape: it must refuse a body a protocol-15 endpoint refuses.
-test('control: the protocol-15 decision request refuses a body with no sessionKey, or a kind it does not know', () => {
+// The same for the decision request's shape: it must refuse a body a protocol-16 endpoint refuses.
+test('control: the protocol-16 decision request refuses a body with no sessionKey, or a kind it does not know', () => {
   const request = {
     toolName: 'Bash',
     toolKind: 'shell',
@@ -936,27 +1150,65 @@ test('control: the protocol-15 decision request refuses a body with no sessionKe
     agentId: null,
     agentType: null,
   };
-  assert.equal(V15_DECISION_REQUEST.safeParse(request).success, true, 'a protocol-15 decision request');
+  assert.equal(V16_DECISION_REQUEST.safeParse(request).success, true, 'a protocol-16 decision request');
   const { sessionKey: _sessionKey, ...unkeyed } = request;
-  assert.equal(V15_DECISION_REQUEST.safeParse(unkeyed).success, false, 'a request with no controller handle');
+  assert.equal(V16_DECISION_REQUEST.safeParse(unkeyed).success, false, 'a request with no controller handle');
   assert.equal(
-    V15_DECISION_REQUEST.safeParse({ ...request, toolKind: 'teleport' }).success,
+    V16_DECISION_REQUEST.safeParse({ ...request, toolKind: 'teleport' }).success,
     false,
     'a tool kind that release does not declare',
   );
+  assert.equal(
+    V16_DECISION_REQUEST.safeParse({ ...request, shellDialect: 'powershell' }).success,
+    true,
+    'a dialect that release declares',
+  );
+  assert.equal(
+    V16_DECISION_REQUEST.safeParse({ ...request, shellDialect: 'cmd' }).success,
+    false,
+    'the dialect protocol 17 adds, which that release does not declare',
+  );
 });
 
-test('a controller on protocol 15 decodes every item, every added fact member and the skills list this build writes', () => {
-  const corpus = fileURLToPath(new URL('../../contracts/wire-vectors/', import.meta.url));
-  const added = readdirSync(corpus).filter((file) =>
-    /^(session_update\.agent-item-|session_update\.agent-facts-(tasks-settled|usage-sample-cache-read|agent-receipt-effort-reported)|link_hello\.agent-skills)/.test(
-      file,
-    ),
+test('the dialect word protocol 17 adds is held back from a controller at 16, and sent at 17', async () => {
+  const sent: DecisionRequest[] = [];
+  let version: number | null = 16;
+  const decide = decideAtLinkVersion(
+    async (request) => {
+      sent.push(request);
+      return allow();
+    },
+    () => version,
   );
-  assert.equal(added.length, 12, `the vectors this reads: ${added.join(', ')}`);
+  const request: DecisionRequest = {
+    toolName: 'run_shell_command',
+    toolKind: 'shell',
+    shellDialect: 'cmd',
+    runtime: 'qwen-code',
+    toolUseId: 'call_1',
+    toolInput: { command: 'dir' },
+    sessionId: 'qwen-session-1',
+    sessionKey: 'session-1',
+    cwd: '/w',
+    agentId: null,
+    agentType: null,
+  };
+  await decide(request, new AbortController().signal);
+  version = 17;
+  await decide(request, new AbortController().signal);
+  const [at16, at17] = sent.map((one) => JSON.parse(JSON.stringify(one)) as Record<string, unknown>);
+  assert.equal(at16?.['shellDialect'], undefined, 'a controller at 16 was sent the word it does not declare');
+  assert.ok(V16_DECISION_REQUEST.safeParse(at16).success, 'a controller at 16 refuses what it was sent');
+  assert.equal(at17?.['shellDialect'], 'cmd', 'a controller at 17 was not sent the dialect');
+});
+
+test('a controller on protocol 16 decodes every vector protocol 17 adds: the Qwen Code entry and pack row, its messages, its causes, its open refusal and its degrades', () => {
+  const corpus = fileURLToPath(new URL('../../contracts/wire-vectors/', import.meta.url));
+  const added = readdirSync(corpus).filter((file) => /qwen-code/.test(file));
+  assert.equal(added.length, 8, `the vectors this reads: ${added.join(', ')}`);
   for (const file of added) {
     const wire = (JSON.parse(readFileSync(`${corpus}${file}`, 'utf8')) as { wire: string }).wire;
-    const read = V15.safeParse(JSON.parse(wire));
+    const read = V16.safeParse(JSON.parse(wire));
     assert.ok(read.success, `${file}: ${read.success ? '' : JSON.stringify(read.error.issues)}`);
   }
 });

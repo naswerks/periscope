@@ -22,7 +22,11 @@ the wire as `cause.event`, and the transcript locator is `claude-transcript:`. A
 Codex, through Codex's app-server, when its operator points it at a Codex binary and a home of the
 runner's own ([configuration](docs/configuration.md#codex)); a Codex session is gated through
 periscope's own Codex hook, at tier `intercepted-with-residual`, and every path that can still run
-undecided is named when it happens.
+undecided is named when it happens. It can offer Qwen Code too, through the Qwen Code CLI's own
+control protocol, when its operator points it at the CLI and a base of the runner's own
+([configuration](docs/configuration.md#qwen-code)); a Qwen Code session reaches its model through an
+endpoint the operator declared, every call it makes is asked about through the same gate, at tier
+`intercepted-with-residual`, and what can still run undecided is named.
 
 ## Run a host
 
@@ -135,6 +139,7 @@ anything. The figure for a release is in [`CHANGELOG.md`](CHANGELOG.md).
 | `@anthropic-ai/claude-agent-sdk` | **0.3.284**, pinned exactly, no caret |
 | Claude Code CLI                  | **2.1.284** (bundled with that SDK)   |
 | Codex app-server                 | **0.162.1**, pinned, when configured  |
+| Qwen Code CLI                    | **0.25.1**, pinned, when configured   |
 | Node                             | 22 or later; CI proves 22 and 24      |
 
 The SDK is pre-1.0, so the SHA-256 of its installed type definitions is kept in

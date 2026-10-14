@@ -121,7 +121,9 @@ test('every client method the adapter calls is stable at the pinned release', ()
 
 test("Codex's cause events are its wired notifications, exactly, both ways", () => {
   const wired = codexWiredNotifications().map((method) => `codex:${method}`);
-  const { missing, invented } = difference([...AGENT_EVENTS], wired);
+  // Codex's own: every runtime's agent events share one list, each runtime held to its own table.
+  const codexEvents = AGENT_EVENTS.filter((event) => event.startsWith('codex:'));
+  const { missing, invented } = difference([...codexEvents], wired);
   assert.deepEqual(missing, [], `wired notifications with no cause event: ${missing.join(', ')}`);
   assert.deepEqual(invented, [], `cause events naming no wired notification: ${invented.join(', ')}`);
   for (const event of AGENT_EVENTS) assert.ok(isCauseEvent(event), `${event} is not a declared cause event`);

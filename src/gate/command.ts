@@ -330,6 +330,36 @@ export function stripPowerShellComments(command: string): string {
 }
 
 /**
+ * A `cmd.exe` command as the shared tokenizer can read it: what `cmd.exe` itself would run.
+ *
+ * Three rules differ from a POSIX shell's, and each would hide text from the POSIX reading. Outside
+ * double quotes a caret escapes the next character, so `git pu^sh` runs `git push`: the caret is
+ * removed and the character kept. A single quote is no quote at all, so `echo 'a & git push'` runs
+ * `git push` after the `&`: each one is read as a space. And `#` opens no comment, so nothing is
+ * stripped. Inside double quotes a caret is an ordinary character. There is no heredoc to set aside.
+ * Every difference is resolved toward scanning more text, never less.
+ */
+export function readCmdCommand(command: string): string {
+  let result = '';
+  let quoted = false;
+  for (let i = 0; i < command.length; i += 1) {
+    const character = command[i] as string;
+    if (character === '"') {
+      quoted = !quoted;
+      result += character;
+      continue;
+    }
+    if (!quoted && character === '^' && i + 1 < command.length) {
+      result += command[i + 1] as string;
+      i += 1;
+      continue;
+    }
+    result += !quoted && character === "'" ? ' ' : character;
+  }
+  return result;
+}
+
+/**
  * Split into tokens, with separators preserved as their own single-character tokens.
  *
  * `quotesAreSeparators` is the interpreter inversion: when set, the quote characters that delimit a
@@ -658,15 +688,18 @@ function readInvocation(tokens: readonly string[]): { invocation: Invocation; sc
  */
 export function parseCommand(command: string, dialect: ShellDialect = 'posix'): ParsedCommand {
   const withoutComments =
-    dialect === 'powershell' ? stripPowerShellComments(command) : stripComments(command);
+    dialect === 'powershell'
+      ? stripPowerShellComments(command)
+      : dialect === 'cmd'
+        ? readCmdCommand(command)
+        : stripComments(command);
   const hasInterpreter = tokenize(withoutComments).some((token) =>
     INTERPRETER_NAMES.includes(programNameOf(token)),
   );
-  // PowerShell has no heredoc: `<<` there is not a body to separate, so nothing is set aside as data.
+  // PowerShell and cmd.exe have no heredoc: `<<` there is not a body to separate, so nothing is set
+  // aside as data.
   const heredocs =
-    dialect === 'powershell'
-      ? { text: withoutComments, payloads: [] }
-      : separateHeredocBodies(withoutComments);
+    dialect === 'posix' ? separateHeredocBodies(withoutComments) : { text: withoutComments, payloads: [] };
 
   const tokens = tokenize(heredocs.text, hasInterpreter);
   const invocations: Invocation[] = [];
