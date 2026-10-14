@@ -97,6 +97,12 @@ the open `capabilities` list needs no version bump; a new hello member does. The
 - the refusal reason `qwen-ask-rules-not-active`, which refuses a Qwen Code open, and the degrades
   `gate-tool-unruled`, `gate-mode-widened` and `gate-credential-in-shell`
   ([The control tier](#the-control-tier));
+- `pi`, a runtime the hello's `agents` may list and a `session_new` may name, whose messages are
+  pi's own RPC events, records and answers with `runtime: "pi"` (below), with its row in
+  `agentSkills` and its events and the host's commands among the causes (`pi:*` in `AGENT_EVENTS`;
+  [state-machine.md](state-machine.md));
+- the refusal reason `pi-extension-not-active`, which refuses a pi open, and the degrade
+  `gate-foreign-extension` ([The control tier](#the-control-tier));
 - `cmd` in `SHELL_DIALECTS`, the grammar of a shell call Qwen Code runs through `cmd.exe` on Windows.
 
 It adds no payload kind and no member. A version-16 controller reads what this build sends: a
@@ -107,7 +113,8 @@ dialect is `cmd` with no `shellDialect` at all, and the controller reads that ca
 Every frame a version-16 controller sends decodes here unchanged. Version 14 narrowed
 `session_new.request.env` (below), and the narrowing holds at every version the host negotiates.
 `src/host/protocol-window.test.ts` holds both directions over a real link: every frame this host
-sends, a Claude session's, a Codex session's and a Qwen Code session's on one link, decodes with the
+sends, a Claude session's, a Codex session's, a Qwen Code session's and a pi session's on one link,
+decodes with the
 protocol-16 decoder v1.7.0 shipped, and every decision request it posts reads as that release's
 `DecisionRequest`; each wire vector version 17 adds decodes with that decoder; and a version-16
 controller's `session_new` and `session_configure` decode here and apply.
@@ -149,11 +156,11 @@ A `host_configure_result` carries the same `agent`.
 From v15, `configuration.agents` lists the runtimes the host can spawn sessions on, one
 `HostAgentEntry` each, at most `MAX_AGENT_ENTRIES`, and is optional:
 
-- `runtime`: the name a `session_new` names it by (`claude`, `codex`, `qwen-code`).
+- `runtime`: the name a `session_new` names it by (`claude`, `codex`, `qwen-code`, `pi`).
 - `version` and `sdkVersion`: the runtime's own version, and the version of the library the host
   drives it through, null when there is none. Claude's are `agent`'s `claudeCodeVersion` and
-  `sdkVersion`; Codex's `version` is its app-server's and Qwen Code's its CLI's, and the
-  `sdkVersion` of both is null.
+  `sdkVersion`; Codex's `version` is its app-server's, Qwen Code's and pi's their CLIs', and the
+  `sdkVersion` of each is null.
 - `models`: the models it offers, each a `HostModel` as above.
 - `vocabularies`: `{ permissionModes, efforts, thinking }`, the words a `session_new` or
   `session_configure` may name for it, and whether it takes a thinking control.
@@ -162,8 +169,8 @@ From v15, `configuration.agents` lists the runtimes the host can spawn sessions 
   or off its pinned version, its sign-in missing) is listed `available: false` with the reason, and a
   `session_new` naming it is refused `runtime-unavailable`. Claude is always available.
 
-This host lists Claude, built from the same catalog read `agent` carries, then Codex and then Qwen
-Code when its operator configured each ([configuration](configuration.md)), so `agents` is null when
+This host lists Claude, built from the same catalog read `agent` carries, then Codex, then Qwen
+Code and then pi when its operator configured each ([configuration](configuration.md)), so `agents` is null when
 `agent` is null and absent when it is absent. Codex's entry is its pinned version, the models its app-server
 lists, the permission modes `default`, `dontAsk` and `bypassPermissions`, the efforts its models
 list, `thinking` true only when a listed model takes the effort `none`, and the tier
@@ -171,7 +178,11 @@ list, `thinking` true only when a listed model takes the effort `none`, and the 
 sandbox ready. Qwen Code's entry is its pinned version, no models (a Qwen Code session's model is
 an endpoint's, and the session names it), the permission modes `bypassPermissions`, `default` and
 `plan`, the efforts `low`, `medium`, `high`, `xhigh` and `max`, `thinking` false, and the tier
-`intercepted-with-residual`. The whole list is held to `MAX_AGENT_CATALOG_BYTES` as JSON. Claude's entry is placed first, and a later
+`intercepted-with-residual`. pi's entry is its pinned version, the models it reaches as
+`provider/id` (read at start from a pi with nothing of its own and no session; none when that read
+fails or is past the hello's bounds), each listing the six efforts when it reasons and none when it
+does not, no permission modes, the efforts `minimal`, `low`, `medium`, `high`, `xhigh` and `max`
+(pi's thinking levels), `thinking` true, and the tier `intercepted`. The whole list is held to `MAX_AGENT_CATALOG_BYTES` as JSON. Claude's entry is placed first, and a later
 entry that would push the list past the budget rides with `models: []`, named once, so one
 runtime's catalog never empties another's; a list Claude's entry alone cannot fit takes the catalog
 with it, both riding null. A `host_configure_result` carries the same `agents`.
@@ -184,7 +195,8 @@ From v15, `configuration.endpoints` lists the model endpoints the host's operato
   `openai-responses`, `openai-chat`). A wire API a newer peer adds is read; the host sends only the
   ones it declares.
 - `runtimes`: the runtimes that can reach it. Each speaks the endpoint's wire API (Claude speaks
-  `anthropic-messages`, Codex `openai-responses`, Qwen Code all three), and the host refuses at start
+  `anthropic-messages`, Codex `openai-responses`, Qwen Code and pi all three), and the host refuses
+  at start
   an endpoint naming
   one that does not, and lists a runtime only where it routes it and it speaks the API, so a
   controller filters its picker on `runtimes` with no table of its own.
@@ -214,7 +226,8 @@ absent when it is absent. A runtime it does not list cannot take plugin director
 Claude is `namespaced`, `per-session`: the agent CLI's plugin directories. Codex is `namespaced`,
 `per-process`: each directory is a skill root of the session's own app-server. Qwen Code is `bare`,
 `per-session`: each directory's `skills/` is a skill directory in the session's own settings, and the
-CLI lists its skills by name alone. A word a newer peer
+CLI lists its skills by name alone. pi is `bare`, `per-session`: each directory's `skills/` is handed
+to the session's pi as a skill directory on its command line, and pi lists its skills by name alone. A word a newer peer
 adds is read; the host sends only the words it declares.
 
 ## The credential on the three transports
@@ -333,6 +346,19 @@ host wrote, are not forwarded. Which messages move the session is `QWEN_COVERAGE
 turn in an error `result` whose `num_turns` is 0 and whose `error.message` names the missing auth type
 or key: that is a Qwen Code session's sign-in marker.
 
+A pi session's messages carry `runtime: "pi"`, and each `message` is what pi wrote on stdout in RPC
+mode, or its answer to one of the host's commands: an event as pi wrote it (`agent_start`,
+`message_end`, `tool_execution_start`, `agent_settled`, and the rest), a record (`extension_error`,
+`extension_ui_request`), and pi's answers to the host's `get_commands`, `get_state`, `prompt`,
+setters, `abort` and `get_session_stats` as `{ type: 'response', command, success, data }` or with
+`error`. A `message_update` rides the delta lane, and only for a session that asked for partial
+messages; everything else the update lane. Which messages move the session is `PI_COVERAGE`
+([state-machine.md](state-machine.md)). pi writes no sign-in event; a session with no model it can
+reach meets one of three markers: its open ends `session-spawn-failed` with pi's own last line,
+`No models available`, naming `/login`; the answer to a `prompt` is `success: false` with an `error`
+starting `No API key found for ` or `Authentication failed for `; or a run's answer is a
+`message_end` whose `stopReason` is `error`, its `errorMessage` the provider's own refusal.
+
 A forwarded message's body, on either lane, carries `observedAt` (v12): the instant, ISO-8601 in
 UTC, this host took the message off the agent's stream. Date a message by it rather than by its
 arrival: a message replayed after a reconnect arrives late, and a clock started at arrival runs
@@ -390,6 +416,22 @@ running total for the session and its `turn` and `turnScope` null, a resumed or 
 including the source's tokens, with no cost and no cache writes; `usage_sample` is each answer to the
 context-usage request the host sends after each `result`; `tasks` is the background tasks the CLI
 reports started and settled. `inputTokens` is the CLI's input less its cached input, floored at zero.
+
+pi's sources: `session_handle` is the session id the answer to the host's `get_state` names;
+`agent_receipt` is pi's own (`source: 'runtime'`) once the session opens: the model and thinking
+level its state names (`effort` is the thinking level), the skills its command list names, and the
+MCP servers the host's extension registered, with no permission mode. It is sent again when pi says
+its thinking level moved, and one composed by the host (`source: 'host'`) follows a model the host
+set, for which pi writes no event. `turn_record` is the answer to `get_session_stats`, which the host
+asks after each run: its `totals` are pi's running totals for the session, tokens and a cost in US
+dollars pi estimates from its own model catalogue (`costBasis: 'catalogue-estimated'`, never a bill),
+and its `turn` and `turnScope` null. pi counts every entry of the session's file, its compacted
+history, abandoned branches, failed retries and compaction calls included, so a total can exceed what
+the visible conversation used, and a resumed or forked session's includes the source's.
+`inputTokens` is pi's `input`, which pi counts without the cached input; pi states no reasoning
+figure. `usage_sample` is the same answer's context usage; `compaction` is each compaction pi
+reports, its `tokensAfter` null, since pi states only an estimate; `tasks` is not sent. pi's messages
+carry no id, so a pi fact's `sourceId` is null.
 
 Every fact carries `runtime`. `sourceId` is the id of the native message the fact was lifted from
 (Claude: the message's `uuid`, the same id its `agent_message` carries) and null for a fact lifted
@@ -531,7 +573,11 @@ Claude's items come from `UserPromptSubmit` (the turn's start and its prompt), e
 (the turn's end), `system/compact_boundary` and `system/api_retry` (`CLAUDE_ITEM_COVERAGE`,
 `src/host/claude-items.ts`, keyed by the SDK's own message and block kinds). Codex's come from its
 turn and item notifications, its plan updates and its notices (`CODEX_ITEM_FILLS`,
-`src/host/codex-items.ts`, and each `CODEX_COVERAGE` row's note).
+`src/host/codex-items.ts`, and each `CODEX_COVERAGE` row's note). pi's come from its runs, the turn
+running from `agent_start` to `agent_settled` (a pi turn is one model call, so the conversation's turn
+is the whole run a prompt starts), its user and assistant `message_end`s, each `tool_execution_end`,
+and its retries, failed compactions, extension errors and notifications (`PiItemFill`,
+`src/host/pi-items.ts`, and each `PI_COVERAGE` row's note); a pi item's `turnId` is null.
 
 A kind or a vocabulary word a newer peer adds is read on the way in and refused on the way out; an
 item kind this build does not model decodes and reads as null through `readAgentItem`. Every member
@@ -559,8 +605,13 @@ by the gate, and its opening `degrades` name `gate-hook-foreign`, `gate-project-
 `gate-sandbox-absent` when they hold for it. A Qwen Code session is `intercepted-with-residual`:
 the settings the host writes for it send every tool the CLI ships, and each attached MCP server's,
 to ask, and the gate decides every ask; its opening `degrades` name `gate-credential-in-shell` when a
-variables file the CLI loads, or the endpoint's own variables, would reach the agent's shell. The tier
-is stated, never negotiated, and the host decides nothing by it.
+variables file the CLI loads, or the endpoint's own variables, would reach the agent's shell. A pi
+session is `intercepted`: pi has no permission system, and periscope's extension, the last handler
+every tool call meets, asks the gate about each before it runs; its opening `degrades` name
+`gate-foreign-extension` when code this host did not load is in the session, and
+`gate-credential-in-shell` when the endpoint's own variables would reach the agent's shell, and
+either lowers its level to `intercepted-with-residual`. The tier is stated, never negotiated, and the
+host decides nothing by it.
 
 **Degrades raised mid-session.** A degrade is a `RefusalReason` that names a path where a call ran
 undecided, or where the session lost a guarantee; it never means the call was stopped, and it never
@@ -574,11 +625,12 @@ with their detail. A Codex session's transport refusals (`rpc-*`) ride the same 
 Qwen Code's are `gate-tool-unruled` (its first init lists a tool no ask rule names, so a call to it
 the CLI allows by default runs without asking; once per tool) and `gate-mode-widened` (the CLI reports
 a mode other than `default` or `plan`; once per mode); the one known at the open is also raised once,
-with its detail. None of these is `permission-decision-unavailable`, which means the tool did not run.
+with its detail. pi's two are known at the open, and each is raised once, with its detail. None of these is `permission-decision-unavailable`, which means the tool did not run.
 A Codex open whose hook is not trusted and enabled is refused `codex-hook-not-active`, and a Qwen Code
 open whose settings could not be written, or do not read back asking about every built-in tool with
-every hook off, is refused `qwen-ask-rules-not-active`: a refusal transition on this lane, then the
-session's end.
+every hook off, is refused `qwen-ask-rules-not-active`, and a pi open whose extension did not say
+hello in time, or that pi would not load, is refused `pi-extension-not-active`: a refusal transition
+on this lane, then the session's end.
 
 A level outside `CONTROL_TIER_LEVELS` is read on the way in, so a newer peer's added level survives,
 and refused on the way out. The codec checks a transition's `controlTier` and nothing else in it.
@@ -698,6 +750,30 @@ On `qwen-code`, every other member is read as Qwen Code's own:
 - `endpoint` opens the session on that endpoint, over any of the three wire APIs; its credential is
   written only into the session's settings file. A Qwen Code session opened on no endpoint ends its
   first turn at the sign-in marker (above).
+
+On `pi`, every other member is read as pi's own:
+
+- `permissionMode` is refused `request-key-unsupported`: pi has no permission modes, and every call
+  asks this host. `effort` takes the entry's words, pi's thinking levels; `thinking` disabled starts
+  the session at `off`.
+- A member that is Claude's alone is refused `request-key-unsupported`, naming it: `settingSources`,
+  `forwardSubagentText`, `hooks`, `spawn`, a store, and a `systemPrompt` that is the `claude_code`
+  preset. A string `systemPrompt` replaces pi's base prompt and the `runtime-default` preset's
+  `append` is added to it; either reaches pi as a file in the session's run directory, never on its
+  command line.
+- `resume` names a session in the host's store whose working directory is the session's own; any
+  other is refused `request-key-unsupported`, naming `resume`. `fork` opens a copy of it in the
+  session's directory.
+- `plugins` reach pi as skill directories on its command line, each directory's `skills/`. A
+  directory without one is named among the receipt's `pluginErrors`.
+- `mcpServers` ride the extension's configuration file: an HTTP server's `headers` beside its URL, a
+  stdio server's command, arguments and environment, each value written so pi expands nothing in it.
+  The extension registers each server's tools by name (`mcp__<server>__<tool>`), and the session's
+  gate decides every call. A server pi has no form for (SSE, an in-process server, a name outside
+  letters, digits, `-` and `_`) is refused `mcp-descriptor-invalid`, naming it. `strictMcpConfig` on
+  admits only those servers: pi reads no MCP file of the workspace's, and the agent home's is empty.
+- `endpoint` opens the session on that endpoint as pi's provider, over any of the three wire APIs;
+  its credential is written only into the agent home's `models.json`.
 
 `endpoint` names the model endpoint the session's model traffic goes to, by a name the hello's
 `endpoints` lists. Null or absent is the runtime's own route. A controller names an endpoint and
@@ -936,6 +1012,8 @@ The reasons a controller meets most, and what each is not:
 | `gate-hook-timed-out`, `gate-hook-unspawnable`, `gate-hook-output-rejected`, `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call`, `gate-approval-unanswered`, `gate-approval-auto-reviewed`, `gate-approval-ambiguous`, `gate-project-config-active`, `gate-sandbox-absent` | degrades on a Codex session's state lane: a call went on undecided, or the session lost a guarantee ([The control tier](#the-control-tier)). Never a stop                                                                                                                                |
 | `qwen-ask-rules-not-active`                                                                                                                                                                                                                                                            | a Qwen Code open whose settings could not be written, or do not read back asking about every built-in tool and every attached MCP server with every hook off; the detail names the file and what it lacks. Without them a call the CLI allows by default runs undecided                  |
 | `gate-tool-unruled`, `gate-mode-widened`, `gate-credential-in-shell`                                                                                                                                                                                                                   | degrades on a Qwen Code session's state lane: a tool no ask rule names, a mode that approves calls itself, a variables file or endpoint variable that reaches the agent's shell ([The control tier](#the-control-tier)). Never a stop                                                    |
+| `pi-extension-not-active`                                                                                                                                                                                                                                                              | a pi open whose extension did not say hello over the session's channel within `PI_HELLO_DEADLINE_MS`, or that pi would not load, or whose channel or configuration could not be made; no prompt was written. Without it every pi tool call would run undecided                           |
+| `gate-foreign-extension`                                                                                                                                                                                                                                                               | a degrade on a pi session's state lane, known at the open: a command, tool or MCP server from code this host did not load, which lowers the opening tier ([The control tier](#the-control-tier)). Never a stop                                                                           |
 | `request-key-unsupported`                                                                                                                                                                                                                                                              | a `session_new` member the named runtime does not honour, or a value of one its vocabularies lack; the detail names the key. Every member is Claude's own, so a session on Claude never meets it                                                                                         |
 | `plugins-undeliverable`                                                                                                                                                                                                                                                                | the runtime refused the call that hands it a session's plugin directories (Codex's `skills/extraRoots/set`); the open ends before `ready`, the detail carrying the runtime's answer. A directory that is not there is not this: it is named among the receipt's `pluginErrors`           |
 | `rpc-line-malformed`, `rpc-line-too-large`, `rpc-request-timed-out`, `rpc-request-failed`, `rpc-server-overloaded`                                                                                                                                                                     | a runtime's JSON-RPC peer: a line that is no JSON-RPC message, a line past what the host reads (dropped whole), a request with no answer by the host's deadline, an error answer, and the peer's own overload code. They reach a controller in a cause's detail, never as a wire refusal |

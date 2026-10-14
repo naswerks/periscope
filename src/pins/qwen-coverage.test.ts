@@ -28,6 +28,7 @@ import { AGENT_EVENTS, isCauseEvent } from '../state/model.js';
 import type { TransitionCause } from '../state/model.js';
 import { SessionObserver } from '../state/observer.js';
 import { QWEN_COVERAGE, qwenWiredEvents } from '../state/qwen-coverage.js';
+import { piWiredEvents } from '../state/pi-coverage.js';
 
 /** The names one side has and the other lacks, both ways. */
 function difference(
@@ -102,10 +103,11 @@ test("Qwen Code's cause events are its wired message and answer rows, exactly, b
   for (const event of qwenEvents) assert.ok(isCauseEvent(event), `${event} is not a declared cause event`);
 });
 
-test("every agent event belongs to one runtime's table: Codex's wired notifications or Qwen Code's wired rows", () => {
+test("every agent event belongs to one runtime's table: Codex's wired notifications, Qwen Code's wired rows or pi's", () => {
   const owned = new Set([
     ...codexWiredNotifications().map((method) => `codex:${method}`),
     ...qwenWiredEvents().map((name) => `qwen-code:${name}`),
+    ...piWiredEvents().map((name) => `pi:${name}`),
   ]);
   const orphans = AGENT_EVENTS.filter((event) => !owned.has(event));
   assert.deepEqual(orphans, [], `agent events no runtime's table holds: ${orphans.join(', ')}`);

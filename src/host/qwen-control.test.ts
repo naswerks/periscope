@@ -106,14 +106,17 @@ test('every request from the CLI is answered: a response, an error, and a handle
 
 test('a cancel the CLI sends aborts the handler of its request', async () => {
   let aborted = false;
-  const run = started((_subtype, _request, _id, signal) => {
-    signal.addEventListener('abort', () => {
-      aborted = true;
-    });
-    return new Promise((resolve) =>
-      setTimeout(() => resolve({ response: { behavior: 'deny', message: 'late' } }), 20),
-    );
-  });
+  // The handler settles only when it is aborted, so the cancel always finds it running: a handler that
+  // settled on a timer would race the cancel on a busy machine.
+  const run = started(
+    (_subtype, _request, _id, signal) =>
+      new Promise((resolve) => {
+        signal.addEventListener('abort', () => {
+          aborted = true;
+          resolve({ response: { behavior: 'deny', message: 'late' } });
+        });
+      }),
+  );
   run.child.send({ type: 'control_request', request_id: '9', request: { subtype: 'can_use_tool' } });
   await drain();
   run.child.send({ type: 'control_cancel_request', request_id: '9' });

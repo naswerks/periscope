@@ -112,10 +112,21 @@ import type { QwenRuntimeConfig } from './qwen-process.js';
 import type { QwenRuntimeRead } from './qwen-runtime.js';
 import { QWEN_MESSAGE_BINDING, qwenNativeRuntime, unavailableQwenEntry } from './qwen-runtime.js';
 import type { QwenMessage } from './qwen-wire.js';
+import { PI_PINNED_VERSION } from './pi-binary.js';
+import { piEndpointEnv, piEndpointRoutes } from './pi-endpoints.js';
+import { PiFactLift } from './pi-facts.js';
+import { createPiSessionGate } from './pi-gate.js';
+import { PiItemFill } from './pi-items.js';
+import { piMcpServers } from './pi-mcp.js';
+import { piSkillDirectories } from './pi-pack.js';
+import type { PiRuntimeConfig } from './pi-process.js';
+import type { PiRuntimeRead } from './pi-runtime.js';
+import { PI_MESSAGE_BINDING, piNativeRuntime, unavailablePiEntry } from './pi-runtime.js';
+import type { PiMessage } from './pi-wire.js';
 import type { Decider } from '../gate/decision.js';
 import type { LocalGate } from '../gate/local.js';
 import type { ToolFamilies } from '../gate/local.js';
-import { CODEX_TOOL_FAMILIES, QWEN_TOOL_FAMILIES, localGate } from '../gate/local.js';
+import { CODEX_TOOL_FAMILIES, PI_TOOL_FAMILIES, QWEN_TOOL_FAMILIES, localGate } from '../gate/local.js';
 import type { GateOutcome } from '../gate/outcome.js';
 import { recordGateOutcome } from '../gate/outcome.js';
 import {
@@ -133,6 +144,7 @@ import { SessionRegistry } from '../sessions/registry.js';
 import { factLiftFor } from '../sessions/fact-lift.js';
 import {
   CODEX_RUNTIME,
+  PI_RUNTIME,
   QWEN_RUNTIME,
   agentSkillsFor,
   controlTierFor,
@@ -338,6 +350,9 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   }
   if (runtime === QWEN_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
     return composeQwenSession(options, machine, observer, clock);
+  }
+  if (runtime === PI_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
+    return composePiSession(options, machine, observer, clock);
   }
 
   // The conversation items: read from the session's messages, with the prompt its hook reports and the
@@ -568,6 +583,79 @@ function composeQwenSession(
       items,
     },
     QWEN_MESSAGE_BINDING,
+  );
+  observer.created(`a session was requested in ${options.cwd}`);
+  return ok({ sessionKey: options.sessionKey, session: created.value, machine, observer, detach });
+}
+
+/**
+ * `composeSession` for a session on pi: no SDK hooks, pi's own forwarding, and the session's gate, which
+ * this host's extension inside pi asks over the session's channel for every call. The gate's decision is
+ * the one a Claude call gets: the same local gate, decider, deadlines and outcome record.
+ */
+function composePiSession(
+  options: ComposeSessionOptions,
+  machine: SessionStateMachine,
+  observer: SessionObserver,
+  clock: Clock,
+): Result<ComposedSession> {
+  const items = new PiItemFill(options.sessionKey);
+  // The channel's own refusals (a request with the wrong token, a malformed line) reach the host's log
+  // through the session once it exists.
+  let reportChannel: (detail: string) => void = () => undefined;
+  const gate = createPiSessionGate({
+    sessionKey: options.sessionKey,
+    cwd: options.cwd,
+    decide: options.decide,
+    ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+    decisionTimeoutMs: options.gate?.decisionTimeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS,
+    holdAfterMs: options.gate?.holdAfterMs ?? DEFAULT_HOLD_AFTER_MS,
+    version: packageVersion(),
+    onOutcome: (outcome) => {
+      recordGateOutcome(machine, outcome);
+      if (outcome.kind === 'deny' || outcome.kind === 'refused' || outcome.kind === 'expired') {
+        items.gateBlocked(outcome.request.toolUseId);
+      }
+      options.onOutcome?.(outcome);
+    },
+    // A degrade is recorded on the session's own machine, so it rides the wire as the session's state,
+    // and reaches the host's log beside it.
+    onDegrade: (name, detail) => {
+      observer.refused({ kind: 'refusal', event: name, detail });
+      options.onRefusal?.(refusal(name, detail));
+    },
+    onSpawnDegrades: (names, level) => observer.stateSpawnDegrades(names, level),
+    onChannelRefused: (detail) => reportChannel(detail),
+  });
+
+  const created = options.registry.create({
+    ...(options.request ?? {}),
+    cwd: options.cwd,
+    nativeGate: gate,
+  });
+  if (!created.ok) {
+    gate.close();
+    return refuse<ComposedSession>(created.refusal.reason, created.refusal.detail);
+  }
+  // The registry started this session on pi's own process, so its messages are pi's.
+  const session = created.value as unknown as HostedSession<PiMessage>;
+  reportChannel = (detail) => created.value.degrade('runtime_degraded', `hook channel: ${detail}`);
+  created.value.onEnd(() => gate.close());
+  // The session's plugin directories this host cannot hand pi are reported in its receipt.
+  const skills = piSkillDirectories((options.request?.plugins ?? []).map((plugin) => plugin.path));
+  const lift = new PiFactLift({ undeliveredPlugins: skills.problems });
+  const detach = forwardNativeSession(
+    {
+      sessionKey: options.sessionKey,
+      session,
+      observer,
+      sink: options.sink,
+      clock,
+      ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
+      lift,
+      items,
+    },
+    PI_MESSAGE_BINDING,
   );
   observer.created(`a session was requested in ${options.cwd}`);
   return ok({ sessionKey: options.sessionKey, session: created.value, machine, observer, detach });
@@ -838,6 +926,16 @@ export interface PeriscopeHostOptions {
    * @internal
    */
   readonly qwen?: PeriscopeQwenOptions;
+  /**
+   * pi, offered beside Claude: how a pi session's CLI is started, and the read at start that decides its
+   * entry in the hello (`readPiRuntime`). The host builds its registry with pi's own process when it
+   * builds one; an embedder passing its own `registry` gives it the runtime itself. Omitted, the hello
+   * does not list pi and a session naming `pi` is refused `runtime-unavailable`. The daemon composes it
+   * from its two config keys.
+   *
+   * @internal
+   */
+  readonly pi?: PeriscopePiOptions;
   readonly registry?: SessionRegistry;
   /** How the link is built. Defaults to the real `ControllerLink`. See `HostLink`. */
   readonly link?: (handlers: LinkHandlers) => HostLink;
@@ -872,6 +970,18 @@ export interface PeriscopeQwenOptions {
   readonly runtime: QwenRuntimeConfig;
   /** The read at start; the binary composes `readQwenRuntime` over the same CLI and base home. */
   readonly read: () => Promise<QwenRuntimeRead>;
+}
+
+/**
+ * pi, as a host offers it.
+ *
+ * @internal
+ */
+export interface PeriscopePiOptions {
+  /** The CLI, the base home and the seams a session's CLI starts with. */
+  readonly runtime: PiRuntimeConfig;
+  /** The read at start; the binary composes `readPiRuntime` over the same CLI and base home. */
+  readonly read: () => Promise<PiRuntimeRead>;
 }
 
 /** What a host reports. Data rather than log lines, so an embedder decides the format. */
@@ -1078,6 +1188,8 @@ export class PeriscopeHost {
   #codexEntry: HostAgentEntry | undefined;
   /** Qwen Code's entry as its read at start left it; undefined on a host that does not offer Qwen Code. */
   #qwenEntry: HostAgentEntry | undefined;
+  /** pi's entry as its read at start left it; undefined on a host that does not offer pi. */
+  #piEntry: HostAgentEntry | undefined;
   /**
    * The entries the hello lists after Claude's, fitted to the runtimes list's bound with Claude's
    * first: an entry that would push the list past it rides with no models, so one runtime's catalog
@@ -1121,7 +1233,7 @@ export class PeriscopeHost {
         homeDir: options.homeDir ?? '',
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
-        ...(options.codex === undefined && options.qwen === undefined
+        ...(options.codex === undefined && options.qwen === undefined && options.pi === undefined
           ? {}
           : {
               runtimes: {
@@ -1139,6 +1251,14 @@ export class PeriscopeHost {
                       [QWEN_RUNTIME]: qwenNativeRuntime({
                         ...options.qwen.runtime,
                         endpoints: qwenEndpointRoutes(options.endpoints ?? []),
+                      }),
+                    }),
+                ...(options.pi === undefined
+                  ? {}
+                  : {
+                      [PI_RUNTIME]: piNativeRuntime({
+                        ...options.pi.runtime,
+                        endpoints: piEndpointRoutes(options.endpoints ?? []),
                       }),
                     }),
               },
@@ -1207,7 +1327,13 @@ export class PeriscopeHost {
     const readCatalog = this.#options.agentCatalog;
     const readCodex = this.#options.codex?.read;
     const readQwen = this.#options.qwen?.read;
-    if (readCatalog === undefined && readCodex === undefined && readQwen === undefined) {
+    const readPi = this.#options.pi?.read;
+    if (
+      readCatalog === undefined &&
+      readCodex === undefined &&
+      readQwen === undefined &&
+      readPi === undefined
+    ) {
       this.#link.start();
       return;
     }
@@ -1217,7 +1343,8 @@ export class PeriscopeHost {
       readCatalog === undefined ? Promise.resolve(undefined) : settledCatalog(readCatalog),
       readCodex === undefined ? Promise.resolve(undefined) : settledCodexRead(readCodex),
       readQwen === undefined ? Promise.resolve(undefined) : settledQwenRead(readQwen),
-    ]).then(([catalog, codex, qwen]) => {
+      readPi === undefined ? Promise.resolve(undefined) : settledPiRead(readPi),
+    ]).then(([catalog, codex, qwen, pi]) => {
       if (this.#pendingStart !== pending) return;
       this.#pendingStart = null;
       if (codex !== undefined) {
@@ -1236,6 +1363,15 @@ export class PeriscopeHost {
           runtime: QWEN_RUNTIME,
           entry: qwen.entry,
           detail: qwen.detail,
+        });
+      }
+      if (pi !== undefined) {
+        this.#piEntry = pi.entry;
+        this.#report({
+          kind: 'runtime-catalog',
+          runtime: PI_RUNTIME,
+          entry: pi.entry,
+          detail: pi.detail,
         });
       }
       if (catalog !== undefined) this.#stampAgent(catalog);
@@ -1589,7 +1725,9 @@ export class PeriscopeHost {
           ? codexEndpointEnv(endpoint)
           : requested.value.runtime === QWEN_RUNTIME
             ? qwenEndpointEnv(endpoint)
-            : endpointSpawnEnv(endpoint);
+            : requested.value.runtime === PI_RUNTIME
+              ? piEndpointEnv(endpoint)
+              : endpointSpawnEnv(endpoint);
 
     const provider = this.#workspaces;
 
@@ -1746,6 +1884,11 @@ export class PeriscopeHost {
       const qwenServers = qwenMcpServers(servers.value);
       if (!qwenServers.ok) return giveBack(qwenServers.refusal);
     }
+    // A pi session takes them in the form its extension registers, the same way.
+    if (requested.value.runtime === PI_RUNTIME) {
+      const piServers = piMcpServers(servers.value);
+      if (!piServers.ok) return giveBack(piServers.refusal);
+    }
 
     // The host's plugin directories, checked now: one that vanished since it was configured refuses
     // this open by name. The agent would report it in its init message's `plugin_errors`, but only
@@ -1790,9 +1933,18 @@ export class PeriscopeHost {
                 checksShellDirectory: true,
                 resolvesAgainstCallCwd: true,
               }
-            : this.#options.toolFamilies === undefined
-              ? {}
-              : { toolFamilies: this.#options.toolFamilies }),
+            : runtimeOf(requested.value) === PI_RUNTIME
+              ? // A pi session's tools are pi's: its own names, its PowerShell tool read in PowerShell's
+                // grammar as well, and its relative paths, read and written, placed where the session runs.
+                {
+                  toolFamilies: PI_TOOL_FAMILIES,
+                  readsShellDialect: true,
+                  resolvesAgainstCallCwd: true,
+                  resolvesWritesAgainstCallCwd: true,
+                }
+              : this.#options.toolFamilies === undefined
+                ? {}
+                : { toolFamilies: this.#options.toolFamilies }),
       }),
       ...(this.#options.codex === undefined
         ? {}
@@ -2469,6 +2621,7 @@ export class PeriscopeHost {
     return [
       ...(this.#codexEntry === undefined ? [] : [this.#codexEntry]),
       ...(this.#qwenEntry === undefined ? [] : [this.#qwenEntry]),
+      ...(this.#piEntry === undefined ? [] : [this.#piEntry]),
     ];
   }
 
@@ -2746,6 +2899,16 @@ async function settledQwenRead(read: () => Promise<QwenRuntimeRead>): Promise<Qw
   } catch (error) {
     const reason = `the Qwen Code runtime could not be read: ${describe(error)}`;
     return { entry: unavailableQwenEntry(QWEN_PINNED_VERSION, reason), detail: reason };
+  }
+}
+
+/** The pi read, settled: a read that throws is reported as an unavailable runtime, never a failed start. */
+async function settledPiRead(read: () => Promise<PiRuntimeRead>): Promise<PiRuntimeRead> {
+  try {
+    return await read();
+  } catch (error) {
+    const reason = `the pi runtime could not be read: ${describe(error)}`;
+    return { entry: unavailablePiEntry(PI_PINNED_VERSION, reason), detail: reason };
   }
 }
 

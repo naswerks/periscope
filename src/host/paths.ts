@@ -121,6 +121,7 @@ export function credentialPaths(
     readonly modelEndpointFiles?: readonly string[];
     readonly codexHome?: string | null;
     readonly qwenHome?: string | null;
+    readonly piHome?: string | null;
   } = {},
 ): string[] {
   const home = homeDirectory(env);
@@ -149,6 +150,13 @@ export function credentialPaths(
     add(join(directory, 'settings.json'));
     add(join(directory, '.env'));
   };
+  // The files of a pi agent home that hold a credential: its sign-in and API keys, the MCP servers'
+  // tokens, and the models file, whose providers carry their keys in plain text.
+  const piAgentFiles = (directory: string): void => {
+    add(join(directory, 'auth.json'));
+    add(join(directory, 'mcp-auth.json'));
+    add(join(directory, 'models.json'));
+  };
 
   // The host's own credential directory, first, and derived rather than spelled out. The
   // directory is named rather than the file, so anything the host later keeps beside the token
@@ -175,6 +183,8 @@ export function credentialPaths(
     codexHomeFiles(join(home, '.codex'));
     // The operator's own Qwen Code home, whether or not this host runs Qwen Code, likewise.
     qwenHomeFiles(join(home, '.qwen'));
+    // The operator's own pi agent home, whether or not this host runs pi, likewise.
+    piAgentFiles(join(home, '.pi', 'agent'));
     // The variables file in the home directory itself: many tools read it, Qwen Code loads it whatever
     // its own home is, and it is where keys are commonly kept.
     add(join(home, '.env'));
@@ -229,6 +239,12 @@ export function credentialPaths(
     add(join(runnerHome, 'sessions'));
     qwenHomeFiles(runnerHome);
   }
+
+  // The pi home this host runs pi sessions from, whole: its agent home holds the sign-in and the
+  // endpoints' keys, its sessions store every session's conversation, and each session's run directory
+  // the channel's token and the session's MCP tickets. Nothing in it is anything a session's tools need.
+  const piHome = options.piHome ?? env['PERISCOPE_PI_HOME'] ?? null;
+  if (typeof piHome === 'string' && piHome.trim() !== '') add(piHome.trim());
 
   return paths;
 }

@@ -104,6 +104,7 @@ export function configValueProblem(key: string, value: string): string | null {
     case 'PERISCOPE_MODEL_ENDPOINTS':
     case 'PERISCOPE_CODEX_HOME':
     case 'PERISCOPE_QWEN_HOME':
+    case 'PERISCOPE_PI_HOME':
       return isAbsolutePath(value) ? null : `${key} must be an absolute path — got '${value}'`;
     case 'PERISCOPE_CODEX_BIN':
       if (!isAbsolutePath(value)) return `${key} must be an absolute path — got '${value}'`;
@@ -114,6 +115,11 @@ export function configValueProblem(key: string, value: string): string | null {
       if (!isAbsolutePath(value)) return `${key} must be an absolute path — got '${value}'`;
       return isBatchFile(value)
         ? `${key} names a batch file, which runs only through a shell; name the package's cli-entry.js — got '${value}'`
+        : null;
+    case 'PERISCOPE_PI_BIN':
+      if (!isAbsolutePath(value)) return `${key} must be an absolute path — got '${value}'`;
+      return isBatchFile(value)
+        ? `${key} names a batch file, which runs only through a shell; name the package's dist/bundle/cli.js — got '${value}'`
         : null;
     case 'PERISCOPE_BRANCH_SCHEME':
       return value.includes('{key}')

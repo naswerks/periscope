@@ -104,7 +104,7 @@ the decision deadline.
 - The vocabulary is owned locally, never received. The wire carries no policy in either direction;
   the embedder chooses tool families and protected paths at construction.
 - Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
-  workspace, with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome })` as the protected set and the home directory
+  workspace, with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome, piHome })` as the protected set and the home directory
   the shell scan expands from `homeDirectory(env)`. That set, stated once (`src/host/paths.ts`): the
   host's own config directory (`PERISCOPE_CONFIG_DIR` or `~/.periscope`, which holds the token
   cache, the paired credential and the config file); the agent CLI's token cache and configuration
@@ -118,8 +118,11 @@ the decision deadline.
   holding the session's settings and the endpoint's key); Qwen Code's sign-in, token, extension-secret,
   settings and variables files (`oauth_creds.json`, `mcp-oauth-tokens.json`,
   `mcp-oauth-tokens-v2.json`, `extension-secrets-v1.json`, `settings.json`, `.env`) in `~/.qwen` and
-  in an operator's own `QWEN_HOME`; and `~/.env`, which Qwen Code loads into its own environment
-  whatever its home. The rest of the CLI's home (its settings, skills and tool output) is the agent's to
+  in an operator's own `QWEN_HOME`; `~/.env`, which Qwen Code loads into its own environment
+  whatever its home; the whole of pi's runner home (`PERISCOPE_PI_HOME`: its agent home with the
+  sign-in and the endpoints' keys, the session store every pi session's file is kept in, and each
+  session's run directory with its channel's token); and pi's sign-in, MCP token and models files
+  (`auth.json`, `mcp-auth.json`, `models.json`) in `~/.pi/agent`. The rest of the CLI's home (its settings, skills and tool output) is the agent's to
   read, and so is the rest of the operator's own `~/.codex` and the runner home's rollouts and state,
   and the Qwen Code base's shared `runtime` directory, where the chats a resume reads are kept.
   The host's own cache location derives from the same function, so the two cannot disagree about
@@ -334,6 +337,66 @@ is the settings file this host writes for each session (`src/host/qwen-home.ts`)
 
 Qwen Code is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
 
+## The pi gate
+
+pi has no permission system. What it has is an extension's `tool_call` handler, which every tool call
+passes through before it runs and which can block it. So the gate is an extension of periscope's own
+(`src/host/pi-extension.ts`, built to `dist/host/pi-extension.js`), and what decides coverage is that
+it is loaded, that it is the last handler a call meets, and that nothing else is loaded beside it.
+
+- **The launch rule** (`piArgs`, `src/host/pi-process.ts`). pi is started with `--mode rpc
+--no-extensions --no-skills --no-approve`, then `-e builtin:mcp` and `-e` naming this package's
+  extension by absolute path, the session's skill directories (`--skill`), the session store
+  (`--session-dir`), the session to open, the model and the system prompt file. `--no-extensions` and
+  `--no-skills` keep pi from finding any of its own; `--no-approve` leaves the workspace untrusted, so
+  a repository's `.pi/settings.json` (which could name the shell binary), `.pi/mcp.json` and
+  `.pi/extensions` are not read. pi loads its built-in extensions before the ones `-e` names, so
+  periscope's handler runs after pi's MCP extension's: the input it decides is the input that runs.
+- **Proven before the first prompt.** The extension's configuration (the channel's address and token,
+  its deadline, the session's MCP servers) is a file only the runner can read, named by
+  `PERISCOPE_PI_EXTENSION_CONFIG`; the extension reads it, takes the variable out of pi's environment,
+  and says hello over the session's hook channel (`src/host/hook-channel.ts`) once pi's session has
+  started, with what it can see: every tool and command pi lists and where each came from, and the
+  MCP servers registered. The host deletes the file once the hello arrives. No prompt is written
+  before it; one that does not arrive within `PI_HELLO_DEADLINE_MS`, or a pi that refuses to load the
+  extension, refuses the open `pi-extension-not-active`.
+- **Nothing else loaded, checked at the open** (`piForeignSources`, `src/host/pi-gate.ts`). Every
+  tool, command and MCP server the hello names, and every command `get_commands` lists, must come from
+  this package's extension, from one of pi's built-in tools (`builtin:<tool>`, the pinned release's
+  list), from pi's MCP extension, or from a skill directory the host handed over. Anything else, and a
+  list the extension could not read or had to cut, is named `gate-foreign-extension` and drops the
+  opening tier to `intercepted-with-residual`. An extension that registers neither a tool nor a command
+  is invisible to the check; the launch rule is what keeps one from loading.
+- **One decision per call.** The extension asks the host about each `tool_call` over the channel, the
+  answer verified by the session's token (`src/gate/hook-exchange.ts`), and the host reads it as a
+  `DecisionRequest` (`readPiToolCall`, `src/gate/pi-request.ts`: the tool's name, the call id, the
+  input, the session, the call's own directory, `toolKind`, `shellDialect`) through the same call
+  decision as a Claude call: the local gate, then the decider, with the session's deadline and hold.
+- **What blocks.** A deny blocks the call with its reason. So do the extension's own deadline (the
+  decision deadline plus `HOOK_DEADLINE_MARGIN_MS`), an interrupt (the run's signal blocks at once and
+  closes the exchange, which ends the host's decision rather than leaving pi's abort to wait on it), a
+  reply that does not verify, and anything the handler throws.
+- **An allow may rewrite the input** (`canRewriteInput`). The rewrite is applied to the call's input in
+  place, and pi runs that object, unvalidated again; pi's transcript and its `tool_execution_start`
+  still show the input the model wrote.
+- **pi's own `bash` command is refused.** It runs a command outside any tool call, and its handler has
+  no way to block one but to throw, so the extension's handler throws: the command does not run, and
+  the answer says so.
+- **pi's tools in the local gate** (`PI_TOOL_FAMILIES`): `write` and `edit` through the jail, with a
+  relative path placed where the session runs (`resolvesWritesAgainstCallCwd`); `read` through the
+  protected set; `bash` and `powershell` through the shell rules, read in their own grammars (`posix`
+  and `powershell`); `grep`, `find` and `ls` through the protected set, relative paths placed where the
+  call runs.
+- **MCP.** The session's servers are registered by the extension with `direct` exposure, so each tool
+  is its own `mcp__<server>__<tool>` and asked about like every other call. Every header and variable
+  value is escaped first, so pi neither runs a value starting `!` as a command nor expands a `$` in it.
+- **The residual known at the open.** `gate-foreign-extension` (above), and `gate-credential-in-shell`
+  when the session's endpoint has variables of its own, which pi's environment carries to every
+  command the agent runs; the detail names the variables, never their values.
+
+pi is advertised at `intercepted` (`CONTROL_TIERS`); a session with either degrade known at its open
+opens at `intercepted-with-residual`.
+
 ## What is deliberately not covered
 
 - `bypassPermissions` is composable, as the SDK's own `permissionMode` vocabulary. It travels wire
@@ -385,6 +448,10 @@ Qwen Code is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
 | `src/host/codex-approvals.ts`              | Codex's approvals through the per-call decision                                                                   |
 | `src/host/qwen-home.ts`                    | A Qwen Code session's home and system-scope settings, their ask rules, and the read-back                          |
 | `src/host/qwen-gate.ts`                    | One Qwen Code session's gate: the ask, its answer, the deadline order and the residual                            |
+| `src/host/pi-extension.ts`                 | The extension pi loads: its configuration, its hello, its MCP servers and its call handlers                       |
+| `src/host/pi-gate.ts`                      | One pi session's gate: the channel, the hello, the check for code this host did not load                          |
+| `src/gate/pi-request.ts`                   | pi's `tool_call` event read as a decision request                                                                 |
+| `src/host/pi-home.ts`                      | The pi base: its agent home's files, a session's run directory, a resume resolved to its file                     |
 | `src/host/codex-gate-watch.ts`             | The residual, watched and named as it happens                                                                     |
 | `src/gate/outcome.ts`                      | `GateOutcome` (`holding`, `allow`, `deny`, `refused`, `expired`) to transitions, pure; `recordGateOutcome`        |
 | `src/gate/escalate.ts`                     | `escalatingDecider()`: status before body, `EscalationUnavailable`; the HTTP lane the link does not carry         |

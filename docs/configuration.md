@@ -87,10 +87,13 @@ workspace provider live, except while a session is open or opening.
 | `PERISCOPE_CODEX_HOME`               | The Codex home every Codex session runs from (`CODEX_HOME`), by absolute path: the runner's own, never the operator's `~/.codex`. Created when absent. Its sign-in files, and the files that make periscope's hook the gate there (`hooks.json`, `hooks/`, `config.toml`), join the gate's protected set. A path holding a space or any of `&                                                                                                                                                                                                                                                             | < > ^ % ! ( ) ; , = ' "`or a backtick cannot carry the hook's line, so Codex is listed unavailable, naming the character; the host still starts. Set with`PERISCOPE_CODEX_BIN`. Config-file key; never settable over the link. |
 | `PERISCOPE_QWEN_BIN`                 | The Qwen Code CLI sessions naming `qwen-code` run, by absolute path: the npm package's `cli-entry.js`, which runs under this Node. A batch file (`.cmd`, `.bat`) is refused, because it runs only through a shell. Set with `PERISCOPE_QWEN_HOME` or not at all; one without the other refuses start. Read at start ([Qwen Code](#qwen-code)). Config-file key; never settable over the link.                                                                                                                                                                                                             |
 | `PERISCOPE_QWEN_HOME`                | The base every Qwen Code session's home is made beneath, by absolute path: the runner's own, never the operator's `~/.qwen`. Created when absent. Each session runs from `<base>/sessions/<id>`, made at its open and removed at its close, and every session shares `<base>/runtime`, where the CLI keeps the chats a resume reads. `<base>/sessions` joins the gate's protected set. Set with `PERISCOPE_QWEN_BIN`. Config-file key; never settable over the link.                                                                                                                                      |
+| `PERISCOPE_PI_BIN`                   | The pi CLI sessions naming `pi` run, by absolute path: the npm package's `dist/bundle/cli.js`, which runs under this Node. A batch file (`.cmd`, `.bat`) is refused, because it runs only through a shell. Set with `PERISCOPE_PI_HOME` or not at all; one without the other refuses start. Read at start ([pi](#pi)). Config-file key; never settable over the link.                                                                                                                                                                                                                                     |
+| `PERISCOPE_PI_HOME`                  | The base pi runs from, by absolute path: the runner's own, never the operator's `~/.pi`. Created when absent. `<base>/agent` is pi's agent home, `<base>/sessions` the store of every session's file, and `<base>/run/<id>` one session's run directory, made at its open and removed at its close. The whole base joins the gate's protected set. Set with `PERISCOPE_PI_BIN`. Config-file key; never settable over the link.                                                                                                                                                                            |
 | `PERISCOPE_CODEX_ENDPOINT_KEY`       | Never read from this host's own environment, and not a config-file key: the host sets it, in the app-server environment of a Codex session opened on a [model endpoint](#model-endpoints), to that endpoint's credential, and the session's provider reads its key from it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                        |
 | `PERISCOPE_HOOK_CHANNEL`             | Never read from this host's own environment, and not a config-file key: the host sets it, in a Codex session's app-server environment, to the address of that session's hook channel (a named pipe on Windows, a Unix socket elsewhere), and `periscope hook codex` reads it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                      |
 | `PERISCOPE_HOOK_TOKEN`               | Never read from this host's own environment, and not a config-file key: the host sets it, in a Codex session's app-server environment, to that session's random token for its hook channel, and `periscope hook codex` presents it and verifies the host's answer by it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                           |
 | `PERISCOPE_HOOK_DEADLINE_MS`         | Never read from this host's own environment, and not a config-file key: the host sets it, in a Codex session's app-server environment, to how long `periscope hook codex` waits for the host's answer: the session's decision deadline plus `HOOK_DEADLINE_MARGIN_MS`, inside the hook's timeout. Kept out of the agent's shell, and beneath the env floor.                                                                                                                                                                                                                                               |
+| `PERISCOPE_PI_EXTENSION_CONFIG`      | Never read from this host's own environment, and not a config-file key: the host sets it, in a pi session's environment, to the path of that session's extension configuration (its channel's address and token, its deadline, its MCP servers), a file only the runner can read. periscope's pi extension reads it and takes it out of pi's environment, and the host deletes the file once the extension has said hello. Beneath the env floor.                                                                                                                                                         |
 | `PERISCOPE_CONFIG_DIR`               | The directory holding the token cache, the paired credential and the config file. Default `<home>/.periscope`, where home is `USERPROFILE` or `HOME`. The whole directory is in the gate's protected set. Deliberately not a config-file key.                                                                                                                                                                                                                                                                                                                                                             |
 | `PERISCOPE_PAIR_URL`                 | Where `periscope pair` redeems a code when no `--controller` is given. Default: the origin of `PERISCOPE_DECISION_URL` plus the controller's pair route.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `PERISCOPE_MACHINE_LABEL`            | The label sent with a pair request when no `--label` is given, shown in the controller's listings. Default: the hostname.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -112,7 +115,8 @@ The agent CLI's token cache and configuration file in `CLAUDE_CONFIG_DIR`, when 
 the model endpoints file and every credential file it names, and `auth.json` and `.credentials.json`
 in `PERISCOPE_CODEX_HOME` and in `<user home>/.codex`, and the session homes beneath
 `PERISCOPE_QWEN_HOME`, Qwen Code's sign-in, token and settings files in `<user home>/.qwen` and in an
-operator's own `QWEN_HOME`, and `<user home>/.env`; the full set is listed in [the gate](gate.md).
+operator's own `QWEN_HOME`, `<user home>/.env`, the whole of `PERISCOPE_PI_HOME`, and pi's sign-in, MCP
+token and models files in `<user home>/.pi/agent`; the full set is listed in [the gate](gate.md).
 
 ## What a controller can set over the link
 
@@ -130,7 +134,8 @@ the model endpoints file (`PERISCOPE_MODEL_ENDPOINTS`): a controller able to poi
 choose where a session's model calls go, and with which credential. Nor are the Codex binary and
 home (`PERISCOPE_CODEX_BIN`, `PERISCOPE_CODEX_HOME`): a controller able to point them elsewhere would
 choose what runs as a session, and whose sign-in it runs under; and the Qwen Code CLI and base
-(`PERISCOPE_QWEN_BIN`, `PERISCOPE_QWEN_HOME`), for the same reason. A controller can also list one directory or read the head of one text file under the
+(`PERISCOPE_QWEN_BIN`, `PERISCOPE_QWEN_HOME`) and the pi CLI and home (`PERISCOPE_PI_BIN`,
+`PERISCOPE_PI_HOME`), for the same reason. A controller can also list one directory or read the head of one text file under the
 repository root (`repository_list` / `repository_read`), jailed to that root and to the protected
 set, bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
 a time, by the workspace's key (`workspace_read`), under the same jail and protected set. [The wire
@@ -486,6 +491,74 @@ lists Qwen Code after Claude and Codex ([the wire protocol](protocol.md)).
   variables it holds, never their values, as `gate-credential-in-shell`. Keep credentials out of them
   on a runner.
 
+## pi
+
+A host offers pi beside Claude when `PERISCOPE_PI_BIN` and `PERISCOPE_PI_HOME` are both set. Then a
+`session_new` naming `runtime: "pi"` runs pi in RPC mode in the session's directory, driven by JSON
+lines on stdin and stdout, and the hello's `agents` lists pi after Claude, Codex and Qwen Code
+([the wire protocol](protocol.md)).
+
+- **The version is pinned.** This release runs pi 1.2.0 (`PI_PINNED_VERSION`). Install that version
+  (`npm install -g @earendil-works/pi-coding-agent@1.2.0`, which needs Node 22.19 or later) and point
+  `PERISCOPE_PI_BIN` at the package's `dist/bundle/cli.js`. A CLI that reports another version, or
+  none, is listed unavailable with the path, the version it reports and the version pinned; the host
+  still starts, and a session naming `pi` is refused `runtime-unavailable` with that reason. Nothing
+  installs or updates it.
+- **The home is the runner's own.** pi runs with `PI_CODING_AGENT_DIR` set to `<base>/agent`, so the
+  operator's own `~/.pi` (its sign-in, its settings, its extensions) is never what a session runs from.
+  Sign pi in there once, from a plain terminal: run pi with `PI_CODING_AGENT_DIR` set to that directory
+  and use `/login`. At start the host writes `models.json` (the endpoints below) and an empty
+  `mcp.json` there, rewriting each only when it changed.
+- **The models.** At start the host runs pi once with nothing of its own loaded and no session, asks
+  which models it reaches, and closes it without a prompt. The hello lists them as `provider/id`, the
+  form a session names one by. A list that cannot be read, or that is past what the hello carries, is
+  no list: the entry carries none and the `[pi]` line says why. A session opened with no model pi can
+  reach ends as pi's own exit, which names `/login` (the sign-in marker
+  [the wire protocol](protocol.md) names).
+- **Endpoints.** An endpoint whose `runtimes` name `pi`, over any of the three wire APIs, is written
+  into `models.json` as a provider of that name, its key in that file alone, never in pi's environment
+  or on its command line; a session opened on it runs it as pi's provider. An endpoint's own variables
+  are set in pi's environment, which every command the agent runs inherits, so a session opened on one
+  names them as `gate-credential-in-shell` and opens at `intercepted-with-residual`.
+- **The launch rule.** pi loads no extension, skill, settings file or MCP configuration of its own
+  finding: the host starts it with `--no-extensions --no-skills --no-approve`, then names pi's built-in
+  MCP extension and periscope's own extension, the skills it hands over, the session store, the model
+  and the system prompt file. Nothing a controller wrote reaches pi's command line: a system prompt
+  rides a file in the session's run directory.
+- **The open.** No prompt is written until periscope's extension has said hello over the session's
+  channel, within `PI_HELLO_DEADLINE_MS` (thirty seconds). An extension that does not, or that pi
+  refuses to load, refuses the open `pi-extension-not-active`; pi exiting for another reason first ends
+  the open as that exit. Then the host reads pi's commands and state, and code this host did not load
+  (a command, a tool or an MCP server from any other source) lowers the session's tier and is named
+  `gate-foreign-extension`.
+- **Its control tier is `intercepted`.** pi has no permission system of its own: periscope's extension
+  asks the session's gate about every tool call before it runs, through the same gate as a Claude
+  call, and runs after every other handler, so the input it decides is the input that runs. A deny,
+  the extension's own deadline, an interrupt or a broken channel blocks the call; an allow may rewrite
+  its input. pi's own `bash` command, which runs a command outside any tool call, is refused and never
+  runs. pi has no permission modes, and a session asking for one is refused `request-key-unsupported`
+  ([gate.md](gate.md), the pi gate; [SECURITY.md](../SECURITY.md)).
+- **The deadlines.** A pi session waits for each decision for its `decisionTimeoutMs`, and the
+  extension blocks the call at that plus `HOOK_DEADLINE_MARGIN_MS`.
+- **Resume and fork.** A resumed session is the file in the session store that carries the id the
+  request names and the session's own working directory; any other is refused
+  `request-key-unsupported` naming `resume`. A fork opens a copy of that file in the session's
+  directory.
+- **The shell.** pi runs its `bash` tool through bash: on Windows, Git for Windows at its default path
+  (`%ProgramFiles%\Git\bin\bash.exe`), and without it the first `bash.exe` on `PATH`, which can be
+  WSL's. Install Git for Windows on a Windows runner. Its `powershell` tool runs PowerShell. The gate
+  reads a `bash` call as `posix` and a `powershell` call as `powershell`.
+- **Plugins.** The configured plugin directories (`PERISCOPE_PLUGIN_DIRS`) and a session's own
+  `plugins` reach pi as skill directories on its command line: each directory's `skills/`, its skills
+  listed by their bare names. A directory without one is named in the session's receipt.
+- **MCP servers.** A session's servers ride its extension's configuration, a file only the runner can
+  read: an HTTP server's headers beside its URL, written so pi expands nothing in them, and a stdio
+  server's command. Their tools are named `mcp__<server>__<tool>` and asked about like every other
+  call. An SSE server is refused `mcp-descriptor-invalid`.
+- **Spend.** pi states a session's running totals: its tokens, and its cost in US dollars at its own
+  catalogue's rates, never a bill. They cover every entry of the session's file, compacted history and
+  failed retries included, so a total can exceed what the visible conversation used.
+
 ## What the host prints
 
 Every line of output is `<ISO timestamp> [channel] message`, with a detail after a dash when there
@@ -509,7 +582,9 @@ offering Codex prints `[codex] codex 0.162.1, 6 model(s) in the hello, control t
 intercepted-with-residual`, or `[codex] codex is listed unavailable` with the reason, and then whether
 periscope's hook was written to the runner's home and answered its probe. A host offering Qwen Code
 prints `[qwen-code] qwen-code 0.25.1, 0 model(s) in the hello, control tier intercepted-with-residual`,
-or `[qwen-code] qwen-code is listed unavailable` with the reason.
+or `[qwen-code] qwen-code is listed unavailable` with the reason. A host offering pi prints `[pi] pi
+1.2.0, 3 model(s) in the hello, control tier intercepted`, or `[pi] pi is listed unavailable` with the
+reason.
 
 A paired host prints `[credential] paired as <hostId> - the paired credential is presented on every
 dial` instead; a host on a signed-in token prints its first `[credential]` line (`cache-hit`,
@@ -557,7 +632,10 @@ With the reason on stderr and a non-zero exit, when:
   off its pinned version, not signed in) does not refuse start: it is listed unavailable;
 - one of `PERISCOPE_QWEN_BIN` and `PERISCOPE_QWEN_HOME` is set without the other, either is not an
   absolute path, or the CLI is a batch file. A Qwen Code that is set up but cannot run (absent, off its
-  pinned version, a base that cannot be created) does not refuse start: it is listed unavailable.
+  pinned version, a base that cannot be created) does not refuse start: it is listed unavailable;
+- one of `PERISCOPE_PI_BIN` and `PERISCOPE_PI_HOME` is set without the other, either is not an
+  absolute path, or the CLI is a batch file. A pi that is set up but cannot run (absent, off its pinned
+  version, a home that cannot be written) does not refuse start: it is listed unavailable.
 
 After start-up, one link event is fatal: `credential_rejected`. The controller or its identity
 provider has refused the host's material, so the process stops its sessions, prints the remedy

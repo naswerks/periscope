@@ -18,6 +18,7 @@ import type { HookInput, SDKMessage } from '../host/agent-process.js';
 import type { Result } from '../core/result.js';
 import type {
   ControlTier,
+  ControlTierLevel,
   MessageEventName,
   SessionTransition,
   TransitionCause,
@@ -28,6 +29,8 @@ import type { CodexMessage } from '../host/codex-wire.js';
 import { CodexArmState, codexRequestsFor } from './codex-observer.js';
 import type { QwenMessage } from '../host/qwen-wire.js';
 import { QwenArmState, qwenRequestsFor } from './qwen-observer.js';
+import type { PiMessage } from '../host/pi-wire.js';
+import { PiArmState, piRequestsFor } from './pi-observer.js';
 
 /**
  * How this observer keys a permission entry. `PermissionRequest` carries no tool_use_id — see below.
@@ -97,6 +100,8 @@ export class SessionObserver {
   readonly #codex = new CodexArmState();
   /** What the Qwen Code lane remembers; untouched on any other session. */
   readonly #qwen = new QwenArmState();
+  /** What the pi lane remembers; untouched on any other session. */
+  readonly #pi = new PiArmState();
 
   constructor(machine: SessionStateMachine, options: SessionObserverOptions = {}) {
     this.#machine = machine;
@@ -146,14 +151,15 @@ export class SessionObserver {
   }
 
   /**
-   * Degrades known before the session's first `ready`, added to the tier that transition states. Once it
-   * is stated this does nothing: a degrade found later rides the state lane on its own.
+   * Degrades known before the session's first `ready`, added to the tier that transition states, and the
+   * level that tier drops to with them where the runtime's own level promised what they take away. Once
+   * it is stated this does nothing: a degrade found later rides the state lane on its own.
    */
-  stateSpawnDegrades(names: readonly string[]): void {
+  stateSpawnDegrades(names: readonly string[], level?: ControlTierLevel): void {
     if (this.#reported || this.#controlTier === null || names.length === 0) return;
     const degrades = [...this.#controlTier.degrades];
     for (const name of names) if (!degrades.includes(name)) degrades.push(name);
-    this.#controlTier = { level: this.#controlTier.level, degrades };
+    this.#controlTier = { level: level ?? this.#controlTier.level, degrades };
   }
 
   /** A named condition the host itself produced — a decision path that failed rather than denied. */
@@ -229,6 +235,32 @@ export class SessionObserver {
     });
     if (requests.some((request) => request.to === 'ready')) this.#reported = true;
     return requests.map((request) => this.#machine.record(request));
+  }
+
+  /**
+   * Every message a pi process yields: pi's lane, translated by `pi-observer.ts` and recorded here, so its
+   * first `ready` carries the tier and its compaction is reported like any other. Returns what it
+   * recorded.
+   */
+  observePiMessage(message: PiMessage): Result<SessionTransition>[] {
+    const outcome = piRequestsFor(message, this.#pi, {
+      state: this.#machine.state,
+      controlTier: this.#controlTier,
+      isOpen: (entryId) => this.#isOpen(entryId),
+    });
+    if (outcome.requests.some((request) => request.to === 'ready')) this.#reported = true;
+    const recorded = outcome.requests.map((request) => this.#machine.record(request));
+    if (outcome.compaction !== null) {
+      // pi states the trigger and, at the end, what it counted before; what is left it only estimates.
+      const report: CompactionReport = {
+        status: outcome.compaction.status,
+        trigger: outcome.compaction.trigger,
+        tokensBefore: outcome.compaction.tokensBefore,
+        tokensAfter: null,
+      };
+      for (const listener of this.#compactionListeners) listener(report);
+    }
+    return recorded;
   }
 
   /** A report when the compaction entry moved across one source's records, and nothing otherwise. */

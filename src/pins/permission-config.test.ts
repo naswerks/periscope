@@ -92,6 +92,10 @@ const MODE_MODULES = [
   // The Qwen Code fact lift reports, inside the receipt, the approval mode the CLI's init states: evidence
   // read off the runtime's own message. It sets nothing.
   'host/qwen-facts.ts',
+  // The pi process refuses a requested mode by name: pi has none. It hands no mode to anything.
+  'host/pi-process.ts',
+  // The pi fact lift states, inside the receipt, that pi has no mode in force. It sets nothing.
+  'host/pi-facts.ts',
   'host/wire-request.ts',
   'sessions/registry.ts',
   'sessions/session.ts',

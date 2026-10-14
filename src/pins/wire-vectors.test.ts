@@ -280,6 +280,35 @@ const qwenDegrade = (event: RefusalReason, detail: string): SessionTransition =>
   cause: { kind: 'refusal', event, detail },
 });
 
+/**
+ * A pi session's first `ready`: caused by the answer to the host's `get_state`, at the residual tier,
+ * naming the code found at the open that this host did not load.
+ */
+const TRANSITION_READY_PI: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'pi-session-a',
+  cause: {
+    kind: 'agent-event',
+    event: 'pi:get_state',
+    detail: "pi's state was read, after this host's extension said hello and pi's commands were read",
+  },
+  controlTier: { level: 'intercepted-with-residual', degrades: ['gate-foreign-extension'] },
+};
+
+/** That code, named on the state lane once, before the first `ready`. */
+const TRANSITION_PI_FOREIGN_EXTENSION: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'pi-session-a',
+  seq: 1,
+  to: 'spawning',
+  cause: {
+    kind: 'refusal',
+    event: 'gate-foreign-extension',
+    detail:
+      'code this host did not load is in this pi session, outside its gate: the command example-command from /srv/example/extension.ts',
+  },
+};
+
 /** An open refused before any process existed, for one of the runtime and endpoint reasons. */
 const openRefused = (event: RefusalReason, detail: string): SessionTransition => ({
   ...TRANSITION_OPEN_REFUSED,
@@ -590,6 +619,33 @@ const QWEN_CODE_ENTRY: HostAgentEntry = {
   unavailableReason: null,
 };
 
+/** pi's entry: no SDK, its models as `provider/id`, no permission mode, its thinking ladder as efforts. */
+const PI_ENTRY: HostAgentEntry = {
+  runtime: 'pi',
+  version: '1.2.0',
+  sdkVersion: null,
+  models: [
+    {
+      value: 'example-provider/example-model',
+      resolvedModel: null,
+      displayName: 'Example Model',
+      description: null,
+      supportedEffortLevels: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+      supportsFastMode: null,
+      supportsAutoMode: null,
+      supportsAdaptiveThinking: null,
+    },
+  ],
+  vocabularies: {
+    permissionModes: [],
+    efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    thinking: true,
+  },
+  controlTier: { level: 'intercepted', degrades: [] },
+  available: true,
+  unavailableReason: null,
+};
+
 const AGENT_SKILLS: HostAgentSkills[] = [
   { runtime: 'claude', naming: 'namespaced', delivery: 'per-session' },
   { runtime: 'codex', naming: 'namespaced', delivery: 'per-process' },
@@ -875,6 +931,42 @@ const AUTHORED = {
         ),
       ),
     },
+    // pi: its first ready at the residual tier with the degrade known at open, that degrade named, the
+    // open refused when its extension does not say hello, and a native event.
+    {
+      name: 'session_update.state-transition-pi-ready',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_PI)),
+    },
+    {
+      name: 'session_update.state-transition-pi-foreign-extension',
+      frame: session(stateTransitionUpdate(TRANSITION_PI_FOREIGN_EXTENSION)),
+    },
+    {
+      name: 'session_update.open-refused-pi-extension-not-active',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'pi-extension-not-active',
+            "this host's extension did not say hello over its channel within 30000ms, so pi may be running with no gate",
+          ),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.agent-message-pi',
+      frame: session(
+        agentMessageUpdate(
+          {
+            type: 'tool_execution_start',
+            toolCallId: 'call_1',
+            toolName: 'bash',
+            args: { command: 'git status' },
+          },
+          AT,
+          'pi',
+        ),
+      ),
+    },
   ],
   session_delta: [
     {
@@ -921,6 +1013,24 @@ const AUTHORED = {
     {
       name: 'session_delta.agent-fragment-qwen-code',
       frame: session(agentFragmentDelta('qwen-code', 'text', 'Hel', null)),
+    },
+    {
+      name: 'session_delta.agent-message-pi',
+      frame: session(
+        agentMessageDelta(
+          {
+            type: 'message_update',
+            message: { role: 'assistant', content: [] },
+            assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Hel' },
+          },
+          AT,
+          'pi',
+        ),
+      ),
+    },
+    {
+      name: 'session_delta.agent-fragment-pi',
+      frame: session(agentFragmentDelta('pi', 'text', 'Hel', null)),
     },
   ],
   session_new: [
@@ -1497,6 +1607,28 @@ const AUTHORED = {
           agent: AGENT,
           agents: [CLAUDE_ENTRY, CODEX_ENTRY, QWEN_CODE_ENTRY],
           agentSkills: [...AGENT_SKILLS, { runtime: 'qwen-code', naming: 'bare', delivery: 'per-session' }],
+        },
+        pendingRestart: [],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    {
+      name: 'link_hello.agents-pi',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: [],
+        cursors: [],
+        configuration: {
+          ...unsetHostConfiguration(),
+          agent: AGENT,
+          agents: [CLAUDE_ENTRY, CODEX_ENTRY, QWEN_CODE_ENTRY, PI_ENTRY],
+          agentSkills: [
+            ...AGENT_SKILLS,
+            { runtime: 'qwen-code', naming: 'bare', delivery: 'per-session' },
+            { runtime: 'pi', naming: 'bare', delivery: 'per-session' },
+          ],
         },
         pendingRestart: [],
         protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },

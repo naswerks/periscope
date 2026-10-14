@@ -1,12 +1,13 @@
 # Security
 
-Periscope runs Claude Code sessions on your machine on behalf of a remote controller, and Codex
-and Qwen Code sessions when you configure them. That is a serious thing to install, and this document
-is written to be read _before_ you do. It states the posture, what each control covers, and what it
-does not. Everything about the gate below is about Claude sessions; a Codex session is gated through
-its own hook and a Qwen Code session through its CLI's own permission requests, each with residual
-paths named as they happen, and [Codex sessions](#codex-sessions) and
-[Qwen Code sessions](#qwen-code-sessions) say what holds and what does not.
+Periscope runs Claude Code sessions on your machine on behalf of a remote controller, and Codex,
+Qwen Code and pi sessions when you configure them. That is a serious thing to install, and this
+document is written to be read _before_ you do. It states the posture, what each control covers, and
+what it does not. Everything about the gate below is about Claude sessions; a Codex session is gated
+through its own hook, a Qwen Code session through its CLI's own permission requests and a pi session
+through an extension of periscope's own, each with residual paths named as they happen, and
+[Codex sessions](#codex-sessions), [Qwen Code sessions](#qwen-code-sessions) and
+[pi sessions](#pi-sessions) say what holds and what does not.
 
 ## The permission model
 
@@ -398,6 +399,70 @@ writes send every call to ask, and the paths that can still run undecided are na
   `--version`, and lists any other version unavailable. It never installs or updates Qwen Code, and it
   never runs a batch file.
 
+## pi sessions
+
+pi is offered only when you set `PERISCOPE_PI_BIN` and `PERISCOPE_PI_HOME`
+([configuration](docs/configuration.md#pi)). pi has no permission system of its own; a pi session is
+gated by an extension of periscope's, which asks the same gate as a Claude call (the local refusals
+above, then your controller) about every tool call before it runs. Its control tier is
+`intercepted`, and the hello says so ([gate.md](docs/gate.md), the pi gate). What holds, and what
+does not:
+
+- **Only periscope's code is loaded, and the host checks.** pi starts with its own discovery of
+  extensions and skills off and the workspace untrusted, so a repository's `.pi/extensions`,
+  `.pi/settings.json` (which could choose the shell pi runs) and `.pi/mcp.json` are not read; it loads
+  pi's built-in MCP extension and periscope's, named by path. No prompt is written until periscope's
+  extension has said hello over the session's channel; one that does not, or that pi will not load,
+  refuses the open `pi-extension-not-active`. At the open the host holds every tool, command and MCP
+  server pi lists to those sources, and names anything else `gate-foreign-extension`, lowering the
+  session's tier to `intercepted-with-residual`.
+- **An extension that registers nothing is invisible to that check.** The check sees an extension by
+  the tools, commands and servers it registers. One that registers none of them would not be seen;
+  under the launch rule nothing of pi's own finding loads, so such code would have to come from a
+  changed pi or a changed launch, not from the workspace.
+- **Every call is decided, and the decision is the last word.** pi runs its built-in extensions'
+  handlers before the ones it was handed, so periscope's handler is the last a call meets: the input
+  it decides is the input that runs. A deny, the extension's own deadline, an interrupt, a reply that
+  does not verify, or anything the handler throws blocks the call. An allow may rewrite the input,
+  which pi runs without validating it again, as a Claude session does; pi's own transcript keeps the
+  input the model wrote. pi's `bash` command, which runs a command outside any tool call, is refused.
+- **The whole pi home is protected.** `PERISCOPE_PI_HOME` holds pi's agent home (your sign-in and the
+  endpoints' keys), the session store and each session's run directory (the channel's token and the
+  MCP servers' tickets), and all of it is in the protected set, so no agent reads any of it, its own
+  session's file included: the session store is shared by every pi session, and a session that could
+  read it could read another's conversation. pi's `read` tool has no limit of its own; the protected
+  set and the write jail are what bound it. Your own `~/.pi/agent/auth.json`, `mcp-auth.json` and
+  `models.json` are protected on every host.
+- **The extension's configuration never reaches the agent's shell.** It is a file only the runner can
+  read, named by `PERISCOPE_PI_EXTENSION_CONFIG`; the extension takes that variable out of pi's
+  environment before any command runs, and the host deletes the file once the hello arrives. A tool
+  server's headers ride that file, written so pi neither expands a `$` in them nor runs one starting
+  `!` as a command; they are never in pi's environment or on its command line.
+- **An endpoint's key is written once, outside the environment.** An endpoint you declared for pi is
+  written into the agent home's `models.json` as a provider, its key in that file alone. Its own
+  variables, if it has any, are set in pi's environment, which every command the agent runs inherits,
+  and a session opened on it names them, never their values, as `gate-credential-in-shell`, at the
+  tier `intercepted-with-residual`.
+- **pi's MCP client cannot be told a server has no sign-in.** A server that answers 401 is marked as
+  needing a sign-in, and its tools are not listed until one happens; a ticket a server refuses leaves
+  the session without that server's tools rather than with another route to them. A token such a
+  sign-in writes is kept in the agent home's `mcp-auth.json`, inside the protected base.
+- **The shell on Windows is Git Bash, and without it can be WSL's.** pi runs its `bash` tool through
+  Git for Windows at its default path, and without it through the first `bash.exe` on `PATH`, which
+  can be WSL's. A command run in WSL names your files under `/mnt/c/...`, a spelling the protected set,
+  written in Windows paths, does not match. Install Git for Windows at its default path on a Windows
+  runner.
+- **The model route and identity are beneath the floor.** `PI_*` (pi's agent home, sessions store,
+  package directory, telemetry and network switches), `PERISCOPE_PI_EXTENSION_CONFIG`, and the
+  provider names pi reads beside them (`DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`,
+  `XAI_API_KEY`, `HF_TOKEN`, `COPILOT_GITHUB_TOKEN`, `GOOGLE_CLOUD_API_KEY` and the rest, and the
+  families `AWS_*`, `AZURE_OPENAI_*`, `CLOUDFLARE_*`, `MINIMAX_*`, `XIAOMI_*` and `ZAI_*`) are in
+  `EXTRA_ENV_FLOOR`, so no controller can move a pi session's home, its extension's configuration,
+  its model server or its credential.
+- **A pinned CLI, quiet at start.** The host runs one pi release (`PI_PINNED_VERSION`), checks its
+  `--version`, and lists any other version unavailable. It never installs or updates pi, never runs a
+  batch file, and starts pi with its version check and telemetry off.
+
 ## The outbound-only posture
 
 There is no inbound port anywhere in this package. Periscope dials out to your controller over a
@@ -454,7 +519,9 @@ over the link and without a further credential:
   `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
   `ANTHROPIC_API_KEY`, Codex's home, model route, credentials and certificate authority (the eight
   names [Codex sessions](#codex-sessions) lists), Qwen Code's own variables and the model routes it
-  reads (the names [Qwen Code sessions](#qwen-code-sessions) lists), and the families `ANTHROPIC_*` (the model endpoint, its tokens and headers,
+  reads (the names [Qwen Code sessions](#qwen-code-sessions) lists), pi's own variables, its
+  extension's configuration and the model routes it reads (the names [pi sessions](#pi-sessions)
+  lists), and the families `ANTHROPIC_*` (the model endpoint, its tokens and headers,
   every provider's base URL), `CLAUDE_CODE_USE_*` (the provider switches),
   `CLAUDE_CODE_SKIP_*_AUTH`, `CLAUDE_CODE_CLIENT_*` (the client certificate), `SSL_CERT_*` and
   `*_PROXY` (`EXTRA_ENV_FLOOR`). So a controller cannot change which server the model call goes
@@ -528,6 +595,8 @@ stops being true.
 | Bundled Claude Code CLI          | **2.1.284**                                                  |
 | Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows |
 | Codex app-server                 | **0.162.1**, pinned; any other version is listed unavailable |
+| Qwen Code CLI                    | **0.25.1**, pinned; any other version is listed unavailable  |
+| pi                               | **1.2.0**, pinned; any other version is listed unavailable   |
 
 The SDK is pre-1.0 and its surface moves without semver protection, so a SHA-256 of the installed
 type definitions is kept in `contracts/sdk.sha256` and a CI job fails on any drift between the installed

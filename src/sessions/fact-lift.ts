@@ -15,6 +15,7 @@ import type { SDKMessage } from '../host/agent-process.js';
 import { ClaudeFactLift } from '../host/claude-facts.js';
 import { CodexFactLift } from '../host/codex-facts.js';
 import { QwenFactLift } from '../host/qwen-facts.js';
+import { PiFactLift } from '../host/pi-facts.js';
 import type { CompactionReport } from '../state/observer.js';
 
 /** What one message carries: facts for the update lane and fragments for the delta lane, in order. */
@@ -39,6 +40,7 @@ export const FACT_LIFTS: Readonly<Record<string, () => FactLift<never>>> = {
   claude: () => new ClaudeFactLift(),
   codex: () => new CodexFactLift(),
   'qwen-code': () => new QwenFactLift(),
+  pi: () => new PiFactLift(),
 };
 
 /** A new lift for one session on `runtime`, or null for a runtime with no lift: it then reports no facts. */

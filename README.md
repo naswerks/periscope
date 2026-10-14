@@ -26,7 +26,11 @@ undecided is named when it happens. It can offer Qwen Code too, through the Qwen
 control protocol, when its operator points it at the CLI and a base of the runner's own
 ([configuration](docs/configuration.md#qwen-code)); a Qwen Code session reaches its model through an
 endpoint the operator declared, every call it makes is asked about through the same gate, at tier
-`intercepted-with-residual`, and what can still run undecided is named.
+`intercepted-with-residual`, and what can still run undecided is named. And it can offer pi, through
+pi's RPC mode, when its operator points it at the CLI and a home of the runner's own
+([configuration](docs/configuration.md#pi)); pi has no permission system, so periscope's own
+extension, loaded into pi, asks the same gate about every call before it runs, at tier `intercepted`,
+and a pi session that finds code it did not load names it.
 
 ## Run a host
 
@@ -140,6 +144,7 @@ anything. The figure for a release is in [`CHANGELOG.md`](CHANGELOG.md).
 | Claude Code CLI                  | **2.1.284** (bundled with that SDK)   |
 | Codex app-server                 | **0.162.1**, pinned, when configured  |
 | Qwen Code CLI                    | **0.25.1**, pinned, when configured   |
+| pi CLI                           | **1.2.0**, pinned, when configured    |
 | Node                             | 22 or later; CI proves 22 and 24      |
 
 The SDK is pre-1.0, so the SHA-256 of its installed type definitions is kept in

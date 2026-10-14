@@ -558,6 +558,23 @@ export const REFUSAL_REASONS = [
   'gate-tool-unruled',
   'gate-mode-widened',
   'gate-credential-in-shell',
+
+  // The gate over a runtime whose only gate is an extension this host loads into it (pi's `tool_call`
+  // handler), launched so that no other extension of anyone's loads beside it. The first is a refusal;
+  // the second is a degrade, raised on the session's state lane and never stopping it.
+  //
+  //   pi-extension-not-active      Refused: the open ends because this host's extension did not say it
+  //                                was loaded, over its channel, before the first prompt: the channel
+  //                                could not listen, its configuration could not be written, the runtime
+  //                                would not load it, or no hello arrived in time. Without it the runtime
+  //                                has no gate at all, so nothing enforces the protected set on it. The
+  //                                detail says which.
+  //   gate-foreign-extension       Code this host did not load is running in the session: a command or a
+  //                                tool whose source is neither this host's extension, the runtime's own
+  //                                built-ins nor a skill this host handed over. Known when the session
+  //                                opens; the detail names each source.
+  'pi-extension-not-active',
+  'gate-foreign-extension',
 ] as const;
 
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];

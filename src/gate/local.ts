@@ -107,6 +107,19 @@ export const QWEN_TOOL_FAMILIES: ToolFamilies = {
   search: ['glob', 'grep_search'],
 };
 
+/**
+ * The names pi gives its built-in tools: `bash` and `powershell` run a command, `read` reads the path it
+ * names, `write` and `edit` write theirs, and `grep`, `find` and `ls` read under theirs, the session's
+ * directory when they name none. Every other pi tool has no local family and is asked about like any
+ * call this gate has no opinion on.
+ */
+export const PI_TOOL_FAMILIES: ToolFamilies = {
+  write: ['write', 'edit'],
+  read: ['read'],
+  shell: ['bash', 'powershell'],
+  search: ['grep', 'find', 'ls'],
+};
+
 export interface LocalGateOptions {
   /** The absolute root every path-taking call must resolve inside. */
   readonly workspaceRoot: string | null;
@@ -139,6 +152,12 @@ export interface LocalGateOptions {
    * tools take paths relative to where the call runs; a patch's paths are always resolved this way.
    */
   readonly resolvesAgainstCallCwd?: boolean;
+  /**
+   * Resolve a relative path a write tool names against the call's own working directory (`cwd`), else
+   * the workspace root, rather than this process's. Defaults to false. Set for a runtime whose file tools
+   * write paths relative to where the session runs; the path is then jailed where it lands.
+   */
+  readonly resolvesWritesAgainstCallCwd?: boolean;
 }
 
 /**
@@ -164,6 +183,7 @@ export function localGate(options: LocalGateOptions): LocalGate {
   const readsShellDialect = options.readsShellDialect ?? false;
   const checksShellDirectory = options.checksShellDirectory ?? false;
   const resolvesAgainstCallCwd = options.resolvesAgainstCallCwd ?? false;
+  const resolvesWritesAgainstCallCwd = options.resolvesWritesAgainstCallCwd ?? false;
 
   return (request: DecisionRequest): Refusal | null => {
     if (shellTools.has(request.toolName)) {
@@ -203,7 +223,10 @@ export function localGate(options: LocalGateOptions): LocalGate {
     }
 
     if (writeTools.has(request.toolName)) {
-      return checkPath(pathFromToolInput(request.toolInput), jail);
+      const named = pathFromToolInput(request.toolInput);
+      if (!resolvesWritesAgainstCallCwd || named === null) return checkPath(named, jail);
+      const placed = againstCallCwd(named, request.cwd, jail.workspaceRoot);
+      return typeof placed === 'string' ? checkPath(placed, jail) : placed;
     }
 
     if (readTools.has(request.toolName)) {

@@ -43,6 +43,7 @@
     "contracts/wire-vectors/",
     "contracts/codex-protocol-names.json",
     "contracts/qwen-code-names.json",
+    "contracts/pi-names.json",
     "docs/",
     "examples/",
     "README.md",

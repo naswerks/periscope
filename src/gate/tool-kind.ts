@@ -1,5 +1,5 @@
 /**
- * Each runtime's tool names, read as tool kinds: Claude's, then Codex's, then Qwen Code's.
+ * Each runtime's tool names, read as tool kinds: Claude's, then Codex's, then Qwen Code's, then pi's.
  *
  * Claude's names are the agent SDK's own, as a `PreToolUse` input's `tool_name` carries them: the tools its
  * input schemas describe, and the gate's own families (`DEFAULT_TOOL_FAMILIES`). A tool the table does
@@ -129,6 +129,45 @@ export function qwenShellDialect(
   const comSpec = (envValue(env, 'ComSpec') ?? 'cmd.exe').toLowerCase();
   if (comSpec.endsWith('powershell.exe') || comSpec.endsWith('pwsh.exe')) return 'powershell';
   return 'cmd';
+}
+
+/**
+ * pi's tool names, read as tool kinds: the built-in tools its `tool_call` event names. `bash` and
+ * `powershell` run a command; `read`, `grep`, `find` and `ls` read under a path; `write` writes one and
+ * `edit` edits one. Every MCP tool is `mcp__{server}__{tool}` and is `mcp` by that prefix. Every other
+ * name (a tool an extension registers) is `other`.
+ */
+export const PI_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
+  bash: 'shell',
+  powershell: 'shell',
+  read: 'file_read',
+  grep: 'file_read',
+  find: 'file_read',
+  ls: 'file_read',
+  write: 'file_write',
+  edit: 'file_edit',
+};
+
+/** The kind of the pi tool named `toolName`: its row in the table, `mcp` by prefix, else `other`. */
+export function piToolKind(toolName: string): ToolKind {
+  if (Object.hasOwn(PI_TOOL_KINDS, toolName)) return PI_TOOL_KINDS[toolName] ?? 'other';
+  if (toolName.startsWith(MCP_TOOL_PREFIX)) return 'mcp';
+  return 'other';
+}
+
+/**
+ * The grammar each pi shell tool runs its command in. `bash` runs a bash, which on Windows is Git Bash
+ * (pi looks for it where Git for Windows installs it before anything on the path), and `powershell` runs
+ * PowerShell. Neither depends on the environment, so the tool's name decides it.
+ */
+export const PI_SHELL_DIALECTS: Readonly<Record<string, ShellDialect>> = {
+  bash: 'posix',
+  powershell: 'powershell',
+};
+
+/** The dialect of the pi shell tool named `toolName`, or null for a tool that runs no command. */
+export function piShellDialect(toolName: string): ShellDialect | null {
+  return Object.hasOwn(PI_SHELL_DIALECTS, toolName) ? (PI_SHELL_DIALECTS[toolName] ?? null) : null;
 }
 
 /** A variable read as Windows reads it, without regard to the case of its name. */

@@ -7,12 +7,13 @@
  * that release's bounds written as numbers. It describes a released peer, so it never changes to
  * follow this build; an edit here that turns a test green changes the contract rather than fixing
  * it. The frames it reads are the bytes a real link carried, from a host the peer welcomed at 16.
- * Protocol 17 adds what such a controller receives inside members it already reads: `qwen-code` in
- * the hello's runtimes list and its row in the pack list, a Qwen Code session's own messages and
- * fragments with `runtime: "qwen-code"`, transitions caused by its events, and four reasons: one open
- * refusal and three degrades, one of which rides the first `ready`'s control tier. So what is read
- * here is a Claude session's traffic, a Codex session's and a Qwen Code session's, side by side on one
- * link, and each word protocol 17 adds is shown read by that decoder (the vectors it adds, below).
+ * Protocol 17 adds what such a controller receives inside members it already reads: `qwen-code` and
+ * `pi` in the hello's runtimes list and their rows in the pack list, their sessions' own messages and
+ * fragments with `runtime: "qwen-code"` or `runtime: "pi"`, transitions caused by their events, and six
+ * reasons: two open refusals and four degrades, two of which ride a first `ready`'s control tier. So
+ * what is read here is a Claude session's traffic, a Codex session's, a Qwen Code session's and a pi
+ * session's, side by side on one link, and each word protocol 17 adds is shown read by that decoder
+ * (the vectors it adds, below).
  * One word is not: the decision request's `shellDialect` gains `cmd`, which that release's
  * `DecisionRequest` (`V16_DECISION_REQUEST`) does not declare, so a request naming it is sent to a
  * controller at 16 with no dialect.
@@ -41,6 +42,7 @@ import type { DecisionRequest } from '../gate/decision.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { fakeAgents, initMessage } from '../test-support/fake-agent.js';
 import { FAKE_MODELS, fakeCodex } from '../test-support/fake-codex.js';
+import { fakePi } from '../test-support/fake-pi.js';
 import { fakeQwen } from '../test-support/fake-qwen.js';
 import { tempDir } from '../test-support/temp-dir.js';
 import { peerOn, waitFor } from '../test-support/ws-peer.js';
@@ -48,6 +50,8 @@ import type { HookInput, SDKMessage } from './agent-process.js';
 import { availableCodexEntry, codexHostModel, codexNativeRuntime } from './codex-runtime.js';
 import { PeriscopeHost, decideAtLinkVersion } from './host.js';
 import type { ModelEndpoint } from './model-endpoints.js';
+import type { PiRuntimeConfig } from './pi-process.js';
+import { availablePiEntry, piNativeRuntime } from './pi-runtime.js';
 import { availableQwenEntry, qwenNativeRuntime } from './qwen-runtime.js';
 import type { QwenRuntimeConfig } from './qwen-process.js';
 import { QWEN_NAMES } from './qwen-names.js';
@@ -494,6 +498,9 @@ const CODEX_ENTRY = availableCodexEntry(
 /** What the hello's runtimes list states for Qwen Code on the pinned CLI. */
 const QWEN_ENTRY = availableQwenEntry('0.25.1');
 
+/** What the hello's runtimes list states for pi on the pinned CLI. */
+const PI_ENTRY = availablePiEntry('1.2.0');
+
 /** An endpoint this build's host declares; a protocol-16 controller reads the hello's list. */
 const ENDPOINT: ModelEndpoint = {
   name: 'example-endpoint',
@@ -570,6 +577,19 @@ test('a controller on protocol 16 decodes every frame a host of this build sends
     killTree: () => Promise.resolve(),
     closeGraceMs: 20,
   };
+  // pi lists a command an extension this host did not load registered: the degrade protocol 17 adds
+  // for pi, known when it opens.
+  const pi = fakePi({
+    calls: () => [{ toolName: 'bash', input: { command: 'git status' } }],
+    foreignCommands: [{ name: 'example-command', path: '/srv/example/extension.ts' }],
+  });
+  const piRuntime: PiRuntimeConfig = {
+    binary: 'C:/tools/pi/dist/bundle/cli.js',
+    base: join(cwd, 'pi'),
+    spawn: pi.spawn,
+    killTree: () => Promise.resolve(),
+    closeGraceMs: 20,
+  };
   const decided: DecisionRequest[] = [];
   const host = new PeriscopeHost({
     controllerUrl: peer.url,
@@ -594,6 +614,7 @@ test('a controller on protocol 16 decodes every frame a host of this build sends
           closeGraceMs: 20,
         }),
         'qwen-code': qwenNativeRuntime(qwenRuntime),
+        pi: piNativeRuntime(piRuntime),
       },
     }),
     agentCatalog: () => Promise.resolve({ ok: true, agent: AGENT }),
@@ -602,6 +623,7 @@ test('a controller on protocol 16 decodes every frame a host of this build sends
       read: async () => ({ entry: CODEX_ENTRY, detail: null }),
     },
     qwen: { runtime: qwenRuntime, read: async () => ({ entry: QWEN_ENTRY, detail: null }) },
+    pi: { runtime: piRuntime, read: async () => ({ entry: PI_ENTRY, detail: null }) },
     endpoints: [ENDPOINT],
   });
 
@@ -726,6 +748,17 @@ test('a controller on protocol 16 decodes every frame a host of this build sends
     peer.send('session-3', 2, { kind: 'session_prompt', text: 'hello' });
     await waitFor(() => reached(peer.raw, 'session-3', 'idle'), 'the Qwen Code turn to end', TIMEOUT_MS);
 
+    // A pi session, driven through a run with a shell call: what protocol 17 adds for pi reaches the
+    // wire inside the same members.
+    peer.send(
+      'session-4',
+      1,
+      sessionNew(cwd, { request: sessionNewRequest({ runtime: 'pi', includePartialMessages: true }) }),
+    );
+    await waitFor(() => reached(peer.raw, 'session-4', 'ready'), 'the pi session to be ready', TIMEOUT_MS);
+    peer.send('session-4', 2, { kind: 'session_prompt', text: 'hello' });
+    await waitFor(() => reached(peer.raw, 'session-4', 'idle'), 'the pi run to end', TIMEOUT_MS);
+
     // A host-scoped answer, whose configuration carries the catalog. No seam is composed, so it is
     // refused, and the refusal answer still carries the whole configuration.
     peer.send(
@@ -807,25 +840,27 @@ test('a controller on protocol 16 decodes every frame a host of this build sends
       'the first ready states the tier',
     );
 
-    // What protocol 16 added, read natively: Codex in the runtimes list beside Qwen Code, the pack
-    // list, Codex's messages and fragments named, and a transition an agent event caused.
+    // What protocol 16 added, read natively: Codex in the runtimes list beside Qwen Code and pi, the
+    // pack list, Codex's messages and fragments named, and a transition an agent event caused.
     const runtimes = [
       CLAUDE_ENTRY,
       JSON.parse(JSON.stringify(CODEX_ENTRY)) as unknown,
       JSON.parse(JSON.stringify(QWEN_ENTRY)) as unknown,
+      JSON.parse(JSON.stringify(PI_ENTRY)) as unknown,
     ];
     assert.deepEqual(
       helloConfiguration['agents'],
       runtimes,
-      'the hello lists Claude, then Codex, then Qwen Code',
+      'the hello lists Claude, then Codex, then Qwen Code, then pi',
     );
-    assert.deepEqual(answerConfiguration['agents'], runtimes, 'the configure answer lists all three');
+    assert.deepEqual(answerConfiguration['agents'], runtimes, 'the configure answer lists all four');
     assert.deepEqual(
       helloConfiguration['agentSkills'],
       [
         { runtime: 'claude', naming: 'namespaced', delivery: 'per-session' },
         { runtime: 'codex', naming: 'namespaced', delivery: 'per-process' },
         { runtime: 'qwen-code', naming: 'bare', delivery: 'per-session' },
+        { runtime: 'pi', naming: 'bare', delivery: 'per-session' },
       ],
       'the hello lists how each runtime takes plugins',
     );
@@ -894,10 +929,42 @@ test('a controller on protocol 16 decodes every frame a host of this build sends
       'the first ready states the tier, the degrade known at open with it',
     );
 
-    // The decision requests a protocol-16 endpoint reads: one for the Claude call and one for Qwen
-    // Code's. Qwen Code's shell on Windows is `cmd`, a word 16 does not declare, so its request is sent
-    // with no dialect at all.
-    assert.equal(decided.length, 2, 'a tool call was not asked about');
+    // What protocol 17 adds for pi, among what the protocol-16 decoder read: its messages, its
+    // fragments, transitions its events and the host's commands caused, and the degrade known when it
+    // opened, named and riding the first ready's tier.
+    const piRead = read.filter((one) => one.sessionId === 'session-4');
+    assert.ok(
+      piRead.some((one) => one.kind === 'session_update' && bodyOf(one)['runtime'] === 'pi'),
+      'a pi message was sent',
+    );
+    assert.ok(
+      piRead.some((one) => one.kind === 'session_delta' && bodyOf(one)['runtime'] === 'pi'),
+      'a pi fragment was sent',
+    );
+    const piTransitions = piRead.flatMap((one) =>
+      one.kind === 'session_update' ? [readStateTransition(bodyOf(one) as JsonObject)] : [],
+    );
+    const piCauses = piTransitions.flatMap((transition) =>
+      transition === null ? [] : [`${transition.cause.kind}/${transition.cause.event}`],
+    );
+    for (const cause of [
+      'agent-event/pi:get_state',
+      'agent-event/pi:agent_start',
+      'agent-event/pi:agent_settled',
+      'refusal/gate-foreign-extension',
+    ]) {
+      assert.ok(piCauses.includes(cause), `${cause} among ${piCauses.join(', ')}`);
+    }
+    assert.deepEqual(
+      piTransitions.find((transition) => transition?.to === 'ready')?.controlTier,
+      { level: 'intercepted-with-residual', degrades: ['gate-foreign-extension'] },
+      'the first ready states the tier, the degrade known at open with it',
+    );
+
+    // The decision requests a protocol-16 endpoint reads: one for the Claude call, one for Qwen Code's
+    // and one for pi's. Qwen Code's shell on Windows is `cmd`, a word 16 does not declare, so its
+    // request is sent with no dialect at all; pi's `bash` is `posix` on every host, a word 16 declares.
+    assert.equal(decided.length, 3, 'a tool call was not asked about');
     for (const request of decided) {
       const asV16 = V16_DECISION_REQUEST.safeParse(JSON.parse(JSON.stringify(request)));
       assert.ok(asV16.success, asV16.success ? '' : asV16.error.message);
@@ -909,6 +976,11 @@ test('a controller on protocol 16 decodes every frame a host of this build sends
     assert.equal(qwenBody['runtime'], 'qwen-code');
     assert.equal(qwenBody['toolKind'], 'shell');
     assert.equal(qwenBody['shellDialect'], process.platform === 'win32' ? undefined : 'posix');
+    const piBody = JSON.parse(JSON.stringify(decided[2])) as Record<string, unknown>;
+    assert.deepEqual(
+      [piBody['runtime'], piBody['toolKind'], piBody['shellDialect']],
+      ['pi', 'shell', 'posix'],
+    );
   } finally {
     host.stop();
     await peer.close();
@@ -1206,6 +1278,17 @@ test('a controller on protocol 16 decodes every vector protocol 17 adds: the Qwe
   const corpus = fileURLToPath(new URL('../../contracts/wire-vectors/', import.meta.url));
   const added = readdirSync(corpus).filter((file) => /qwen-code/.test(file));
   assert.equal(added.length, 8, `the vectors this reads: ${added.join(', ')}`);
+  for (const file of added) {
+    const wire = (JSON.parse(readFileSync(`${corpus}${file}`, 'utf8')) as { wire: string }).wire;
+    const read = V16.safeParse(JSON.parse(wire));
+    assert.ok(read.success, `${file}: ${read.success ? '' : JSON.stringify(read.error.issues)}`);
+  }
+});
+
+test('a controller on protocol 16 decodes every vector protocol 17 adds for pi: its entry and pack row, its messages and fragments, its causes, its open refusal and its degrade', () => {
+  const corpus = fileURLToPath(new URL('../../contracts/wire-vectors/', import.meta.url));
+  const added = readdirSync(corpus).filter((file) => /[.-]pi[-.]/.test(file));
+  assert.equal(added.length, 7, `the vectors this reads: ${added.join(', ')}`);
   for (const file of added) {
     const wire = (JSON.parse(readFileSync(`${corpus}${file}`, 'utf8')) as { wire: string }).wire;
     const read = V16.safeParse(JSON.parse(wire));

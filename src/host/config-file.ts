@@ -47,6 +47,8 @@ export const CONFIG_KEYS = [
   'PERISCOPE_CODEX_HOME',
   'PERISCOPE_QWEN_BIN',
   'PERISCOPE_QWEN_HOME',
+  'PERISCOPE_PI_BIN',
+  'PERISCOPE_PI_HOME',
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
