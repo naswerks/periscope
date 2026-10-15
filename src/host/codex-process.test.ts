@@ -7,7 +7,13 @@ import { FAKE_MODELS, fakeCodex } from '../test-support/fake-codex.js';
 import type { FakeCodex, FakeCodexOptions } from '../test-support/fake-codex.js';
 import type { AgentProcess, AgentProcessRequest } from './agent-process.js';
 import { CODEX_ANSWERED_REQUESTS, codexServerRequestAnswer } from './codex-answers.js';
-import { codexInitFacts, codexOptOuts, codexRequestProblem, startCodexProcess } from './codex-process.js';
+import {
+  CODEX_HOME_VARIABLE,
+  codexInitFacts,
+  codexOptOuts,
+  codexRequestProblem,
+  startCodexProcess,
+} from './codex-process.js';
 import type { CodexMessage } from './codex-wire.js';
 
 const HOME = 'C:/runner/codex-home';
@@ -117,7 +123,7 @@ test('the app-server is started from the binary with the session flags as root o
     'sandbox_mode="workspace-write"',
     'web_search="disabled"',
     'features.hooks=true',
-    'shell_environment_policy.exclude=[]',
+    `shell_environment_policy.exclude=${JSON.stringify([CODEX_HOME_VARIABLE])}`,
   ]) {
     const at = args.indexOf(flag);
     assert.ok(at > 0 && args[at - 1] === '-c', `${flag} is not a -c override: ${args.join(' ')}`);
@@ -335,13 +341,21 @@ test('an interrupt asked before the turn has an id is sent once it has one', asy
   session.process.close();
 });
 
-test('an over-long prompt is not sent, and the session is told by name', async () => {
+test('regression: an over-long prompt is not sent, is answered as not taken, and the session is told by name', async () => {
   const session = started();
   await opened(session);
-  assert.equal(session.process.prompt('x'.repeat(1_048_577)), true);
+  assert.equal(session.process.prompt('x'.repeat(1_048_577)), false, 'a turn that will never run was taken');
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(session.fake.server.requestsOf('turn/start').length, 0);
   assert.match(session.degrades.join('\n'), /1048577 characters is past the 1048576 Codex takes/);
+  session.process.close();
+});
+
+test('control: a prompt at the limit is taken and sent', async () => {
+  const session = started();
+  await opened(session);
+  assert.equal(session.process.prompt('x'.repeat(1_048_576)), true);
+  await until(() => session.fake.server.requestsOf('turn/start').length === 1, 'the turn to start');
   session.process.close();
 });
 

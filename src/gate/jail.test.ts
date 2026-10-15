@@ -205,6 +205,60 @@ test('a protected path the resolver cannot resolve is still protected', () => {
   assert.notEqual(checkShellForProtectedPaths('cat C:/Users/agent/.claude/.credentials.json', options), null);
 });
 
+// ---------------------------------------------------------------------------
+// The session's path variables in a shell command
+// ---------------------------------------------------------------------------
+
+/**
+ * A session's spawn environment: a directory and a file the protected set covers, a directory it does
+ * not, a list naming a protected directory among others, and a value that is no path at all.
+ */
+const VARIABLES = {
+  AGENT_DIR: 'C:/Users/agent/.claude',
+  SETTINGS_FILE: 'C:/Users/agent/.claude.json',
+  OPEN_DIR: 'C:/work/runtime',
+  PATH: 'C:/Users/agent/.claude;C:/Windows',
+  MODE: '1',
+};
+
+const shellReason = (command: string, options: JailOptions = jail({ variables: VARIABLES })): string | null =>
+  checkShellForProtectedPaths(command, options)?.reason ?? null;
+
+/** One protected file, named through `AGENT_DIR` in every spelling a shell gives a variable. */
+const THROUGH_A_VARIABLE = [
+  'cat "$AGENT_DIR/.credentials.json"',
+  'cat ${AGENT_DIR}/.credentials.json',
+  'Get-Content "$env:AGENT_DIR\\.credentials.json"',
+  'Get-Content "${env:AGENT_DIR}\\.credentials.json"',
+  'type "%AGENT_DIR%\\.credentials.json"',
+];
+
+test('regression: a protected path named through a variable of the session refuses, in every spelling a shell reads', () => {
+  for (const command of THROUGH_A_VARIABLE) {
+    assert.equal(shellReason(command), 'credential-path-denied', command);
+  }
+  assert.equal(shellReason('cat "$SETTINGS_FILE"'), 'credential-path-denied');
+});
+
+test('control: the expansion is what refuses; with no variables known the same commands have no credential opinion', () => {
+  for (const command of THROUGH_A_VARIABLE) assert.equal(shellReason(command, jail()), null, command);
+});
+
+test('a variable name is read as each shell reads it: PowerShell and cmd without regard to case, a POSIX shell exactly', () => {
+  assert.equal(shellReason('Get-Content $ENV:agent_dir\\.credentials.json'), 'credential-path-denied');
+  assert.equal(shellReason('type %Agent_Dir%\\.credentials.json'), 'credential-path-denied');
+  // In a POSIX shell `$agent_dir` is another variable, unset in this session.
+  assert.equal(shellReason('cat $agent_dir/.credentials.json'), null);
+});
+
+test('control: a variable naming no protected path, a list, and a value that is no path never refuse', () => {
+  assert.equal(shellReason('ls "$OPEN_DIR"'), null);
+  // A list names several places and none of them by itself; spelling it out would refuse `echo $PATH`.
+  assert.equal(shellReason('echo $PATH'), null);
+  assert.equal(shellReason('echo %MODE%'), null);
+  assert.equal(shellReason('cat "$NOT_SET/.credentials.json"'), null);
+});
+
 // Guards the selector: a jail that refused everything would satisfy every refusal assertion above.
 test('the jail discriminates — inside flows, outside refuses, credentials refuse differently', () => {
   assert.equal(reasonOf('C:/repo/src/a.ts'), null);

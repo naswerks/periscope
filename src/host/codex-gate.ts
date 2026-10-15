@@ -64,6 +64,8 @@ export interface CodexSessionGate {
   answer(method: string, params: JsonObject, id: RpcId): Promise<RpcAnswer>;
   /** Told every notification the app-server sends, before it is forwarded. */
   observe(method: string, params: JsonObject): void;
+  /** Told the environment the app-server is started with: the local gate reads its path variables. */
+  spawnedWith(env: Readonly<Record<string, string | undefined>>): void;
   /** A named degrade on the session's state lane, once per (name, key). */
   raise(name: RefusalReason, detail: string, key: string): void;
   /** The degrades known at the open, for the opening tier, each raised once with its detail. */
@@ -94,6 +96,8 @@ export interface CodexSessionGateOptions {
   readonly onChannelRefused?: (detail: string) => void;
   /** Told every event the hook sent, as Codex wrote it, before it is decided. An observation only. */
   readonly onHookEvent?: (event: unknown) => void;
+  /** Told every environment the session's process is started with, for the local gate. */
+  readonly spawnedWith?: (env: Readonly<Record<string, string | undefined>>) => void;
   readonly platform?: string;
 }
 
@@ -231,6 +235,7 @@ export function createCodexSessionGate(options: CodexSessionGateOptions): CodexS
       approvals.observe(method, params);
       watch.observe(method, params);
     },
+    spawnedWith: (env) => options.spawnedWith?.(env),
     raise,
     stateSpawnDegrades: (found) => {
       try {

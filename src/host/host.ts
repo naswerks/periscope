@@ -91,6 +91,7 @@ import type { FrameSink } from '../control/stream.js';
 import { forwardNativeSession, forwardSession } from '../control/stream.js';
 import { CODEX_PINNED_VERSION } from './codex-binary.js';
 import type { CodexRuntimeConfig } from './codex-process.js';
+import { CODEX_HOME_VARIABLE } from './codex-process.js';
 import { ClaudeItemFill } from './claude-items.js';
 import { CodexFactLift } from './codex-facts.js';
 import { CodexItemFill } from './codex-items.js';
@@ -117,6 +118,7 @@ import { piEndpointEnv, piEndpointRoutes } from './pi-endpoints.js';
 import { PiFactLift } from './pi-facts.js';
 import { createPiSessionGate } from './pi-gate.js';
 import { PiItemFill } from './pi-items.js';
+import { PI_AGENT_DIR_VARIABLE, piBaseOf } from './pi-home.js';
 import { piMcpServers } from './pi-mcp.js';
 import { piSkillDirectories } from './pi-pack.js';
 import type { PiRuntimeConfig } from './pi-process.js';
@@ -142,6 +144,7 @@ import type { McpServerOptions } from '../mcp/server.js';
 import type { SessionRequest } from '../sessions/registry.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { factLiftFor } from '../sessions/fact-lift.js';
+import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import {
   CODEX_RUNTIME,
   PI_RUNTIME,
@@ -256,6 +259,13 @@ export interface ComposeSessionOptions {
    * @internal
    */
   readonly codexHooksPath?: string;
+  /**
+   * Told every environment the session is composed or started with: by the registry when it composes
+   * one, and by the session's gate when a runtime's process adds variables of its own. The local gate
+   * reads the path variables of what it is told.
+   * @internal
+   */
+  readonly spawnedWith?: (env: Readonly<Record<string, string | undefined>>) => void;
 }
 
 /** One composed session: the handle, its machine, and how to take the wiring back down. */
@@ -408,7 +418,12 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
       : items.hooks((error) => options.onHookFailure?.({ event: 'UserPromptSubmit', error })),
   );
 
-  const created = options.registry.create({ ...(options.request ?? {}), cwd: options.cwd, hooks });
+  const created = options.registry.create({
+    ...(options.request ?? {}),
+    cwd: options.cwd,
+    hooks,
+    ...spawnedWithOf(options),
+  });
   if (!created.ok) return refuse<ComposedSession>(created.refusal.reason, created.refusal.detail);
   const session = created.value;
 
@@ -430,6 +445,13 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   observer.created(`a session was requested in ${options.cwd}`);
 
   return ok({ sessionKey: options.sessionKey, session, machine, observer, detach });
+}
+
+/** The composer's `spawnedWith`, to spread into a request or a gate's options; nothing when it gave none. */
+function spawnedWithOf(options: ComposeSessionOptions): {
+  spawnedWith?: (env: Readonly<Record<string, string | undefined>>) => void;
+} {
+  return options.spawnedWith === undefined ? {} : { spawnedWith: options.spawnedWith };
 }
 
 /**
@@ -475,6 +497,7 @@ function composeCodexSession(
     },
     onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
     onChannelRefused: (detail) => reportChannel(detail),
+    ...spawnedWithOf(options),
   });
 
   const created = options.registry.create({
@@ -482,6 +505,7 @@ function composeCodexSession(
     cwd: options.cwd,
     hostEnv: { ...(options.request?.hostEnv ?? {}), ...gate.env },
     nativeGate: gate,
+    ...spawnedWithOf(options),
   });
   if (!created.ok) {
     gate.close();
@@ -551,12 +575,14 @@ function composeQwenSession(
       options.onRefusal?.(refusal(name, detail));
     },
     onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
+    ...spawnedWithOf(options),
   });
 
   const created = options.registry.create({
     ...(options.request ?? {}),
     cwd: options.cwd,
     nativeGate: gate,
+    ...spawnedWithOf(options),
   });
   if (!created.ok) return refuse<ComposedSession>(created.refusal.reason, created.refusal.detail);
   // The registry started this session on Qwen Code's own process, so its messages are Qwen's.
@@ -626,12 +652,14 @@ function composePiSession(
     },
     onSpawnDegrades: (names, level) => observer.stateSpawnDegrades(names, level),
     onChannelRefused: (detail) => reportChannel(detail),
+    ...spawnedWithOf(options),
   });
 
   const created = options.registry.create({
     ...(options.request ?? {}),
     cwd: options.cwd,
     nativeGate: gate,
+    ...spawnedWithOf(options),
   });
   if (!created.ok) {
     gate.close();
@@ -1901,6 +1929,18 @@ export class PeriscopeHost {
     }
     const plugins = mergePlugins(this.#pluginDirs, requested.value.plugins);
 
+    // The session's spawn environment as far as this host knows it, for the local gate's shell scan.
+    // Seeded now with what is known before anything spawns, so a call decided before the runtime starts
+    // reads that rather than nothing; every later report is merged in and none replaces what is known:
+    // the environment the registry composes, then the variables a runtime's process adds as it starts.
+    let spawnEnv: Readonly<Record<string, string | undefined>> = this.#knownSpawnEnv(
+      requested.value,
+      hostEnv,
+    );
+    const spawnedWith = (env: Readonly<Record<string, string | undefined>>): void => {
+      spawnEnv = { ...spawnEnv, ...env };
+    };
+
     const composed = composeSession({
       registry: this.#registry,
       sessionKey,
@@ -1919,6 +1959,7 @@ export class PeriscopeHost {
         resolve: nodePathResolver,
         protectedPaths: this.#options.protectedPaths,
         home: this.#options.home === undefined ? homeDirectory() : this.#options.home,
+        spawnEnv: () => spawnEnv,
         // A Codex session's tools are Codex's: its own names, its shell read in the grammar it runs
         // in, and its paths relative to where the call runs.
         ...(runtimeOf(requested.value) === CODEX_RUNTIME
@@ -1953,6 +1994,7 @@ export class PeriscopeHost {
               this.#options.codex.runtime.hook?.lines ?? codexHookLines(this.#options.codex.runtime.home)
             ).hooksPath,
           }),
+      spawnedWith,
       where,
       // The controller's own handle when it sent one, the routing key otherwise. The key stays the
       // fallback rather than null: a transition with no correlation at all is strictly less useful
@@ -2614,6 +2656,26 @@ export class PeriscopeHost {
       });
     }
     return fitted;
+  }
+
+  /**
+   * What a session's spawn environment is known to hold before its runtime starts: the environment the
+   * registry composes (this host's base environment when it built the registry, the controller's declared
+   * variables, the endpoint's), and the home a native runtime is started with.
+   */
+  #knownSpawnEnv(
+    request: Pick<SessionRequest, 'env' | 'runtime'>,
+    hostEnv: Readonly<Record<string, string>> | undefined,
+  ): Record<string, string> {
+    const known = composeSpawnEnv(this.#options.baseEnv ?? {}, request.env ?? {}, hostEnv ?? {});
+    const runtime = runtimeOf(request);
+    if (runtime === CODEX_RUNTIME && this.#options.codex !== undefined) {
+      known[CODEX_HOME_VARIABLE] = this.#options.codex.runtime.home;
+    }
+    if (runtime === PI_RUNTIME && this.#options.pi !== undefined) {
+      known[PI_AGENT_DIR_VARIABLE] = piBaseOf(this.#options.pi.runtime.base).agent;
+    }
+    return known;
   }
 
   /** The entries a session may name a runtime from, beside Claude: what this host offers, whole. */

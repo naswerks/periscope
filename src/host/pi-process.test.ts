@@ -712,7 +712,7 @@ test("a resume opens the session's file by path, when it ran here; one that ran 
   }
 });
 
-test('the twenty request keys: each one pi cannot honour is refused by name, and nothing is dropped', () => {
+test('the twenty request keys: each one pi cannot honour is refused by name, and the one it has no use for is named', () => {
   const refused: [Partial<AgentProcessRequest>, RegExp][] = [
     [{ hooks: {} }, /^hooks:/],
     [{ sessionStore: {} as never }, /^sessionStore:/],
@@ -738,11 +738,18 @@ test('the twenty request keys: each one pi cannot honour is refused by name, and
     { thinking: { type: 'disabled' } },
     { systemPrompt: 'replace it' },
     { includePartialMessages: false },
-    { strictMcpConfig: false },
     { resume: 'x' },
     { fork: true },
   ] satisfies Partial<AgentProcessRequest>[]) {
     assert.equal(piRequestProblem(processRequest(honoured)), null, JSON.stringify(honoured));
+  }
+  // Accepted and read by nothing, either way: pi reads no MCP file of the workspace's and its agent home
+  // lists none, so a session has only the servers it names whatever this says.
+  for (const ignored of [
+    { strictMcpConfig: false },
+    { strictMcpConfig: true },
+  ] satisfies Partial<AgentProcessRequest>[]) {
+    assert.equal(piRequestProblem(processRequest(ignored)), null, JSON.stringify(ignored));
   }
 });
 

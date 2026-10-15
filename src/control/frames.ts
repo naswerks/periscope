@@ -48,9 +48,11 @@ export const PROTOCOL_VERSION = 17;
  *
  * Version 17 adds `qwen-code` as a runtime a hello may list and a session may name, whose forwarded
  * messages are its own stream-json messages and control requests with `runtime: "qwen-code"`; its
- * agent events (`qwen-code:{type}`, `qwen-code:system/{subtype}` and `qwen-code:{answer}`); four refusal
- * reasons (`qwen-ask-rules-not-active`, `gate-tool-unruled`, `gate-mode-widened`,
- * `gate-credential-in-shell`); and `cmd` as the grammar of a decision request's shell call. A
+ * agent events (`qwen-code:{type}`, `qwen-code:system/{subtype}` and `qwen-code:{answer}`); `pi` the
+ * same way, its forwarded messages what pi wrote in RPC mode with `runtime: "pi"` and its agent events
+ * `pi:*`; six refusal reasons (`qwen-ask-rules-not-active`, `gate-tool-unruled`, `gate-mode-widened`,
+ * `gate-credential-in-shell`, `pi-extension-not-active`, `gate-foreign-extension`); and `cmd` as the
+ * grammar of a decision request's shell call. A
  * transition's cause is carried unnarrowed, a runtime is a word, and a reason a controller does not
  * know is read tolerantly, so a version-16 controller is still spoken to: what it sends decodes here
  * unchanged, and what it receives decodes on its side. The one closed word it would refuse, `cmd`, is

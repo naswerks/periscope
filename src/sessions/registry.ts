@@ -180,6 +180,13 @@ export interface SessionRequest {
    * @internal
    */
   readonly nativeGate?: unknown;
+  /**
+   * Told the environment this registry composed for the session, before its process starts: the
+   * session's local gate reads its path variables. A runtime that adds variables of its own when its
+   * process starts tells its gate those as well.
+   * @internal
+   */
+  readonly spawnedWith?: (env: Readonly<Record<string, string>>) => void;
 }
 
 /** How many sessions one host holds at once, live and opening together, unless told otherwise. */
@@ -370,6 +377,7 @@ export class SessionRegistry {
       },
     };
 
+    request.spawnedWith?.(processRequest.env);
     const session = new HostedSession<unknown>(
       native === null
         ? this.#startProcess(processRequest)

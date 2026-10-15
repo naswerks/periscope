@@ -132,15 +132,33 @@ are jailed to the session's workspace. Reads are not jailed: a read goes anywher
 can read, the agent's own tool output and installed packages included, and the protected set is what
 stops it. A search is refused when its root (`path`, else the workspace) is at or beneath a protected
 path, and also when a protected path sits beneath its root, because the search would read it. The
-shell scan matches a protected path written literally or through a home-directory form (`~`,
-`$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, `%USERPROFILE%`), and every comparison folds
-case. What falls through is symlink indirection (the gate resolves paths as text and follows no
-link) and a shell command that reaches a protected path without naming it: a recursive search of an
-ancestor directory, or a path the command builds at run time. What this means for fact 1's picture:
-offline, those calls escalate and are refused as outages, which is still fail-closed; online, for
-exactly those vectors, what stands between the agent and the token cache is your controller, not
-this gate. Closing them is a known open question: a link needs the filesystem the gate deliberately
-does not consult, and a computed path cannot be read from a command's text.
+shell scan matches a protected path written literally, through a home-directory form (`~`, `$HOME`,
+`${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}` spellings, `%USERPROFILE%`),
+or through a variable of the session's spawn environment whose value is one absolute path, spelled
+`$NAME`, `${NAME}`, `$env:NAME`, `${env:NAME}` or `%NAME%`. Those variables are the ones each runtime
+is started with: the homes this host sets (`CODEX_HOME`, `QWEN_HOME`, `QWEN_CODE_SYSTEM_SETTINGS_PATH`,
+`PI_CODING_AGENT_DIR` and their kin) and the ones it passes through (`USERPROFILE`, `APPDATA`,
+`CLAUDE_CONFIG_DIR` when you set it). A name is read as each shell reads it, PowerShell's and `cmd`'s
+without regard to case and a POSIX shell's exactly, and every comparison folds case. A command that
+only shows such a variable is refused like one that mentions the path itself:
+`echo "$PI_CODING_AGENT_DIR"` is, since the whole pi home is protected. What falls through is
+symlink indirection (the gate resolves paths as text and follows no link) and a shell command that
+reaches a protected path without naming it:
+
+- a recursive search of an ancestor directory;
+- a path the command builds at run time, from several variables (`%HOMEDRIVE%%HOMEPATH%`) or from a
+  variable it sets itself;
+- a variable the runtime sets in its own shell, whose value this host never sees (pi's
+  `PI_SESSION_FILE`, Qwen Code's `QWEN_CODE_PROJECT_DIR`);
+- a variable read through a command (`$(printenv NAME)`, `Get-Item env:NAME`) or an expansion
+  operator (`${NAME:-...}`, `${NAME%...}`, `%NAME:~...%`, `cmd`'s delayed `!NAME!`);
+- a list variable such as `PATH`, which is never spelled out.
+
+What this means for fact 1's picture: offline, those calls escalate and are refused as outages, which
+is still fail-closed; online, for exactly those vectors, what stands between the agent and the token
+cache is your controller, not this gate. Closing them is a known open question: a link needs the
+filesystem the gate deliberately does not consult, and a computed path cannot be read from a
+command's text.
 
 Name what is lost, because "no opinion" undersells it. With the controller unreachable, such a call
 is refused as an outage rather than by name, which is precisely the distinction the local gate was
@@ -192,7 +210,7 @@ So `PeriscopeHost` sets `grantOnAllow`: it makes the decision your gate already 
 one call at a time, for exactly the calls it approved. It is not `bypassPermissions`; nothing is
 disabled wholesale.
 
-> Three residuals.
+> Four residuals.
 > **(1)** The flag defaults OFF. An embedder who calls `composeSession` by hand and does not set it
 > gets a gate that cannot say yes: the tool simply does not run and the agent reports a permission
 > it was never going to be granted. This raises a `gate-cannot-grant` degrade on the first allow
@@ -204,6 +222,10 @@ disabled wholesale.
 > `settingSources: []` does _not_ mean no operator rules are live. Managed policy settings and
 > `~/.claude.json` load regardless of that field, and a managed machine is exactly where such a
 > policy exists. The refusal sees the tiers you name and cannot see the two that are always on.
+> **(4)** A hand-composed session's shell scan spells out the home-directory forms only. The
+> session's path variables reach the local gate through `PeriscopeHost`'s own composition, so a
+> session composed by hand names a protected path through `$NAME`, `$env:NAME` or `%NAME%` past the
+> scan.
 
 > **What an effective allow actually skips.** The [Claude Code permissions
 > documentation](https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks) states
@@ -302,16 +324,22 @@ the Codex gate). What holds, and what does not:
   implements nor measures it. On Windows Codex runs the agent's commands through PowerShell, which
   loads the user's PowerShell profile whenever Codex runs a call as a login shell: its default, unless
   the call asks otherwise, in which case the command runs with `-NoProfile`.
-- **The gate's own files are protected.** The runner home's `hooks.json`, its `hooks` directory and its
-  `config.toml` join the protected set beside its sign-in files: the hook is all that stands between
-  the agent's shell and those credentials, and rewriting the shim (whose trust covers its path, not its
-  bytes) or the recorded trust would take it away. The shim's bytes are also rewritten at every open
-  when they differ. This is the gate protecting itself, nothing more.
+- **The gate's own files are protected; the gate's code is not.** The runner home's `hooks.json`, its
+  `hooks` directory and its `config.toml` join the protected set beside its sign-in files: the hook is
+  all that stands between the agent's shell and those credentials, and rewriting the shim (whose trust
+  covers its path, not its bytes) or the recorded trust would take it away. The shim's bytes are also
+  rewritten at every open when they differ. That protects the files Codex reads to find the gate, and
+  nothing more: the shim runs this package's `dist/bin/periscope.js` under the Node binary on every
+  call, and neither is in the protected set. The agent shares this host's OS user, so a command that
+  rewrites either ungates every later Codex call on this runner. It is the same-user residual this
+  package names throughout, wider for Codex because Codex alone re-reads its gate from disk on every
+  call; keep the package and Node where the runner's user cannot write, or accept it.
 - **A home of the runner's own.** `CODEX_HOME` is `PERISCOPE_CODEX_HOME` for every Codex process, so
   a session never runs from your own `~/.codex`, its sign-in or its history. The sign-in files in both
-  homes (`auth.json`, `.credentials.json`) are in the protected set. A home whose path holds a space or
-  a shell metacharacter cannot carry the hook's line, so Codex is listed unavailable there, naming the
-  character; the host itself still starts.
+  homes (`auth.json`, `.credentials.json`) are in the protected set, named literally, through a
+  home-directory form or through `CODEX_HOME` itself, and `CODEX_HOME` is kept from the agent's shell
+  (below). A home whose path holds a space or a shell metacharacter cannot carry the hook's line, so
+  Codex is listed unavailable there, naming the character; the host itself still starts.
 - **No project is trusted on your behalf.** The host sends no working directory on any thread or turn
   request; the app-server's own working directory is the session's. Codex records a project as
   trusted only when a thread request names a directory, so the host never writes a trust entry, and
@@ -328,9 +356,10 @@ the Codex gate). What holds, and what does not:
   reads its key from `PERISCOPE_CODEX_ENDPOINT_KEY`, which the host sets, with the endpoint's own
   `env`, in the app-server's environment only. Codex hands a shell command the app-server's whole
   environment unless told otherwise, and its own exclusion of `*KEY*`, `*SECRET*` and `*TOKEN*` names
-  is off unless asked for, so the host names each of those variables, and the hook's three, in
-  `shell_environment_policy.exclude`, exactly; Codex matches each entry as a glob without regard to
-  case, so each removes that one variable. Codex's hooks still receive the whole environment.
+  is off unless asked for, so the host names each of those variables, the hook's three and
+  `CODEX_HOME`, in `shell_environment_policy.exclude`, exactly; Codex matches each entry as a glob
+  without regard to case, so each removes that one variable. Codex's hooks still receive the whole
+  environment.
 - **A tool server's ticket stays out of the environment and off the command line.** A session's HTTP
   MCP servers ride its thread's config, sent over the app-server's stdin, with their headers as
   static `http_headers`: never `env_http_headers`, which reads a header from the app-server's
@@ -366,17 +395,20 @@ writes send every call to ask, and the paths that can still run undecided are na
   `gate-mode-widened`. Both are degrades on the session's state lane, never a stop.
 - **Your `~/.env` reaches the agent's shell.** The CLI loads `~/.env`, and `~/.qwen/.env`, into its own
   environment whatever its home, and every command the agent runs inherits that environment. Both
-  files are in the protected set, so no session reads them, and so are Claude's and Codex's: a session
-  on any runtime is refused reading `~/.env`. A Qwen Code session that opens while one exists names
-  the variables it adds, never their values, as `gate-credential-in-shell` in its opening tier, and so
-  does a session whose endpoint sets variables of its own. Keep credentials out of both files on a
-  runner.
+  files are in the protected set, so a session's tools and shell commands are refused them, named
+  literally, through a home-directory form or through a variable such as `$USERPROFILE`, and so are
+  Claude's and Codex's: a session on any runtime is refused reading `~/.env`. A Qwen Code session
+  that opens while one exists names the variables it adds, never their values, as
+  `gate-credential-in-shell` in its opening tier, and so does a session whose endpoint sets variables
+  of its own. Keep credentials out of both files on a runner.
 - **A home of the runner's own, one per session.** Each session runs from a home beneath
   `PERISCOPE_QWEN_HOME`, made at its open and removed at its close, so a session never runs from your
   own `~/.qwen`, its sign-in or its settings. The sessions' homes are in the protected set, and so are
   the sign-in, token, extension-secret, settings and variables files in `~/.qwen` and in a `QWEN_HOME`
-  you set yourself. The base's shared `runtime` directory, where the chats a resume reads are kept,
-  is not protected: a session can read another session's chat there.
+  you set yourself. The CLI's shell inherits the variables naming the session's home and settings file
+  (`QWEN_HOME`, `QWEN_CODE_SYSTEM_SETTINGS_PATH` and their kin), and a command naming them is refused as
+  if it named the path. The base's shared `runtime` directory, where the chats a resume reads are
+  kept, is not protected: a session can read another session's chat there.
 - **An endpoint's credential is written once, outside the environment.** A Qwen Code session reaches
   its model only through an endpoint you declared, and the endpoint's key is written into the
   session's settings file alone: never the CLI's environment, which the agent's shell inherits, and
@@ -428,10 +460,13 @@ does not:
   input the model wrote. pi's `bash` command, which runs a command outside any tool call, is refused.
 - **The whole pi home is protected.** `PERISCOPE_PI_HOME` holds pi's agent home (your sign-in and the
   endpoints' keys), the session store and each session's run directory (the channel's token and the
-  MCP servers' tickets), and all of it is in the protected set, so no agent reads any of it, its own
-  session's file included: the session store is shared by every pi session, and a session that could
-  read it could read another's conversation. pi's `read` tool has no limit of its own; the protected
-  set and the write jail are what bound it. Your own `~/.pi/agent/auth.json`, `mcp-auth.json` and
+  MCP servers' tickets), and all of it is in the protected set, named literally, through a
+  home-directory form or through `PI_CODING_AGENT_DIR`, which pi's shell inherits: the session store
+  is shared by every pi session, and a session that could read it could read another's conversation.
+  One way in stays: pi sets `PI_SESSION_FILE` in its own shell on every command, naming the session's
+  own file in that store, and this host never sees its value, so `cat "$PI_SESSION_FILE"` reads the
+  session's own conversation. pi's `read` tool has no limit of its own; the protected set and the
+  write jail are what bound it. Your own `~/.pi/agent/auth.json`, `mcp-auth.json` and
   `models.json` are protected on every host.
 - **The extension's configuration never reaches the agent's shell.** It is a file only the runner can
   read, named by `PERISCOPE_PI_EXTENSION_CONFIG`; the extension takes that variable out of pi's

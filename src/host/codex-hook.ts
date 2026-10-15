@@ -117,13 +117,23 @@ export function codexHookLines(
   };
 }
 
-/** Whether a hook handler is periscope's, from any start: its line names this package's hook command. */
-function isPeriscopeHandler(handler: unknown): boolean {
+/**
+ * Periscope's POSIX hook line for any Node binary and any install of this package, whole, as
+ * `codexHookLines` writes it: two single-quoted words, the second this package's entry.
+ */
+const POSIX_HOOK_LINE =
+  /^NODE_OPTIONS= '(?:[^']|'\\'')*' --no-warnings '(?:[^']|'\\'')*[\\/]periscope\.js' hook codex$/;
+
+/**
+ * Whether a hook handler is periscope's, from any start: one of its lines is, whole, a line this package
+ * writes, its POSIX line or its shim in this home. A foreign hook that only contains those words, or a
+ * shim of the same name elsewhere, is someone else's, and the merge keeps it.
+ */
+function isPeriscopeHandler(handler: unknown, lines: CodexHookLines): boolean {
   if (typeof handler !== 'object' || handler === null) return false;
   const fields = handler as Record<string, unknown>;
-  const lines = [fields['command'], fields['commandWindows'], fields['command_windows']];
-  return lines.some(
-    (line) => typeof line === 'string' && (line.endsWith(CODEX_HOOK_SHIM) || line.includes(' hook codex')),
+  return [fields['command'], fields['commandWindows'], fields['command_windows']].some(
+    (line) => typeof line === 'string' && (POSIX_HOOK_LINE.test(line) || samePath(line, lines.windows)),
   );
 }
 
@@ -144,7 +154,7 @@ export function codexHooksFile(existing: unknown, lines: CodexHookLines): JsonOb
   const kept = (current as unknown[]).filter((group) => {
     const handlers =
       typeof group === 'object' && group !== null ? (group as { hooks?: unknown }).hooks : undefined;
-    return !(Array.isArray(handlers) && handlers.some(isPeriscopeHandler));
+    return !(Array.isArray(handlers) && handlers.some((handler) => isPeriscopeHandler(handler, lines)));
   });
   const ours: JsonObject = {
     hooks: [

@@ -72,7 +72,7 @@ export const CODEX_NOTIFICATION_COVERAGE = {
   'thread/settings/updated': { handling: 'declined', note: EXPERIMENTAL },
   'thread/tokenUsage/updated': {
     handling: 'wired',
-    note: 'a usage sample (context tokens are the last call total, Codex own rule); the newest one for a turn is that turn record totals. It names no model, so the model is the session model register. inputTokens is input minus cached input, floored at zero: Codex own split, so it counts uncached input only',
+    note: 'a usage sample (context tokens are the last call total, Codex own rule); the newest one for a turn is that turn record totals, the thread running total: a resumed or forked thread includes the source thread tokens, which Codex restores from the rollout. It names no model, so the model is the session model register. inputTokens is input minus cached input, floored at zero: Codex own split, so it counts uncached input only',
   },
   'turn/started': {
     handling: 'wired',

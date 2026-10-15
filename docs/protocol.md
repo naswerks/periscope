@@ -342,9 +342,10 @@ on stdout: a stream message as the CLI wrote it (`system`, `assistant`, `user`, 
 `{ type: 'control_request', request_id, request }`. A `stream_event` rides the delta lane and
 everything else the update lane; the answers to the host's own control requests, and the prompts the
 host wrote, are not forwarded. Which messages move the session is `QWEN_COVERAGE`
-([state-machine.md](state-machine.md)). A session whose CLI has no model it can reach ends its first
-turn in an error `result` whose `num_turns` is 0 and whose `error.message` names the missing auth type
-or key: that is a Qwen Code session's sign-in marker.
+([state-machine.md](state-machine.md)). A session whose CLI has no model it can reach gets one error
+`result` whose `num_turns` is 0 and whose `error.message` names the missing auth type or key, written
+before the CLI answers `initialize`, and then the CLI exits: that result is a Qwen Code session's
+sign-in marker.
 
 A pi session's messages carry `runtime: "pi"`, and each `message` is what pi wrote on stdout in RPC
 mode, or its answer to one of the host's commands: an event as pi wrote it (`agent_start`,
@@ -354,8 +355,10 @@ setters, `abort` and `get_session_stats` as `{ type: 'response', command, succes
 `error`. A `message_update` rides the delta lane, and only for a session that asked for partial
 messages; everything else the update lane. Which messages move the session is `PI_COVERAGE`
 ([state-machine.md](state-machine.md)). pi writes no sign-in event; a session with no model it can
-reach meets one of three markers: its open ends `session-spawn-failed` with pi's own last line,
-`No models available`, naming `/login`; the answer to a `prompt` is `success: false` with an `error`
+reach meets one of three markers: pi exits before the session opens (`No models available`, naming
+`/login`), and the session ends with cause `process/process_failed`, its detail `the pi CLI exited
+(...)` and the last line pi wrote to standard error, which for that message is the documentation
+path pi prints after it; the answer to a `prompt` is `success: false` with an `error`
 starting `No API key found for ` or `Authentication failed for `; or a run's answer is a
 `message_end` whose `stopReason` is `error`, its `errorMessage` the provider's own refusal.
 
@@ -725,7 +728,8 @@ On `codex`, every other member is read as Codex's own:
   server's tools are asked about before each call, and the session's gate decides each ask for the
   call pending on that server. A server Codex has no form for
   (SSE, an in-process server, a key it has no setting for, a name with a `.`) is refused
-  `mcp-descriptor-invalid`, naming it.
+  `mcp-descriptor-invalid`, naming it. Codex has no setting `strictMcpConfig` maps to, and the host
+  reads it for no Codex session: either value is accepted and changes nothing.
 - `endpoint` opens the session on a provider of its own, defined in its thread's config and named by
   the host. The endpoint must carry `codex` and speak `openai-responses`; otherwise it is refused
   `endpoint-unknown` or `endpoint-incompatible`. `model-endpoint-mismatch` is Claude's rule and a
@@ -748,8 +752,8 @@ On `qwen-code`, every other member is read as Qwen Code's own:
   server, a name outside letters, digits, `-` and `_`) is refused `mcp-descriptor-invalid`, naming it.
   `strictMcpConfig` on (the default) admits only those servers.
 - `endpoint` opens the session on that endpoint, over any of the three wire APIs; its credential is
-  written only into the session's settings file. A Qwen Code session opened on no endpoint ends its
-  first turn at the sign-in marker (above).
+  written only into the session's settings file. A Qwen Code session opened on no endpoint meets the
+  sign-in marker (above) and ends with the CLI's exit.
 
 On `pi`, every other member is read as pi's own:
 
@@ -770,8 +774,10 @@ On `pi`, every other member is read as pi's own:
   stdio server's command, arguments and environment, each value written so pi expands nothing in it.
   The extension registers each server's tools by name (`mcp__<server>__<tool>`), and the session's
   gate decides every call. A server pi has no form for (SSE, an in-process server, a name outside
-  letters, digits, `-` and `_`) is refused `mcp-descriptor-invalid`, naming it. `strictMcpConfig` on
-  admits only those servers: pi reads no MCP file of the workspace's, and the agent home's is empty.
+  letters, digits, `-` and `_`) is refused `mcp-descriptor-invalid`, naming it. pi reads no MCP file
+  of the workspace's, and the agent home's is empty, so a session has only those servers whatever
+  `strictMcpConfig` says: the host reads it for no pi session, and either value is accepted and
+  changes nothing.
 - `endpoint` opens the session on that endpoint as pi's provider, over any of the three wire APIs;
   its credential is written only into the agent home's `models.json`.
 

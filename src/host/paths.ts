@@ -95,10 +95,11 @@ export function homeDirectory(env: NodeJS.ProcessEnv = process.env): string | nu
  * This exists because file permissions are not a boundary here. The agent runs as the same OS
  * user as the host, so a 0600 token file is readable by the agent exactly as it is by the host. No
  * mode, no owner and no ACL separates them. The gate refusing these paths is the only local
- * control there is: the read, write and search tools, and shell commands naming a path literally or
- * through a home-directory form (`~`, `$HOME`, `%USERPROFILE%`). A symlink to one of these paths is
- * outside that scope. Without this list "the agent holds no credential" is true only in the narrowest
- * sense: it holds none of its own, and can read the host's.
+ * control there is: the read, write and search tools, and shell commands naming a path literally,
+ * through a home-directory form (`~`, `$HOME`, `%USERPROFILE%`), or through a variable of the
+ * session's spawn environment whose value is a path. A symlink to one of these paths is outside that
+ * scope, and so is a path a command builds at run time. Without this list "the agent holds no
+ * credential" is true only in the narrowest sense: it holds none of its own, and can read the host's.
  *
  * The set names credential material, not the directories it sits in. An agent reads its own CLI's
  * settings, skills and tool output under the CLI's home; what it may not read is the CLI's token cache

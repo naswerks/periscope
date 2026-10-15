@@ -11,12 +11,15 @@
  * so file permissions are not a boundary against it: an 0600 credential is readable by the agent
  * exactly as it is by the host. This denial is the local control, and it covers the declared read,
  * write and search tools (`Read`, `NotebookRead`, the write tools, `Grep`, `Glob` by default) and
- * shell commands naming a protected path literally or through a home-directory form (`~`, `$HOME`,
- * `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, `%USERPROFILE%`), each with a named refusal and with
- * case folded. A search is refused when its root is at or beneath a protected path and also when a
- * protected path sits beneath its root, since the search would read it. What stays outside: symlink
- * indirection, and a shell command that reaches a protected path without naming it (a recursive
- * search of an ancestor, a path built at run time); those are not refused here.
+ * shell commands naming a protected path literally, through a home-directory form (`~`, `$HOME`,
+ * `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, `${env:...}` of either, `%USERPROFILE%`), or through a
+ * variable of the session's spawn environment whose value is a path (`$NAME`, `${NAME}`, `$env:NAME`,
+ * `${env:NAME}`, `%NAME%`), each with a named refusal and with case folded. A search is refused when
+ * its root is at or beneath a protected path and also when a protected path sits beneath its root,
+ * since the search would read it. What stays outside: symlink indirection, and a shell command that
+ * reaches a protected path without naming it (a recursive search of an ancestor, a path built at run
+ * time, a variable the command or the runtime sets itself, a variable read through a command or an
+ * expansion operator); those are not refused here.
  *
  * Every unknown resolves toward refusing. No path in the input: refuse. A resolver that throws:
  * refuse. Not absolute: refuse. No declared root: refuse, because a jail with no walls is not a
@@ -51,6 +54,14 @@ export interface JailOptions {
   readonly protectedPaths: readonly string[];
   /** The home directory a shell command's `~` and `$HOME` forms name. Absent: the forms stay as written. */
   readonly home?: string | null;
+  /**
+   * The session's spawn environment, as far as the host knows it. Each variable whose value is one
+   * absolute path is spelled out where a shell command names it, before the protected-path scan, so a
+   * protected path written through a variable the host placed is matched as if written in full.
+   * Absent: only the home-directory forms are.
+   * @internal
+   */
+  readonly variables?: Readonly<Record<string, string | undefined>>;
 }
 
 /** The tool-input fields that carry a path, in precedence order. First readable one wins. */
@@ -247,15 +258,70 @@ export function checkSearch(toolInput: unknown, options: JailOptions): Refusal |
 /**
  * The command with its home-directory forms spelled out, so a protected path written through one of
  * them is matched as if written in full: `~` at the start of a word, `$HOME`, `${HOME}`, `$env:HOME`,
- * `$env:USERPROFILE` and `%USERPROFILE%`. With no home known the text is returned as written.
+ * `$env:USERPROFILE`, their braced `${env:...}` spellings and `%USERPROFILE%`. With no home known the
+ * text is returned as written.
  */
 function expandHome(text: string, home: string | null | undefined): string {
   if (home === null || home === undefined || home.trim() === '') return text;
   return text
     .replace(/\$\{HOME\}|\$HOME\b/g, () => home)
-    .replace(/\$env:(?:USERPROFILE|HOME)\b/gi, () => home)
+    .replace(/\$env:(?:USERPROFILE|HOME)\b|\$\{env:(?:USERPROFILE|HOME)\}/gi, () => home)
     .replace(/%USERPROFILE%/gi, () => home)
     .replace(/(^|[\s'"=:;(|&<>])~(?=[\\/]|$|[\s'";|&)<>])/g, (_match, lead: string) => `${lead}${home}`);
+}
+
+/**
+ * Is this value one path a command could name by its variable? An absolute path, and not a list: `PATH`
+ * and its kin join several places with `;` (or `:` after a POSIX root), and spelling one out would set
+ * every directory on it against the protected set, which none of them is by being listed.
+ */
+function isOnePath(value: string): boolean {
+  if (!isAbsolutePath(value)) return false;
+  return !value.includes(';') && !value.slice(2).includes(':');
+}
+
+/**
+ * Every spelling of a variable this scan reads, in one pass so a value spelled out is never read again:
+ * PowerShell's `${env:NAME}` and `$env:NAME`, `cmd`'s `%NAME%`, and the POSIX `${NAME}` and `$NAME`.
+ */
+const VARIABLE_FORMS =
+  /\$\{env:([^}]+)\}|\$env:([A-Za-z_][A-Za-z0-9_]*)|%([^%\s]+)%|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/gi;
+
+/**
+ * The command with each variable of `variables` whose value is one path spelled out, so a protected path
+ * written through it is matched as if written in full. Names are read as each shell reads them:
+ * PowerShell and `cmd` without regard to case, a POSIX shell exactly. A name that is not one of these
+ * paths stays as written.
+ */
+function expandVariables(
+  text: string,
+  variables: Readonly<Record<string, string | undefined>> | undefined,
+): string {
+  if (variables === undefined) return text;
+  const exact = new Map<string, string>();
+  const folded = new Map<string, string>();
+  for (const [name, value] of Object.entries(variables)) {
+    if (typeof value !== 'string' || !isOnePath(value)) continue;
+    exact.set(name, value);
+    if (!folded.has(name.toLowerCase())) folded.set(name.toLowerCase(), value);
+  }
+  if (exact.size === 0) return text;
+  return text.replace(
+    VARIABLE_FORMS,
+    (
+      match: string,
+      braced: string | undefined,
+      bare: string | undefined,
+      cmd: string | undefined,
+      posixBraced: string | undefined,
+      posix: string | undefined,
+    ) => {
+      const foldedName = braced ?? bare ?? cmd;
+      if (foldedName !== undefined) return folded.get(foldedName.toLowerCase()) ?? match;
+      const exactName = posixBraced ?? posix;
+      return exactName === undefined ? match : (exact.get(exactName) ?? match);
+    },
+  );
 }
 
 /**
@@ -281,11 +347,12 @@ function expandHome(text: string, home: string | null | undefined): string {
  * oversight in them.
  *
  * The comparison is on the resolved protected paths and on the command text with its home-directory
- * forms spelled out, case-insensitively, because Windows paths reach here in both slash styles and
- * either case.
+ * forms and its path variables spelled out, case-insensitively, because Windows paths reach here in both
+ * slash styles and either case.
  */
 export function checkShellForProtectedPaths(command: string, options: JailOptions): Refusal | null {
-  const haystack = normalizePath(expandHome(command, options.home)).toLowerCase();
+  const expanded = expandVariables(expandHome(command, options.home), options.variables);
+  const haystack = normalizePath(expanded).toLowerCase();
   for (const candidate of options.protectedPaths) {
     const outcome = resolveOrRefuse(candidate, options.resolve);
     // A protected path this host cannot resolve is still protected — fall back to its literal form

@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
 import type {
   HostAgent,
@@ -71,7 +72,15 @@ interface PiHost {
   readonly base: string;
 }
 
-async function piHost(options: { read?: PiRuntimeRead; fake?: FakePiOptions } = {}): Promise<PiHost> {
+async function piHost(
+  options: {
+    read?: PiRuntimeRead;
+    fake?: FakePiOptions;
+    env?: Readonly<Record<string, string>>;
+    /** The protected set, from the runtime's base. Absent: none. */
+    protect?: (base: string) => readonly string[];
+  } = {},
+): Promise<PiHost> {
   const base = await tempDir('pi-host');
   const fake = fakePi(options.fake);
   const link = new RecordingLink();
@@ -84,8 +93,8 @@ async function piHost(options: { read?: PiRuntimeRead; fake?: FakePiOptions } = 
       decided.push(request);
       return Promise.resolve({ behavior: 'allow' });
     },
-    protectedPaths: [],
-    baseEnv: { PATH: 'p' },
+    protectedPaths: options.protect?.(base) ?? [],
+    baseEnv: { PATH: 'p', ...(options.env ?? {}) },
     homeDir: base,
     link: (handlers) => {
       link.handlers = handlers;
@@ -190,6 +199,50 @@ test("a session on pi opens ready at its tier once its extension said hello; a p
     assert.ok(
       run.link.bodies().some(({ body }) => body['update'] === 'agent_message' && body['runtime'] === 'pi'),
       'no message of pi rode the wire',
+    );
+  } finally {
+    await stopped(run);
+  }
+});
+
+test("regression: the endpoints' keys named through pi's agent directory variable are refused in each shell's spelling; a variable naming no protected place is not", async () => {
+  const spellings = [
+    { toolName: 'bash', command: 'cat "$PI_CODING_AGENT_DIR/models.json"' },
+    { toolName: 'powershell', command: 'Get-Content "$env:PI_CODING_AGENT_DIR\\models.json"' },
+    { toolName: 'bash', command: 'cat "%PI_CODING_AGENT_DIR%\\models.json"' },
+  ];
+  const elsewhere = resolve('/elsewhere/tmp');
+  const run = await piHost({
+    // The protected set as `credentialPaths` states it for a pi base: the whole base.
+    protect: (base) => [base],
+    env: { TEMP: elsewhere },
+    fake: {
+      calls: () => [
+        ...spellings.map(({ toolName, command }) => ({ toolName, input: { command } })),
+        // Control: the same spelling of a variable whose value no protected entry covers.
+        { toolName: 'bash', input: { command: 'ls "$TEMP"' } },
+      ],
+    },
+  });
+  try {
+    run.link.deliver('session-1', sessionNew(CWD, { request: sessionNewRequest({ runtime: 'pi' }) }));
+    await until(() => run.link.transitions().some((one) => one.to === 'ready'), 'the session to be ready');
+    run.link.deliver('session-1', { kind: 'session_prompt', text: 'read the keys' }, 2);
+    await until(() => run.link.transitions().some((one) => one.to === 'idle'), 'the run to settle');
+
+    const agentDir = run.fake.child.spawned?.env['PI_CODING_AGENT_DIR'] ?? '';
+    assert.ok(
+      agentDir.startsWith(run.base),
+      `pi's agent directory ${agentDir} is not in the protected base, so the refusals below would prove nothing`,
+    );
+    const refused = run.link
+      .transitions()
+      .filter((one) => one.cause.kind === 'refusal' && one.cause.event === 'credential-path-denied');
+    assert.equal(refused.length, spellings.length, refused.map((one) => one.cause.detail).join('\n'));
+    assert.deepEqual(
+      run.decided.map((request) => (request.toolInput as { command?: unknown }).command),
+      ['ls "$TEMP"'],
+      'only the control reached the decider',
     );
   } finally {
     await stopped(run);

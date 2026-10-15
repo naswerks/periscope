@@ -93,6 +93,7 @@ import type {
   UsageSampleFact,
 } from '../control/frames.js';
 import type { RefusalReason } from '../core/refusal.js';
+import { CODEX_RUNTIME, CONTROL_TIERS } from '../sessions/runtimes.js';
 import type { SessionTransition } from '../state/model.js';
 
 /** From dist/pins/ up to the package root, then into the corpus. */
@@ -361,7 +362,7 @@ const CLAUDE_ENTRY: HostAgentEntry = {
   unavailableReason: null,
 };
 
-/** Codex's entry: no SDK, and its own efforts (`none` among them). */
+/** Codex's entry: no SDK, its own efforts (`none` among them), and the control tier its hello states. */
 const CODEX_ENTRY: HostAgentEntry = {
   runtime: 'codex',
   version: '0.162.1',
@@ -383,7 +384,7 @@ const CODEX_ENTRY: HostAgentEntry = {
     efforts: ['low', 'medium', 'high', 'none'],
     thinking: true,
   },
-  controlTier: { level: 'none', degrades: [] },
+  controlTier: CONTROL_TIERS[CODEX_RUNTIME],
   available: true,
   unavailableReason: null,
 };

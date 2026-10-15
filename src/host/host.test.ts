@@ -13,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { fixedClock, fixedTicker } from '../core/time.js';
 import { refusal } from '../core/refusal.js';
@@ -469,6 +469,70 @@ test('regression: a PeriscopeHost grants by default, because it loads no setting
     'allow',
     'a composed host approved a call and did not grant it',
   );
+});
+
+/**
+ * A PeriscopeHost over a registry whose base environment is `baseEnv`, protecting `protectedPaths`: a
+ * Claude session opened on it, and what its gate answers for each command in `commands`.
+ */
+async function claudeAnswers(
+  baseEnv: Readonly<Record<string, string>>,
+  protectedPaths: readonly string[],
+  commands: readonly string[],
+): Promise<{ answers: string[]; causes: string[] }> {
+  const processes = fakeAgents();
+  const link = new FakeLink();
+  const host = new PeriscopeHost({
+    controllerUrl: 'ws://unused',
+    hostId: 'test-host',
+    decide: allow,
+    protectedPaths,
+    registry: new SessionRegistry({
+      baseEnv,
+      homeDir: 'C:/nonexistent-home-for-tests',
+      clock: fixedClock(AT),
+      startProcess: processes.start,
+    }),
+    link: (handlers) => {
+      link.handlers = handlers;
+      return link;
+    },
+  });
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await settle();
+  const request = processes.started[0]?.request;
+  assert.ok(request !== undefined, 'no session was started');
+  const answers: string[] = [];
+  for (const command of commands) {
+    const output = await callHooks(request, preToolUse('Bash', { command }));
+    answers.push(
+      (output as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput
+        ?.permissionDecision ?? '',
+    );
+  }
+  await settle();
+  host.stop();
+  return { answers, causes: link.causes() };
+}
+
+test("regression: with CLAUDE_CONFIG_DIR set, its sign-in named through the variable is refused in each shell's spelling; unset, the same spelling names nothing", async () => {
+  const configDir = resolve('/operator/claude-config');
+  const credentials = join(configDir, '.credentials.json');
+  const spellings = [
+    'cat "$CLAUDE_CONFIG_DIR/.credentials.json"',
+    'Get-Content "$env:CLAUDE_CONFIG_DIR\\.credentials.json"',
+    'type "%CLAUDE_CONFIG_DIR%\\.credentials.json"',
+  ];
+  const set = await claudeAnswers({ PATH: 'p', CLAUDE_CONFIG_DIR: configDir }, [credentials], spellings);
+  assert.deepEqual(set.answers, ['deny', 'deny', 'deny']);
+  assert.equal(
+    set.causes.filter((cause) => cause === 'refusal/credential-path-denied').length,
+    spellings.length,
+    set.causes.join(', '),
+  );
+  // Control: the variable unset in the session's environment, the same commands name no protected path.
+  const unset = await claudeAnswers({ PATH: 'p' }, [credentials], spellings);
+  assert.deepEqual(unset.answers, ['allow', 'allow', 'allow']);
 });
 
 test('a composed session refuses a relative cwd rather than resolving it against the host', () => {

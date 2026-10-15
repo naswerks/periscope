@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { connect } from 'node:net';
+import { join, resolve } from 'node:path';
 
 import type {
   HostConfiguration,
@@ -26,9 +27,13 @@ import {
   HOOK_TOKEN_VARIABLE,
   readHookAnswer,
 } from '../gate/hook-exchange.js';
+import { SessionRegistry } from '../sessions/registry.js';
 import type { SessionTransition } from '../state/model.js';
+import { fakeAgents } from '../test-support/fake-agent.js';
 import { FAKE_HOOK_HASH, FAKE_MODELS, fakeCodex } from '../test-support/fake-codex.js';
 import type { FakeCodex, FakeCodexOptions } from '../test-support/fake-codex.js';
+import type { CodexSessionGate } from './codex-gate.js';
+import { CODEX_HOME_VARIABLE } from './codex-process.js';
 import { availableCodexEntry, codexHostModel } from './codex-runtime.js';
 import type { HostLink } from './host.js';
 import { PeriscopeHost } from './host.js';
@@ -91,9 +96,13 @@ async function gateHost(
   options: {
     readonly fake?: Partial<FakeCodexOptions>;
     readonly decide?: (request: DecisionRequest) => unknown;
+    /** The runner's Codex home. Absent: `HOME`. */
+    readonly home?: string;
+    readonly protectedPaths?: readonly string[];
   } = {},
 ): Promise<GateHost> {
-  const fake = fakeCodex({ codexHome: HOME, ...options.fake });
+  const home = options.home ?? HOME;
+  const fake = fakeCodex({ codexHome: home, ...options.fake });
   const link = new RecordingLink();
   const asked: DecisionRequest[] = [];
   const decide: Decider = (request) => {
@@ -104,7 +113,7 @@ async function gateHost(
     controllerUrl: 'ws://unused',
     hostId: 'test-host',
     decide,
-    protectedPaths: [],
+    protectedPaths: options.protectedPaths ?? [],
     baseEnv: { PATH: 'p' },
     homeDir: 'C:/nonexistent-home-for-tests',
     link: (handlers) => {
@@ -115,7 +124,7 @@ async function gateHost(
     codex: {
       runtime: {
         binary: 'C:/tools/codex.exe',
-        home: HOME,
+        home,
         clientVersion: '1.7.0',
         spawn: fake.spawn,
         killTree: () => Promise.resolve(),
@@ -164,7 +173,11 @@ function spawned(fake: FakeCodex): {
 
 /** Ask the session's hook channel about one call, as the hook process does. */
 function askHook(fake: FakeCodex, event: JsonObject): Promise<unknown> {
-  const env = spawned(fake).env;
+  return askChannel(spawned(fake).env, event);
+}
+
+/** Ask the hook channel `env` names about one call. */
+function askChannel(env: Readonly<Record<string, string>>, event: JsonObject): Promise<unknown> {
   const address = env[HOOK_CHANNEL_VARIABLE] ?? '';
   const token = env[HOOK_TOKEN_VARIABLE] ?? '';
   return new Promise((resolve) => {
@@ -341,7 +354,12 @@ test("the hook's variables ride the app-server's environment and are kept from t
   }
   const flag = args.find((arg) => arg.startsWith('shell_environment_policy.exclude='));
   const excluded = JSON.parse((flag ?? '').slice('shell_environment_policy.exclude='.length)) as string[];
-  assert.deepEqual(excluded, [HOOK_CHANNEL_VARIABLE, HOOK_TOKEN_VARIABLE, HOOK_DEADLINE_VARIABLE]);
+  assert.deepEqual(excluded, [
+    HOOK_CHANNEL_VARIABLE,
+    HOOK_TOKEN_VARIABLE,
+    HOOK_DEADLINE_VARIABLE,
+    CODEX_HOME_VARIABLE,
+  ]);
   // Codex reads each entry as a case-insensitive glob; an exact name removes that variable and no other.
   const glob = (pattern: string, name: string): boolean =>
     new RegExp(
@@ -355,8 +373,108 @@ test("the hook's variables ride the app-server's environment and are kept from t
   const removed = sample.filter((name) => excluded.some((pattern) => glob(pattern, name)));
   assert.deepEqual(
     removed.sort(),
-    [HOOK_CHANNEL_VARIABLE, HOOK_DEADLINE_VARIABLE, HOOK_TOKEN_VARIABLE].sort(),
+    [HOOK_CHANNEL_VARIABLE, HOOK_DEADLINE_VARIABLE, HOOK_TOKEN_VARIABLE, CODEX_HOME_VARIABLE].sort(),
   );
+  host.stop();
+});
+
+/** The reason a hook answer carries, or the empty string. */
+const reasonOf = (answer: unknown): string =>
+  typeof answer === 'object' && answer !== null && typeof (answer as { reason?: unknown }).reason === 'string'
+    ? (answer as { reason: string }).reason
+    : '';
+
+/** A runner home absolute on every platform, so the host's own resolver reads it as one. */
+const ABSOLUTE_HOME = resolve('/runner/codex-home');
+
+test("regression: a sign-in file named through CODEX_HOME is refused in each shell's spelling, and the variable is kept from the agent's shell", async () => {
+  const { host, link, fake, asked } = await gateHost({
+    home: ABSOLUTE_HOME,
+    protectedPaths: [join(ABSOLUTE_HOME, 'auth.json')],
+  });
+  open(link);
+  await ready(link);
+  const { env, args } = spawned(fake);
+  assert.equal(env[CODEX_HOME_VARIABLE], ABSOLUTE_HOME, 'the app-server runs from the runner home');
+  const flag = args.find((arg) => arg.startsWith('shell_environment_policy.exclude='));
+  const excluded = JSON.parse((flag ?? '').slice('shell_environment_policy.exclude='.length)) as string[];
+  assert.ok(excluded.includes(CODEX_HOME_VARIABLE), 'the home reaches the agent shell');
+  const spellings = [
+    'Get-Content "$env:CODEX_HOME\\auth.json"',
+    'cat "$CODEX_HOME/auth.json"',
+    'type "%CODEX_HOME%\\auth.json"',
+  ];
+  for (const [index, command] of spellings.entries()) {
+    const answer = await askHook(fake, hookEvent(`call_${index}`, 'Bash', { command }));
+    assert.match(reasonOf(answer), /^credential-path-denied: /, command);
+  }
+  assert.equal(asked.length, 0, 'a call the local gate refuses never reaches the decider');
+  // Control: the same spelling naming the home itself, which no protected entry covers, is asked about.
+  const listing = await askHook(
+    fake,
+    hookEvent('call_home', 'Bash', { command: 'Get-ChildItem "$env:CODEX_HOME"' }),
+  );
+  assert.deepEqual(listing, { allow: true });
+  assert.equal(asked.length, 1);
+  host.stop();
+});
+
+test('regression: a call decided before the runtime reports the environment it starts with reads what the host already knew, never nothing', async () => {
+  let gate: CodexSessionGate | null = null;
+  const agents = fakeAgents();
+  const registry = new SessionRegistry({
+    baseEnv: { PATH: 'p' },
+    homeDir: 'C:/nonexistent-home-for-tests',
+    runtimes: {
+      // A Codex process that reports nothing of its own: only what the host knew before the spawn can
+      // name CODEX_HOME to the session's gate.
+      codex: {
+        start: (request, _degrade, route) => {
+          gate = route.gate as CodexSessionGate;
+          return agents.start(request);
+        },
+        readInit: () => null,
+      },
+    },
+  });
+  const link = new RecordingLink();
+  const asked: DecisionRequest[] = [];
+  const host = new PeriscopeHost({
+    controllerUrl: 'ws://unused',
+    hostId: 'test-host',
+    decide: (request) => {
+      asked.push(request);
+      return Promise.resolve({ behavior: 'allow' });
+    },
+    protectedPaths: [join(ABSOLUTE_HOME, 'auth.json')],
+    registry,
+    link: (handlers) => {
+      link.handlers = handlers;
+      return link;
+    },
+    agentCatalog: async () => ({ ok: false, detail: 'not read in this test' }),
+    codex: {
+      runtime: { binary: 'C:/tools/codex.exe', home: ABSOLUTE_HOME, clientVersion: '1.7.0' },
+      read: async () => ({ entry: availableCodexEntry('0.162.1', []), detail: null }),
+    },
+  });
+  host.start();
+  await until(() => link.announced !== null, 'the hello');
+  open(link);
+  await until(() => gate !== null, 'the session to start');
+  const channel = (gate as unknown as CodexSessionGate).env;
+  const early = await askChannel(
+    channel,
+    hookEvent('call_early', 'Bash', { command: 'Get-Content "$env:CODEX_HOME\\auth.json"' }),
+  );
+  assert.match(reasonOf(early), /^credential-path-denied: /);
+  // Control: a variable nobody placed names nothing, so the same spelling of it is asked about.
+  const unknown = await askChannel(
+    channel,
+    hookEvent('call_unknown', 'Bash', { command: 'Get-Content "$env:NOT_PLACED\\auth.json"' }),
+  );
+  assert.deepEqual(unknown, { allow: true });
+  assert.equal(asked.length, 1);
   host.stop();
 });
 

@@ -238,11 +238,13 @@ test(
     );
     const mcp = await fakeMcpHttp('2024-11-05');
     const started = Date.now();
+    // A ticket pi must neither expand (`$`) nor run (`!`): the server reads it back as written.
+    const ticket = '!echo $NOT_A_VARIABLE';
     const run = start(dir, {
       deny: (asked) => JSON.stringify(asked.toolInput).includes('deny-me'),
       overrides: {
         mcpServers: {
-          nas: { type: 'http', url: mcp.url, headers: { 'X-Job-Ticket': '!echo $NOT_A_VARIABLE' } },
+          nas: { type: 'http', url: mcp.url, headers: { 'X-Job-Ticket': ticket } },
         },
       },
     });
@@ -268,7 +270,22 @@ test(
         initialized: mcp.initialized,
         versionHeaders: mcp.versionHeaders,
         calls: mcp.calls,
+        tickets: mcp.requests.map((request) => ({
+          method: request.method,
+          ticket: request.headers['x-job-ticket'] ?? null,
+        })),
       });
+      const tickets = mcp.requests.map((request) => request.headers['x-job-ticket']);
+      assert.equal(
+        mcp.requests.find((request) => request.method === 'initialize')?.headers['x-job-ticket'],
+        ticket,
+        'the server was opened without the ticket, or with it changed',
+      );
+      assert.deepEqual(
+        tickets.filter((one) => one !== undefined && one !== ticket),
+        [],
+        'a request carried the ticket changed',
+      );
 
       assert.ok(hello >= 0 && firstRun > hello, 'a run began before the extension said hello');
       const shell = run.decided.filter((asked) => asked.toolName === 'bash');

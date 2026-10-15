@@ -35,7 +35,7 @@ import { CodexFactLift } from './codex-facts.js';
 import { codexSessionFlags } from './codex-home.js';
 import { codexMcpConfig } from './codex-mcp.js';
 import { UNDELIVERED_PLUGIN, codexSkillRoots } from './codex-pack.js';
-import { startCodexProcess } from './codex-process.js';
+import { CODEX_HOME_VARIABLE, startCodexProcess } from './codex-process.js';
 import { availableCodexEntry, codexHostModel } from './codex-runtime.js';
 import type { CodexMessage } from './codex-wire.js';
 import type { HostLink } from './host.js';
@@ -415,7 +415,11 @@ test("a session on a Codex endpoint opens on a provider of its own, its window s
     env_key: CODEX_ENDPOINT_KEY_VARIABLE,
   });
   assert.equal(config['model_context_window'], 128000);
-  assert.deepEqual(config['shell_environment_policy.exclude'], [CODEX_ENDPOINT_KEY_VARIABLE, 'EXAMPLE_FLAG']);
+  assert.deepEqual(config['shell_environment_policy.exclude'], [
+    CODEX_ENDPOINT_KEY_VARIABLE,
+    'EXAMPLE_FLAG',
+    CODEX_HOME_VARIABLE,
+  ]);
   const spawned = session.fake.child.spawned;
   assert.equal(
     spawned?.env[CODEX_ENDPOINT_KEY_VARIABLE],
@@ -425,7 +429,7 @@ test("a session on a Codex endpoint opens on a provider of its own, its window s
   assert.equal(spawned?.args.join(' ').includes(KEY), false, 'the key is on the command line');
   assert.ok(
     spawned?.args.includes(
-      `shell_environment_policy.exclude=${JSON.stringify([CODEX_ENDPOINT_KEY_VARIABLE, 'EXAMPLE_FLAG'])}`,
+      `shell_environment_policy.exclude=${JSON.stringify([CODEX_ENDPOINT_KEY_VARIABLE, 'EXAMPLE_FLAG', CODEX_HOME_VARIABLE])}`,
     ),
     'the exclusion is a session flag on the command line too',
   );
