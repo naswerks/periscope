@@ -8,6 +8,8 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-10-14
+
 No wire or API change: the protocol, the window and the public exports are as they were.
 
 - Fixed: the shell scan reads a protected path named through a variable of the session's spawn
