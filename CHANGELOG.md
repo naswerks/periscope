@@ -8,6 +8,40 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-10-21
+
+No wire or API change: the protocol, the window `[16, 17]` and the public exports are as they were, so a
+runner on 1.8.2 links to every controller a 1.8.1 runner links to.
+
+- Fixed: the shell backstop's boundary rules read the parsed invocation — the program, its subcommand and
+  its option tokens — instead of a word anywhere in the command, so a word inside a path no longer
+  completes a rule. `git diff -- src/app/fields/edit-remote-work` and `git status && tail logs/pre-push.log`
+  flow, where `git-remote-surgery` and `git-push` refused them; `git status && git push origin main` still
+  refuses. A command named inside another program's words (`ssh host "git push"`, a pager set with
+  `git -c core.pager=…`) is still read and still refuses. The rule names are unchanged.
+- Fixed: both layers read git wherever it runs. Behind a launcher (`env`, `sudo`, `doas`, `nohup`,
+  `nice`, `ionice`, `time`, `timeout`, `stdbuf`, `command`, `exec`, `xargs`, `watch`, `start`) git is
+  read as git, and git's dashed binaries (`git-push`, `.../git-core/git-send-pack.exe`) read as git with
+  their subcommand. `env git send-pack origin main` and the dashed `git-send-pack.exe` were classified as
+  benign shell and are now refused by the verb allow-list.
+- Added: completing an Azure DevOps pull request is a boundary beside `gh-pr-merge`.
+  `az-repos-pr-complete` holds `az repos pr update` with a status other than `abandoned` or `active`, and
+  `az repos pr create|update` with `--auto-complete` set to anything but `false`; a bare option or a
+  value that could expand holds too. `az repos pr list` and `show`, an abandon, and `--auto-complete false`
+  flow. The title, the description (every word up to the next flag), `-d` and the merge message of
+  `az repos pr create|update` are prose, as a commit message is. A raw REST call (`az rest`,
+  `az devops invoke`) is not parsed, as a raw `gh api` call is not.
+- Fixed: read-only git that publishes nothing flows: `git for-each-ref`, `git merge-tree`, `git worktree
+list`, a bare `git config section.key` read, and git 2.46's `git config get` and `git config list`.
+  `git worktree add`, `remove`, `prune`, `move` and `lock`, `git config edit`, `set`, `unset`,
+  `rename-section`, `remove-section` and a value still refuse.
+- Fixed: a branch deletion refuses in a short cluster (`git branch -dr`) and an abbreviated long option
+  (`--del`), and a hard reset as `--har`.
+- Fixed: a session the host opened is held to the start timeout from its first turn, as
+  `registry.open()` holds one: an agent given a turn that never reports itself ends `start_timed_out`
+  instead of sitting in `spawning`. A session never prompted, the interactive session a controller opens
+  for a person to type into, is not ended. `docs/state-machine.md` says so.
+
 ## [1.8.1] - 2026-10-14
 
 No wire or API change: the protocol, the window and the public exports are as they were.

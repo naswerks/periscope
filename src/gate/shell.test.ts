@@ -319,3 +319,214 @@ test('regression: `git reset --hard` is a boundary, while a soft or mixed reset 
   // Segment-scoped: the flag of another program in the pipe is not borrowed.
   assert.equal(refusalFor('git reset | grep --hard'), null);
 });
+
+// ---------------------------------------------------------------------------
+// Read-only git that publishes nothing.
+// ---------------------------------------------------------------------------
+
+test('regression: `git for-each-ref` and `git merge-tree` are reads, and flow', () => {
+  for (const command of [
+    'git for-each-ref refs/heads',
+    "git for-each-ref --format='%(refname:short)' refs/remotes",
+    'git merge-tree --write-tree main topic',
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('regression: `git worktree list` flows, and every other worktree subcommand still refuses', () => {
+  assert.equal(refusalFor('git worktree list'), null);
+  assert.equal(refusalFor('git worktree list --porcelain'), null);
+  for (const command of [
+    'git worktree add ../other topic',
+    'git worktree remove ../other',
+    'git worktree prune',
+    'git worktree move ../other ../moved',
+    'git worktree lock ../other',
+    'git worktree',
+  ]) {
+    assert.equal(refusalFor(command)?.reason, 'shell-verb-unrecognised', `${command} flowed`);
+  }
+});
+
+test('regression: a bare `git config section.key` read flows, as do `git config get` and `git config list`', () => {
+  for (const command of [
+    'git config user.email',
+    'git config --global user.name',
+    'git config --type=bool core.bare',
+    'git config get user.email',
+    'git config get --all remote.origin.fetch',
+    'git config list',
+    'git config list --show-origin',
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('control: a `git config` write still refuses in every shape, `git config edit` included', () => {
+  for (const command of [
+    'git config user.email you@example.invalid',
+    'git config --bool core.bare true',
+    'git config edit',
+    'git config set user.name someone',
+    'git config unset user.name',
+    'git config rename-section old new',
+    'git config remove-section old',
+    'git config --get user.email --unset core.x',
+  ]) {
+    assert.equal(refusalFor(command)?.reason, 'shell-verb-unrecognised', `${command} flowed`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The rules read the subcommand, not a word in a path.
+// ---------------------------------------------------------------------------
+
+test('regression: a boundary word inside a path is part of the path, and a read-only command through it flows', () => {
+  for (const command of [
+    'git diff --stat a1b2c3 d4e5f6 -- src/app/fields/edit-remote-work src/app/schema.graphql | tail -40',
+    'git add src/app/fields/edit-remote-work/edit-remote-work.component.ts',
+    'git diff -- src/app/fields/edit-remote-work/',
+    'git diff -U0 -- src/app/fields/edit-remote-work',
+    'git log -L 10,20:src/app/fields/edit-remote-work/edit.ts',
+    'git -C C:/work/remote-tools status',
+    "git status -sb && git log --oneline -8 --format='%h %ad %s' --date=iso && ls logs 2>/dev/null && tail -40 logs/pre-push.log 2>/dev/null",
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('regression: a boundary word another program prints or searches for is not a git subcommand', () => {
+  for (const command of [
+    'git status; echo push',
+    'git log --oneline | grep remote',
+    'git status && tail -5 push.log',
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('control: `git push` in its own segment after `git status &&` still parks', () => {
+  assert.match(refusalFor('git status && git push origin main')?.detail ?? '', /^git-push:/);
+});
+
+test("control: a git command inside another program's words still refuses, by the residual check", () => {
+  for (const command of [
+    'ssh build-host git push origin main',
+    'ssh build-host "git push origin main"',
+    "git -c core.pager='git push origin main' log",
+    'rg -n "git push" docs/',
+  ]) {
+    assert.equal(refusalFor(command)?.reason, 'shell-boundary-command', `${command} flowed`);
+  }
+});
+
+test('regression: a branch deletion refuses in a short cluster and an abbreviated long option', () => {
+  for (const command of [
+    'git branch -dr origin/topic',
+    'git branch -rD origin/topic',
+    'git branch --del topic',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-branch-delete:/, `${command} flowed`);
+  }
+  assert.match(refusalFor('git reset --har HEAD~1')?.detail ?? '', /^git-reset-hard:/);
+});
+
+// ---------------------------------------------------------------------------
+// Git behind a launcher, and git's dashed binaries.
+// ---------------------------------------------------------------------------
+
+const LAUNCHED: ReadonlyArray<readonly [string, string]> = [
+  ['env', 'env GIT_TRACE=1'],
+  ['sudo', 'sudo -u build'],
+  ['doas', 'doas -u build'],
+  ['nohup', 'nohup'],
+  ['nice', 'nice -n 5'],
+  ['ionice', 'ionice -c 3'],
+  ['time', 'time'],
+  ['timeout', 'timeout 10'],
+  ['stdbuf', 'stdbuf -oL'],
+  ['command', 'command'],
+  ['exec', 'exec'],
+  ['xargs', 'xargs -n 1'],
+  ['watch', 'watch -n 5'],
+  ['start', 'start'],
+];
+
+for (const [launcher, prefix] of LAUNCHED) {
+  test(`regression: behind \`${launcher}\`, git is read as git by both layers`, () => {
+    assert.match(
+      refusalFor(`${prefix} git push origin main`)?.detail ?? '',
+      /^git-push:/,
+      `${prefix} git push flowed`,
+    );
+    assert.equal(
+      refusalFor(`${prefix} git send-pack origin main`)?.reason,
+      'shell-verb-unrecognised',
+      `${prefix} git send-pack was not refused by the allowlist`,
+    );
+    assert.equal(refusalFor(`${prefix} git status`), null, `${prefix} git status was refused`);
+  });
+}
+
+test('regression: a dashed git binary is git, by path and with .exe', () => {
+  assert.match(refusalFor('git-push origin main')?.detail ?? '', /^git-push:/);
+  for (const command of [
+    '"C:/Program Files/Git/mingw64/libexec/git-core/git-send-pack.exe" origin main',
+    '/usr/lib/git-core/git-receive-pack origin',
+  ]) {
+    assert.equal(refusalFor(command)?.reason, 'shell-verb-unrecognised', `${command} flowed`);
+  }
+  assert.equal(refusalFor('/usr/lib/git-core/git-rev-parse HEAD'), null, 'a dashed read flows');
+});
+
+// ---------------------------------------------------------------------------
+// Merging a pull request, on GitHub and on Azure DevOps.
+// ---------------------------------------------------------------------------
+
+test('control: `gh pr merge` still parks, by any route', () => {
+  for (const command of [
+    'gh pr merge 42',
+    'gh -R owner/repo pr merge 42',
+    'env gh pr merge 42',
+    'gh pr merge 42 --squash',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^gh-pr-merge:/, `${command} flowed`);
+  }
+});
+
+test('regression: completing an Azure DevOps pull request is a merge, and parks', () => {
+  for (const command of [
+    'az repos pr update --id 5 --status completed',
+    'az repos pr update --id 5 --status=completed',
+    'az repos pr update --id 5 --status Completed',
+    'az repos pr update --id 5 --status "completed"',
+    'az repos pr update --id 5 --st completed',
+    'az repos pr update --id 5 --status $STATUS',
+    'az repos pr update --id 5 --auto-complete true',
+    'az repos pr update --id 5 --auto-complete',
+    'az repos pr create --title "the work" --auto-complete true',
+    'az --org https://dev.azure.com/example repos pr update --id 5 --status completed',
+    'env az repos pr update --id 5 --status completed',
+    'git status && az repos pr update --id 5 --status completed',
+  ]) {
+    const found = refusalFor(command);
+    assert.equal(found?.reason, 'shell-boundary-command', `${command} flowed`);
+    assert.match(found?.detail ?? '', /^az-repos-pr-complete: merging is a human boundary$/);
+  }
+});
+
+test('control: an Azure DevOps pull request that is not completed flows', () => {
+  for (const command of [
+    'az repos pr update --id 5 --status abandoned',
+    'az repos pr update --id 5 --status active',
+    'az repos pr update --id 5 --auto-complete false',
+    'az repos pr create --title "the work" --auto-complete false',
+    'az repos pr list',
+    'az repos pr show --id 5',
+    'az repos pr create --title "the work" --description "this merges after review"',
+    'az repos pr update --id 5 --description "set the status to completed after review"',
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});

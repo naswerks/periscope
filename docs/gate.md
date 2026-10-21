@@ -100,8 +100,14 @@ process adds as it starts (`LocalGateOptions.spawnEnv`, internal). Outside the s
 builds at run time, a variable the command or the runtime sets itself (pi's `PI_SESSION_FILE`), a
 variable read through a command (`$(printenv NAME)`) or an expansion operator (`${NAME:-...}`), a
 list variable such as `PATH`, and a recursive search of an ancestor. A boundary-crossing shell shape
-(`shell-boundary-command`: a push, a force, a remote change, a branch deletion, a hard reset, a merge)
-is classified locally and then
+(`shell-boundary-command`: a push, a force, a remote change, a branch deletion, a hard reset, a merge
+with `gh pr merge`, the completion of an Azure DevOps pull request with `az repos pr update --status
+completed` or `--auto-complete`) is read from the parsed invocation — its program, its subcommand and its
+option tokens, never a word inside a path — wherever the program runs: at a command position, behind a
+launcher (`env`, `sudo`, `nohup`, `timeout`, `xargs` and the others `src/gate/shell.ts` names), as git's
+dashed binary (`git-send-pack.exe`), or named inside another program's words (`ssh host "git push"`).
+The git verb allow-list reaches the same positions. A raw REST call that merges (`gh api`, `az rest`) is
+not parsed. Such a shape is classified locally and then
 escalated like any other call, because a controller may hold it for a person to answer; refusing it
 in-process would make that answer impossible to give. With the controller unreachable it refuses at
 the decision deadline.

@@ -297,6 +297,15 @@ export class SessionRegistry {
     return this.#live.size;
   }
 
+  /**
+   * How long an agent has, from its first turn, to report itself. Read by the host, which arms the
+   * same window on a session it opened by `create()` as `open()` arms on its own.
+   * @internal
+   */
+  get startTimeoutMs(): number {
+    return this.#startTimeoutMs;
+  }
+
   /** Sessions that have started but not yet reported themselves. Separate because they have no id. */
   get provisioningCount(): number {
     return this.#provisioning.size;

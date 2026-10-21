@@ -19,9 +19,11 @@ Seven states: `spawning`, `ready`, `working`, `idle`, `errored`, `interrupted`, 
 means the agent reported itself (`system/init`, the only source of the session id, the CLI version,
 the model, the tool, skill and plugin inventory and `apiKeySource`). Init arrives mid-turn, so a
 real trace reads `working` then `ready` then `working`: `UserPromptSubmit` fires before
-`system/init`. A session created but never prompted sits in `spawning` until the start timeout;
-that missing `ready` is what makes the emits-nothing-until-prompted behaviour legible instead of a
-hang.
+`system/init`. A session created but never prompted sits in `spawning` until its first turn, which is
+the interactive session a controller opens and leaves for a person to type into; that missing `ready`
+is what makes the emits-nothing-until-prompted behaviour legible instead of a hang. From its first
+turn a session has the start timeout (60 s by default, the registry's `startTimeoutMs`) to report
+itself, on the host's path as through `registry.open()`, or it ends with the `start_timed_out` event.
 
 The CLI re-sends `system/init` on every turn with current values; on Claude Code 2.1.284, one turn
 gave one init and two gave two. Only the first records `ready`. A later one records nothing and
