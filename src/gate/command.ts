@@ -63,6 +63,13 @@ export interface ParsedCommand {
   readonly scannable: string;
   /** True when a shell interpreter or eval token is present anywhere. See `INTERPRETER_NAMES`. */
   readonly hasInterpreter: boolean;
+  /**
+   * The POSIX reading with each escaped blank joined into its word (`C:/Program\ Files/…` one path), when
+   * that changes the words. The classifier refuses when either reading refuses, so the second reading
+   * can only add a refusal: a word that begins with an escaped blank is read both ways.
+   * @internal
+   */
+  readonly escapedReading?: ParsedCommand;
 }
 
 /**
@@ -413,6 +420,30 @@ export function readCmdCommand(command: string): string {
  * nothing else, exactly as the same text does outside the quotes.
  */
 export function tokenize(command: string, quotesAreSeparators = false): string[] {
+  return splitWords(command, quotesAreSeparators, false);
+}
+
+/** Does this character, after an escaped blank, continue the word? A comment opener does not. */
+function continuesWord(character: string | undefined): boolean {
+  return (
+    character !== undefined &&
+    character !== ' ' &&
+    character !== '\t' &&
+    character !== '\n' &&
+    character !== '\r' &&
+    character !== '#' &&
+    !SEPARATORS.has(character)
+  );
+}
+
+/**
+ * `tokenize`, with a POSIX shell's escaped blank read when `escapes` is set: outside a quote, a
+ * backslash before a blank that continues the word joins the word, as `C:/Program\ Files/…` is one path
+ * to bash. Read only where it splits words: `\\` is a pair, so its second backslash escapes nothing, and a
+ * blank before a separator, a comment or the end is left as it was. PowerShell and cmd.exe read a
+ * backslash as an ordinary character, so only the POSIX reading sets it.
+ */
+function splitWords(command: string, quotesAreSeparators: boolean, escapes: boolean): string[] {
   const tokens: string[] = [];
   let current = '';
   let quote = '';
@@ -424,7 +455,9 @@ export function tokenize(command: string, quotesAreSeparators = false): string[]
     current = '';
   };
 
-  for (const character of command) {
+  const characters = [...command];
+  for (let i = 0; i < characters.length; i += 1) {
+    const character = characters[i] as string;
     if (quotesAreSeparators) {
       if (skippingComment) {
         if (character !== '\n') continue;
@@ -464,6 +497,20 @@ export function tokenize(command: string, quotesAreSeparators = false): string[]
       quote = character;
       current += character;
       continue;
+    }
+
+    if (escapes && character === '\\') {
+      const next = characters[i + 1];
+      if (next === '\\') {
+        current += '\\\\';
+        i += 1;
+        continue;
+      }
+      if ((next === ' ' || next === '\t') && continuesWord(characters[i + 2])) {
+        current += next;
+        i += 1;
+        continue;
+      }
     }
 
     if (SEPARATORS.has(character)) {
@@ -745,6 +792,18 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
     dialect === 'posix' ? separateHeredocBodies(withoutComments) : { text: withoutComments, payloads: [] };
 
   const tokens = tokenize(heredocs.text, hasInterpreter);
+  const parsed: ParsedCommand = { ...positionsOf(tokens), hasInterpreter };
+  if (dialect !== 'posix') return parsed;
+  // A POSIX shell joins an escaped blank into its word; PowerShell and cmd.exe have no such escape. Read
+  // that way too, beside the reading above, only when it changes the words.
+  const escaped = splitWords(heredocs.text, hasInterpreter, true);
+  if (escaped.length === tokens.length && escaped.every((token, index) => token === tokens[index]))
+    return parsed;
+  return { ...parsed, escapedReading: { ...positionsOf(escaped), hasInterpreter } };
+}
+
+/** A command's tokens read position by position: its invocations and the text a classifier may scan. */
+function positionsOf(tokens: readonly string[]): { invocations: Invocation[]; scannable: string } {
   const invocations: Invocation[] = [];
   const scannableTokens: string[] = [];
 
@@ -786,9 +845,5 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
   }
   closePosition();
 
-  return {
-    invocations,
-    scannable: scannableTokens.join(' '),
-    hasInterpreter,
-  };
+  return { invocations, scannable: scannableTokens.join(' ') };
 }

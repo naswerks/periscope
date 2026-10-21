@@ -428,6 +428,14 @@ export function classifyShellCommand(
   command: string,
   parsed: ParsedCommand = parseCommand(command),
 ): Refusal | null {
+  // A POSIX reading with an escaped blank is read both ways — split, and joined as a POSIX shell joins
+  // it — and refused when either refuses, so reading the escape can only add a refusal.
+  const refused = classifyReading(parsed);
+  if (refused !== null || parsed.escapedReading === undefined) return refused;
+  return classifyReading(parsed.escapedReading);
+}
+
+function classifyReading(parsed: ParsedCommand): Refusal | null {
   const reached = reach(parsed.invocations);
 
   // Layer 1 — the boundary rules, over every invocation the parse reaches, then over the commands

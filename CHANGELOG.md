@@ -24,6 +24,11 @@ runner on 1.8.2 links to every controller a 1.8.1 runner links to.
   read as git, and git's dashed binaries (`git-push`, `.../git-core/git-send-pack.exe`) read as git with
   their subcommand. `env git send-pack origin main` and the dashed `git-send-pack.exe` were classified as
   benign shell and are now refused by the verb allow-list.
+- Fixed: a POSIX command with a backslash-escaped space is also read as a POSIX shell reads it, the
+  escaped space joined into its word, and refused when either reading refuses. So
+  `C:/Program\ Files/Git/mingw64/libexec/git-core/git-send-pack.exe origin main`, one path to bash, refuses
+  as its quoted form does. The second reading only adds refusals; PowerShell and `cmd` read a backslash
+  as an ordinary character and are read as before.
 - Added: completing an Azure DevOps pull request is a boundary beside `gh-pr-merge`.
   `az-repos-pr-complete` holds `az repos pr update` with a status other than `abandoned` or `active`, and
   `az repos pr create|update` with `--auto-complete` set to anything but `false`; a bare option or a

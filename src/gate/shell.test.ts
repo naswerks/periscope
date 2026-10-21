@@ -11,6 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { classifyShellCommand } from './shell.js';
+import { parseCommand } from './command.js';
 
 const refusalFor = (command: string): { reason: string; detail: string } | null => {
   const found = classifyShellCommand(command);
@@ -478,6 +479,48 @@ test('regression: a dashed git binary is git, by path and with .exe', () => {
     assert.equal(refusalFor(command)?.reason, 'shell-verb-unrecognised', `${command} flowed`);
   }
   assert.equal(refusalFor('/usr/lib/git-core/git-rev-parse HEAD'), null, 'a dashed read flows');
+});
+
+test('regression: a dashed git binary behind a backslash-escaped space is git, as the quoted path is', () => {
+  // To a POSIX shell `C:/Program\ Files/...` is one word: the call runs the dashed binary itself.
+  const escaped = String.raw`C:/Program\ Files/Git/mingw64/libexec/git-core/git-send-pack.exe origin main`;
+  assert.equal(refusalFor(escaped)?.reason, 'shell-verb-unrecognised', `${escaped} flowed`);
+  assert.equal(
+    refusalFor('"C:/Program Files/Git/mingw64/libexec/git-core/git-send-pack.exe" origin main')?.reason,
+    'shell-verb-unrecognised',
+    'the control: the quoted path refuses the same way',
+  );
+  assert.equal(
+    refusalFor(String.raw`C:/Program\ Files/Git/cmd/git.exe status`),
+    null,
+    'an escaped path to a read flows',
+  );
+});
+
+test('deliberate: an escaped space is read both ways, so reading it only adds a refusal', () => {
+  // Joined alone, a word that begins with an escaped space would hide the git behind it, though ssh hands
+  // the word to a remote shell that splits it again. The split reading still sees it.
+  for (const command of [
+    String.raw`timeout 10 ssh build-host \ git-send-pack.exe origin`,
+    String.raw`ssh build-host ''\ git push origin main`,
+  ]) {
+    assert.notEqual(refusalFor(command), null, `${command} flowed`);
+  }
+});
+
+test('control: PowerShell and cmd.exe read a backslash as an ordinary character, so they get no escaped reading', () => {
+  const command = String.raw`git -C C:\repo\ remote add o u`;
+  assert.notEqual(
+    parseCommand(command).escapedReading,
+    undefined,
+    'the POSIX reading joins the escaped space',
+  );
+  assert.equal(parseCommand(command, 'powershell').escapedReading, undefined);
+  assert.equal(parseCommand(command, 'cmd').escapedReading, undefined);
+  assert.match(
+    classifyShellCommand(command, parseCommand(command, 'powershell'))?.detail ?? '',
+    /^git-remote-surgery:/,
+  );
 });
 
 // ---------------------------------------------------------------------------
