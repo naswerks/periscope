@@ -43,6 +43,8 @@ const ALLOWED_GIT_VERBS = [
   'rev-list',
   'check-ignore',
   'check-attr',
+  'for-each-ref',
+  'merge-tree',
   '--version',
   '--help',
   'add',
@@ -305,10 +307,10 @@ test('a single-line command with no quotes, comments or expansions that refuses 
   );
 });
 
-// A comment inside an interpreter payload used to be command text: `bash -c "git status # push"`
-// refused as a push while `git status # push` flowed, and `git status # stash\npush` refused while
-// the same text inside `bash -c` flowed. The nested shell's comment rule now applies inside the
-// payload, so each pair answers alike.
+// A comment inside an interpreter payload is a comment, as it is outside one: `bash -c "git status #
+// push"` and `git status # push` both flow, and `git status # stash\ngit push` refuses on the push in
+// its second line, inside `bash -c` or not. Each pair answers alike. A bare `push` on the next line is a
+// program named push, not git's subcommand, so the control is a real `git push`.
 test('regression: a comment inside bash -c is a comment, so the answer matches the same text outside', () => {
   assert.equal(
     classifyShellCommand('git status # push'),
@@ -320,10 +322,10 @@ test('regression: a comment inside bash -c is a comment, so the answer matches t
     null,
     'the same comment inside the payload flows',
   );
-  const outside = classifyShellCommand('git status # stash\npush');
-  assert.notEqual(outside, null, 'the control: a bare push on the next line refuses on its own');
+  const outside = classifyShellCommand('git status # stash\ngit push');
+  assert.notEqual(outside, null, 'the control: a push on the next line refuses on its own');
   assert.deepEqual(
-    classifyShellCommand('bash -c "git status # stash\npush"'),
+    classifyShellCommand('bash -c "git status # stash\ngit push"'),
     outside,
     'the same lines inside the payload refuse for the same reason',
   );
@@ -387,9 +389,8 @@ test('a trailing comment never changes the outcome of a command that ends outsid
   );
 });
 
-// The denylist scans the whole executable text, the global flag's argument included, so a
-// directory literally named `push` or `gh/pr` is refused: the deliberate over-refusal direction,
-// one click for a human, and not a claim about verbs. The path therefore carries no boundary word.
+// The path here carries no boundary word, so this claim holds whatever reads the path. The property
+// below it states the stronger claim the boundary rules make: a path naming one flows too.
 test('every allowed git verb stays allowed behind a -C <path> global flag naming no boundary word', () => {
   const segment = fc.constantFrom(
     'repo',
@@ -409,6 +410,39 @@ test('every allowed git verb stays allowed behind a -C <path> global flag naming
     .array(segment, { minLength: 1, maxLength: 3 })
     .map((segments) => segments.join('/'))
     .filter((path) => !path.includes(' ') && !BOUNDARY_WORDS.test(path));
+  fc.assert(
+    fc.property(fc.constantFrom(...ALLOWED_GIT_VERBS), pathArb, (verb, path) => {
+      fc.pre(!refuses(`git ${verb}`));
+      assert.equal(
+        classifyShellCommand(`git -C ${path} ${verb}`),
+        null,
+        `git -C ${path} ${verb} was refused`,
+      );
+    }),
+    RUNS,
+  );
+});
+
+// The boundary rules read the subcommand, not a word in a path: a path is one token, and a boundary word
+// inside it (`push`, `remote`, `pre-push.log`, a folder named `gh`) cannot complete a rule.
+test('regression: every allowed git verb stays allowed behind a -C <path> global flag, whatever boundary word the path holds', () => {
+  const segment = fc.constantFrom(
+    'repo',
+    'src',
+    'push',
+    'remote',
+    'gh',
+    'pr',
+    'merge',
+    'branch',
+    'delete',
+    'stash',
+    'a-b',
+    'c.d',
+    'pre-push.log',
+    'edit-remote-work',
+  );
+  const pathArb = fc.array(segment, { minLength: 1, maxLength: 3 }).map((segments) => segments.join('/'));
   fc.assert(
     fc.property(fc.constantFrom(...ALLOWED_GIT_VERBS), pathArb, (verb, path) => {
       fc.pre(!refuses(`git ${verb}`));

@@ -57,7 +57,8 @@ Before anything is asked of your controller, a local rule runs. It only ever _ad
 can never turn a "no" into a "yes". It refuses, locally and immediately: a path that escapes the
 session's workspace, a read of the credential set, and a git invocation whose verb is not on the
 allow-list, by parsing the command rather than by matching strings. A boundary-crossing shape (a
-push, a force, a remote change, a branch deletion, a merge) is recognised locally but escalated to
+push, a force, a remote change, a branch deletion, a merge on GitHub or the completion of an Azure
+DevOps pull request) is recognised locally, from the parsed command, but escalated to
 the controller like any other call, so a person can answer it; with the controller unreachable it
 refuses when the decision deadline passes. So the answer to _"what happens if the controller is
 compromised or unreachable?"_ is: the local classes are refused before the question is asked, and

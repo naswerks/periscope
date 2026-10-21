@@ -160,12 +160,16 @@ class FakeLink implements HostLink {
 
 const allow = async (): Promise<unknown> => ({ behavior: 'allow' });
 
-const registryOver = (start: (request: AgentProcessRequest) => AgentProcess): SessionRegistry =>
+const registryOver = (
+  start: (request: AgentProcessRequest) => AgentProcess,
+  startTimeoutMs?: number,
+): SessionRegistry =>
   new SessionRegistry({
     baseEnv: { PATH: 'p' },
     homeDir: 'C:/nonexistent-home-for-tests',
     clock: fixedClock(AT),
     startProcess: start,
+    ...(startTimeoutMs === undefined ? {} : { startTimeoutMs }),
   });
 
 const preToolUse = (toolName: string, input: unknown): HookInput =>
@@ -586,6 +590,8 @@ function hostOver(
     toolFamilies?: ToolFamilies;
     /** What a controller may place in a spawn's environment. Absent means nothing. */
     controllerEnvKeys?: readonly string[];
+    /** The registry's start window. Absent means its default. */
+    startTimeoutMs?: number;
   } = {},
 ): { host: PeriscopeHost; link: FakeLink; processes: FakeAgents } {
   const processes = options.processes ?? fakeAgents();
@@ -595,7 +601,7 @@ function hostOver(
     hostId: 'test-host',
     decide: allow,
     protectedPaths: [],
-    registry: registryOver(processes.start),
+    registry: registryOver(processes.start, options.startTimeoutMs),
     link: (handlers) => {
       link.handlers = handlers;
       return link;
@@ -690,6 +696,62 @@ test('regression: session_prompt sends a turn, and records that it did', async (
   assert.ok(
     link.causes().includes('control/prompt_submitted'),
     `no turn in the trace: ${link.causes().join(', ')}`,
+  );
+});
+
+const elapse = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('regression: a session given its first turn and no report within the start window ends start_timed_out', async () => {
+  const { host, link } = hostOver({ startTimeoutMs: 40 });
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await settle();
+  link.deliver('handle-1', { kind: 'session_prompt', text: 'do the thing' }, 2);
+  await elapse(160);
+  await settle();
+
+  const ended = link.transitions().find((transition) => transition.to === 'ended');
+  assert.equal(
+    ended?.cause.event,
+    'start_timed_out',
+    `the silent session was not ended: ${link.causes().join(', ')}`,
+  );
+  assert.equal(host.session('handle-1').ok, false, 'the ended session is still reachable');
+});
+
+test('control: a session that reports itself within the start window stays live', async () => {
+  const { host, link, processes } = hostOver({ startTimeoutMs: 40 });
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await settle();
+  link.deliver('handle-1', { kind: 'session_prompt', text: 'do the thing' }, 2);
+  await settle();
+  processes.started[0]?.emit(initMessage('session-1'));
+  await elapse(160);
+  await settle();
+
+  assert.equal(
+    link.transitions().find((transition) => transition.to === 'ended'),
+    undefined,
+    link.causes().join(', '),
+  );
+  assert.equal(host.session('handle-1').ok, true);
+});
+
+test('control: a session that is never prompted is not ended by the start window', async () => {
+  // The interactive session: opened with no turn, left for a person to type into.
+  const { host, link } = hostOver({ startTimeoutMs: 40 });
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await elapse(160);
+  await settle();
+
+  assert.equal(
+    link.transitions().find((transition) => transition.to === 'ended'),
+    undefined,
+    link.causes().join(', '),
+  );
+  assert.equal(
+    host.session('handle-1').ok,
+    true,
+    'a session with no turn was ended by a window that never opened',
   );
 });
 

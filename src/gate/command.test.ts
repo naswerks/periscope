@@ -216,3 +216,33 @@ test('the parser actually produces invocations and scannable text', () => {
   assert.match(parsed.scannable, /git/);
   assert.match(parsed.scannable, /gh/);
 });
+
+test("regression: an Azure DevOps pull request's title, description and merge message are prose, not command text", () => {
+  const invocation = parseCommand(
+    'az repos pr create --title "merge the work" -d "it merges" --merge-commit-message "merge it" --source-branch topic',
+  ).invocations[0];
+  assert.deepEqual(invocation?.dataPayloads, ['"merge the work"', '"it merges"', '"merge it"']);
+  assert.ok(
+    invocation?.args.includes('--source-branch') && invocation.args.includes('topic'),
+    'a later flag stays an argument',
+  );
+  const inline = parseCommand('az repos pr update --id 5 --description="set it to completed"').invocations[0];
+  assert.deepEqual(inline?.dataPayloads, ['"set it to completed"']);
+});
+
+test("regression: az's --description takes every word up to the next flag", () => {
+  const invocation = parseCommand('az repos pr update --id 5 --description "line one" "line two" --title "x"')
+    .invocations[0];
+  assert.deepEqual(invocation?.dataPayloads, ['"line one"', '"line two"', '"x"']);
+  assert.ok(
+    !invocation?.args.some((arg) => arg.includes('line')),
+    'no paragraph of the description stays in the scan',
+  );
+});
+
+test('control: az prose that could expand stays in the scan, and az outside a pull request write is not prose', () => {
+  const expanding = parseCommand('az repos pr create --description "$(git push origin main)"');
+  assert.match(expanding.scannable, /git push/);
+  const listing = parseCommand('az repos pr list --title "merge"').invocations[0];
+  assert.deepEqual(listing?.dataPayloads, []);
+});

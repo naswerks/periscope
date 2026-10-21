@@ -63,6 +63,13 @@ export interface ParsedCommand {
   readonly scannable: string;
   /** True when a shell interpreter or eval token is present anywhere. See `INTERPRETER_NAMES`. */
   readonly hasInterpreter: boolean;
+  /**
+   * The POSIX reading with each escaped blank joined into its word (`C:/Program\ Files/…` one path), when
+   * that changes the words. The classifier refuses when either reading refuses, so the second reading
+   * can only add a refusal: a word that begins with an escaped blank is read both ways.
+   * @internal
+   */
+  readonly escapedReading?: ParsedCommand;
 }
 
 /**
@@ -128,16 +135,44 @@ const OPENER_KEYWORDS = new Set(['do', 'then', 'else', 'elif']);
 /** Receivers whose heredoc body is file content, never command text. */
 const DATA_RECEIVERS = new Set(['cat', 'tee']);
 
-/** Programs whose message flags carry prose. The `gh` entries are keyed on `pr create`/`pr edit`. */
+/**
+ * Programs whose message flags carry prose. The `gh` entries are keyed on `pr create`/`pr edit`, the `az`
+ * entries on `repos pr create`/`repos pr update`.
+ */
 const MESSAGE_FLAGS: Readonly<Record<string, readonly string[]>> = {
   git: ['-m', '--message'],
   gh: ['-t', '--title', '-b', '--body'],
+  az: ['--title', '--description', '-d', '--merge-commit-message'],
 };
 
 const INLINE_MESSAGE_PREFIXES: Readonly<Record<string, readonly string[]>> = {
   git: ['--message='],
   gh: ['--title=', '--body='],
+  az: ['--title=', '--description=', '--merge-commit-message='],
 };
+
+/**
+ * Message flags whose value is every word up to the next flag, not one token: `az`'s `--description`
+ * takes `"line one" "line two"` as two paragraphs. Each inert literal in the run is data; anything else
+ * stays in the scan, as one word after any other message flag does.
+ */
+const VARIADIC_MESSAGE_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  az: ['--description', '-d'],
+};
+
+/** Does `words` hold `sequence` as adjacent entries? */
+function holdsAdjacent(words: readonly string[], sequence: readonly string[]): boolean {
+  for (let i = 0; i + sequence.length <= words.length; i += 1) {
+    if (sequence.every((word, offset) => words[i + offset] === word)) return true;
+  }
+  return false;
+}
+
+/** `az repos pr create` or `az repos pr update`, read from the words that are not options. */
+function isAzurePullRequestWrite(tokens: readonly string[]): boolean {
+  const words = tokens.filter((token) => !token.startsWith('-'));
+  return holdsAdjacent(words, ['repos', 'pr', 'create']) || holdsAdjacent(words, ['repos', 'pr', 'update']);
+}
 
 /**
  * Git global flags whose following token is their argument rather than the verb.
@@ -385,6 +420,30 @@ export function readCmdCommand(command: string): string {
  * nothing else, exactly as the same text does outside the quotes.
  */
 export function tokenize(command: string, quotesAreSeparators = false): string[] {
+  return splitWords(command, quotesAreSeparators, false);
+}
+
+/** Does this character, after an escaped blank, continue the word? A comment opener does not. */
+function continuesWord(character: string | undefined): boolean {
+  return (
+    character !== undefined &&
+    character !== ' ' &&
+    character !== '\t' &&
+    character !== '\n' &&
+    character !== '\r' &&
+    character !== '#' &&
+    !SEPARATORS.has(character)
+  );
+}
+
+/**
+ * `tokenize`, with a POSIX shell's escaped blank read when `escapes` is set: outside a quote, a
+ * backslash before a blank that continues the word joins the word, as `C:/Program\ Files/…` is one path
+ * to bash. Read only where it splits words: `\\` is a pair, so its second backslash escapes nothing, and a
+ * blank before a separator, a comment or the end is left as it was. PowerShell and cmd.exe read a
+ * backslash as an ordinary character, so only the POSIX reading sets it.
+ */
+function splitWords(command: string, quotesAreSeparators: boolean, escapes: boolean): string[] {
   const tokens: string[] = [];
   let current = '';
   let quote = '';
@@ -396,7 +455,9 @@ export function tokenize(command: string, quotesAreSeparators = false): string[]
     current = '';
   };
 
-  for (const character of command) {
+  const characters = [...command];
+  for (let i = 0; i < characters.length; i += 1) {
+    const character = characters[i] as string;
     if (quotesAreSeparators) {
       if (skippingComment) {
         if (character !== '\n') continue;
@@ -436,6 +497,20 @@ export function tokenize(command: string, quotesAreSeparators = false): string[]
       quote = character;
       current += character;
       continue;
+    }
+
+    if (escapes && character === '\\') {
+      const next = characters[i + 1];
+      if (next === '\\') {
+        current += '\\\\';
+        i += 1;
+        continue;
+      }
+      if ((next === ' ' || next === '\t') && continuesWord(characters[i + 2])) {
+        current += next;
+        i += 1;
+        continue;
+      }
     }
 
     if (SEPARATORS.has(character)) {
@@ -533,6 +608,7 @@ function heredocReceiverIsDataSink(line: string, upTo: number): boolean {
     const words = tokens.slice(1).filter((token) => !token.startsWith('-'));
     return words[0] === 'pr' && (words[1] === 'create' || words[1] === 'edit');
   }
+  if (program === 'az') return isAzurePullRequestWrite(tokens.slice(1));
   return false;
 }
 
@@ -571,6 +647,7 @@ function separateHeredocBodies(command: string): { text: string; payloads: strin
 /** Does this invocation's shape make its message flags carry prose rather than code? */
 function isMessageBearing(program: string, tokens: readonly string[]): boolean {
   if (program === 'git') return tokens.some((token) => token === 'commit');
+  if (program === 'az') return isAzurePullRequestWrite(tokens);
   if (program !== 'gh') return false;
   const words = tokens.filter((token) => !token.startsWith('-'));
   return words[0] === 'pr' && (words[1] === 'create' || words[1] === 'edit');
@@ -598,6 +675,7 @@ function readInvocation(tokens: readonly string[]): { invocation: Invocation; sc
   const messageBearing = isMessageBearing(program, tokens.slice(1));
   const flags = MESSAGE_FLAGS[program] ?? [];
   const inlinePrefixes = INLINE_MESSAGE_PREFIXES[program] ?? [];
+  const variadic = VARIADIC_MESSAGE_FLAGS[program] ?? [];
 
   // Built alongside, never filtered afterwards. Deriving the scannable tokens by removing anything
   // that appears in `dataPayloads` silently fails on the inline form: the token is `--body="…"`
@@ -660,8 +738,11 @@ function readInvocation(tokens: readonly string[]): { invocation: Invocation; sc
       if (flags.includes(token)) {
         args.push(token);
         scannable.push(token);
-        const payload = tokens[index + 1];
-        if (payload !== undefined) {
+        // One word, or for a variadic flag every word up to the next option.
+        const last = variadic.includes(token) ? tokens.length - 1 : index + 1;
+        while (index + 1 <= last && index + 1 < tokens.length) {
+          const payload = tokens[index + 1] as string;
+          if (variadic.includes(token) && payload.startsWith('-')) break;
           if (isInertLiteral(payload)) dataPayloads.push(payload);
           else {
             args.push(payload);
@@ -678,6 +759,15 @@ function readInvocation(tokens: readonly string[]): { invocation: Invocation; sc
   }
 
   return { invocation: { program, globalFlags, verb, args, dataPayloads }, scannable };
+}
+
+/**
+ * Words read as one invocation, by the same grammar as a command position: for the classifier, which
+ * finds a command inside another's words — a launcher's (`env git push`) or text a program will run
+ * (`ssh host "git push"`). Not part of the gate's barrel.
+ */
+export function invocationOf(tokens: readonly string[]): Invocation {
+  return readInvocation(tokens).invocation;
 }
 
 /**
@@ -702,6 +792,18 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
     dialect === 'posix' ? separateHeredocBodies(withoutComments) : { text: withoutComments, payloads: [] };
 
   const tokens = tokenize(heredocs.text, hasInterpreter);
+  const parsed: ParsedCommand = { ...positionsOf(tokens), hasInterpreter };
+  if (dialect !== 'posix') return parsed;
+  // A POSIX shell joins an escaped blank into its word; PowerShell and cmd.exe have no such escape. Read
+  // that way too, beside the reading above, only when it changes the words.
+  const escaped = splitWords(heredocs.text, hasInterpreter, true);
+  if (escaped.length === tokens.length && escaped.every((token, index) => token === tokens[index]))
+    return parsed;
+  return { ...parsed, escapedReading: { ...positionsOf(escaped), hasInterpreter } };
+}
+
+/** A command's tokens read position by position: its invocations and the text a classifier may scan. */
+function positionsOf(tokens: readonly string[]): { invocations: Invocation[]; scannable: string } {
   const invocations: Invocation[] = [];
   const scannableTokens: string[] = [];
 
@@ -743,9 +845,5 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
   }
   closePosition();
 
-  return {
-    invocations,
-    scannable: scannableTokens.join(' '),
-    hasInterpreter,
-  };
+  return { invocations, scannable: scannableTokens.join(' ') };
 }

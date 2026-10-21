@@ -1152,6 +1152,13 @@ export class PeriscopeHost {
    */
   readonly #held = new Map<string, string[]>();
   /**
+   * Sessions whose start window is armed. A session is created with no turn and says nothing until it
+   * gets one, which is the interactive session a controller opens and leaves for a person to type into,
+   * so the window is armed at its first turn and not at its open: from that turn it has the registry's
+   * start timeout to report itself, as `registry.open()` gives one, or it ends `start_timed_out`.
+   */
+  readonly #startArmed = new WeakSet<object>();
+  /**
    * Configures refused while their session was still opening, by handle, recorded on the session's own
    * lane when it opens. An open that produces no session drops them: its own refusal ends the session on
    * the wire, and each was reported here when it arrived.
@@ -1570,6 +1577,12 @@ export class PeriscopeHost {
     const sent = composed.session.prompt(text);
     if (!sent.ok) return this.#refuse(sessionKey, sent.refusal);
     composed.observer.promptSubmitted('the controller sent a turn');
+    // The first turn starts the agent, so it starts the start window too (`#startArmed`). The wait settles
+    // as a result and never throws; the session's own end is what reaches the controller.
+    if (composed.session.state === 'provisioning' && !this.#startArmed.has(composed.session)) {
+      this.#startArmed.add(composed.session);
+      void composed.session.whenLive(this.#registry.startTimeoutMs);
+    }
   }
 
   /**
