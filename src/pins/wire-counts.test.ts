@@ -14,8 +14,8 @@ import { sourceFiles } from './walk.js';
 /** How a reader of the codec's text finds an integer member: its name, a colon, then the integer schema. */
 const INTEGER_MEMBER = /(\w+)\s*:\s*z\.number\(\)\.int\(\)/g;
 
-/** The integer members of the item stream and of the facts protocol 16 added. */
-const COUNTS = ['exitCode', 'durationMs', 'cacheReadTokens'] as const;
+/** The integer members of the item stream and the facts protocol 16 added, and the paging protocol 18 added. */
+const COUNTS = ['exitCode', 'durationMs', 'cacheReadTokens', 'offset', 'nextOffset'] as const;
 
 function integerMembers(text: string): Set<string> {
   return new Set([...text.matchAll(INTEGER_MEMBER)].map((match) => match[1] ?? ''));
@@ -23,7 +23,7 @@ function integerMembers(text: string): Set<string> {
 
 const codec = sourceFiles().find((file) => file.path === 'control/codec.ts')?.text ?? '';
 
-test('the codec spells every count of the item stream and the added facts as an integer member', () => {
+test('the codec spells every count of the item stream, the added facts and the paging as an integer member', () => {
   assert.ok(codec.length > 0, 'the codec was not read');
   const found = integerMembers(codec);
   assert.ok(found.has('seq'), 'the reading finds the codec counts it always had: the walk is real');

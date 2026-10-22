@@ -90,16 +90,22 @@ A hello with no range does not decode: `protocolRange` is a declared member ther
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
 `[17, 18]`. Version 18 adds:
 
+- paging to `repository_read`: an optional `offset` on the ask and an optional `nextOffset` on the
+  answer, with `MAX_REPOSITORY_FILE_BYTES` the most of a file the pages reach
+  ([Host-scoped asks](#host-scoped-asks));
 - the refusal reason `transcripts-not-served`, the answer to the asks the host no longer serves
   ([Host-scoped asks](#host-scoped-asks), [The bulk lane](#the-bulk-lane)).
 
 It adds no payload kind. A version-17 controller reads what this build sends: the reason rides kinds
-it already reads, and a reason it does not know is read as such. Every frame a version-17 controller
-sends decodes here unchanged, the retired asks included, so such an ask is answered by name and the
-channel it rode keeps its sequence. Version 14 narrowed `session_new.request.env` (below), and the
+it already reads, and a reason it does not know is read as such; `nextOffset` is never written on a
+link negotiated below 18, so the answer it reads is the head read version 17 made. Every frame a
+version-17 controller sends decodes here unchanged, the retired asks included, so such an ask is
+answered by name and the channel it rode keeps its sequence; a `repository_read` with no `offset` is
+the head read. Version 14 narrowed `session_new.request.env` (below), and the
 narrowing holds at every version the host negotiates. `src/host/protocol-window.test.ts` holds both
 directions over a real link: every frame this host sends, a Claude session's, a Codex session's, a
-Qwen Code session's and a pi session's on one link, and its answers to the retired asks, decodes
+Qwen Code session's and a pi session's on one link, and its answers to the retired asks and to a
+`repository_read`, decodes
 with the protocol-17 decoder v1.8.2 shipped, and every decision request it posts reads as that
 release's `DecisionRequest`; each wire vector version 18 adds decodes with that decoder; and a
 version-17 controller's `session_new` and `session_configure` decode here and apply.
@@ -870,11 +876,30 @@ agent's transcript files. Both still decode, so an ask from an older controller 
 than dropped, always `transcript_failed` with `transcripts-not-served`; `transcript_list_result` and
 `transcript_tail_result` still decode and are never sent.
 
-Bounds: `WORKSPACE_PAGE_SIZE` worktrees per page,
-`MAX_BULK_RELEASES` entries per bulk release, `MAX_CONFIGURE_ENTRIES` entries per configure,
-`MAX_REPOSITORY_ENTRIES` names per directory listing, `MAX_REPOSITORY_READ_BYTES` per file head, cut
-on a character boundary with the file's whole size in the answer. `MAX_WORKSPACE_READ_BYTES` per
-workspace page and `MAX_WORKSPACE_FILE_BYTES` per workspace file.
+Bounds: `WORKSPACE_PAGE_SIZE` worktrees per page, `MAX_BULK_RELEASES` entries per bulk release,
+`MAX_CONFIGURE_ENTRIES` entries per configure, `MAX_REPOSITORY_ENTRIES` names per directory listing,
+`MAX_REPOSITORY_READ_BYTES` per repository page, cut on a character boundary with the file's whole
+size in the answer, and `MAX_REPOSITORY_FILE_BYTES` of a repository file paged through.
+`MAX_WORKSPACE_READ_BYTES` per workspace page and `MAX_WORKSPACE_FILE_BYTES` per workspace file.
+
+`repository_read` names a file by a path relative to the repository root, with `maxBytes` and, from
+v18, `offset` (absent or null is 0; otherwise the `nextOffset` of the answer before). The answer
+carries the page as text, cut on a character boundary, the file's whole size, `truncated` (true while
+bytes of the file remain past the page) and, from v18, `nextOffset`: where the next page starts, null
+when the page reached the end of the file or `MAX_REPOSITORY_FILE_BYTES`. Offset 0 is the head of a
+file of any size, the read v17 made; the pages after it reach no further than
+`MAX_REPOSITORY_FILE_BYTES`, so a longer file is read to that bound and its answers say `truncated`.
+A page that would end inside its first character carries that character whole, so every page moves
+forward. An offset past the end of the file, past `MAX_REPOSITORY_FILE_BYTES` or inside a character,
+a binary file, and a path that is not a file each refuse `repository-read-failed` by name.
+
+`nextOffset` is written only on a link negotiated at 18 or above (and before the first handshake):
+on a link at 17 the answer carries no `nextOffset`, and an ask with no `offset` is answered exactly as
+v17 answered it. The shape is fixed when the answer is composed. A frame retained for replay and
+replayed on a link renegotiated at another version keeps it: one composed at 18 and replayed at 17
+carries `nextOffset`, which a version-17 decoder carries as an unknown member and does not read; one
+composed at 17 and replayed at 18 carries none, which reads as not stated, so a controller pages on
+only from an answer that states a `nextOffset`.
 
 `workspace_read` names a workspace by the key it was provisioned at and a file by a path relative to
 that workspace's directory, with `offset` (0, or the `nextOffset` of the answer before) and

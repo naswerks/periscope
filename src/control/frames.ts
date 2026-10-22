@@ -46,15 +46,19 @@ export const PROTOCOL_VERSION = 18;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 18 adds one refusal reason, `transcripts-not-served`: a host of this build does not look for,
- * read or keep the agent's transcript files, and gives that answer to every `transcript_list` and
- * `transcript_tail` (on `transcript_failed`) and to every `bulk_request` whose locator names the
- * `claude-transcript:` namespace (on `bulk_failed`). Every transcript kind still decodes, and both
- * answers are kinds a version-17 controller already reads, its reason read tolerantly, so a
- * version-17 controller is still spoken to: what it sends decodes here unchanged, and what it
- * receives decodes on its side. The narrowing of `session_new.request.env` that version 14 made (a
- * key a controller places in the spawn environment must be one this host's operator declared, above
- * the floor) holds at every version this host negotiates.
+ * Version 18 adds paging to the repository read: `repository_read.offset`, where a page starts, and
+ * `repository_read_result.nextOffset`, where the next one does, null at the end of the file or at
+ * `MAX_REPOSITORY_FILE_BYTES`. Both are optional: an ask with no offset is the head read version 17
+ * made, and `nextOffset` is never written on a link negotiated below 18. It adds one refusal reason,
+ * `transcripts-not-served`: a host of this build does not look for, read or keep the agent's
+ * transcript files, and gives that answer to every `transcript_list` and `transcript_tail` (on
+ * `transcript_failed`) and to every `bulk_request` whose locator names the `claude-transcript:`
+ * namespace (on `bulk_failed`). Every transcript kind still decodes, and both answers are kinds a
+ * version-17 controller already reads, its reason read tolerantly, so a version-17 controller is
+ * still spoken to: what it sends decodes here unchanged, and what it receives decodes on its side.
+ * The narrowing of `session_new.request.env` that version 14 made (a key a controller places in the
+ * spawn environment must be one this host's operator declared, above the floor) holds at every
+ * version this host negotiates.
  */
 export const PROTOCOL_VERSION_MIN = 17;
 
@@ -1927,9 +1931,17 @@ export const MAX_REPOSITORY_ENTRIES = 500;
 /**
  * The most text one `repository_read_result` carries. The frame cap is 64 KiB and the envelope plus
  * JSON escaping must fit inside it, so the text is bounded below the cap with margin; a longer file
- * is answered to this many bytes and marked `truncated`.
+ * is answered a page at a time, each page marked `truncated` while bytes remain.
  */
 export const MAX_REPOSITORY_READ_BYTES = 48 * 1024;
+
+/**
+ * The most of a file the repository read pages through (protocol 18). The head of any file is
+ * served at offset 0, whatever its size; pages after it continue while they end before this bound
+ * and the end of the file, so the link stays a command lane rather than a file transfer. An offset
+ * past this bound is refused by name.
+ */
+export const MAX_REPOSITORY_FILE_BYTES = 512 * 1024;
 
 /**
  * Ask this host to list one directory of its repository, by a path relative to the repository root
@@ -1964,25 +1976,42 @@ export interface RepositoryListResult {
 
 /**
  * Ask this host for the text of one file of its repository, by a path relative to the repository
- * root, at most `maxBytes` of it (1 to `MAX_REPOSITORY_READ_BYTES`). Text files only: a file with a
- * NUL byte in its head is refused rather than served, because the answer is a string.
+ * root, from byte `offset` and at most `maxBytes` of it (1 to `MAX_REPOSITORY_READ_BYTES`). Text
+ * files only: a file with a NUL byte in its head is refused rather than served, because the answer
+ * is a string. Offset 0 reads the head of a file of any size; a later page must start before
+ * `MAX_REPOSITORY_FILE_BYTES`.
  */
 export interface RepositoryRead {
   readonly kind: 'repository_read';
   readonly requestId: string;
   readonly path: string;
   readonly maxBytes: number;
+  /**
+   * Where the page starts, in bytes: 0, or the `nextOffset` of the answer before it (protocol 18).
+   * Null or absent = 0, the head; a controller one release behind never sends it.
+   */
+  readonly offset?: number | null;
 }
 
 /** The read's answer; every exit is this one kind. `text` is null exactly when `refusal` is not. */
 export interface RepositoryReadResult {
   readonly kind: 'repository_read_result';
   readonly requestId: string;
-  /** UTF-8 text, the first `maxBytes` of the file at most. */
+  /**
+   * UTF-8 text from the asked offset, at most `maxBytes` of it, cut on a character boundary; a page
+   * smaller than its first character carries that character whole.
+   */
   readonly text: string | null;
   /** The file's whole size, so a caller can see how much `truncated` left behind. */
   readonly sizeBytes: number;
+  /** True when bytes of the file remain past this page. */
   readonly truncated: boolean;
+  /**
+   * Where the next page starts (protocol 18), or null when this page reached the end of the file or
+   * `MAX_REPOSITORY_FILE_BYTES`. Written only on a link negotiated at 18 or above; absent = not
+   * stated, as from a host one release behind.
+   */
+  readonly nextOffset?: number | null;
   readonly refusal: WireRefusal | null;
 }
 
@@ -2001,19 +2030,31 @@ export function repositoryListResult(
   return { kind: 'repository_list_result', requestId, entries, truncated, refusal: refusal ?? null };
 }
 
-/** Build a `repository_read`. Fills `maxBytes` with the cap. */
+/**
+ * Build a `repository_read`. Fills `maxBytes` with the cap. Added inside the window, `offset` is
+ * stated only when given: an ask without one is the head read.
+ */
 export function repositoryRead(
   requestId: string,
   path: string,
   maxBytes = MAX_REPOSITORY_READ_BYTES,
+  offset?: number,
 ): RepositoryRead {
-  return { kind: 'repository_read', requestId, path, maxBytes };
+  return { kind: 'repository_read', requestId, path, maxBytes, ...(offset === undefined ? {} : { offset }) };
 }
 
-/** Build a `repository_read_result`. Fills `refusal` with null, the read answer. */
+/**
+ * Build a `repository_read_result`. Fills `refusal` with null, the read answer. Added inside the
+ * window, `nextOffset` is stated only when given, so an answer to a link below 18 carries none.
+ */
 export function repositoryReadResult(
   requestId: string,
-  read: { readonly text: string | null; readonly sizeBytes: number; readonly truncated: boolean },
+  read: {
+    readonly text: string | null;
+    readonly sizeBytes: number;
+    readonly truncated: boolean;
+    readonly nextOffset?: number | null;
+  },
   refusal?: WireRefusal,
 ): RepositoryReadResult {
   return {
@@ -2022,6 +2063,7 @@ export function repositoryReadResult(
     text: read.text,
     sizeBytes: read.sizeBytes,
     truncated: read.truncated,
+    ...(read.nextOffset === undefined ? {} : { nextOffset: read.nextOffset }),
     refusal: refusal ?? null,
   };
 }

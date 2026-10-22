@@ -578,7 +578,8 @@ over the link and without a further credential:
 - **Remove directories.** `workspace_release` deletes a worktree under the workspace root, and the
   controller can set that root through `host_configure` (a root change is refused only while a
   session is live or opening).
-- **Read files.** Any directory listing or text-file head under the repository root
+- **Read files.** Any directory listing under the repository root, and any text file there: its
+  head, whatever its size, and on a link at protocol 18 its first 512 KiB a page at a time
   (`repository_list` / `repository_read`, read-only and bounded), a root the controller can re-point
   through `host_configure`; and any text file up to 512 KiB inside a workspace this host provisioned,
   a page at a time (`workspace_read`, by the workspace's key). Each door is jailed to its root and

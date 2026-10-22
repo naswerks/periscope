@@ -1499,12 +1499,65 @@ const AUTHORED = {
       name: 'repository_read.head',
       frame: session(repositoryRead('request-10', 'docs/guides/getting-started.md', 16384)),
     },
+    {
+      name: 'repository_read.paged',
+      frame: session(repositoryRead('request-12', 'docs/guides/getting-started.md', 49152, 49152)),
+    },
   ],
   repository_read_result: [
     {
       name: 'repository_read_result.truncated',
       frame: session(
         repositoryReadResult('request-10', { text: '# The brief\n', sizeBytes: 20480, truncated: true }),
+      ),
+    },
+    {
+      name: 'repository_read_result.page',
+      frame: session(
+        repositoryReadResult('request-12', {
+          text: '## Platform state\n',
+          sizeBytes: 70656,
+          truncated: true,
+          nextOffset: 65536,
+        }),
+      ),
+    },
+    {
+      name: 'repository_read_result.last',
+      frame: session(
+        repositoryReadResult('request-12', {
+          text: 'the end of the brief\n',
+          sizeBytes: 70656,
+          truncated: false,
+          nextOffset: null,
+        }),
+      ),
+    },
+    {
+      name: 'repository_read_result.refused-past-end',
+      frame: session(
+        repositoryReadResult(
+          'request-12',
+          { text: null, sizeBytes: 0, truncated: false, nextOffset: null },
+          {
+            reason: 'repository-read-failed',
+            detail: 'the offset 98304 is past the end of the file (70656 bytes)',
+          },
+        ),
+      ),
+    },
+    {
+      name: 'repository_read_result.refused-past-ceiling',
+      frame: session(
+        repositoryReadResult(
+          'request-12',
+          { text: null, sizeBytes: 0, truncated: false, nextOffset: null },
+          {
+            reason: 'repository-read-failed',
+            detail:
+              'the offset 589824 is past the 524288 bytes the repository read pages through; the head of any file is read at offset 0',
+          },
+        ),
       ),
     },
     {

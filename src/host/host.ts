@@ -2168,21 +2168,34 @@ export class PeriscopeHost {
     }
   }
 
-  /** Answer `repository_read`: the head of one text file under the repository root. */
+  /**
+   * Answer `repository_read`: one page of a text file under the repository root, the head when the
+   * ask names no offset. Every answer is shaped for the link's protocol (`pagedAtLinkVersion`).
+   */
   async #answerRepositoryRead(channelKey: string, asked: RepositoryRead): Promise<void> {
-    const nothing = { text: null, sizeBytes: 0, truncated: false };
+    const version = (): number | null => this.#link.negotiatedVersion ?? null;
+    const nothing = { text: null, sizeBytes: 0, truncated: false, nextOffset: null };
     const refused = (why: Refusal): void =>
       this.#refuseRepository(
         channelKey,
-        repositoryReadResult(asked.requestId, nothing, wireRefusalOf(why)),
+        repositoryReadResult(asked.requestId, pagedAtLinkVersion(nothing, version()), wireRefusalOf(why)),
         why,
       );
     const root = this.#workspaces?.repositoryRoot;
     if (root === undefined) return refused(noRepositoryRoot());
     try {
-      const read = await readRepositoryFile(root, asked.path, asked.maxBytes, this.#options.protectedPaths);
+      const read = await readRepositoryFile(
+        root,
+        asked.path,
+        asked.maxBytes,
+        this.#options.protectedPaths,
+        asked.offset ?? 0,
+      );
       if (!read.ok) return refused(read.refusal);
-      this.#send(channelKey, repositoryReadResult(asked.requestId, read.value));
+      this.#send(
+        channelKey,
+        repositoryReadResult(asked.requestId, pagedAtLinkVersion(read.value, version())),
+      );
     } catch (error) {
       refused(refusal('repository-read-failed', describe(error)));
     }
@@ -2897,6 +2910,28 @@ export function decideAtLinkVersion(decide: Decider, version: () => number | nul
     const { shellDialect: _dialect, ...older } = request;
     return decide(older, signal);
   };
+}
+
+/** The first protocol a `repository_read_result` may carry `nextOffset` at. */
+const FIRST_PROTOCOL_CARRYING_REPOSITORY_PAGING = 18;
+
+/**
+ * A repository read's answer as the link's protocol carries it: `nextOffset` is stated on a link at
+ * 18 or above, and before the first handshake, as on a link that negotiates nothing; below 18 it is
+ * left out, and the answer is the head read version 17 made.
+ *
+ * The version is read when the answer is composed, and a frame retained for replay keeps that shape.
+ * One composed at 18 and replayed on a link renegotiated at 17 carries `nextOffset` to a controller
+ * whose decoder does not declare it and carries it unread; one composed at 17 and replayed at 18
+ * states no next page, which reads as not stated.
+ */
+export function pagedAtLinkVersion<T extends { readonly nextOffset: number | null }>(
+  read: T,
+  version: number | null,
+): T | Omit<T, 'nextOffset'> {
+  if (version === null || version >= FIRST_PROTOCOL_CARRYING_REPOSITORY_PAGING) return read;
+  const { nextOffset: _nextOffset, ...head } = read;
+  return head;
 }
 
 /** The Qwen Code read, settled: a read that throws is reported as an unavailable runtime, never a failed start. */

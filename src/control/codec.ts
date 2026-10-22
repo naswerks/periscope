@@ -850,6 +850,10 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     requestId: z.string().min(1),
     path: z.string().min(1).max(MAX_CONFIGURATION_VALUE_LENGTH),
     maxBytes: z.number().int().min(1).max(MAX_REPOSITORY_READ_BYTES),
+    // Protocol 18, and optional: a controller one release behind omits it, and its ask is the head
+    // read. Bounded below only: an offset past the most of a file the read serves is the host's to
+    // refuse by name, since a frame the codec refused would never reach the host to be answered.
+    offset: z.number().int().nonnegative().nullable().optional(),
   }),
   z.looseObject({
     kind: z.literal('repository_read_result'),
@@ -857,6 +861,9 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     text: z.string().nullable(),
     sizeBytes: z.number().int().nonnegative(),
     truncated: z.boolean(),
+    // Protocol 18, optional for the same reason: a host one release behind, or one answering a link
+    // below 18, states no next page.
+    nextOffset: z.number().int().positive().nullable().optional(),
     refusal: refusalSchema.nullable(),
   }),
   z.looseObject({

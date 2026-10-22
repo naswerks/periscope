@@ -400,12 +400,19 @@ behind it: `src/host/paths.ts` names the agent home's credential files to protec
 sessions this host runs, and nothing else under that home is read for a controller; the asks the
 wire retired are answered by name ([protocol.md](protocol.md)).
 
-It reads the repository under `PERISCOPE_REPOSITORY_ROOT`:
-`repository_list` (names, sorted, capped at `MAX_REPOSITORY_ENTRIES`) and `repository_read` (a text
-head capped at `MAX_REPOSITORY_READ_BYTES`, cut on a character boundary, with the whole size). The
-jail is lexical (join, resolve, contain) and physical (`realpath` both sides, contain again); a file
-whose head holds a NUL byte refuses `repository-read-failed` rather than shipping binary as text.
-The listing does not follow links; the read does.
+It reads the repository under `PERISCOPE_REPOSITORY_ROOT`: `repository_list` (names, sorted,
+capped at `MAX_REPOSITORY_ENTRIES`) and `repository_read` (a page of text capped at
+`MAX_REPOSITORY_READ_BYTES`, cut on a character boundary, with the whole size: the head of any file
+at offset 0, and pages through its first `MAX_REPOSITORY_FILE_BYTES` after it); and a workspace's
+directory for `workspace_read` (pages of a file up to `MAX_WORKSPACE_FILE_BYTES`). Both reads take a
+page through one reader, `readTextPage`, so they cut and refuse alike. The jail is lexical (join,
+resolve, contain) and physical (`realpath` both sides, contain again); a file whose head holds a NUL
+byte refuses `repository-read-failed` rather than shipping binary as text. The listing does not
+follow links; the reads do.
+
+A repository page's `nextOffset` is written only on a link negotiated at 18 or above, or before any
+handshake (`pagedAtLinkVersion` in `src/host/host.ts`, the shape `decideAtLinkVersion` gives a
+decision request): on a link at 17 the answer is the head read that version made.
 
 ## Workspaces
 

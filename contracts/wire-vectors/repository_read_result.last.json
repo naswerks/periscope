@@ -1,0 +1,23 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "repository_read_result",
+      "requestId": "request-12",
+      "text": "the end of the brief\n",
+      "sizeBytes": 70656,
+      "truncated": false,
+      "nextOffset": null,
+      "refusal": null
+    }
+  },
+  "name": "repository_read_result.last",
+  "protocolVersion": 18,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"repository_read_result\",\"requestId\":\"request-12\",\"text\":\"the end of the brief\\n\",\"sizeBytes\":70656,\"truncated\":false,\"nextOffset\":null,\"refusal\":null}}"
+}

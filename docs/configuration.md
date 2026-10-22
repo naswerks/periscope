@@ -135,9 +135,10 @@ choose where a session's model calls go, and with which credential. Nor are the 
 home (`PERISCOPE_CODEX_BIN`, `PERISCOPE_CODEX_HOME`): a controller able to point them elsewhere would
 choose what runs as a session, and whose sign-in it runs under; and the Qwen Code CLI and base
 (`PERISCOPE_QWEN_BIN`, `PERISCOPE_QWEN_HOME`) and the pi CLI and home (`PERISCOPE_PI_BIN`,
-`PERISCOPE_PI_HOME`), for the same reason. A controller can also list one directory or read the head of one text file under the
-repository root (`repository_list` / `repository_read`), jailed to that root and to the protected
-set, bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
+`PERISCOPE_PI_HOME`), for the same reason. A controller can also list one directory or read one
+text file under the repository root (`repository_list` / `repository_read`: the head of any file, and
+on a link at protocol 18 its first 512 KiB a page at a time), jailed to that root and to the
+protected set, bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
 a time, by the workspace's key (`workspace_read`), under the same jail and protected set. [The wire
 protocol](protocol.md) states the three doors.
 

@@ -394,7 +394,9 @@ export const REFUSAL_REASONS = [
   //                             is not this, it is `repository-read-failed`.
   //   repository-read-failed    The path is not a directory (for a listing) or not a file (for a
   //                             read), the file holds a NUL byte in its head (binary; the answer is
-  //                             a string), or the filesystem refused. The detail names which.
+  //                             a string), a page's offset is past the end of the file, past
+  //                             `MAX_REPOSITORY_FILE_BYTES` or inside a character, or the filesystem
+  //                             refused. The detail names which.
   'repository-path-escape',
   'repository-read-failed',
 

@@ -81,7 +81,7 @@ import { GitWorktreeProvider } from '../workspace/git-worktree.js';
 import { nodeCommandEffects, nodeWorkspaceEffects } from './workspace-fs.js';
 import type { AgentProcess, AgentProcessRequest, HookInput } from './agent-process.js';
 import type { HostReconfigurer, HostEvent, HostLink } from './host.js';
-import { PeriscopeHost, composeSession } from './host.js';
+import { PeriscopeHost, composeSession, pagedAtLinkVersion } from './host.js';
 import type { SessionDegrade } from '../sessions/session.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import type { FakeAgents } from '../test-support/fake-agent.js';
@@ -98,6 +98,8 @@ class FakeLink implements HostLink {
   started = false;
   stopped = false;
   handlers: LinkHandlers | null = null;
+  /** The version a handshake chose; null, as before any handshake, unless a case sets it. */
+  negotiatedVersion: number | null = null;
 
   send(sessionId: string, payload: SessionPayload): Result<void> {
     this.sent.push({ sessionId, payload });
@@ -2814,6 +2816,61 @@ test("repository_list and repository_read answer under the provider's repository
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('repository_read pages: on a link at 18 every answer states nextOffset, and on a link at 17 none does, the head read unchanged', async () => {
+  const root = await tempDir('repository-read');
+  try {
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(join(root, 'docs', 'brief.md'), '0123456789', 'utf8');
+    const { link } = hostOver({ workspaces: providerRootedAt(root) });
+
+    link.negotiatedVersion = 18;
+    link.deliver('discovery-channel', repositoryRead('rr-head', 'docs/brief.md', 4));
+    await answeredTimes(link, 'repository_read_result', 1, 'the head');
+    link.deliver('discovery-channel', repositoryRead('rr-page', 'docs/brief.md', 4, 4));
+    await answeredTimes(link, 'repository_read_result', 2, 'the second page');
+    link.deliver('discovery-channel', repositoryRead('rr-last', 'docs/brief.md', 4, 8));
+    await answeredTimes(link, 'repository_read_result', 3, 'the last page');
+    link.deliver('discovery-channel', repositoryRead('rr-past', 'docs/brief.md', 4, 11));
+    await answeredTimes(link, 'repository_read_result', 4, 'the refused page');
+    assert.deepEqual(
+      repositoryReads(link).map((read) => [read.requestId, read.text, read.truncated, read.nextOffset]),
+      [
+        ['rr-head', '0123', true, 4],
+        ['rr-page', '4567', true, 8],
+        ['rr-last', '89', false, null],
+        ['rr-past', null, false, null],
+      ],
+    );
+    assert.equal(repositoryReads(link)[3]?.refusal?.reason, 'repository-read-failed');
+    assert.match(repositoryReads(link)[3]?.refusal?.detail ?? '', /past the end/);
+
+    // The same asks on a link at 17: the head is the read it always was, and no answer names a page.
+    link.negotiatedVersion = 17;
+    link.deliver('discovery-channel', repositoryRead('rr-head-17', 'docs/brief.md', 4));
+    await answeredTimes(link, 'repository_read_result', 5, 'the head at 17');
+    link.deliver('discovery-channel', repositoryRead('rr-past-17', 'docs/brief.md', 4, 11));
+    await answeredTimes(link, 'repository_read_result', 6, 'the refusal at 17');
+    const at17 = repositoryReads(link).slice(4);
+    assert.deepEqual(
+      at17.map((read) => [read.requestId, read.text, read.truncated, 'nextOffset' in read]),
+      [
+        ['rr-head-17', '0123', true, false],
+        ['rr-past-17', null, false, false],
+      ],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('before any handshake the answer states nextOffset; the shaping reads the version when the answer is composed', () => {
+  const page = { text: 'x', sizeBytes: 2, truncated: true, nextOffset: 1 };
+  assert.deepEqual(pagedAtLinkVersion(page, null), page);
+  assert.deepEqual(pagedAtLinkVersion(page, 18), page);
+  assert.deepEqual(pagedAtLinkVersion(page, 19), page);
+  assert.deepEqual(pagedAtLinkVersion(page, 17), { text: 'x', sizeBytes: 2, truncated: true });
 });
 
 test('a host with no repository root answers repository-path-escape to both asks: nothing to read under', async () => {

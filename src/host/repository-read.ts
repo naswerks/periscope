@@ -25,9 +25,11 @@
  * refusal here, not a value, because the ask named one thing and it is not there.
  *
  * Bounded twice: a listing carries at most `MAX_REPOSITORY_ENTRIES` names and says when it stopped;
- * a read carries at most `maxBytes` (itself capped at `MAX_REPOSITORY_READ_BYTES`), cut on a UTF-8
- * boundary, and says the file's whole size. A file with a NUL byte in its first
- * `BINARY_PROBE_BYTES` is refused as binary: the answer is a string and a string cannot carry it.
+ * a read carries one page, at most `maxBytes` (itself capped at `MAX_REPOSITORY_READ_BYTES`), cut on
+ * a UTF-8 boundary, and says the file's whole size. Offset 0 is the head of a file of any size; the
+ * pages after it reach no further than `MAX_REPOSITORY_FILE_BYTES`. Both doors read a page the same
+ * way (`readTextPage`). A file with a NUL byte in its first `BINARY_PROBE_BYTES` is refused as
+ * binary: the answer is a string and a string cannot carry it.
  */
 import { createReadStream } from 'node:fs';
 import { readdir, realpath, stat } from 'node:fs/promises';
@@ -35,6 +37,7 @@ import { readdir, realpath, stat } from 'node:fs/promises';
 import type { RepositoryEntry } from '../control/frames.js';
 import {
   MAX_REPOSITORY_ENTRIES,
+  MAX_REPOSITORY_FILE_BYTES,
   MAX_REPOSITORY_READ_BYTES,
   MAX_WORKSPACE_FILE_BYTES,
   MAX_WORKSPACE_READ_BYTES,
@@ -54,11 +57,17 @@ export interface RepositoryListing {
   readonly truncated: boolean;
 }
 
-/** One file's head as text, with the whole size so a caller can see what `truncated` left behind. */
+/** One page of a file as text, with the whole size so a caller can see what `truncated` left behind. */
 export interface RepositoryText {
   readonly text: string;
   readonly sizeBytes: number;
+  /** True when bytes of the file remain past this page. */
   readonly truncated: boolean;
+  /**
+   * Where the next page starts, or null when this page reached the end of the file or
+   * `MAX_REPOSITORY_FILE_BYTES`.
+   */
+  readonly nextOffset: number | null;
 }
 
 /** One page of a workspace file as text: the file's whole size, and where the next page starts. */
@@ -227,60 +236,62 @@ export async function listRepositoryDirectory(
 }
 
 /**
- * Read the head of one text file under the root: at most `maxBytes` (capped at the wire's bound),
- * cut back to a UTF-8 boundary so the text never ends mid-character. Binary is refused by the NUL
- * probe; a directory or an absent path is refused by name.
+ * Read one page of a text file under the root: from byte `offset`, at most `maxBytes` (capped at the
+ * wire's bound), cut back to a character boundary. Offset 0 is the head of a file of any size, the
+ * read a controller one release behind makes. A page after it starts no further than
+ * `MAX_REPOSITORY_FILE_BYTES` and ends there, or at the end of the file, whichever is first:
+ * `nextOffset` is null at either. Binary is refused by the NUL probe; a directory, an absent path,
+ * and an offset past the end, past that bound or inside a character are refused by name.
  */
 export async function readRepositoryFile(
   root: string,
   relative: string,
   maxBytes = MAX_REPOSITORY_READ_BYTES,
   protectedPaths: readonly string[] = [],
+  offset = 0,
 ): Promise<Result<RepositoryText>> {
-  const real = await admittedRealPath(root, relative, protectedPaths);
+  const door = REPOSITORY_DOOR;
+  const real = await admittedRealPath(root, relative, protectedPaths, door);
   if (!real.ok) return real;
 
   let stats;
   try {
     stats = await stat(real.value);
   } catch (error) {
-    return refuse('repository-read-failed', `the file could not be read: ${describe(error)}`);
+    return refuse(door.failed, `the file could not be read: ${describe(error)}`);
   }
-  if (!stats.isFile()) return refuse('repository-read-failed', 'the path is not a file');
+  if (!stats.isFile()) return refuse(door.failed, 'the path is not a file');
 
-  const wanted = Math.min(Math.max(1, Math.floor(maxBytes)), MAX_REPOSITORY_READ_BYTES);
-  const probe = Math.max(wanted, BINARY_PROBE_BYTES);
-  const chunks: Buffer[] = [];
-  try {
-    if (stats.size > 0) {
-      for await (const chunk of createReadStream(real.value, { start: 0, end: probe - 1 })) {
-        chunks.push(chunk as Buffer);
-      }
-    }
-  } catch (error) {
-    return refuse('repository-read-failed', `the file could not be read: ${describe(error)}`);
+  const start = Math.max(0, Math.floor(offset));
+  if (start > stats.size) {
+    return refuse(door.failed, `the offset ${start} is past the end of the file (${stats.size} bytes)`);
   }
-  const head = Buffer.concat(chunks);
-  if (head.subarray(0, BINARY_PROBE_BYTES).includes(0)) {
+  // How far pages reach: the end of the file, or the bound, whichever is first.
+  const reach = Math.min(stats.size, MAX_REPOSITORY_FILE_BYTES);
+  if (start > reach) {
     return refuse(
-      'repository-read-failed',
-      'the file holds a NUL byte in its head and is not served as text',
+      door.failed,
+      `the offset ${start} is past the ${MAX_REPOSITORY_FILE_BYTES} bytes the repository read pages through; the head of any file is read at offset 0`,
     );
   }
 
-  let cut = Math.min(head.length, wanted);
-  // A continuation byte at the cut means a character straddles it: step back to its first byte.
-  while (cut > 0 && cut < head.length && (head[cut]! & 0xc0) === 0x80) cut -= 1;
-  const text = head.subarray(0, cut).toString('utf8');
-  return ok({ text, sizeBytes: stats.size, truncated: cut < stats.size });
+  const wanted = Math.min(Math.max(1, Math.floor(maxBytes)), MAX_REPOSITORY_READ_BYTES, reach - start);
+  const page = await readTextPage(real.value, stats.size, start, wanted, door);
+  if (!page.ok) return page;
+  const end = page.value.end;
+  return ok({
+    text: page.value.text,
+    sizeBytes: stats.size,
+    truncated: end < stats.size,
+    nextOffset: end < reach ? end : null,
+  });
 }
 
 /**
  * Read one page of a text file inside a workspace's directory: from byte `offset`, at most `maxBytes`
- * (capped at the wire's bound), cut back to a character boundary. A page that would end inside its
- * first character carries that whole character, so every page makes progress. The file must be at
- * most `MAX_WORKSPACE_FILE_BYTES` and text by the repository read's rule (no NUL byte in its first
- * `BINARY_PROBE_BYTES`); an offset past the end or inside a character is refused.
+ * (capped at the wire's bound), cut back to a character boundary. The file must be at most
+ * `MAX_WORKSPACE_FILE_BYTES` and text by the repository read's rule; an offset past the end or inside
+ * a character is refused.
  */
 export async function readWorkspaceFile(
   root: string,
@@ -312,12 +323,32 @@ export async function readWorkspaceFile(
   }
 
   const wanted = Math.min(Math.max(1, Math.floor(maxBytes)), MAX_WORKSPACE_READ_BYTES);
+  const page = await readTextPage(real.value, stats.size, start, wanted, door);
+  if (!page.ok) return page;
+  const end = page.value.end;
+  return ok({ text: page.value.text, sizeBytes: stats.size, nextOffset: end < stats.size ? end : null });
+}
+
+/**
+ * One page of a text file, the read both doors share: from `start`, at most `wanted` bytes, cut back
+ * to a character boundary. A page that would end inside its first character carries that whole
+ * character, so every page makes progress; a page asked for no bytes is empty. The file is text by
+ * one rule wherever the page starts: no NUL byte in its first `BINARY_PROBE_BYTES`. A start inside a
+ * character is refused, because a page from there would begin with half of one.
+ */
+async function readTextPage(
+  path: string,
+  size: number,
+  start: number,
+  wanted: number,
+  door: ReadDoor,
+): Promise<Result<{ readonly text: string; readonly end: number }>> {
   let head: Buffer;
   let page: Buffer;
   try {
-    head = await readRange(real.value, 0, Math.min(stats.size, BINARY_PROBE_BYTES));
+    head = await readRange(path, 0, Math.min(size, BINARY_PROBE_BYTES));
     // Three bytes past the page: enough to see whether a character straddles the cut.
-    page = await readRange(real.value, start, Math.min(stats.size - start, wanted + 3));
+    page = await readRange(path, start, Math.min(size - start, wanted + 3));
   } catch (error) {
     return refuse(door.failed, `the file could not be read: ${describe(error)}`);
   }
@@ -334,17 +365,12 @@ export async function readWorkspaceFile(
   let cut = Math.min(page.length, wanted);
   // A continuation byte at the cut means a character straddles it: step back to its first byte.
   while (cut > 0 && cut < page.length && (page[cut]! & 0xc0) === 0x80) cut -= 1;
-  if (cut === 0 && page.length > 0) {
-    // The first character is longer than `maxBytes`: the page carries it whole rather than nothing.
+  if (cut === 0 && page.length > 0 && wanted > 0) {
+    // The first character is longer than `wanted`: the page carries it whole rather than nothing.
     cut = 1;
     while (cut < page.length && (page[cut]! & 0xc0) === 0x80) cut += 1;
   }
-  const end = start + cut;
-  return ok({
-    text: page.subarray(0, cut).toString('utf8'),
-    sizeBytes: stats.size,
-    nextOffset: end < stats.size ? end : null,
-  });
+  return ok({ text: page.subarray(0, cut).toString('utf8'), end: start + cut });
 }
 
 /** `length` bytes of a file from `start`; fewer when the file ends first. */

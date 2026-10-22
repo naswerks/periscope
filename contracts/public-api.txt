@@ -113,7 +113,7 @@ host: function readMachineFacts(): MachineFacts
 host: function readMirrorDrop(message: SDKMessage): MirrorDrop | null
 host: function readModelEndpoints(path: string, env: NodeJS.ProcessEnv, options?: ModelEndpointsReadOptions): ModelEndpointsReading | string
 host: function readRateLimit(message: SDKMessage): RateLimitStanding | null
-host: function readRepositoryFile(root: string, relative: string, maxBytes?: number, protectedPaths?: readonly string[]): Promise<Result<RepositoryText>>
+host: function readRepositoryFile(root: string, relative: string, maxBytes?: number, protectedPaths?: readonly string[], offset?: number): Promise<Result<RepositoryText>>
 host: function readTaskSpend(message: SDKMessage): { agentId: string; spend: TurnSpend; } | null
 host: function readTurnSpend(message: SDKMessage): TurnSpend | null
 host: function readWorkspaceFile(root: string, relative: string, offset?: number, maxBytes?: number, protectedPaths?: readonly string[]): Promise<Result<WorkspaceText>>
@@ -148,7 +148,7 @@ host: interface ModelEndpointsReading { readonly endpoints: readonly ModelEndpoi
 host: interface PairedCredentialWrite { readonly mode: CredentialModeOutcome; readonly path: string }
 host: interface PeriscopeHostOptions { readonly agentCatalog?: () => Promise<AgentCatalog>; readonly backoff?: BackoffOptions; readonly baseEnv?: Readonly<Record<string, string>>; readonly bulk?: BulkResolver; readonly clock?: Clock; readonly configuration?: HostConfiguration; readonly controllerEnvKeys?: readonly string[]; readonly controllerUrl: string; readonly credential?: ControllerCredential; readonly decide: Decider; readonly defaultWorkspaceKey?: string; readonly endpoints?: readonly ModelEndpoint[]; readonly extraEnvFloor?: readonly string[]; readonly gate?: GateTimings; readonly home?: string; readonly homeDir?: string; readonly hostId: string; readonly link?: (handlers: LinkHandlers) => HostLink; readonly linkCapabilities?: readonly string[]; readonly linkTimings?: { readonly heartbeatIntervalMs?: number; readonly heartbeatTimeoutMs?: number; readonly connectTimeoutMs?: number; }; readonly maxSessions?: number; readonly overriddenByEnvironment?: readonly string[]; readonly pendingRestart?: readonly string[]; readonly pluginDirs?: readonly string[]; readonly protectedPaths: readonly string[]; readonly reconfigure?: HostReconfigurer; readonly registry?: SessionRegistry; readonly report?: (event: HostEvent) => void; readonly ticker?: Ticker; readonly toolFamilies?: ToolFamilies; readonly tools?: Omit<McpServerOptions, "identity">; readonly transcriptsRoot?: string; readonly workspaces?: WorkspaceProvider }
 host: interface RepositoryListing { readonly entries: readonly RepositoryEntry[]; readonly truncated: boolean }
-host: interface RepositoryText { readonly sizeBytes: number; readonly text: string; readonly truncated: boolean }
+host: interface RepositoryText { readonly nextOffset: number; readonly sizeBytes: number; readonly text: string; readonly truncated: boolean }
 host: interface SignInDeps { readonly fetch?: { (input: RequestInfo | URL, init?: RequestInit): Promise<Response>; (input: string | URL | Request, init?: RequestInit): Promise<Response>; }; readonly nowMs?: Ticker; readonly present?: (url: string) => void; readonly sleep?: (ms: number) => Promise<void>; readonly timeoutMs?: number }
 host: interface TokenCacheWrite { readonly mode: CredentialModeOutcome; readonly path: string }
 host: interface TranscriptPage { readonly entries: readonly DiscoveredTranscript[]; readonly nextIndex: number; readonly totalCount: number }
@@ -298,6 +298,7 @@ index: const MAX_FACT_WORD_LENGTH: 64
 index: const MAX_FRAME_BYTES: number
 index: const MAX_PLUGIN_DIRS: 8
 index: const MAX_REPOSITORY_ENTRIES: 500
+index: const MAX_REPOSITORY_FILE_BYTES: number
 index: const MAX_REPOSITORY_READ_BYTES: number
 index: const MAX_WORKSPACE_FILE_BYTES: number
 index: const MAX_WORKSPACE_READ_BYTES: number
@@ -477,8 +478,8 @@ index: function refusal(reason: RefusalReason, detail: string): Refusal
 index: function refuse<T>(reason: RefusalReason, detail: string): Result<T>
 index: function repositoryList(requestId: string, path?: string): RepositoryList
 index: function repositoryListResult(requestId: string, entries: readonly RepositoryEntry[], truncated?: boolean, refusal?: WireRefusal): RepositoryListResult
-index: function repositoryRead(requestId: string, path: string, maxBytes?: number): RepositoryRead
-index: function repositoryReadResult(requestId: string, read: { readonly text: string | null; readonly sizeBytes: number; readonly truncated: boolean; }, refusal?: WireRefusal): RepositoryReadResult
+index: function repositoryRead(requestId: string, path: string, maxBytes?: number, offset?: number): RepositoryRead
+index: function repositoryReadResult(requestId: string, read: { readonly text: string | null; readonly sizeBytes: number; readonly truncated: boolean; readonly nextOffset?: number | null; }, refusal?: WireRefusal): RepositoryReadResult
 index: function requireAbsolute(candidate: string): Result<string>
 index: function requireDeviceCodeEnabled(config: IdentityConfig): Result<true>
 index: function requireS256(method: string): Result<typeof CODE_CHALLENGE_METHOD>
@@ -639,8 +640,8 @@ index: interface ReleaseReceipt { readonly branchDeleted: boolean; readonly dire
 index: interface RepositoryEntry { readonly directory: boolean; readonly mtimeMs: number; readonly name: string; readonly sizeBytes: number }
 index: interface RepositoryList { readonly kind: "repository_list"; readonly path: string; readonly requestId: string }
 index: interface RepositoryListResult { readonly entries: readonly RepositoryEntry[]; readonly kind: "repository_list_result"; readonly refusal: WireRefusal; readonly requestId: string; readonly truncated: boolean }
-index: interface RepositoryRead { readonly kind: "repository_read"; readonly maxBytes: number; readonly path: string; readonly requestId: string }
-index: interface RepositoryReadResult { readonly kind: "repository_read_result"; readonly refusal: WireRefusal; readonly requestId: string; readonly sizeBytes: number; readonly text: string; readonly truncated: boolean }
+index: interface RepositoryRead { readonly kind: "repository_read"; readonly maxBytes: number; readonly offset?: number; readonly path: string; readonly requestId: string }
+index: interface RepositoryReadResult { readonly kind: "repository_read_result"; readonly nextOffset?: number; readonly refusal: WireRefusal; readonly requestId: string; readonly sizeBytes: number; readonly text: string; readonly truncated: boolean }
 index: interface RetentionPlan { readonly keep: readonly TranscriptEntry[]; readonly remove: readonly TranscriptEntry[]; readonly undatedKept: number }
 index: interface RetentionPolicy { readonly maxAgeMs: number }
 index: interface RoutingRow { readonly lane: StreamLane; readonly note: string }
@@ -914,6 +915,7 @@ protocol: const MAX_FACT_WORD_LENGTH: 64
 protocol: const MAX_FRAME_BYTES: number
 protocol: const MAX_PLUGIN_DIRS: 8
 protocol: const MAX_REPOSITORY_ENTRIES: 500
+protocol: const MAX_REPOSITORY_FILE_BYTES: number
 protocol: const MAX_REPOSITORY_READ_BYTES: number
 protocol: const MAX_WORKSPACE_FILE_BYTES: number
 protocol: const MAX_WORKSPACE_READ_BYTES: number
@@ -965,8 +967,8 @@ protocol: function readStateTransition(body: JsonObject): SessionTransition | nu
 protocol: function readWireRefusal(body: JsonObject): WireRefusalUpdate | null
 protocol: function repositoryList(requestId: string, path?: string): RepositoryList
 protocol: function repositoryListResult(requestId: string, entries: readonly RepositoryEntry[], truncated?: boolean, refusal?: WireRefusal): RepositoryListResult
-protocol: function repositoryRead(requestId: string, path: string, maxBytes?: number): RepositoryRead
-protocol: function repositoryReadResult(requestId: string, read: { readonly text: string | null; readonly sizeBytes: number; readonly truncated: boolean; }, refusal?: WireRefusal): RepositoryReadResult
+protocol: function repositoryRead(requestId: string, path: string, maxBytes?: number, offset?: number): RepositoryRead
+protocol: function repositoryReadResult(requestId: string, read: { readonly text: string | null; readonly sizeBytes: number; readonly truncated: boolean; readonly nextOffset?: number | null; }, refusal?: WireRefusal): RepositoryReadResult
 protocol: function sameActivity(left: SessionActivity | null, right: SessionActivity | null): boolean
 protocol: function sessionList(requestId: string): SessionList
 protocol: function sessionListResult(requestId: string, sessions: readonly SessionListEntry[], counts: { liveCount: number; provisioningCount: number; }): SessionListResult
@@ -1037,8 +1039,8 @@ protocol: interface Refusal { readonly detail: string; readonly reason: "frame-n
 protocol: interface RepositoryEntry { readonly directory: boolean; readonly mtimeMs: number; readonly name: string; readonly sizeBytes: number }
 protocol: interface RepositoryList { readonly kind: "repository_list"; readonly path: string; readonly requestId: string }
 protocol: interface RepositoryListResult { readonly entries: readonly RepositoryEntry[]; readonly kind: "repository_list_result"; readonly refusal: WireRefusal; readonly requestId: string; readonly truncated: boolean }
-protocol: interface RepositoryRead { readonly kind: "repository_read"; readonly maxBytes: number; readonly path: string; readonly requestId: string }
-protocol: interface RepositoryReadResult { readonly kind: "repository_read_result"; readonly refusal: WireRefusal; readonly requestId: string; readonly sizeBytes: number; readonly text: string; readonly truncated: boolean }
+protocol: interface RepositoryRead { readonly kind: "repository_read"; readonly maxBytes: number; readonly offset?: number; readonly path: string; readonly requestId: string }
+protocol: interface RepositoryReadResult { readonly kind: "repository_read_result"; readonly nextOffset?: number; readonly refusal: WireRefusal; readonly requestId: string; readonly sizeBytes: number; readonly text: string; readonly truncated: boolean }
 protocol: interface RunningTaskEntry { readonly description: string; readonly taskId: string; readonly type: string }
 protocol: interface SessionActivity { readonly kind: "tool" | "subagent" | "permission" | "requesting" | "compacting" | "elicitation"; readonly name: string }
 protocol: interface SessionCancel { readonly kind: "session_cancel" }

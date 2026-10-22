@@ -14,9 +14,11 @@
  *
  * Protocol 18 adds what such a controller receives inside kinds it already reads: the reason
  * `transcripts-not-served`, on `transcript_failed` for a `transcript_list` or a `transcript_tail` and
- * on `bulk_failed` for a `claude-transcript:` locator. So what is read here is a Claude session's
- * traffic, a Codex session's, a Qwen Code session's and a pi session's, side by side on one link, and
- * the answers to the asks protocol 18 changes.
+ * on `bulk_failed` for a `claude-transcript:` locator; and `nextOffset` on `repository_read_result`,
+ * which a host never writes on a link at 17, so the answer such a controller reads is the head read
+ * it always was. So what is read here is a Claude session's traffic, a Codex session's, a Qwen Code
+ * session's and a pi session's, side by side on one link, and the answers to the asks protocol 18
+ * changes.
  *
  * Protocol 16 is outside the window, so no link is negotiated at it any more. `V16` stays for what it
  * still proves: that the schemas `V17` is built from can refuse (the controls below), that
@@ -32,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 import { decode } from '../control/codec.js';
+import { ok } from '../core/result.js';
 import type { HostAgent, JsonObject, JsonValue, SessionConfigure, SessionNew } from '../control/frames.js';
 import {
   PROTOCOL_VERSION,
@@ -1245,6 +1248,69 @@ test('a controller on protocol 17 reads the answer to every transcript ask: tran
   }
 });
 
+test('a controller on protocol 17 reads a repository_read answer as the head read it always was: no nextOffset on the wire', async () => {
+  const peer = await peerOn({ welcomeVersion: 17, ack: true });
+  const root = await tempDir('protocol-window');
+  writeFileSync(join(root, 'brief.md'), `# A brief\n${'x'.repeat(100)}\n`);
+  const host = new PeriscopeHost({
+    controllerUrl: peer.url,
+    hostId: 'host-1',
+    decide: allow,
+    protectedPaths: [],
+    registry: new SessionRegistry({ baseEnv: {}, homeDir: root, startProcess: fakeAgents().start }),
+    workspaces: {
+      provision: () => Promise.resolve(ok({ path: root, meta: {} })),
+      release: () => Promise.resolve(ok(undefined)),
+      repositoryRoot: root,
+    },
+  });
+
+  try {
+    host.start();
+    await waitFor(() => host.link.negotiatedVersion === 17, 'the welcome at 17', TIMEOUT_MS);
+    // The ask a protocol-17 controller sends: no offset, so the head.
+    peer.send('discovery-1', 1, {
+      kind: 'repository_read',
+      requestId: 'read-head',
+      path: 'brief.md',
+      maxBytes: 16,
+    });
+    // And a refused one, whose answer is shaped the same way.
+    peer.send('discovery-1', 2, {
+      kind: 'repository_read',
+      requestId: 'read-missing',
+      path: 'missing.md',
+      maxBytes: 16,
+    });
+    await waitFor(
+      () => sentFrames(peer.raw).filter((sent) => sent.kind === 'repository_read_result').length === 2,
+      'the two answers',
+      TIMEOUT_MS,
+    );
+
+    const answers = sentFrames(peer.raw).filter((sent) => sent.kind === 'repository_read_result');
+    for (const one of answers) {
+      const decoded = V17.safeParse(JSON.parse(one.raw));
+      assert.ok(decoded.success, decoded.success ? '' : JSON.stringify(decoded.error.issues));
+      assert.equal('nextOffset' in one.payload, false, `${one.raw} carries a member 17 does not declare`);
+    }
+    // The two reads settle in either order; each answer is matched on its request id.
+    assert.deepEqual(
+      answers
+        .map((one) => [one.payload['requestId'], one.payload['text'], one.payload['truncated']])
+        .sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
+      [
+        ['read-head', '# A brief\nxxxxxx', true],
+        ['read-missing', null, false],
+      ],
+    );
+  } finally {
+    host.stop();
+    await peer.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('an effort a controller names that the SDK does not is refused by name, not dropped', () => {
   const asked: SessionConfigure = {
     kind: 'session_configure',
@@ -1456,6 +1522,21 @@ test('the dialect word protocol 17 adds is held back from a controller at 16, an
   assert.equal(at16?.['shellDialect'], undefined, 'a controller at 16 was sent the word it does not declare');
   assert.ok(V16_DECISION_REQUEST.safeParse(at16).success, 'a controller at 16 refuses what it was sent');
   assert.equal(at17?.['shellDialect'], 'cmd', 'a controller at 17 was not sent the dialect');
+});
+
+test('a controller on protocol 17 decodes every answer vector protocol 18 adds: the repository read pages and their refusals, and transcripts-not-served', () => {
+  const corpus = fileURLToPath(new URL('../../contracts/wire-vectors/', import.meta.url));
+  const added = readdirSync(corpus).filter((file) =>
+    /^(repository_read_result\.(page|last|refused-)|(transcript_failed|bulk_failed)\.transcripts-not-served)/.test(
+      file,
+    ),
+  );
+  assert.equal(added.length, 6, `the vectors this reads: ${added.join(', ')}`);
+  for (const file of added) {
+    const wire = (JSON.parse(readFileSync(`${corpus}${file}`, 'utf8')) as { wire: string }).wire;
+    const read = V17.safeParse(JSON.parse(wire));
+    assert.ok(read.success, `${file}: ${read.success ? '' : JSON.stringify(read.error.issues)}`);
+  }
 });
 
 test('a controller on protocol 16 decodes every vector protocol 17 adds: the Qwen Code entry and pack row, its messages, its causes, its open refusal and its degrades', () => {
