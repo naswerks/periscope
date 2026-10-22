@@ -598,8 +598,8 @@ over the link and without a further credential:
   that call's permission keys can ride along (`pins/permission-config.test.ts`).
 - **Reconfigure the host.** The workspace root, the repository root, the branch scheme, the agent
   home, the plugin directories and the two controller URLs through `host_configure`, written to the
-  config file; the URLs and the agent home apply at the next start, so the protected set always
-  covers the agent home the hello reports as in effect.
+  config file; the URLs and the agent home apply at the next start (the hello names them in
+  `pendingRestart` until then), so the protected set always covers the agent home the host runs with.
 - **Start a Codex session, where you configured Codex.** Its tool calls go through the gate by
   periscope's own hook, with the residual paths named, under Codex's sandbox and approval policy for
   the permission mode the controller names, `bypassPermissions` (no sandbox) included

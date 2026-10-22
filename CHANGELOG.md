@@ -72,7 +72,7 @@ local-only gate, or one linked to a controller that does not, let them run.
 - Fixed: an agent home written over the link (`host_configure`) is pending until the next start, as
   the two controller URLs are: it is written to the config file and named in `pendingRestart` in the
   answer and every hello, and the protected set keeps the agent home the host started with. Applied
-  live, the hello named a home whose credential files the protected set did not yet name, since a
+  live, the host ran with a home whose credential files the protected set did not yet name, since a
   session's gate keeps the set it opened with.
 - Changed: `defaultAgentHome` is defined in the host's paths module; its export and behaviour are
   unchanged.

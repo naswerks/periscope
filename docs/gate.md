@@ -475,12 +475,14 @@ opens at `intercepted-with-residual`.
     (`echo \" ; git send-pack origin main`), where the quote is read as opening a span, so the rest of
     the line is one word of `echo`'s. The same shapes with `git push` refuse as `git-push`.
   - a command word an expansion supplies whose program the line does not name, which is not guessed:
-    a variable set outside the line (`$G push origin main`), a parameter (`$1 push`, `"$@" push`), and a
-    word an expansion only completes (`g$(echo it) push origin main`).
+    a variable set outside the line (`$G push origin main`), a parameter (`$1 push`, `"$@" push`), a
+    word an expansion only completes (`g$(echo it) push origin main`), and a variable a loop sets
+    (`for G in git; do $G push origin main; done`).
   - a command word the line names that is not at a command position the reading reads: behind `!`
     (`G=git; ! $G push origin main`), behind assignments to the command
     (`G=git; FOO=1 $G push origin main`, `G=git; X=$(foo) $G push origin main`), and behind a launcher
-    (`sudo $(echo git) push origin main`, `G=git; timeout 10 $G push origin main`).
+    (`sudo $(echo git) push origin main`, `G=git; timeout 10 $G push origin main`), and as `eval`'s
+    unquoted words (`G=git; eval $G push origin main`; the quoted `eval "$G push origin main"` refuses).
   - PowerShell's call operator on an expression (`& (Get-Command git) push origin main`,
     `$G = 'git'; & $G push origin main`), and `cmd`'s `%NAME%` as a command word
     (`%G% push origin main`).

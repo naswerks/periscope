@@ -72,7 +72,7 @@ The host dials and sends `link_hello`:
 | `hostId`          | the id the host announces; a paired credential's host id when one is presented                                                                                                                                                                   |
 | `capabilities`    | an open list of markers: `bulk-post` always; exactly one `workspace:<mode>` (`workspace:none`, `workspace:plain` or `workspace:git-worktree`) always; `workspace:branch-scheme` when a scheme is set. A controller ignores what it does not know |
 | `cursors`         | the host's inbound positions, one per session                                                                                                                                                                                                    |
-| `configuration`   | the host's effective settings, reported and never negotiated (below)                                                                                                                                                                             |
+| `configuration`   | the host's configured settings, reported and never negotiated (below); `pendingRestart` names those not yet in effect                                                                                                                            |
 | `pendingRestart`  | the setting keys written over the link that apply only at the host's next start                                                                                                                                                                  |
 
 The controller answers `link_welcome` with `protocolVersion` set to the version it chose inside the

@@ -277,7 +277,7 @@ test('control: an address the act cannot use refuses config-value-invalid and wr
   }
 });
 
-test('regression: a written agent home is pending until the next start, so the hello never names a home whose credential files are not yet protected', async () => {
+test('regression: a written agent home is pending until the next start, so the host never runs with a home whose credential files are not yet protected', async () => {
   const { env, dir } = await scratchEnv();
   try {
     const live = {
