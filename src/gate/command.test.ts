@@ -66,6 +66,17 @@ test('a comment ends at its newline and the command after it survives', () => {
   assert.match(stripComments('echo hi # a note\ngit status'), /git status/);
 });
 
+test('regression: the escaped reading keeps a `#` after an escaped blank inside its word, and reads the command after it', () => {
+  const parsed = parseCommand(String.raw`echo a\ # ; git push origin main`);
+  assert.equal(
+    parsed.escapedReading?.invocations[0]?.verb,
+    'a #',
+    'the escaped blank and the # are one word',
+  );
+  assert.equal(parsed.escapedReading?.invocations[1]?.verb, 'push', 'the push after the ; was not read');
+  assert.equal(parsed.invocations.length, 1, 'the split reading still takes the # for a comment');
+});
+
 // ---------------------------------------------------------------------------
 // Defect 2 — global flags before the subcommand defeat the verb finder.
 // ---------------------------------------------------------------------------

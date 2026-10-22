@@ -64,9 +64,10 @@ export interface ParsedCommand {
   /** True when a shell interpreter or eval token is present anywhere. See `INTERPRETER_NAMES`. */
   readonly hasInterpreter: boolean;
   /**
-   * The POSIX reading with each escaped blank joined into its word (`C:/Program\ Files/…` one path), when
-   * that changes the words. The classifier refuses when either reading refuses, so the second reading
-   * can only add a refusal: a word that begins with an escaped blank is read both ways.
+   * The POSIX reading with each escaped blank joined into its word (`C:/Program\ Files/…` one path, and
+   * `a\ #` one word whose `#` opens no comment), when that changes the words. The classifier refuses when
+   * either reading refuses, so the second reading can only add a refusal: a word that begins with an
+   * escaped blank is read both ways.
    * @internal
    */
   readonly escapedReading?: ParsedCommand;
@@ -230,9 +231,21 @@ export function isInertLiteral(token: string): boolean {
  * to an interpreter and interpreters do not honour this parser's idea of a comment.
  */
 export function stripComments(command: string): string {
+  return stripPosixComments(command, false);
+}
+
+/**
+ * `stripComments`, with a POSIX shell's escaped blank read when `escapes` is set: outside a quote, a blank
+ * after an unpaired backslash is part of the word before it, so it starts no word and a `#` after it is
+ * mid-word, as bash reads `echo a\ # ; git push` (one word `a #`, then the push). Only the blank is read
+ * as escaped: a backslash before a quote is not, so a quote after one still opens a span, the reading
+ * that scans more.
+ */
+function stripPosixComments(command: string, escapes: boolean): string {
   let result = '';
   let quote = '';
   let atWordStart = true;
+  let backslashes = 0;
 
   for (let i = 0; i < command.length; i += 1) {
     const character = command[i] as string;
@@ -247,6 +260,7 @@ export function stripComments(command: string): string {
       quote = character;
       result += character;
       atWordStart = false;
+      backslashes = 0;
       continue;
     }
 
@@ -255,16 +269,20 @@ export function stripComments(command: string): string {
       while (i < command.length && command[i] !== '\n') i += 1;
       if (i < command.length) result += '\n';
       atWordStart = true;
+      backslashes = 0;
       continue;
     }
 
     result += character;
+    const escapedBlank = escapes && backslashes % 2 === 1 && (character === ' ' || character === '\t');
+    backslashes = character === '\\' ? backslashes + 1 : 0;
     atWordStart =
-      character === ' ' ||
-      character === '\t' ||
-      character === '\n' ||
-      character === '\r' ||
-      SEPARATORS.has(character);
+      !escapedBlank &&
+      (character === ' ' ||
+        character === '\t' ||
+        character === '\n' ||
+        character === '\r' ||
+        SEPARATORS.has(character));
   }
 
   return result;
@@ -423,7 +441,10 @@ export function tokenize(command: string, quotesAreSeparators = false): string[]
   return splitWords(command, quotesAreSeparators, false);
 }
 
-/** Does this character, after an escaped blank, continue the word? A comment opener does not. */
+/**
+ * Does this character, after an escaped blank, continue the word? A `#` does: the escaped blank started
+ * no word, so the `#` is mid-word and opens no comment.
+ */
 function continuesWord(character: string | undefined): boolean {
   return (
     character !== undefined &&
@@ -431,7 +452,6 @@ function continuesWord(character: string | undefined): boolean {
     character !== '\t' &&
     character !== '\n' &&
     character !== '\r' &&
-    character !== '#' &&
     !SEPARATORS.has(character)
   );
 }
@@ -440,8 +460,9 @@ function continuesWord(character: string | undefined): boolean {
  * `tokenize`, with a POSIX shell's escaped blank read when `escapes` is set: outside a quote, a
  * backslash before a blank that continues the word joins the word, as `C:/Program\ Files/…` is one path
  * to bash. Read only where it splits words: `\\` is a pair, so its second backslash escapes nothing, and a
- * blank before a separator, a comment or the end is left as it was. PowerShell and cmd.exe read a
- * backslash as an ordinary character, so only the POSIX reading sets it.
+ * blank before a separator or the end is left as it was. Inside an interpreter's payload a `#` after an
+ * escaped blank is joined into the word too, so it opens no comment there either. PowerShell and cmd.exe
+ * read a backslash as an ordinary character, so only the POSIX reading sets it.
  */
 function splitWords(command: string, quotesAreSeparators: boolean, escapes: boolean): string[] {
   const tokens: string[] = [];
@@ -783,23 +804,38 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
       : dialect === 'cmd'
         ? readCmdCommand(command)
         : stripComments(command);
-  const hasInterpreter = tokenize(withoutComments).some((token) =>
-    INTERPRETER_NAMES.includes(programNameOf(token)),
-  );
-  // PowerShell and cmd.exe have no heredoc: `<<` there is not a body to separate, so nothing is set
-  // aside as data.
-  const heredocs =
-    dialect === 'posix' ? separateHeredocBodies(withoutComments) : { text: withoutComments, payloads: [] };
-
-  const tokens = tokenize(heredocs.text, hasInterpreter);
-  const parsed: ParsedCommand = { ...positionsOf(tokens), hasInterpreter };
+  const plain = wordsOfText(withoutComments, dialect === 'posix', false);
+  const parsed: ParsedCommand = { ...positionsOf(plain.tokens), hasInterpreter: plain.hasInterpreter };
   if (dialect !== 'posix') return parsed;
-  // A POSIX shell joins an escaped blank into its word; PowerShell and cmd.exe have no such escape. Read
-  // that way too, beside the reading above, only when it changes the words.
-  const escaped = splitWords(heredocs.text, hasInterpreter, true);
-  if (escaped.length === tokens.length && escaped.every((token, index) => token === tokens[index]))
+  // A POSIX shell joins an escaped blank into its word, so a `#` after one is inside that word and opens
+  // no comment; PowerShell and cmd.exe have no such escape. Read that way too, from the comments on,
+  // beside the reading above, only when it changes the words.
+  const escaped = wordsOfText(stripPosixComments(command, true), true, true);
+  const tokens = plain.tokens;
+  if (
+    escaped.tokens.length === tokens.length &&
+    escaped.tokens.every((token, index) => token === tokens[index])
+  )
     return parsed;
-  return { ...parsed, escapedReading: { ...positionsOf(escaped), hasInterpreter } };
+  return {
+    ...parsed,
+    escapedReading: { ...positionsOf(escaped.tokens), hasInterpreter: escaped.hasInterpreter },
+  };
+}
+
+/**
+ * A command's text, its comments already removed, split into words: whether an interpreter is named, the
+ * heredoc bodies a data sink receives set aside when `heredocs` is set, and the split. PowerShell and
+ * cmd.exe have no heredoc: `<<` there is not a body to separate, so nothing is set aside as data.
+ */
+function wordsOfText(
+  text: string,
+  heredocs: boolean,
+  escapes: boolean,
+): { tokens: string[]; hasInterpreter: boolean } {
+  const hasInterpreter = tokenize(text).some((token) => INTERPRETER_NAMES.includes(programNameOf(token)));
+  const body = heredocs ? separateHeredocBodies(text).text : text;
+  return { tokens: splitWords(body, hasInterpreter, escapes), hasInterpreter };
 }
 
 /** A command's tokens read position by position: its invocations and the text a classifier may scan. */

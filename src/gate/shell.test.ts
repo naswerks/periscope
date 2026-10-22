@@ -508,6 +508,34 @@ test('deliberate: an escaped space is read both ways, so reading it only adds a 
   assert.match(refusalFor(push)?.detail ?? '', /^git-push:/, `${push} flowed`);
 });
 
+test('regression: a `#` after an escaped blank is part of the word, so the command after it is read', () => {
+  // To a POSIX shell `a\ #` is one word, `a #`: the `#` opens no comment and the push after the `;` runs.
+  for (const command of [
+    String.raw`echo a\ # ; git push origin main`,
+    'echo a\\\t# ; git push origin main',
+    String.raw`echo a\\\ # ; git push origin main`,
+    String.raw`bash -c "echo a\ # ; git push origin main"`,
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
+  }
+  assert.equal(
+    refusalFor(String.raw`echo a\ # ; git send-pack origin main`)?.reason,
+    'shell-verb-unrecognised',
+    'the plumbing form after the same word is refused by the allowlist',
+  );
+});
+
+test('control: a backslash pair escapes nothing, so the blank after it starts a word and the `#` a comment', () => {
+  assert.equal(refusalFor(String.raw`echo a\\ # ; git push origin main`), null);
+  assert.equal(refusalFor('echo a # ; git push origin main'), null);
+  assert.equal(refusalFor(String.raw`bash -c "echo a\\ # ; git push origin main"`), null);
+});
+
+test('deliberate: a backslash before a quote is not read as an escape, so the quote opens a span and what follows it stays in the scan', () => {
+  // bash runs only `echo "` here; reading the quote as a quote refuses instead, the direction that scans more.
+  assert.match(refusalFor(String.raw`echo \" # " ; git push origin main`)?.detail ?? '', /^git-push:/);
+});
+
 test('control: PowerShell and cmd.exe read a backslash as an ordinary character, so they get no escaped reading', () => {
   const command = String.raw`git -C C:\repo\ remote add o u`;
   assert.notEqual(
