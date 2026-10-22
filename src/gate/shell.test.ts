@@ -433,6 +433,48 @@ test('regression: a branch deletion refuses in a short cluster and an abbreviate
   assert.match(refusalFor('git reset --har HEAD~1')?.detail ?? '', /^git-reset-hard:/);
 });
 
+test('regression: an option value that starts with a dash is the value, not a branch deletion', () => {
+  // git reads each value below as the option's own (a sort key, a format, a commit, a colour) and deletes
+  // nothing; `-dx` is no cluster of git branch's options, and git refuses the unknown switch.
+  for (const command of [
+    'ssh build-host "git branch --sort=-committerdate"',
+    'git branch --sort -committerdate',
+    'git branch --so -committerdate',
+    'git branch --sort=-committerdate',
+    'ssh build-host "git branch --format=-d"',
+    'ssh build-host git branch --format -d',
+    'git branch --contains -d topic',
+    'ssh build-host "git branch --color=-d"',
+    'git branch -dx topic',
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('control: a real branch deletion still parks in a cluster of branch options, after an option value, and after an option that takes no separate value', () => {
+  for (const command of [
+    'git branch -fd topic',
+    'git branch --contains HEAD -d topic',
+    'git branch --sort=-committerdate -d topic',
+    'git branch --color -d topic',
+    'ssh build-host "git branch --color -d topic"',
+    'ssh build-host "git branch -d topic"',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-branch-delete:/, `${command} flowed`);
+  }
+});
+
+test("control: the text after an = in another program's words still begins a command, and an option's =value after it stays its value", () => {
+  for (const command of [
+    "git -c core.pager='git push origin main' log",
+    'rg -c core.pager=git push origin main',
+    'ssh build-host -o core.pager=git push origin main',
+    'ssh build-host git --exec-path=/x push origin main',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Git behind a launcher, and git's dashed binaries.
 // ---------------------------------------------------------------------------

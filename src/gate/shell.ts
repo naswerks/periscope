@@ -101,9 +101,68 @@ function optionValues(words: readonly string[], name: string, shortest: number):
   return values;
 }
 
-/** A `git branch` option that deletes: `-d`, `-D`, a short cluster carrying either, or `--delete`. */
+/** `git branch`'s short options, as `git branch -h` lists them. */
+const BRANCH_SHORT_OPTIONS: ReadonlySet<string> = new Set([
+  'v',
+  'q',
+  't',
+  'u',
+  'r',
+  'a',
+  'd',
+  'D',
+  'm',
+  'M',
+  'c',
+  'C',
+  'l',
+  'f',
+  'i',
+]);
+
+/**
+ * `git branch`'s long options whose value is the next word when it is not joined with `=`, each with the
+ * shortest abbreviation git accepts for it.
+ */
+const BRANCH_VALUE_OPTIONS: ReadonlyArray<readonly [string, number]> = [
+  ['--sort', 4],
+  ['--format', 6],
+  ['--contains', 5],
+  ['--no-contains', 8],
+  ['--with', 6],
+  ['--without', 7],
+  ['--merged', 4],
+  ['--no-merged', 7],
+  ['--points-at', 3],
+  ['--set-upstream-to', 15],
+];
+
+/**
+ * A `git branch` option that deletes: `-d`, `-D`, a cluster of git branch's own short options carrying
+ * either (`-dr`, `-rD`), or `--delete`. A dash word holding a letter git branch has no short option for is
+ * not a cluster of them: `-committerdate` is a sort key.
+ */
 const isBranchDeleteFlag = (token: string): boolean =>
-  /^-[A-Za-z]*[dD][A-Za-z]*$/.test(token) || isLongOption(token, '--delete', 3);
+  (/^-[A-Za-z]+$/.test(token) &&
+    /[dD]/.test(token) &&
+    [...token.slice(1)].every((letter) => BRANCH_SHORT_OPTIONS.has(letter))) ||
+  isLongOption(token, '--delete', 3);
+
+/**
+ * Do `git branch`'s arguments delete a branch? An option's value is its value and never an option of its
+ * own: `--sort=-committerdate`, and `--sort -committerdate` with the key as the next word, as git reads them.
+ */
+function deletesBranch(args: readonly string[]): boolean {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] as string;
+    if (isBranchDeleteFlag(arg)) return true;
+    const takesNext =
+      !arg.includes('=') &&
+      BRANCH_VALUE_OPTIONS.some(([name, shortest]) => isLongOption(arg, name, shortest));
+    if (takesNext) i += 1;
+  }
+  return false;
+}
 
 /**
  * Does this `az` invocation complete an Azure DevOps pull request? `az repos pr update` with a status
@@ -155,9 +214,7 @@ const BOUNDARY_RULES: readonly BoundaryRule[] = [
     // the publish rule above. The flag is read from this invocation's own words, so a downstream
     // `tr -d ' '` cannot lend it one.
     fires: (invocation) =>
-      invocation.program === 'git' &&
-      invocation.verb === 'branch' &&
-      invocation.args.some(isBranchDeleteFlag),
+      invocation.program === 'git' && invocation.verb === 'branch' && deletesBranch(invocation.args),
     detail: 'deleting a branch destroys history a human may still need',
   },
   {
@@ -263,9 +320,14 @@ function reach(invocations: readonly Invocation[]): Invocation[] {
 /**
  * Where a ruled program's name can appear inside another's words. Quotes, expansion characters and
  * separators end a word here — `ssh host "git push"` and `-c core.pager='git push'` both hold a git
- * word — while `-`, `.`, `/` and `\` do not, so a path is one word and `pre-push.log` holds no push.
+ * word — while `-`, `.`, `/` and `\` do not, so a path is one word and `pre-push.log` holds no push. An
+ * `=` is read apart: the text after one can begin a command (`-c core.pager=git push`), and an option's
+ * `=value` after that command's name stays its value (`git branch --sort=-committerdate`).
  */
-const RESIDUAL_SPLIT = /[\s"'`=$(){}[\];|&<>,]+/;
+const RESIDUAL_SPLIT = /[\s"'`$(){}[\];|&<>,]+/;
+
+/** A residual word as the command it may begin reads it: an option keeps its `=value`, any other word splits at `=`. */
+const residualWords = (word: string): string[] => (word.startsWith('-') ? [word] : word.split('='));
 
 /**
  * The residual check: a git, `gh` or `az` word inside any invocation's words — the arguments of a
@@ -279,10 +341,14 @@ function residualRefusal(invocations: readonly Invocation[]): BoundaryRule | nul
       .flatMap((word) => word.split(RESIDUAL_SPLIT))
       .filter((word) => word !== '');
     for (let i = 0; i < words.length; i += 1) {
-      if (!isRuledWord(words[i] as string)) continue;
-      const nested = normalised(invocationOf(words.slice(i)));
-      const rule = BOUNDARY_RULES.find((candidate) => candidate.fires(nested));
-      if (rule !== undefined) return rule;
+      const pieces = (words[i] as string).split('=');
+      for (let k = 0; k < pieces.length; k += 1) {
+        if (!isRuledWord(pieces[k] as string)) continue;
+        const command = [...pieces.slice(k), ...words.slice(i + 1).flatMap(residualWords)];
+        const nested = normalised(invocationOf(command.filter((word) => word !== '')));
+        const rule = BOUNDARY_RULES.find((candidate) => candidate.fires(nested));
+        if (rule !== undefined) return rule;
+      }
     }
   }
   return null;

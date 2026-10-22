@@ -163,6 +163,15 @@ const NAMED = [
   'ssh build-host git send-pack origin main',
   'git reset "--hard"',
   'git branch "-d" x',
+  'ssh build-host git --exec-path=/x push origin main',
+  'ssh build-host "git branch --color=-d"',
+  'ssh build-host "git branch --color -d x"',
+  'ssh build-host "git branch --format=x -d topic"',
+  'rg -c core.pager=git push origin main',
+  'ssh build-host "git push=x origin"',
+  'git branch -ud topic',
+  'git branch --with -d topic',
+  'git branch --sort -D',
 ];
 for (const command of NAMED) corpus.add(command);
 
