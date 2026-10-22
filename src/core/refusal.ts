@@ -352,7 +352,10 @@ export const REFUSAL_REASONS = [
   //                             `bulk_request` whose locator names the `claude-transcript:`
   //                             namespace, on `bulk_failed`. The asks still decode, so an older
   //                             controller's ask is answered by name rather than dropped, and the
-  //                             channel it rode keeps its sequence.
+  //                             channel it rode keeps its sequence. A repository or workspace read
+  //                             whose path is at or beneath an agent's `projects` folder is refused
+  //                             with it too, whatever the root. Not `credential-path-denied`, which
+  //                             names the protected set.
   'transcript-path-escape',
   'transcripts-not-served',
 

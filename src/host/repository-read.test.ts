@@ -413,6 +413,184 @@ test('the head of a file past the bound is served at offset 0; pages stop at the
   }
 });
 
+test('the head of a file whose first byte continues no character is served, decoded as the head read always decoded it', async () => {
+  const root = await tempDir('repository');
+  try {
+    // Text in a single-byte encoding: a curly quote (0x93 in Windows-1252) leads the file.
+    const bytes = Buffer.from([0x93, 0x61, 0x62, 0x63]);
+    await writeFile(join(root, 'quoted.txt'), bytes);
+    const head = await readRepositoryFile(root, 'quoted.txt');
+    assert.ok(head.ok, head.ok ? '' : head.refusal.detail);
+    assert.deepEqual(
+      head.value,
+      { text: bytes.toString('utf8'), sizeBytes: 4, truncated: false, nextOffset: null },
+      'the stray byte decoded as a replacement character, never refused as inside a character',
+    );
+    const workspaceHead = await readWorkspaceFile(root, 'quoted.txt');
+    assert.ok(workspaceHead.ok, workspaceHead.ok ? '' : workspaceHead.refusal.detail);
+    assert.equal(workspaceHead.value.text, bytes.toString('utf8'));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('regression: walking a file that is not UTF-8 by nextOffset never refuses, and the pages cover every byte once', async () => {
+  const root = await tempDir('repository');
+  try {
+    // A lead byte that claims three bytes, then more continuation bytes than any lead claims, a
+    // stray continuation byte after an ASCII one, and a lead byte the file ends inside.
+    const bytes = Buffer.from([0xe9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0x41, 0xa9, 0x42, 0xc3]);
+    await writeFile(join(root, 'latin.txt'), bytes);
+    for (const maxBytes of [1, 2, 3, 5]) {
+      const ends: number[] = [];
+      let offset: number | null = 0;
+      while (offset !== null) {
+        const page = await readRepositoryFile(root, 'latin.txt', maxBytes, [], offset);
+        assert.ok(page.ok, `maxBytes ${maxBytes}, offset ${offset}: ${page.ok ? '' : page.refusal.detail}`);
+        offset = page.value.nextOffset;
+        ends.push(offset ?? bytes.length);
+        assert.ok(ends.length <= bytes.length, 'the walk does not end');
+      }
+      assert.equal(
+        ends.at(-1),
+        bytes.length,
+        `maxBytes ${maxBytes} stops before the end: ${ends.join(', ')}`,
+      );
+      assert.deepEqual(
+        ends,
+        [...ends].sort((a, b) => a - b),
+        `maxBytes ${maxBytes} moves backwards: ${ends.join(', ')}`,
+      );
+
+      // The workspace read walks the same file the same way.
+      const workspaceEnds: number[] = [];
+      let at: number | null = 0;
+      while (at !== null) {
+        const page = await readWorkspaceFile(root, 'latin.txt', at, maxBytes);
+        assert.ok(
+          page.ok,
+          `workspace maxBytes ${maxBytes}, offset ${at}: ${page.ok ? '' : page.refusal.detail}`,
+        );
+        at = page.value.nextOffset;
+        workspaceEnds.push(at ?? bytes.length);
+      }
+      assert.deepEqual(workspaceEnds, ends);
+    }
+
+    // control: a start a lead byte claims is still inside a character, and refused.
+    const inside = await readRepositoryFile(root, 'latin.txt', 3, [], 1);
+    assert.ok(!inside.ok);
+    assert.match(inside.refusal.detail, /inside a character/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the transcript folders: a path at or beneath one refuses transcripts-not-served whatever the root, read and list, and a listing leaves the folder out', async () => {
+  const home = await tempDir('agent-home');
+  try {
+    const projects = join(home, 'projects');
+    await mkdir(join(projects, 'C--work-repo'), { recursive: true });
+    await writeFile(join(projects, 'C--work-repo', 'session-1.jsonl'), '{"type":"user"}\n', 'utf8');
+    await writeFile(join(home, 'settings.json'), '{}\n', 'utf8');
+    const fence = [projects];
+
+    const read = await readRepositoryFile(
+      home,
+      'projects/C--work-repo/session-1.jsonl',
+      undefined,
+      [],
+      0,
+      fence,
+    );
+    assert.ok(!read.ok);
+    assert.equal(read.refusal.reason, 'transcripts-not-served');
+    assert.match(read.refusal.detail, /transcript files/);
+
+    const listed = await listRepositoryDirectory(home, 'projects/C--work-repo', undefined, [], fence);
+    assert.ok(!listed.ok);
+    assert.equal(listed.refusal.reason, 'transcripts-not-served');
+
+    // The folder spelled in another case is the same folder on a filesystem that folds case.
+    const upper = await readRepositoryFile(home, 'projects/C--work-repo/session-1.jsonl', undefined, [], 0, [
+      normalizePath(projects).toUpperCase(),
+    ]);
+    assert.ok(!upper.ok);
+    assert.equal(upper.refusal.reason, 'transcripts-not-served');
+
+    const top = await listRepositoryDirectory(home, '', undefined, [], fence);
+    assert.ok(top.ok);
+    assert.deepEqual(
+      top.value.entries.map((entry) => entry.name),
+      ['settings.json'],
+      'the agent home is listed, without its transcript folder',
+    );
+
+    const workspace = await readWorkspaceFile(
+      home,
+      'projects/C--work-repo/session-1.jsonl',
+      0,
+      100,
+      [],
+      fence,
+    );
+    assert.ok(!workspace.ok);
+    assert.equal(workspace.refusal.reason, 'transcripts-not-served');
+
+    // Control: without the fence the same reads are served, and beside it nothing changes.
+    const unfenced = await readRepositoryFile(home, 'projects/C--work-repo/session-1.jsonl');
+    assert.ok(unfenced.ok);
+    const beside = await readRepositoryFile(home, 'settings.json', undefined, [], 0, fence);
+    assert.ok(beside.ok);
+    assert.equal(beside.value.text, '{}\n');
+    const neighbour = await listRepositoryDirectory(home, '', undefined, [], [`${projects}-old`]);
+    assert.ok(neighbour.ok);
+    assert.ok(
+      neighbour.value.entries.some((entry) => entry.name === 'projects'),
+      'a segment-wise neighbour fences nothing',
+    );
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('the transcript folders are checked on the real path too: a link into one is refused by name', async () => {
+  const home = await tempDir('agent-home');
+  try {
+    const projects = join(home, 'projects');
+    await mkdir(join(projects, 'C--work-repo'), { recursive: true });
+    await writeFile(join(projects, 'C--work-repo', 'session-1.jsonl'), '{"type":"user"}\n', 'utf8');
+    // A link inside a home used as a root, whose lexical resolution is innocent and whose real path is
+    // the transcript folder.
+    const inside = join(home, 'linked');
+    try {
+      await symlink(projects, inside, 'junction');
+    } catch {
+      // A filesystem that refuses link creation cannot host the attack either.
+      return;
+    }
+    const through = await readRepositoryFile(home, 'linked/C--work-repo/session-1.jsonl', undefined, [], 0, [
+      projects,
+    ]);
+    assert.ok(!through.ok);
+    assert.equal(through.refusal.reason, 'transcripts-not-served');
+
+    // The folder spelled through the link names the same folder.
+    const spelled = await readRepositoryFile(
+      home,
+      'projects/C--work-repo/session-1.jsonl',
+      undefined,
+      [],
+      0,
+      [inside],
+    );
+    assert.ok(!spelled.ok);
+    assert.equal(spelled.refusal.reason, 'transcripts-not-served');
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // The workspace read: the same jail over a workspace's directory, read in pages.
 // ---------------------------------------------------------------------------

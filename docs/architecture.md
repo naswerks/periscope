@@ -395,22 +395,28 @@ periscope's extension, which asks the host about every tool call before it runs.
 `src/host/repository-read.ts` is the door through which the binary serves a controller the text of
 a file: under the repository root, and inside a workspace this host provisioned. Nothing in it can
 write. Read-only is a property: the module's whole filesystem surface is `createReadStream`,
-`readdir`, `stat` and `realpath`, held by `pins/read-door-readonly.test.ts`. The agent home is not
-behind it: `src/host/paths.ts` names the agent home's credential files to protect them from the
-sessions this host runs, and nothing else under that home is read for a controller; the asks the
-wire retired are answered by name ([protocol.md](protocol.md)).
+`readdir`, `stat` and `realpath`, held by `pins/read-door-readonly.test.ts`. Two fences hold
+whatever the root is, on the lexical resolution and again on the real path: the protected set
+(`credentialPaths`, the files the gate keeps from the agent) refuses `credential-path-denied`, and the
+agent's projects folders (`agentTranscriptPaths`: `projects` under every agent home the protected set
+names) refuse `transcripts-not-served`, so a root pointed at the agent home or the user's home reads
+neither. A listing of a directory that holds a projects folder names everything else and leaves the
+folder out; a protected file in a listed directory is still named, and refused when read. The asks
+the wire retired are answered by name ([protocol.md](protocol.md)).
 
 It reads the repository under `PERISCOPE_REPOSITORY_ROOT`: `repository_list` (names, sorted,
 capped at `MAX_REPOSITORY_ENTRIES`) and `repository_read` (a page of text capped at
 `MAX_REPOSITORY_READ_BYTES`, cut on a character boundary, with the whole size: the head of any file
 at offset 0, and pages through its first `MAX_REPOSITORY_FILE_BYTES` after it); and a workspace's
 directory for `workspace_read` (pages of a file up to `MAX_WORKSPACE_FILE_BYTES`). Both reads take a
-page through one reader, `readTextPage`, so they cut and refuse alike. The jail is lexical (join,
+page through one reader, `readTextPage`, so they cut and refuse alike: a byte is inside a character
+only when a UTF-8 lead byte before it claims it, so offset 0 is never refused and text in another
+encoding is walked by its `nextOffset` to the end. The jail is lexical (join,
 resolve, contain) and physical (`realpath` both sides, contain again); a file whose head holds a NUL
 byte refuses `repository-read-failed` rather than shipping binary as text. The listing does not
 follow links; the reads do.
 
-A repository page's `nextOffset` is written only on a link negotiated at 18 or above, or before any
+A repository page's `nextOffset` is composed only for a link negotiated at 18 or above, or before any
 handshake (`pagedAtLinkVersion` in `src/host/host.ts`, the shape `decideAtLinkVersion` gives a
 decision request): on a link at 17 the answer is the head read that version made.
 
@@ -442,8 +448,10 @@ cleanup schedule) belong to the embedder. Every result is a named refusal, never
   leaves its directory; the reap is the one path that removes one.
 - `host_configure` reconfigures the running host (`src/bin/reconfigure.ts`): the two roots, the
   branch scheme, the agent home and the two control-plane URLs. A root change while a session is
-  open or opening refuses `config-host-busy`. The URLs are written but apply at the next start, and
-  are named in `pendingRestart` on every hello and answer until then.
+  open or opening refuses `config-host-busy`. The URLs and the agent home are written but apply at
+  the next start, and are named in `pendingRestart` on every hello and answer until then: a session's
+  gate holds the protected set it opened with, so a home applied live would be reported before its
+  credential files were protected.
 - Under a provider the controller's `cwd` is advisory; the `spawning` transition carries the
   directory the session got. One exception: a `cwd` equal to the provider's own `repositoryRoot`
   runs there, the operator's trusted checkout, claiming no key. A resume runs in the session's own

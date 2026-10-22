@@ -18,11 +18,14 @@
  *      root's real path, so a link planted inside the checkout cannot point the read outside it;
  *   4. the protected set: a path at or beneath one of the host's protected paths (the credential
  *      directories the gate keeps from the agent) is refused whatever the root is, on the lexical
- *      resolution and again on the real path.
+ *      resolution and again on the real path;
+ *   5. the agent's transcript folders: a path at or beneath one (`agentTranscriptPaths`) is refused
+ *      the same way, whatever the root is, and a listing leaves such a folder out.
  * A jail violation refuses `repository-path-escape`; a protected path refuses
- * `credential-path-denied`. A path that is inside the root but is not what was asked for (a file
- * where a directory was asked, nothing at all) refuses `repository-read-failed`; absence is a
- * refusal here, not a value, because the ask named one thing and it is not there.
+ * `credential-path-denied`; a transcript folder refuses `transcripts-not-served`. A path that is
+ * inside the root but is not what was asked for (a file where a directory was asked, nothing at all)
+ * refuses `repository-read-failed`; absence is a refusal here, not a value, because the ask named one
+ * thing and it is not there.
  *
  * Bounded twice: a listing carries at most `MAX_REPOSITORY_ENTRIES` names and says when it stopped;
  * a read carries one page, at most `maxBytes` (itself capped at `MAX_REPOSITORY_READ_BYTES`), cut on
@@ -159,25 +162,32 @@ function protectedPathRefusal(resolved: string, protectedPaths: readonly string[
   return ok(null);
 }
 
-/** The jail and the protected set together; the real path of the target on success. */
-async function admittedRealPath(
-  root: string,
-  relative: string,
-  protectedPaths: readonly string[],
-  door: ReadDoor = REPOSITORY_DOOR,
-): Promise<Result<string>> {
-  const resolved = resolveUnder(root, relative, door);
-  if (!resolved.ok) return resolved;
-  const lexical = protectedPathRefusal(resolved.value, protectedPaths);
-  if (!lexical.ok) return lexical;
-  const real = await containedRealPath(root, resolved.value, door);
-  if (!real.ok) return real;
-  // The real path is compared against the protected set's real paths, not its spellings: a
-  // component `realpath` rewrites (a short name, a linked directory) would otherwise make the
-  // resolved target and the protected directory disagree about a prefix that names one place. A
-  // protected path that does not exist is compared as spelled; absence protects nothing.
-  const realProtected = await Promise.all(
-    protectedPaths.map(async (candidate) => {
+/**
+ * The agent's transcript folders apply to this door the way the protected set does: a path at or
+ * beneath one is refused whatever the root is, on the lexical resolution and again on the real path,
+ * so neither a root pointed at the agent's home (or the user's) nor a link into a transcript folder
+ * serves the agent's transcript files to a controller.
+ */
+function transcriptPathRefusal(resolved: string, transcriptPaths: readonly string[]): Result<null> {
+  for (const candidate of transcriptPaths) {
+    if (isContainedByIgnoringCase(resolved, candidate)) {
+      return refuse(
+        'transcripts-not-served',
+        `the path is at or beneath ${candidate}, where the agent keeps its transcript files; the read doors do not serve them`,
+      );
+    }
+  }
+  return ok(null);
+}
+
+/**
+ * Each path as the filesystem names it, so a component `realpath` rewrites (a short name, a linked
+ * directory) cannot make a target and a fenced directory disagree about a prefix that names one
+ * place. A path that does not exist is kept as spelled; absence fences nothing.
+ */
+async function realPathsOf(paths: readonly string[]): Promise<string[]> {
+  return Promise.all(
+    paths.map(async (candidate) => {
       try {
         return normalizePath(await realpath(candidate));
       } catch {
@@ -185,23 +195,49 @@ async function admittedRealPath(
       }
     }),
   );
-  const physical = protectedPathRefusal(real.value, realProtected);
+}
+
+/** The jail, the protected set and the transcript folders together; the real path of the target on success. */
+async function admittedRealPath(
+  root: string,
+  relative: string,
+  protectedPaths: readonly string[],
+  door: ReadDoor = REPOSITORY_DOOR,
+  transcriptPaths: readonly string[] = [],
+): Promise<Result<string>> {
+  const resolved = resolveUnder(root, relative, door);
+  if (!resolved.ok) return resolved;
+  const lexical = protectedPathRefusal(resolved.value, protectedPaths);
+  if (!lexical.ok) return lexical;
+  const lexicalTranscripts = transcriptPathRefusal(resolved.value, transcriptPaths);
+  if (!lexicalTranscripts.ok) return lexicalTranscripts;
+  const real = await containedRealPath(root, resolved.value, door);
+  if (!real.ok) return real;
+  // The real path is compared against each fence's real paths, not its spellings.
+  const physical = protectedPathRefusal(real.value, await realPathsOf(protectedPaths));
   if (!physical.ok) return physical;
+  const physicalTranscripts = transcriptPathRefusal(real.value, await realPathsOf(transcriptPaths));
+  if (!physicalTranscripts.ok) return physicalTranscripts;
   return real;
 }
 
 /**
  * List one directory under the root: files and directories by name, sorted, at most `cap` of
- * them. Anything that is neither (a link, a socket) is left out rather than followed.
+ * them. Anything that is neither (a link, a socket) is left out rather than followed, and so is a
+ * transcript folder: a listing of the directory that holds one (an agent home) names everything
+ * else in it, as before, and not the folder. A protected path inside a listed directory is still
+ * named; its contents are what the protected set refuses.
  */
 export async function listRepositoryDirectory(
   root: string,
   relative: string,
   cap = MAX_REPOSITORY_ENTRIES,
   protectedPaths: readonly string[] = [],
+  transcriptPaths: readonly string[] = [],
 ): Promise<Result<RepositoryListing>> {
-  const real = await admittedRealPath(root, relative, protectedPaths);
+  const real = await admittedRealPath(root, relative, protectedPaths, REPOSITORY_DOOR, transcriptPaths);
   if (!real.ok) return real;
+  const fenced = [...transcriptPaths, ...(await realPathsOf(transcriptPaths))];
 
   let children;
   try {
@@ -214,6 +250,10 @@ export async function listRepositoryDirectory(
   }
   const named = children
     .filter((child) => child.isDirectory() || child.isFile())
+    .filter(
+      (child) =>
+        !fenced.some((candidate) => isContainedByIgnoringCase(`${real.value}/${child.name}`, candidate)),
+    )
     .map((child) => ({ name: child.name, directory: child.isDirectory() }))
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const limit = Math.max(1, cap);
@@ -249,9 +289,10 @@ export async function readRepositoryFile(
   maxBytes = MAX_REPOSITORY_READ_BYTES,
   protectedPaths: readonly string[] = [],
   offset = 0,
+  transcriptPaths: readonly string[] = [],
 ): Promise<Result<RepositoryText>> {
   const door = REPOSITORY_DOOR;
-  const real = await admittedRealPath(root, relative, protectedPaths, door);
+  const real = await admittedRealPath(root, relative, protectedPaths, door, transcriptPaths);
   if (!real.ok) return real;
 
   let stats;
@@ -299,9 +340,10 @@ export async function readWorkspaceFile(
   offset = 0,
   maxBytes = MAX_WORKSPACE_READ_BYTES,
   protectedPaths: readonly string[] = [],
+  transcriptPaths: readonly string[] = [],
 ): Promise<Result<WorkspaceText>> {
   const door = WORKSPACE_DOOR;
-  const real = await admittedRealPath(root, relative, protectedPaths, door);
+  const real = await admittedRealPath(root, relative, protectedPaths, door, transcriptPaths);
   if (!real.ok) return real;
 
   let stats;
@@ -333,8 +375,14 @@ export async function readWorkspaceFile(
  * One page of a text file, the read both doors share: from `start`, at most `wanted` bytes, cut back
  * to a character boundary. A page that would end inside its first character carries that whole
  * character, so every page makes progress; a page asked for no bytes is empty. The file is text by
- * one rule wherever the page starts: no NUL byte in its first `BINARY_PROBE_BYTES`. A start inside a
- * character is refused, because a page from there would begin with half of one.
+ * one rule wherever the page starts: no NUL byte in its first `BINARY_PROBE_BYTES`.
+ *
+ * A character is what a UTF-8 lead byte claims: a byte is inside one only when a lead byte at most
+ * three bytes before it declares a length that reaches it, across continuation bytes. A later start
+ * inside a character is refused, because a page from there would begin with half of one; offset 0
+ * never is. A byte no lead claims (text in another encoding) is a character of its own, so a file
+ * that is not UTF-8 is served from offset 0 and walked to its end, and no answer's `nextOffset` is a
+ * start the next ask refuses.
  */
 async function readTextPage(
   path: string,
@@ -344,9 +392,13 @@ async function readTextPage(
   door: ReadDoor,
 ): Promise<Result<{ readonly text: string; readonly end: number }>> {
   let head: Buffer;
+  let before: Buffer;
   let page: Buffer;
   try {
     head = await readRange(path, 0, Math.min(size, BINARY_PROBE_BYTES));
+    // Up to three bytes before the start: enough to see whether a lead byte claims it.
+    before =
+      start === 0 ? Buffer.alloc(0) : await readRange(path, Math.max(0, start - 3), Math.min(3, start));
     // Three bytes past the page: enough to see whether a character straddles the cut.
     page = await readRange(path, start, Math.min(size - start, wanted + 3));
   } catch (error) {
@@ -355,7 +407,7 @@ async function readTextPage(
   if (head.includes(0)) {
     return refuse(door.failed, 'the file holds a NUL byte in its head and is not served as text');
   }
-  if (page.length > 0 && (page[0]! & 0xc0) === 0x80) {
+  if (page.length > 0 && claimingLead(Buffer.concat([before, page]), before.length) !== null) {
     return refuse(
       door.failed,
       `the offset ${start} falls inside a character; start at 0 or at the nextOffset an answer gave`,
@@ -363,14 +415,39 @@ async function readTextPage(
   }
 
   let cut = Math.min(page.length, wanted);
-  // A continuation byte at the cut means a character straddles it: step back to its first byte.
-  while (cut > 0 && cut < page.length && (page[cut]! & 0xc0) === 0x80) cut -= 1;
+  // A byte at the cut that a lead byte before it claims means a character straddles the cut: step
+  // back to that lead.
+  if (cut > 0 && cut < page.length) cut = claimingLead(page, cut) ?? cut;
   if (cut === 0 && page.length > 0 && wanted > 0) {
     // The first character is longer than `wanted`: the page carries it whole rather than nothing.
     cut = 1;
-    while (cut < page.length && (page[cut]! & 0xc0) === 0x80) cut += 1;
+    while (cut < page.length && claimingLead(page, cut) === 0) cut += 1;
   }
   return ok({ text: page.subarray(0, cut).toString('utf8'), end: start + cut });
+}
+
+/** The length a UTF-8 lead byte declares, or null for a byte that leads no multi-byte character. */
+function declaredLength(byte: number): number | null {
+  if ((byte & 0xe0) === 0xc0) return 2;
+  if ((byte & 0xf0) === 0xe0) return 3;
+  if ((byte & 0xf8) === 0xf0) return 4;
+  return null;
+}
+
+/**
+ * The index of the lead byte whose character covers `bytes[index]`, or null when none does: `index`
+ * is a continuation byte, the bytes between it and the lead are continuation bytes, the lead is at
+ * most three bytes back, and the length it declares reaches `index`.
+ */
+function claimingLead(bytes: Buffer, index: number): number | null {
+  if (index >= bytes.length || (bytes[index]! & 0xc0) !== 0x80) return null;
+  for (let back = 1; back <= 3 && index - back >= 0; back += 1) {
+    const byte = bytes[index - back]!;
+    if ((byte & 0xc0) === 0x80) continue;
+    const length = declaredLength(byte);
+    return length !== null && length > back ? index - back : null;
+  }
+  return null;
 }
 
 /** `length` bytes of a file from `start`; fewer when the file ends first. */

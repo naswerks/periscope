@@ -579,14 +579,15 @@ over the link and without a further credential:
   controller can set that root through `host_configure` (a root change is refused only while a
   session is live or opening).
 - **Read files.** Any directory listing under the repository root, and any text file there: its
-  head, whatever its size, and on a link at protocol 18 its first 512 KiB a page at a time
-  (`repository_list` / `repository_read`, read-only and bounded), a root the controller can re-point
-  through `host_configure`; and any text file up to 512 KiB inside a workspace this host provisioned,
-  a page at a time (`workspace_read`, by the workspace's key). Each door is jailed to its root and
-  honours the host's protected set: a path at or beneath a protected path refuses
-  `credential-path-denied` whatever the root is, on the lexical resolution and on the real path.
+  head, whatever its size, and its first 512 KiB a page at a time (`repository_list` /
+  `repository_read`, read-only and bounded), a root the controller can re-point through
+  `host_configure`; and any text file up to 512 KiB inside a workspace this host provisioned, a page
+  at a time (`workspace_read`, by the workspace's key). Each door is jailed to its root and honours
+  the host's protected set: a path at or beneath a protected path refuses `credential-path-denied`
+  whatever the root is, on the lexical resolution and on the real path.
 - **Not transcripts.** The runner does not look for, read or keep the agent's transcript files
-  (`<agent home>/projects`).
+  (`<agent home>/projects`), and its read doors refuse them whatever their root
+  (`transcripts-not-served`).
 - **Choose the agent's permission mode.** `session_new.request.permissionMode` and
   `session_configure` take the SDK's own vocabulary, `bypassPermissions` included. Under bypass the
   agent's allow and ask rules are off and the `PreToolUse` hook is the only control, so a controller
@@ -597,7 +598,8 @@ over the link and without a further credential:
   that call's permission keys can ride along (`pins/permission-config.test.ts`).
 - **Reconfigure the host.** The workspace root, the repository root, the branch scheme, the agent
   home, the plugin directories and the two controller URLs through `host_configure`, written to the
-  config file; the URLs apply at the next start.
+  config file; the URLs and the agent home apply at the next start, so the protected set always
+  covers the agent home the hello reports as in effect.
 - **Start a Codex session, where you configured Codex.** Its tool calls go through the gate by
   periscope's own hook, with the residual paths named, under Codex's sandbox and approval policy for
   the permission mode the controller names, `bypassPermissions` (no sandbox) included

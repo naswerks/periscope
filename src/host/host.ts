@@ -164,7 +164,7 @@ import { normalizePath } from '../core/paths.js';
 import { mergeHooks, modelSwitchHooks, observationHooks } from './hooks.js';
 import { createToolServer } from './mcp-server.js';
 import { listRepositoryDirectory, readRepositoryFile, readWorkspaceFile } from './repository-read.js';
-import { homeDirectory, nodePathResolver } from './paths.js';
+import { agentTranscriptPaths, homeDirectory, nodePathResolver } from './paths.js';
 import {
   QWEN_MODE_MAP,
   isBypassMode,
@@ -804,6 +804,13 @@ export interface PeriscopeHostOptions {
    */
   readonly protectedPaths: readonly string[];
   /**
+   * The agent's transcript folders: the repository and workspace reads refuse a path at or beneath
+   * one `transcripts-not-served`, on the lexical resolution and on the real path, whatever the root,
+   * and a listing leaves such a folder out. `host/paths.ts`'s `agentTranscriptPaths(env)` computes
+   * the set; absent, it is computed from the process environment, so no host serves them by default.
+   */
+  readonly transcriptPaths?: readonly string[];
+  /**
    * The home directory a shell command's `~` and `$HOME` forms name, for the credential check.
    * Defaults to the process environment's (`host/paths.ts`'s `homeDirectory`).
    */
@@ -1209,6 +1216,8 @@ export class PeriscopeHost {
   #agent: HostAgent | null | undefined;
   /** The endpoints as the hello lists them, or null when this host was composed with none. */
   readonly #hostEndpoints: readonly HostEndpoint[] | null;
+  /** The agent's transcript folders the read doors refuse, as composed or derived at construction. */
+  readonly #transcriptPaths: readonly string[];
   /**
    * The endpoint each live session runs on, by the controller's handle: a session with none is absent.
    * A `session_configure` reads it, so a switch to a model the endpoint must not be sent is refused
@@ -1247,6 +1256,7 @@ export class PeriscopeHost {
         throw new Error('PeriscopeHostOptions.endpoints: an endpoint name is declared twice');
       }
     }
+    this.#transcriptPaths = options.transcriptPaths ?? agentTranscriptPaths();
     this.#configuration = this.#withAgent(options.configuration ?? unsetHostConfiguration());
     this.#pluginDirs = options.pluginDirs ?? [];
     this.#overriddenByEnvironment = options.overriddenByEnvironment ?? [];
@@ -2157,7 +2167,13 @@ export class PeriscopeHost {
     const root = this.#workspaces?.repositoryRoot;
     if (root === undefined) return refused(noRepositoryRoot());
     try {
-      const listed = await listRepositoryDirectory(root, asked.path, undefined, this.#options.protectedPaths);
+      const listed = await listRepositoryDirectory(
+        root,
+        asked.path,
+        undefined,
+        this.#options.protectedPaths,
+        this.#transcriptPaths,
+      );
       if (!listed.ok) return refused(listed.refusal);
       this.#send(
         channelKey,
@@ -2190,6 +2206,7 @@ export class PeriscopeHost {
         asked.maxBytes,
         this.#options.protectedPaths,
         asked.offset ?? 0,
+        this.#transcriptPaths,
       );
       if (!read.ok) return refused(read.refusal);
       this.#send(
@@ -2247,6 +2264,7 @@ export class PeriscopeHost {
         asked.offset,
         asked.maxBytes,
         this.#options.protectedPaths,
+        this.#transcriptPaths,
       );
       if (!read.ok) return refused(read.refusal);
       this.#send(channelKey, workspaceReadResult(asked.requestId, read.value));
@@ -2536,7 +2554,8 @@ export class PeriscopeHost {
     }
     // Busy means a workspace is claimed or being claimed: a session releases through the provider
     // that provisioned it, so the roots cannot move under one. The seam refuses only when the ask
-    // actually changes a root; a scheme or agent-home change applies live regardless.
+    // actually changes a root; a scheme change applies live regardless, and an address or an agent
+    // home waits for the next start.
     const hostBusy = this.#sessions.size > 0 || this.#opening.size > 0;
     let outcome: Result<HostReconfigured>;
     try {
@@ -2640,7 +2659,9 @@ export class PeriscopeHost {
     ];
   }
 
-  #withAgent(configuration: HostConfiguration): HostConfiguration {
+  #withAgent(composed: HostConfiguration): HostConfiguration {
+    // Null whatever an embedder composed: this host keeps no transcripts root, and the hello says so.
+    const configuration = { ...composed, transcriptsRoot: null };
     const endpoints = this.#hostEndpoints === null ? {} : { endpoints: this.#hostEndpoints };
     if (this.#agent === undefined) return { ...configuration, ...endpoints };
     const agents = this.#agent === null ? null : [...hostAgentEntries(this.#agent), ...this.#otherEntries];

@@ -19,6 +19,7 @@ import {
   FilePairedCredential,
   FileTokenCache,
   PeriscopeHost,
+  agentTranscriptPaths,
   defaultAgentHome,
   credentialPaths,
   homeDirectory,
@@ -760,6 +761,9 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       ...(config.qwen === null ? {} : { qwenHome: config.qwen.home }),
       ...(config.pi === null ? {} : { piHome: config.pi.home }),
     }),
+    // The agent's transcript folders, from the same sources and the same agent home as the set above:
+    // the read doors refuse them whatever their root.
+    transcriptPaths: agentTranscriptPaths(raw, { agentHome }),
     // The home the shell check expands `~` and `$HOME` to, from the same environment as the set above.
     home: homeDirectory(raw),
     // No transcript reader and no bulk resolver: this host does not look for, read or keep the
@@ -795,6 +799,8 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       reconfigureHost(raw, entries, hostBusy, {
         controllerUrl: config.controllerUrl,
         decisionUrl: config.decisionUrl,
+        // The agent home the protected set above was built from; a written one waits for the next start.
+        agentHome: config.agentHome === '' ? null : config.agentHome,
       }),
     // The default an unkeyed session_new resolves to, screened above at startup, so a bad
     // value died before this line. Omitted (not nulled) when unset: absence is the documented mode.

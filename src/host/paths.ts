@@ -104,6 +104,34 @@ export function defaultAgentHome(env: NodeJS.ProcessEnv = process.env): string |
 }
 
 /**
+ * Where the agent CLI keeps its transcript files: the `projects` folder of every agent home whose
+ * credential files `credentialPaths` protects, from the same sources. The CLI's default home under
+ * the user's home directory, an explicitly configured `CLAUDE_CONFIG_DIR`, and the effective agent
+ * home (passed by the composition root, else `PERISCOPE_AGENT_HOME`).
+ *
+ * The read doors refuse a path at or beneath one `transcripts-not-served` whatever their root, so a
+ * root pointed at a home cannot serve the agent's transcripts. The set is returned, not applied: the
+ * embedder hands it to the host beside the protected set.
+ */
+export function agentTranscriptPaths(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { readonly agentHome?: string | null } = {},
+): string[] {
+  const paths: string[] = [];
+  const add = (agentHome: string): void => {
+    const projects = join(agentHome.trim(), 'projects');
+    if (!paths.includes(projects)) paths.push(projects);
+  };
+  const home = homeDirectory(env);
+  if (home !== null) add(join(home, '.claude'));
+  const configured = env['CLAUDE_CONFIG_DIR'];
+  if (typeof configured === 'string' && configured.trim() !== '') add(configured);
+  const agentHome = options.agentHome ?? env['PERISCOPE_AGENT_HOME'] ?? null;
+  if (typeof agentHome === 'string' && agentHome.trim() !== '') add(agentHome);
+  return paths;
+}
+
+/**
  * Where credential material lives, as absolute paths.
  *
  * This exists because file permissions are not a boundary here. The agent runs as the same OS

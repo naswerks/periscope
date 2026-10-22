@@ -56,8 +56,10 @@ export {
 } from './repository-read.js';
 
 // The two impure inputs the host's own gate takes at construction, plus the derived location of
-// this host's own credential material — `credentialPaths` covers it BECAUSE both come from here.
+// this host's own credential material — `credentialPaths` covers it BECAUSE both come from here —
+// and the agent's transcript folders, which the read doors refuse.
 export {
+  agentTranscriptPaths,
   credentialPaths,
   defaultAgentHome,
   homeDirectory,

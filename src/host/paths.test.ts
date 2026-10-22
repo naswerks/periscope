@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { isAbsolute, join, sep } from 'node:path';
 
 import {
+  agentTranscriptPaths,
   credentialPaths,
   defaultAgentHome,
   nodePathResolver,
@@ -224,4 +225,39 @@ test('the default agent home derives from the home directory, and no home means 
   assert.equal(defaultAgentHome({ HOME: '/home/agent' }), '/home/agent/.claude');
   assert.equal(defaultAgentHome({ HOME: '  ' }), null);
   assert.equal(defaultAgentHome({}), null);
+});
+
+test("the agent's transcript folders come from every agent home the protected set names, each once", () => {
+  assert.deepEqual(agentTranscriptPaths({ HOME: '/home/agent' }), ['/home/agent/.claude/projects']);
+  assert.deepEqual(
+    agentTranscriptPaths({
+      HOME: '/home/agent',
+      CLAUDE_CONFIG_DIR: '/opt/claude',
+      PERISCOPE_AGENT_HOME: '/srv/agent-home',
+    }),
+    ['/home/agent/.claude/projects', '/opt/claude/projects', '/srv/agent-home/projects'],
+  );
+  // The composition root's agent home wins over the environment's, and the default is not listed twice.
+  assert.deepEqual(
+    agentTranscriptPaths(
+      { HOME: '/home/agent', PERISCOPE_AGENT_HOME: '/srv/ignored' },
+      {
+        agentHome: '/home/agent/.claude',
+      },
+    ),
+    ['/home/agent/.claude/projects'],
+  );
+  assert.deepEqual(agentTranscriptPaths({ USERPROFILE: 'C:\\Users\\agent' }), [
+    'C:\\Users\\agent\\.claude\\projects',
+  ]);
+  // Every agent home whose credential files are protected has its transcript folder named.
+  const env = {
+    HOME: '/home/agent',
+    CLAUDE_CONFIG_DIR: '/opt/claude',
+    PERISCOPE_AGENT_HOME: '/srv/agent-home',
+  };
+  for (const projects of agentTranscriptPaths(env)) {
+    const agentHome = projects.slice(0, -'/projects'.length);
+    assert.ok(credentialPaths(env).includes(`${agentHome}/.credentials.json`), agentHome);
+  }
 });

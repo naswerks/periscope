@@ -2094,6 +2094,33 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
     wire: `{"padding":"${'x'.repeat(MAX_FRAME_BYTES)}"}`,
     expect: refused('frame-too-large'),
   },
+  // The well-formed twin is `repository_read.paged`; only the offset differs: an offset is whole bytes.
+  {
+    name: 'refused.repository-read-offset-fraction',
+    wire: sessionWire({
+      kind: 'repository_read',
+      requestId: 'request-12',
+      path: 'docs/guides/getting-started.md',
+      maxBytes: 49152,
+      offset: 1.5,
+    }),
+    expect: refused('frame-malformed'),
+  },
+  // The well-formed twin is `repository_read_result.page`; only the next offset differs: a next page
+  // starts after the first byte, and the last page says null.
+  {
+    name: 'refused.repository-read-result-next-offset-zero',
+    wire: sessionWire({
+      kind: 'repository_read_result',
+      requestId: 'request-12',
+      text: '## Platform state\n',
+      sizeBytes: 70656,
+      truncated: true,
+      nextOffset: 0,
+      refusal: null,
+    }),
+    expect: refused('frame-malformed'),
+  },
   // The well-formed twin is `session_update.agent-item-tool-result`; only the exit code differs.
   {
     name: 'refused.malformed-agent-item',

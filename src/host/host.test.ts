@@ -595,6 +595,8 @@ function hostOver(
     controllerEnvKeys?: readonly string[];
     /** The registry's start window. Absent means its default. */
     startTimeoutMs?: number;
+    /** The configuration the embedder composed. Absent means every value unset. */
+    configuration?: HostConfiguration;
   } = {},
 ): { host: PeriscopeHost; link: FakeLink; processes: FakeAgents } {
   const processes = options.processes ?? fakeAgents();
@@ -620,6 +622,7 @@ function hostOver(
     ...(options.reconfigure === undefined ? {} : { reconfigure: options.reconfigure }),
     ...(options.toolFamilies === undefined ? {} : { toolFamilies: options.toolFamilies }),
     ...(options.controllerEnvKeys === undefined ? {} : { controllerEnvKeys: options.controllerEnvKeys }),
+    ...(options.configuration === undefined ? {} : { configuration: options.configuration }),
   });
   return { host, link, processes };
 }
@@ -2601,6 +2604,54 @@ test('a reconfigure that applies swaps the bulk resolver live, reports the new v
   ask('after');
   await settle();
   assert.deepEqual(resolved, ['notes:readme']);
+});
+
+test("regression: the hello's transcriptsRoot is null whatever configuration an embedder composes, at construction and after a reconfigure", async () => {
+  const composed: HostConfiguration = {
+    ...unsetHostConfiguration(),
+    transcriptsRoot: '/home/agent/.claude/projects',
+    agentHome: '/home/agent/.claude',
+  };
+  const { link } = hostOver({
+    configuration: composed,
+    reconfigure: () =>
+      ok({
+        workspaces: undefined,
+        bulk: undefined,
+        linkCapabilities: ['workspace:none'],
+        configuration: { ...composed, branchScheme: 'x/{key}' },
+        pluginDirs: [],
+        overriddenByEnvironment: [],
+        pendingRestart: [],
+      }),
+  });
+  link.deliver(
+    'discovery-channel',
+    hostConfigure('cfg-1', [{ key: 'PERISCOPE_BRANCH_SCHEME', value: 'x/{key}' }]),
+  );
+  await settle();
+  const answers = configureResults(link);
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0]?.configuration.transcriptsRoot, null, 'the answer reports a transcripts root');
+  assert.equal(
+    answers[0]?.configuration.agentHome,
+    '/home/agent/.claude',
+    'the rest is reported as composed',
+  );
+  assert.equal(
+    link.announced?.configuration.transcriptsRoot,
+    null,
+    'the next hello reports a transcripts root',
+  );
+
+  // And as composed, before any reconfigure: a configure the host has no seam for answers the view.
+  const bare = hostOver({ configuration: composed });
+  bare.link.deliver(
+    'discovery-channel',
+    hostConfigure('cfg-2', [{ key: 'PERISCOPE_BRANCH_SCHEME', value: 'y/{key}' }]),
+  );
+  await settle();
+  assert.equal(configureResults(bare.link)[0]?.configuration.transcriptsRoot, null);
 });
 
 test('a seam refusal is relayed by name with the unchanged view, and nothing is swapped', async () => {

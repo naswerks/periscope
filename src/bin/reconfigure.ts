@@ -52,12 +52,17 @@ interface EffectivePosture {
 }
 
 /**
- * The control-plane addresses the running host actually uses: what it dialled at start. A file
- * value that differs is written and reported as pending, never applied to the live link.
+ * What the running host took at start and keeps until the next: the control-plane addresses it
+ * dialled, and the agent home its protected set and transcript folders were built from (null = the
+ * default under the home directory). A file value that differs is written and reported as pending,
+ * never applied live: a session's gate holds the protected set it opened with, so a home changed
+ * under it would be reported before its credential files were protected.
  */
-export interface LiveAddresses {
+export interface LiveSettings {
   readonly controllerUrl: string | null;
   readonly decisionUrl: string | null;
+  /** Absent = the merged view before the ask, as for a caller that states no addresses. */
+  readonly agentHome?: string | null;
 }
 
 function setOrNull(value: string | undefined): string | null {
@@ -233,7 +238,7 @@ export function reconfigureHost(
   raw: NodeJS.ProcessEnv,
   entries: readonly HostConfigureEntry[],
   hostBusy: boolean,
-  live?: LiveAddresses,
+  live?: LiveSettings,
 ): Result<HostReconfigured> {
   const seen = new Set<string>();
   for (const entry of entries) {
@@ -303,17 +308,19 @@ export function reconfigureHost(
   };
   const agentHome = after.agentHome ?? defaultAgentHome(raw);
   const pluginDirs = parsePluginDirs(after.pluginDirs);
-  // The addresses in effect are what the host dialled at start; absent a caller's word, the merged
-  // view before this ask is the closest thing to it. A key whose file value differs is pending.
-  const dialled: LiveAddresses = live ?? {
-    controllerUrl: before.controllerUrl,
-    decisionUrl: before.decisionUrl,
+  // What is in effect is what the host took at start; absent a caller's word, the merged view before
+  // this ask is the closest thing to it. A key whose file value differs is pending.
+  const inEffect: Record<(typeof RESTART_KEYS)[number], string | null> = {
+    PERISCOPE_CONTROLLER_URL: live === undefined ? before.controllerUrl : live.controllerUrl,
+    PERISCOPE_DECISION_URL: live === undefined ? before.decisionUrl : live.decisionUrl,
+    PERISCOPE_AGENT_HOME: live?.agentHome === undefined ? before.agentHome : live.agentHome,
   };
-  const pendingRestart = RESTART_KEYS.filter((key) =>
-    key === 'PERISCOPE_CONTROLLER_URL'
-      ? after.controllerUrl !== dialled.controllerUrl
-      : after.decisionUrl !== dialled.decisionUrl,
-  );
+  const asked: Record<(typeof RESTART_KEYS)[number], string | null> = {
+    PERISCOPE_CONTROLLER_URL: after.controllerUrl,
+    PERISCOPE_DECISION_URL: after.decisionUrl,
+    PERISCOPE_AGENT_HOME: after.agentHome,
+  };
+  const pendingRestart = RESTART_KEYS.filter((key) => asked[key] !== inEffect[key]);
   return ok({
     workspaces: workspacesFor(workspaceConfig) ?? undefined,
     // The binary composes no bulk resolver, and an agent-home change rebuilds none.

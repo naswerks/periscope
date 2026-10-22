@@ -55,9 +55,9 @@ export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
 /**
  * The keys a controller may set over the wire (`host_configure`): where this machine's things are,
- * and where its control plane is. The two URLs are written to the file and never applied to
- * the live link: the host dials what it dialled until its next start, and names the keys as pending
- * in its answer and in every hello until then. Never the host id (a paired credential outranks it
+ * and where its control plane is. The two URLs and the agent home are written to the file and never
+ * applied live: the host dials what it dialled and protects the agent home it started with until its
+ * next start, and names the keys as pending in its answer and in every hello until then. Never the host id (a paired credential outranks it
  * anyway), the default workspace key (a start-up posture, screened at boot), the names a
  * controller may place in a spawn's environment (a controller able to write that list would declare
  * its own keys), or the file of model endpoints (a controller able to point it elsewhere would choose
@@ -77,10 +77,15 @@ export const WIRE_CONFIGURABLE_KEYS = [
 
 export type WireConfigurableKey = (typeof WIRE_CONFIGURABLE_KEYS)[number];
 
-/** The wire-settable keys that take effect only at the next start: the control-plane addresses. */
+/**
+ * The wire-settable keys that take effect only at the next start: the control-plane addresses, and
+ * the agent home, whose credential files the protected set names. A session's gate holds the set it
+ * opened with, so a home changed live would be reported before its credential files were protected.
+ */
 export const RESTART_KEYS = [
   'PERISCOPE_CONTROLLER_URL',
   'PERISCOPE_DECISION_URL',
+  'PERISCOPE_AGENT_HOME',
 ] as const satisfies readonly WireConfigurableKey[];
 
 export function isWireConfigurableKey(value: string): value is WireConfigurableKey {

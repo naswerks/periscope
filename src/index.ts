@@ -64,6 +64,7 @@ export * from './sessions/index.js';
 // keeps the boundary visible rather than hiding it behind a deep import.
 export type { BulkPostReceipt, BulkPostRequest, MachineFacts } from './host/index.js';
 export {
+  agentTranscriptPaths,
   credentialPaths,
   nodePathResolver,
   periscopeCredentialDir,

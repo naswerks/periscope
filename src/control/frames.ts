@@ -49,7 +49,7 @@ export const PROTOCOL_VERSION = 18;
  * Version 18 adds paging to the repository read: `repository_read.offset`, where a page starts, and
  * `repository_read_result.nextOffset`, where the next one does, null at the end of the file or at
  * `MAX_REPOSITORY_FILE_BYTES`. Both are optional: an ask with no offset is the head read version 17
- * made, and `nextOffset` is never written on a link negotiated below 18. It adds one refusal reason,
+ * made, and `nextOffset` is never composed for a link negotiated below 18. It adds one refusal reason,
  * `transcripts-not-served`: a host of this build does not look for, read or keep the agent's
  * transcript files, and gives that answer to every `transcript_list` and `transcript_tail` (on
  * `transcript_failed`) and to every `bulk_request` whose locator names the `claude-transcript:`
@@ -1700,7 +1700,7 @@ export interface HostConfigureResult {
   readonly requestId: string;
   readonly configuration: HostConfiguration;
   readonly overriddenByEnvironment: readonly string[];
-  /** The keys written but not in effect until the next start: the two control-plane URLs. */
+  /** The keys written but not in effect until the next start: the two control-plane URLs and the agent home. */
   readonly pendingRestart: readonly string[];
   /** Null = every entry applied. Otherwise the named reason nothing was written. */
   readonly refusal: WireRefusal | null;
@@ -2008,7 +2008,7 @@ export interface RepositoryReadResult {
   readonly truncated: boolean;
   /**
    * Where the next page starts (protocol 18), or null when this page reached the end of the file or
-   * `MAX_REPOSITORY_FILE_BYTES`. Written only on a link negotiated at 18 or above; absent = not
+   * `MAX_REPOSITORY_FILE_BYTES`. Composed only for a link negotiated at 18 or above; absent = not
    * stated, as from a host one release behind.
    */
   readonly nextOffset?: number | null;
@@ -2406,8 +2406,9 @@ export interface HostConfiguration {
   readonly workspaceRoot: string | null;
   readonly branchScheme: string | null;
   /**
-   * Always null from a host of this build: it does not look for, read or keep the agent's transcript
-   * files, so it has no root for them. A required member inside the protocol window, so it is sent.
+   * Always null from a host of this build, whatever configuration its embedder composed: it does not
+   * look for, read or keep the agent's transcript files, so it has no root for them. A required member
+   * inside the protocol window, so it is sent.
    *
    * @deprecated Always null. It leaves the hello at the first protocol outside the window.
    */
@@ -2421,7 +2422,8 @@ export interface HostConfiguration {
   readonly decisionUrl: string | null;
   /**
    * Where the agent CLI keeps its state and its sign-in; its credential files are in the gate's
-   * protected set. Settable over the link.
+   * protected set. Settable over the link, the URLs' rule: the home in effect is the one read at
+   * start, so a change rides `pendingRestart` until the next start.
    */
   readonly agentHome: string | null;
   /**
@@ -2481,8 +2483,8 @@ export interface LinkHello {
   /** The values this host runs with. Reported, never negotiated. */
   readonly configuration: HostConfiguration;
   /**
-   * The keys whose configured value is not the one in effect: written to the file, dialled
-   * only at the next start. Empty on a host that runs what its file says.
+   * The keys whose configured value is not the one in effect: written to the file, applied only at
+   * the next start. Empty on a host that runs what its file says.
    */
   readonly pendingRestart: readonly string[];
   /**

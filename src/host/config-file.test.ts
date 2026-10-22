@@ -187,13 +187,17 @@ test('the wire-settable keys are a subset of the config keys, include the contro
       `${key} must not be settable over the wire`,
     );
   }
-  // The two addresses are settable and take effect only at the next start; the restart set is exactly them.
+  // The two addresses and the agent home are settable and take effect only at the next start; the
+  // restart set is exactly them.
   for (const key of RESTART_KEYS)
     assert.ok(
       (WIRE_CONFIGURABLE_KEYS as readonly string[]).includes(key),
       `${key} must be settable over the wire`,
     );
-  assert.deepEqual([...RESTART_KEYS], ['PERISCOPE_CONTROLLER_URL', 'PERISCOPE_DECISION_URL']);
+  assert.deepEqual(
+    [...RESTART_KEYS],
+    ['PERISCOPE_CONTROLLER_URL', 'PERISCOPE_DECISION_URL', 'PERISCOPE_AGENT_HOME'],
+  );
 });
 
 test('a file carrying PERISCOPE_TRANSCRIPTS_ROOT is a file with an unknown key: refused by name, nothing merged', async () => {
