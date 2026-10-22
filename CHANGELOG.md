@@ -88,31 +88,44 @@ local-only gate, or one linked to a controller that does not, let them run.
   (`--description "notes" "--status" completed`, while `"- fixed it"` stays prose), and the `.cmd` and
   `.bat` shims below.
 - Fixed: a program named through `.cmd` or `.bat`, in any case, is that program, as one named through
-  `.exe` is. `az.cmd`, `git.cmd`, `git.bat` and `gh.cmd` are read by every rule: `git.cmd push origin
-main` refuses as `git-push`, `gh.cmd pr merge 5` as `gh-pr-merge`, and the verb allow-list reads
-  `git.cmd`. `az.cmd repos pr create --description "git push origin main"` flows, its description prose
-  as `az`'s is. Behind a launcher a shim does not take a git word after it out of the allow-list.
-- Fixed: a command word an expansion supplies is read as git, `gh` and `az` in turn by the boundary
-  rules. `$(echo git) push origin x`, `` `echo git` push ``, `G=git; $G push origin main`, `${G} push`,
-  `"$(echo git)" push` and `g$(echo it) push` refuse as `git-push`, and `$(echo gh) pr merge 5` as
-  `gh-pr-merge`. It is read after every other reading, so it adds a boundary refusal only to a command
-  nothing else refuses. `$EDITOR f`, `$(npm bin)/tsc`, `$(which node) script.js` and
-  `"$HOME/bin/tool" run` flow as before. The verb allow-list does not read these words, so
-  `$(echo git) send-pack origin main` flows, as `ssh build-host git send-pack origin main` does;
-  `docs/gate.md` lists the shell shapes that flow.
+  `.exe` is. `az.cmd`, `git.cmd`, `git.bat` and `gh.cmd` are read by every rule:
+  `git.cmd push origin main` refuses as `git-push`, `gh.cmd pr merge 5` as `gh-pr-merge`, and the verb
+  allow-list reads `git.cmd`. `az.cmd repos pr create --description "git push origin main"` flows, its
+  description prose as `az`'s is. Behind a launcher a shim does not take a git word after it out of the
+  allow-list.
+- Fixed: a command word an expansion supplies is read as the program the command line names for it: a
+  substitution of `echo`, `printf`, `which`, `command`, `type` or `where` whose last word is the name
+  (`$(echo git) push origin x`, `` `echo git` push ``, `"$(which git)" push`, `$(command -v gh) pr merge 5`),
+  or a variable the line assigned earlier (`G=git; $G push origin main`, `export G=git && $G push`). That
+  word is read by both layers, as the program written out is, and only once every other reading has
+  flowed, so it adds a refusal where nothing else refuses and never changes the reason of one. An
+  expansion whose program the line does not name is not guessed and flows as before: `$DOCKER push`,
+  `$(which docker) push img`, `$1 push`, `"$@" push`, `$X reset --hard`, `$PKG branch -d x`,
+  `g$(echo it) push`. Only a POSIX reading reads one: PowerShell takes a line that starts with `$(…)` or
+  `$G` for an expression, and `cmd` expands neither. `docs/gate.md` lists the shell shapes that flow.
+- Fixed: a git command named inside another program's words reads git's `-c key=value` as `-c`'s pair,
+  so the verb after it is read: `ssh h "git -c user.name=x push origin main"` and
+  `docker exec c git -c a=b push origin main` refuse as `git-push`, as `git -c a=b push origin main`
+  does at a command position, and a branch deletion, a hard reset and remote surgery behind a `-c` pair
+  refuse under their rules.
 - Fixed: a `git branch` option's value is its value. `ssh build-host "git branch --sort=-committerdate"`,
   `git branch --sort -committerdate`, `git branch --contains -d topic` and `--format=-d` inside another
   program's words flow, where `git-branch-delete` refused them. A deletion cluster is made of
   `git branch`'s own short options: `-dr`, `-rD` and `-fd` still refuse, and `-dx`, an unknown switch to
   git, flows. In another program's words an option's `=value` stays its value, so
   `ssh build-host git --exec-path=/x push origin main` refuses as `git-push`.
-- Added: `scripts/classifier-diff.mjs` (not shipped) classifies one corpus with two builds and prints
-  every answer that moved. Against 1.8.2, over 36,996 commands in the POSIX, PowerShell and `cmd`
-  readings, 1,096 answers changed, each in a form above. 1,050 flow to refused: 902 through a `.cmd` or
-  `.bat` shim (817 of them on the allow-list, each with a git shim word), 115 a command word an expansion
-  supplies, 17 the four `az` forms, 13 an escaped blank before a `#`, and 3 the `--exec-path=` push.
-  36 refused to flows: 11 `git branch` option values and clusters and `az.cmd`'s description, each in
-  the three readings. 10 allow-list refusals keep their reason and name `git.cmd`'s verb in the detail.
+- Added: `scripts/classifier-diff.mjs` (not shipped) classifies one corpus with two builds, prints
+  every answer that moved, and names controls that must not move. Against 1.8.2, over 37,067 commands
+  in the POSIX, PowerShell and `cmd` readings, 1,335 answers changed, each in a form above, and none of
+  the 35 named controls moved (the expansions whose program the line does not name, and
+  `$(echo git) push` in the PowerShell and `cmd` readings). 1,289 flow to refused: 941 through a `.cmd` or `.bat`
+  shim (870 of them on the allow-list, each with a git shim word); 301 a command word an expansion
+  supplies whose line names git, `gh` or `az`, in the POSIX reading (271 on the allow-list, a verb git's
+  allow-list does not list or none, `$(echo git) send-pack origin main` among them); 17 the four `az`
+  forms; 15 a `-c` pair inside another program's words; 12 an escaped blank before a `#`; and 3 the
+  `--exec-path=` push. 36 refused to flows: 11 `git branch` option values and clusters and `az.cmd`'s
+  description, each in the three readings. 10 allow-list refusals keep their reason and name `git.cmd`'s
+  verb in the detail.
 - Docs: `SECURITY.md` states the limit as its own bullet ("Not transcripts.") and the repository read's
   paging; the README, configuration, architecture, gate and protocol documents and the reference
   controller (which no longer offers the transcript asks as doors) follow, and the documents name the
