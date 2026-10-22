@@ -35,9 +35,9 @@ import type {
   SessionPayload,
   SessionPayloadKind,
   TranscriptFailed,
-  TranscriptTailResult,
 } from '../control/frames.js';
 import {
+  TRANSCRIPT_WHAT_PREFIX,
   readStateTransition,
   sessionList,
   sessionListResult,
@@ -573,6 +573,7 @@ function hostOver(
     workspaces?: WorkspaceProvider;
     events?: HostEvent[];
     bulk?: (what: string) => Result<string>;
+    /** The deprecated option, which the host ignores. */
     transcriptsRoot?: string;
     credential?: ControllerCredential;
     /**
@@ -1809,7 +1810,7 @@ const PAYLOAD_SAMPLES: { [K in SessionPayloadKind]: Extract<SessionPayload, { ki
   session_list_result: sessionListResult('r', [], { liveCount: 0, provisioningCount: 0 }),
   transcript_list_result: transcriptListResult('r', [], { totalCount: 0 }),
   transcript_tail_result: transcriptTailResult('r', { found: false, absent: true, newOffset: 0 }),
-  transcript_failed: transcriptFailed('r', { reason: 'transcript-path-escape', detail: 'x' }),
+  transcript_failed: transcriptFailed('r', { reason: 'transcripts-not-served', detail: 'x' }),
   answer_refused: answerRefused('r', { reason: 'frame-too-large', detail: 'x' }),
   workspace_release: workspaceRelease('r', 'w1'),
   workspace_release_result: workspaceReleaseResult('r'),
@@ -1893,60 +1894,92 @@ async function answered(
   throw new Error(`timed out waiting for ${what}`);
 }
 
-test('transcript_list serves a page from the discovery root, and absence of a root is a named wire answer', async () => {
+test('transcript_list and transcript_tail are answered transcripts-not-served on the asking channel, whatever the host was composed with', async () => {
   const root = await tempDir('host-discovery');
   try {
-    await writeFile(join(root, 'notes.txt'), 'not a slug dir\n', 'utf8');
+    // A transcript on disk where an older host would have looked, and the deprecated option naming
+    // it: the host reads neither.
+    await mkdir(join(root, 'C--work-repo'), { recursive: true });
+    await writeFile(join(root, 'C--work-repo', 'session-1.jsonl'), '{"type":"user"}\n', 'utf8');
     const { link } = hostOver({ transcriptsRoot: root });
     link.deliver('discovery-channel', transcriptList('req-2'));
-    await answered(link, 'transcript_list_result', 'the page answer');
-
-    const answers = link.sent.filter((entry) => entry.payload.kind === 'transcript_list_result');
-    assert.equal(answers.length, 1, 'a configured root must answer with a page, even an empty one');
-
-    // The same ask against a host with no root: still an answer, still on the wire, still named.
-    const bare = hostOver();
-    bare.link.deliver('discovery-channel', transcriptList('req-3'));
-    await answered(bare.link, 'transcript_failed', 'the no-root failure answer');
-    const failed = bare.link.sent.filter(
-      (entry): entry is { sessionId: string; payload: TranscriptFailed } =>
-        entry.payload.kind === 'transcript_failed',
-    );
-    assert.equal(failed.length, 1, 'a host with no root must say so, not go quiet');
-    assert.equal(failed[0]?.payload.refusal.reason, 'path-input-missing');
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('regression: a jailed transcript_tail refusal arrives on the wire as transcript_failed, never as silence', async () => {
-  const root = await tempDir('host-discovery');
-  try {
-    const { link } = hostOver({ transcriptsRoot: root });
-    link.deliver('discovery-channel', transcriptTail('req-4', '..', 'session-id', 0));
-    await answered(link, 'transcript_failed', 'the jail failure answer');
+    link.deliver('discovery-channel', transcriptTail('req-3', 'C--work-repo', 'session-1', 0));
+    await settle();
 
     const failed = link.sent.filter(
       (entry): entry is { sessionId: string; payload: TranscriptFailed } =>
         entry.payload.kind === 'transcript_failed',
     );
-    assert.equal(failed.length, 1, 'the jail refusal must reach the asker');
-    assert.equal(failed[0]?.payload.refusal.reason, 'transcript-path-escape');
-    assert.equal(failed[0]?.payload.requestId, 'req-4', 'the failure names the request it answers');
-
-    // And an absent transcript is a value: the tail result says absent, no failure anywhere.
-    link.deliver('discovery-channel', transcriptTail('req-5', 'no-such-slug', 'no-such-id', 0));
-    await answered(link, 'transcript_tail_result', 'the absent-transcript answer');
-    const tails = link.sent.filter(
-      (entry): entry is { sessionId: string; payload: TranscriptTailResult } =>
-        entry.payload.kind === 'transcript_tail_result',
+    assert.deepEqual(
+      failed.map((entry) => [entry.sessionId, entry.payload.requestId, entry.payload.refusal.reason]),
+      [
+        ['discovery-channel', 'req-2', 'transcripts-not-served'],
+        ['discovery-channel', 'req-3', 'transcripts-not-served'],
+      ],
+      'each ask is answered by name, on the channel it rode',
     );
-    assert.equal(tails.length, 1);
-    assert.equal(tails[0]?.payload.absent, true);
-    assert.equal(tails[0]?.payload.found, false);
+    assert.equal(
+      link.sent.some(
+        (entry) =>
+          entry.payload.kind === 'transcript_list_result' || entry.payload.kind === 'transcript_tail_result',
+      ),
+      false,
+      'nothing about a transcript was served',
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('regression: a bulk_request in the claude-transcript: namespace answers transcripts-not-served before any resolver is asked; another namespace reaches the resolver', async () => {
+  const asked: string[] = [];
+  const { link } = hostOver({
+    bulk: (what) => {
+      asked.push(what);
+      return refuse('bulk-target-invalid', `the test resolver names nothing for ${what}`);
+    },
+  });
+  const ask = (deliveryId: string, what: string): void =>
+    link.deliver('handle-1', { kind: 'bulk_request', deliveryId, what, fromOffset: 0, postUrl: 'http://c/' });
+  ask('d-transcript', `${TRANSCRIPT_WHAT_PREFIX}C--work-repo/session-1`);
+  ask('d-other', 'notes:readme');
+  await settle();
+
+  const failures = link.sent.flatMap((entry) =>
+    entry.payload.kind === 'bulk_failed' ? [[entry.payload.deliveryId, entry.payload.refusal.reason]] : [],
+  );
+  assert.deepEqual(failures, [
+    ['d-transcript', 'transcripts-not-served'],
+    ['d-other', 'bulk-target-invalid'],
+  ]);
+  assert.deepEqual(asked, ['notes:readme'], 'the transcript locator reached the resolver');
+
+  // A host with no resolver at all answers the namespace by the same name, and anything else as before.
+  const bare = hostOver();
+  bare.link.deliver('handle-1', {
+    kind: 'bulk_request',
+    deliveryId: 'd-bare',
+    what: `${TRANSCRIPT_WHAT_PREFIX}C--work-repo/session-1`,
+    fromOffset: 0,
+    postUrl: 'http://c/',
+  });
+  bare.link.deliver('handle-1', {
+    kind: 'bulk_request',
+    deliveryId: 'd-bare-other',
+    what: 'notes:readme',
+    fromOffset: 0,
+    postUrl: 'http://c/',
+  });
+  await settle();
+  assert.deepEqual(
+    bare.link.sent.flatMap((entry) =>
+      entry.payload.kind === 'bulk_failed' ? [[entry.payload.deliveryId, entry.payload.refusal.reason]] : [],
+    ),
+    [
+      ['d-bare', 'transcripts-not-served'],
+      ['d-bare-other', 'bulk-target-invalid'],
+    ],
+  );
 });
 
 // --- the workspace key, and the reap (protocol v5) ---------------------------
@@ -2500,63 +2533,72 @@ test('host_configure without a configuration seam answers config-write-failed on
   );
 });
 
-test('a reconfigure that applies swaps the transcripts root live, reports the new view, and re-announces the hello', async () => {
-  const root = await tempDir('host-reconfigure');
-  try {
-    const asked: { entries: readonly HostConfigureEntry[]; hostBusy: boolean }[] = [];
-    const configuration: HostConfiguration = {
-      ...unsetHostConfiguration(),
-      transcriptsRoot: root,
-      controllerUrl: 'ws://unused',
-      decisionUrl: null,
-      agentHome: null,
-    };
-    const { link } = hostOver({
-      reconfigure: (entries, hostBusy) => {
-        asked.push({ entries, hostBusy });
-        return ok({
-          workspaces: undefined,
-          transcriptsRoot: root,
-          bulk: undefined,
-          linkCapabilities: ['workspace:none'],
-          configuration,
-          pluginDirs: [],
-          overriddenByEnvironment: ['PERISCOPE_REPOSITORY_ROOT'],
-          pendingRestart: [],
-        });
-      },
+test('a reconfigure that applies swaps the bulk resolver live, reports the new view, and re-announces the hello', async () => {
+  const asked: { entries: readonly HostConfigureEntry[]; hostBusy: boolean }[] = [];
+  const resolved: string[] = [];
+  const configuration: HostConfiguration = {
+    ...unsetHostConfiguration(),
+    controllerUrl: 'ws://unused',
+    decisionUrl: null,
+    agentHome: '/srv/agent-home',
+  };
+  const { link } = hostOver({
+    reconfigure: (entries, hostBusy) => {
+      asked.push({ entries, hostBusy });
+      return ok({
+        workspaces: undefined,
+        bulk: (what) => {
+          resolved.push(what);
+          return refuse('bulk-target-invalid', 'the swapped resolver names nothing');
+        },
+        linkCapabilities: ['workspace:none'],
+        configuration,
+        pluginDirs: [],
+        overriddenByEnvironment: ['PERISCOPE_REPOSITORY_ROOT'],
+        pendingRestart: [],
+      });
+    },
+  });
+  const ask = (deliveryId: string): void =>
+    link.deliver('handle-1', {
+      kind: 'bulk_request',
+      deliveryId,
+      what: 'notes:readme',
+      fromOffset: 0,
+      postUrl: 'http://c/',
     });
 
-    // Before: no transcripts root, so the discovery door refuses by name.
-    link.deliver('discovery-channel', transcriptList('before'));
-    await answered(link, 'transcript_failed', 'the no-root failure');
+  // Before: no resolver, so the ask is refused without one being asked.
+  ask('before');
+  await settle();
+  assert.deepEqual(resolved, []);
 
-    link.deliver('discovery-channel', hostConfigure('cfg-2', [{ key: 'PERISCOPE_AGENT_HOME', value: root }]));
-    await settle();
-    const answers = configureResults(link);
-    assert.equal(answers.length, 1);
-    assert.equal(answers[0]?.refusal, null, 'the seam applied, so the answer is the applied one');
-    assert.deepEqual(answers[0]?.configuration, configuration);
-    assert.deepEqual(answers[0]?.overriddenByEnvironment, ['PERISCOPE_REPOSITORY_ROOT']);
-    assert.deepEqual(
-      asked,
-      [{ entries: [{ key: 'PERISCOPE_AGENT_HOME', value: root }], hostBusy: false }],
-      'an idle host asks the seam with hostBusy false',
-    );
-    assert.deepEqual(
-      link.announced,
-      { capabilities: ['workspace:none'], configuration, pendingRestart: [] },
-      'the next hello must declare the new view',
-    );
+  link.deliver(
+    'discovery-channel',
+    hostConfigure('cfg-2', [{ key: 'PERISCOPE_AGENT_HOME', value: '/srv/agent-home' }]),
+  );
+  await settle();
+  const answers = configureResults(link);
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0]?.refusal, null, 'the seam applied, so the answer is the applied one');
+  assert.deepEqual(answers[0]?.configuration, configuration);
+  assert.deepEqual(answers[0]?.overriddenByEnvironment, ['PERISCOPE_REPOSITORY_ROOT']);
+  assert.deepEqual(
+    asked,
+    [{ entries: [{ key: 'PERISCOPE_AGENT_HOME', value: '/srv/agent-home' }], hostBusy: false }],
+    'an idle host asks the seam with hostBusy false',
+  );
+  assert.deepEqual(
+    link.announced,
+    { capabilities: ['workspace:none'], configuration, pendingRestart: [] },
+    'the next hello must declare the new view',
+  );
 
-    // After: the same ask now serves a page from the new root. The swap is observable, not asserted
-    // from the answer alone.
-    link.deliver('discovery-channel', transcriptList('after'));
-    await answered(link, 'transcript_list_result', 'the page from the new root');
-    assert.equal(link.sent.filter((entry) => entry.payload.kind === 'transcript_list_result').length, 1);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  // After: the same ask reaches the swapped resolver. The swap is observable, not asserted from the
+  // answer alone.
+  ask('after');
+  await settle();
+  assert.deepEqual(resolved, ['notes:readme']);
 });
 
 test('a seam refusal is relayed by name with the unchanged view, and nothing is swapped', async () => {
@@ -2981,7 +3023,6 @@ test("host_configure_result carries the seam's pendingRestart, and a refusal kee
       entries[0]?.key === 'PERISCOPE_DECISION_URL'
         ? ok({
             workspaces: undefined,
-            transcriptsRoot: undefined,
             bulk: undefined,
             linkCapabilities: ['workspace:none'],
             configuration: { ...unsetHostConfiguration(), decisionUrl: 'https://next.example/decision' },

@@ -40,6 +40,6 @@
     }
   },
   "name": "session_update.agent-facts-tasks-settled",
-  "protocolVersion": 17,
+  "protocolVersion": 18,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_facts\",\"fact\":{\"kind\":\"tasks\",\"runtime\":\"claude\",\"running\":[{\"taskId\":\"task-1\",\"type\":\"local_bash\",\"description\":\"run the suite\"},{\"taskId\":\"task-2\",\"type\":\"local_agent\",\"description\":null}],\"settled\":[{\"taskId\":\"agent-2\",\"type\":\"local_agent\",\"status\":\"failed\"}]},\"sourceId\":\"message-uuid-4\",\"observedAt\":\"2000-01-01T00:00:00.000Z\"}}}"
 }

@@ -143,15 +143,15 @@ test("the environment wins: a written value the environment sets is reported as 
       assert.equal(outcome.value.configuration.agentHome, '/from/env', 'the environment wins per key');
       assert.equal(
         outcome.value.configuration.transcriptsRoot,
-        '/from/env/projects',
-        'the transcripts root derives from the home in effect',
+        null,
+        'no transcripts root is reported, whatever the agent home',
       );
       // The scratch environment also sets the controller URL, a wire key since v8, so it is shadowed too.
       assert.deepEqual(outcome.value.overriddenByEnvironment, [
         'PERISCOPE_AGENT_HOME',
         'PERISCOPE_CONTROLLER_URL',
       ]);
-      assert.equal(outcome.value.transcriptsRoot, '/from/env/projects');
+      assert.equal(outcome.value.bulk, undefined, 'an agent-home change rebuilds no bulk resolver');
     }
     assert.deepEqual(
       readConfigFile(env).values,
@@ -298,7 +298,7 @@ test('an address written back to the value in effect is not pending', async () =
   }
 });
 
-test('PERISCOPE_TRANSCRIPTS_ROOT is an unknown key, over the wire and in the file; the transcripts root derives from the agent home', async () => {
+test('PERISCOPE_TRANSCRIPTS_ROOT is an unknown key, over the wire and in the file; an agent-home change reports no transcripts root', async () => {
   const { env, dir } = await scratchEnv();
   try {
     const refused = reconfigureHost(env, [{ key: 'PERISCOPE_TRANSCRIPTS_ROOT', value: '/old/way' }], false);
@@ -314,7 +314,8 @@ test('PERISCOPE_TRANSCRIPTS_ROOT is an unknown key, over the wire and in the fil
     assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.refusal.detail);
     if (outcome.ok) {
       assert.equal(outcome.value.configuration.agentHome, '/new/home');
-      assert.equal(outcome.value.transcriptsRoot, '/new/home/projects', 'derived from the agent home');
+      assert.equal(outcome.value.configuration.transcriptsRoot, null, 'nothing derives from the agent home');
+      assert.equal(outcome.value.bulk, undefined);
     }
   } finally {
     await rm(dir, { recursive: true, force: true });

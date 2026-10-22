@@ -60,8 +60,6 @@ import type {
   WireRefusal,
   SessionNewGate,
   SessionPayload,
-  TranscriptList,
-  TranscriptTail,
   WorkspaceRelease,
   WorkspaceReleaseBulk,
   WorkspaceReleaseEntry,
@@ -74,8 +72,6 @@ import {
   workspaceListResult,
   answerRefused,
   transcriptFailed,
-  transcriptListResult,
-  transcriptTailResult,
   unsetHostConfiguration,
   workspaceReleaseBulkResult,
   workspaceReleaseEntryResult,
@@ -86,6 +82,7 @@ import {
   workspaceReadResult,
   DEFAULT_RUNTIME,
   MAX_AGENT_CATALOG_BYTES,
+  TRANSCRIPT_WHAT_PREFIX,
 } from '../control/frames.js';
 import type { FrameSink } from '../control/stream.js';
 import { forwardNativeSession, forwardSession } from '../control/stream.js';
@@ -166,7 +163,6 @@ import { readWhere } from './git-facts.js';
 import { normalizePath } from '../core/paths.js';
 import { mergeHooks, modelSwitchHooks, observationHooks } from './hooks.js';
 import { createToolServer } from './mcp-server.js';
-import { listTranscripts, tailTranscript } from './claude-transcripts.js';
 import { listRepositoryDirectory, readRepositoryFile, readWorkspaceFile } from './repository-read.js';
 import { homeDirectory, nodePathResolver } from './paths.js';
 import {
@@ -754,11 +750,10 @@ export interface HostLink extends FrameSink {
 
 /**
  * What a reconfigure produced: the pieces the host swaps in place of the ones it was composed with.
- * `undefined` members mean the same as an omitted option at composition (no provider, no root).
+ * `undefined` members mean the same as an omitted option at composition (no provider, no resolver).
  */
 export interface HostReconfigured {
   readonly workspaces: WorkspaceProvider | undefined;
-  readonly transcriptsRoot: string | undefined;
   readonly bulk: BulkResolver | undefined;
   readonly linkCapabilities: readonly string[];
   readonly configuration: HostConfiguration;
@@ -882,14 +877,18 @@ export interface PeriscopeHostOptions {
    * accepted and ignored.
    */
   readonly tools?: Omit<McpServerOptions, 'identity'>;
+  /**
+   * Turns a `bulk_request`'s locator into the file this host POSTs: the namespaces a controller may
+   * ask for are the ones the embedder's resolver gives meaning. Absent, every `bulk_request` answers
+   * `bulk-target-invalid`. A locator in the `claude-transcript:` namespace never reaches it: this
+   * host answers that one `transcripts-not-served` before any resolver is asked.
+   */
   readonly bulk?: BulkResolver;
   /**
-   * Where the agent CLI's transcripts live (`~/.claude/projects`), for the discovery door.
+   * Ignored: this host does not look for, read or keep the agent's transcripts, so it has no root to
+   * read them under. A `transcript_list` or `transcript_tail` is answered `transcripts-not-served`.
    *
-   * The composition root derives it (`claudeProjectsRoot(env)` in `host/claude-transcripts.ts`),
-   * because reading the environment is that layer's job. Absent means the door answers every
-   * `transcript_list` / `transcript_tail` with a named failure rather than guessing a root;
-   * `session_list` needs no filesystem and always answers.
+   * @deprecated Kept so an embedder that passes it still compiles; it goes at the next major version.
    */
   readonly transcriptsRoot?: string;
   readonly gate?: GateTimings;
@@ -907,8 +906,8 @@ export interface PeriscopeHostOptions {
    */
   readonly linkCapabilities?: readonly string[];
   /**
-   * The values behind those markers: which roots, which scheme, which transcripts root,
-   * which controller. The composition root computes `hostConfigurationOf(config, ...)` beside the
+   * The values behind those markers: which roots, which scheme, which agent home, which
+   * controller. The composition root computes `hostConfigurationOf(config, ...)` beside the
    * markers, from the same reading, so the two cannot disagree. Omitted, the hello reports every
    * value as null.
    */
@@ -1195,7 +1194,6 @@ export class PeriscopeHost {
    * swaps them in one place and every handler reads the current one. Initialised from the options.
    */
   #workspaces: WorkspaceProvider | undefined;
-  #transcriptsRoot: string | undefined;
   #bulk: BulkResolver | undefined;
   #linkCapabilities: readonly string[];
   #configuration: HostConfiguration;
@@ -1235,7 +1233,6 @@ export class PeriscopeHost {
   constructor(options: PeriscopeHostOptions) {
     this.#options = options;
     this.#workspaces = options.workspaces;
-    this.#transcriptsRoot = options.transcriptsRoot;
     this.#bulk = options.bulk;
     this.#linkCapabilities = options.linkCapabilities ?? [];
     this.#hostEndpoints = options.endpoints === undefined ? null : hostEndpointsOf(options.endpoints);
@@ -1530,12 +1527,11 @@ export class PeriscopeHost {
       // the session-existence machinery above applies. The answer rides back on the same key.
       case 'session_list':
         return this.#answerSessionList(frame.sessionId, payload);
+      // The transcript asks still decode, so an older controller's ask rides its channel's sequence
+      // like any other and is answered by name: this host serves no transcripts.
       case 'transcript_list':
-        void this.#answerTranscriptList(frame.sessionId, payload);
-        return;
       case 'transcript_tail':
-        void this.#answerTranscriptTail(frame.sessionId, payload);
-        return;
+        return this.#failDiscovery(frame.sessionId, payload.requestId, transcriptsNotServed());
       case 'workspace_release':
         void this.#answerWorkspaceRelease(frame.sessionId, payload);
         return;
@@ -2147,74 +2143,6 @@ export class PeriscopeHost {
   }
 
   /**
-   * Answer `transcript_list` from the discovery door, one page per request.
-   *
-   * Every exit sends a wire answer. A missing root, a failed walk and a thrown error all become a
-   * `transcript_failed` naming the reason; an answer that dies inside the host would read to the
-   * asker as a host that hung, which is the exact failure the closed dispatch set exists to end.
-   * (`#send` reports a send the link refused locally; the attempt is what every exit guarantees.)
-   */
-  async #answerTranscriptList(channelKey: string, asked: TranscriptList): Promise<void> {
-    const root = this.#transcriptsRoot;
-    if (root === undefined) {
-      return this.#failDiscovery(
-        channelKey,
-        asked.requestId,
-        refusal(
-          'path-input-missing',
-          'this host has no transcripts root configured — the discovery door cannot look',
-        ),
-      );
-    }
-    try {
-      const page = await listTranscripts(root, { fromIndex: asked.fromIndex });
-      this.#send(
-        channelKey,
-        transcriptListResult(asked.requestId, page.entries, {
-          totalCount: page.totalCount,
-          ...(page.nextIndex === null ? {} : { nextIndex: page.nextIndex }),
-        }),
-      );
-    } catch (error) {
-      this.#failDiscovery(channelKey, asked.requestId, refusal('transcript-read-failed', describe(error)));
-    }
-  }
-
-  /** Answer `transcript_tail`. Same exit discipline as the listing: every path answers. */
-  async #answerTranscriptTail(channelKey: string, asked: TranscriptTail): Promise<void> {
-    const root = this.#transcriptsRoot;
-    if (root === undefined) {
-      return this.#failDiscovery(
-        channelKey,
-        asked.requestId,
-        refusal(
-          'path-input-missing',
-          'this host has no transcripts root configured — the discovery door cannot look',
-        ),
-      );
-    }
-    try {
-      const answer = await tailTranscript(root, asked.projectSlug, asked.sessionId, {
-        fromOffset: asked.fromOffset,
-        needle: asked.needle,
-      });
-      if (!answer.ok) return this.#failDiscovery(channelKey, asked.requestId, answer.refusal);
-      this.#send(
-        channelKey,
-        transcriptTailResult(asked.requestId, {
-          found: answer.value.found,
-          absent: answer.value.absent,
-          newOffset: answer.value.newOffset,
-          ...(answer.value.sizeBytes === null ? {} : { sizeBytes: answer.value.sizeBytes }),
-          ...(answer.value.mtimeMs === null ? {} : { mtimeMs: answer.value.mtimeMs }),
-        }),
-      );
-    } catch (error) {
-      this.#failDiscovery(channelKey, asked.requestId, refusal('transcript-read-failed', describe(error)));
-    }
-  }
-
-  /**
    * Answer `repository_list`: one directory of the repository this host provisions from,
    * names only, jailed to the repository root by `listRepositoryDirectory`. Every exit is the one
    * result kind; a host with no repository root has nothing to read under and says so by name.
@@ -2324,7 +2252,7 @@ export class PeriscopeHost {
     this.#refuse(channelKey, why);
   }
 
-  /** A discovery request that could not be answered says so on the wire; the `#failDelivery` twin. */
+  /** A transcript ask is answered by name on the wire; the `#failDelivery` twin. */
   #failDiscovery(channelKey: string, requestId: string, refused: Refusal): void {
     this.#send(channelKey, transcriptFailed(requestId, { reason: refused.reason, detail: refused.detail }));
     this.#refuse(channelKey, refused);
@@ -2504,9 +2432,9 @@ export class PeriscopeHost {
   }
 
   /**
-   * List the worktrees under the workspace root, read from disk now. Paged like the transcript
-   * listing; every exit is one `workspace_list_result`, refusal or page, so a host that cannot look
-   * says so by name rather than going quiet.
+   * List the worktrees under the workspace root, read from disk now. Paged by index; every exit is
+   * one `workspace_list_result`, refusal or page, so a host that cannot look says so by name rather
+   * than going quiet.
    */
   async #answerWorkspaceList(channelKey: string, asked: WorkspaceList): Promise<void> {
     const answer = (
@@ -2595,7 +2523,7 @@ export class PeriscopeHost {
     }
     // Busy means a workspace is claimed or being claimed: a session releases through the provider
     // that provisioned it, so the roots cannot move under one. The seam refuses only when the ask
-    // actually changes a root; a scheme or transcripts-root change applies live regardless.
+    // actually changes a root; a scheme or agent-home change applies live regardless.
     const hostBusy = this.#sessions.size > 0 || this.#opening.size > 0;
     let outcome: Result<HostReconfigured>;
     try {
@@ -2607,7 +2535,6 @@ export class PeriscopeHost {
 
     const rebuilt = outcome.value;
     this.#workspaces = rebuilt.workspaces;
-    this.#transcriptsRoot = rebuilt.transcriptsRoot;
     this.#bulk = rebuilt.bulk;
     this.#linkCapabilities = rebuilt.linkCapabilities;
     // Rebuilt from the file, which holds no catalog: the one read at start is carried over.
@@ -2721,6 +2648,11 @@ export class PeriscopeHost {
     postUrl: string,
     fromOffset: number,
   ): Promise<void> {
+    // The agent's transcripts are not served, whatever resolver this host was composed with: the
+    // namespace is answered by name before any resolver is asked.
+    if (what.startsWith(TRANSCRIPT_WHAT_PREFIX)) {
+      return this.#failDelivery(sessionKey, deliveryId, transcriptsNotServed());
+    }
     const resolve = this.#bulk;
     if (resolve === undefined) {
       return this.#failDelivery(
@@ -2769,8 +2701,8 @@ export class PeriscopeHost {
       kind: 'bulk_delivered',
       deliveryId,
       byteCount: receipt.value.byteCount,
-      // The stat pair rides the receipt so a transcript puller can detect a rewrite. See
-      // `BulkDelivered` in frames.ts.
+      // The stat pair rides the receipt so a puller can detect the file being rewritten under it.
+      // See `BulkDelivered` in frames.ts.
       sizeBytes: receipt.value.sizeBytes,
       mtimeMs: receipt.value.mtimeMs,
     });
@@ -3003,6 +2935,14 @@ async function settledCatalog(read: () => Promise<AgentCatalog>): Promise<AgentC
   } catch (error) {
     return { ok: false, detail: `the catalog read failed: ${describe(error)}` };
   }
+}
+
+/** The answer to every ask for the agent's transcripts. */
+function transcriptsNotServed(): Refusal {
+  return refusal(
+    'transcripts-not-served',
+    'this host does not look for, read or keep the agent transcript files',
+  );
 }
 
 /** The repository asks on a host composed without a repository root: nothing to read under. */

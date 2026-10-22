@@ -88,36 +88,21 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[16, 17]`. Version 17 adds:
+`[17, 18]`. Version 18 adds:
 
-- `qwen-code`, a runtime the hello's `agents` may list and a `session_new` may name, whose messages
-  are the Qwen Code CLI's own stream-json messages with `runtime: "qwen-code"` (below), with its row in
-  `agentSkills` and its events among the causes (`qwen-code:*` in `AGENT_EVENTS`;
-  [state-machine.md](state-machine.md));
-- the refusal reason `qwen-ask-rules-not-active`, which refuses a Qwen Code open, and the degrades
-  `gate-tool-unruled`, `gate-mode-widened` and `gate-credential-in-shell`
-  ([The control tier](#the-control-tier));
-- `pi`, a runtime the hello's `agents` may list and a `session_new` may name, whose messages are
-  pi's own RPC events, records and answers with `runtime: "pi"` (below), with its row in
-  `agentSkills` and its events and the host's commands among the causes (`pi:*` in `AGENT_EVENTS`;
-  [state-machine.md](state-machine.md));
-- the refusal reason `pi-extension-not-active`, which refuses a pi open, and the degrade
-  `gate-foreign-extension` ([The control tier](#the-control-tier));
-- `cmd` in `SHELL_DIALECTS`, the grammar of a shell call Qwen Code runs through `cmd.exe` on Windows.
+- the refusal reason `transcripts-not-served`, the answer to the asks the host no longer serves
+  ([Host-scoped asks](#host-scoped-asks), [The bulk lane](#the-bulk-lane)).
 
-It adds no payload kind and no member. A version-16 controller reads what this build sends: a
-runtime is a word, a transition's cause is carried unnarrowed, and a reason or a degrade it does not
-know is read as such. The one word it could not read is `cmd`, because its `DecisionRequest` declares
-`posix` and `powershell` only: on a link negotiated below 17 the host sends a decision request whose
-dialect is `cmd` with no `shellDialect` at all, and the controller reads that call by its tool's name.
-Every frame a version-16 controller sends decodes here unchanged. Version 14 narrowed
-`session_new.request.env` (below), and the narrowing holds at every version the host negotiates.
-`src/host/protocol-window.test.ts` holds both directions over a real link: every frame this host
-sends, a Claude session's, a Codex session's, a Qwen Code session's and a pi session's on one link,
-decodes with the
-protocol-16 decoder v1.7.0 shipped, and every decision request it posts reads as that release's
-`DecisionRequest`; each wire vector version 17 adds decodes with that decoder; and a version-16
-controller's `session_new` and `session_configure` decode here and apply.
+It adds no payload kind. A version-17 controller reads what this build sends: the reason rides kinds
+it already reads, and a reason it does not know is read as such. Every frame a version-17 controller
+sends decodes here unchanged, the retired asks included, so such an ask is answered by name and the
+channel it rode keeps its sequence. Version 14 narrowed `session_new.request.env` (below), and the
+narrowing holds at every version the host negotiates. `src/host/protocol-window.test.ts` holds both
+directions over a real link: every frame this host sends, a Claude session's, a Codex session's, a
+Qwen Code session's and a pi session's on one link, and its answers to the retired asks, decodes
+with the protocol-17 decoder v1.8.2 shipped, and every decision request it posts reads as that
+release's `DecisionRequest`; each wire vector version 18 adds decodes with that decoder; and a
+version-17 controller's `session_new` and `session_configure` decode here and apply.
 
 Two close reasons carry meaning. A close with code 1002 whose reason starts with `seq gap` is a
 replay request: the controller names the position it holds, and the host's next dial replays from
@@ -125,7 +110,7 @@ it (link cause `replay_requested`). Any other 1002 close is read as the version 
 
 `configuration` is a `HostConfiguration`: seven strings, each `T | null`, in this order:
 `repositoryRoot`, `workspaceRoot`, `branchScheme` (the effective scheme, `{repo}/{key}` when none is
-configured), `transcriptsRoot` (derived from the agent home; reported, never settable on its own),
+configured), `transcriptsRoot` (always null; kept because a controller inside the window requires it),
 `controllerUrl`, `decisionUrl`, `agentHome` — each at most `MAX_CONFIGURATION_VALUE_LENGTH` — and,
 from v11, `plugins`: the plugin directories the host loads into every session, each as
 `{ name, version, path }` from its manifest (`version` null when the manifest declares none), at
@@ -863,9 +848,9 @@ rather than a truncated one when a bound is missed.
 
 | ask                      | answer                          | refusal reasons the answer may carry                                                    |
 | ------------------------ | ------------------------------- | --------------------------------------------------------------------------------------- |
-| `session_list`           | `session_list_result`           | none; `transcript_failed` on failure                                                    |
-| `transcript_list`        | `transcript_list_result`        | `transcript_failed`                                                                     |
-| `transcript_tail`        | `transcript_tail_result`        | `transcript_failed`                                                                     |
+| `session_list`           | `session_list_result`           | none                                                                                    |
+| `transcript_list`        | `transcript_failed`             | `transcripts-not-served`, always                                                        |
+| `transcript_tail`        | `transcript_failed`             | `transcripts-not-served`, always                                                        |
 | `workspace_list`         | `workspace_list_result`         | `workspace-list-failed`                                                                 |
 | `workspace_release`      | `workspace_release_result`      | `workspace-release-failed`, `branch-not-merged`                                         |
 | `workspace_release_bulk` | `workspace_release_bulk_result` | one receipt per entry, in ask order, never aborted                                      |
@@ -874,15 +859,18 @@ rather than a truncated one when a bound is missed.
 | `repository_read`        | `repository_read_result`        | `repository-path-escape`, `repository-read-failed`                                      |
 | `workspace_read`         | `workspace_read_result`         | `workspace-path-escape`, `workspace-read-failed`, `credential-path-denied`              |
 
-On every result kind that carries `refusal`, `refusal: null` is the good answer. `transcript_failed`
-is the one failure kind for the three transcript asks; a reader discriminates on the echoed
-`requestId`, never on the kind. An answer of any kind that the host composed and could not send
-(over the frame cap, most often) arrives instead as `answer_refused` — `{ requestId, refusal }`,
-always small — so a controller learns by name rather than by timeout; match it on `requestId`
-like every other answer. A `transcript_list_result` entry carries the `cwd` the CLI recorded
-on the transcript, null when its head carries none.
+On every result kind that carries `refusal`, `refusal: null` is the good answer; a reader
+discriminates on the echoed `requestId`, never on the kind. An answer of any kind that the host
+composed and could not send (over the frame cap, most often) arrives instead as `answer_refused` —
+`{ requestId, refusal }`, always small — so a controller learns by name rather than by timeout;
+match it on `requestId` like every other answer.
 
-Bounds: `TRANSCRIPT_PAGE_SIZE` transcripts per page, `WORKSPACE_PAGE_SIZE` worktrees per page,
+`transcript_list` and `transcript_tail` are retired: the host does not look for, read or keep the
+agent's transcript files. Both still decode, so an ask from an older controller is answered rather
+than dropped, always `transcript_failed` with `transcripts-not-served`; `transcript_list_result` and
+`transcript_tail_result` still decode and are never sent.
+
+Bounds: `WORKSPACE_PAGE_SIZE` worktrees per page,
 `MAX_BULK_RELEASES` entries per bulk release, `MAX_CONFIGURE_ENTRIES` entries per configure,
 `MAX_REPOSITORY_ENTRIES` names per directory listing, `MAX_REPOSITORY_READ_BYTES` per file head, cut
 on a character boundary with the file's whole size in the answer. `MAX_WORKSPACE_READ_BYTES` per
@@ -926,13 +914,12 @@ number a frame can carry, so a payload within 15 bytes of the limit is refused a
 frame would fit.
 
 `bulk_request` carries `deliveryId` (echoed on the receipt), `what` (a locator), `fromOffset` (a
-byte offset to start from) and `postUrl`. The locator namespace this package resolves is the
-agent CLI's own transcripts: `claude-transcript:{projectSlug}/{sessionId}`, where the prefix is
-`TRANSCRIPT_WHAT_PREFIX`, `projectSlug` is the directory name a `transcript_list_result` entry
-reports (opaque; the CLI's flattening of a path is not invertible) and `sessionId` is the entry's
-id. It is the `claude` instance of the namespace `{runtime}-transcript:{...}`: a runtime's
-transcripts are addressed under that runtime's name. A locator outside the served instance is
-refused `bulk-target-invalid`. An embedder may add resolvers for other namespaces.
+byte offset to start from) and `postUrl`. What a locator names is the embedder's: a host resolves
+`what` through the resolver it was composed with (`PeriscopeHostOptions.bulk`), which gives meaning
+to the namespaces its controller asks for, and a locator no resolver serves is refused
+`bulk-target-invalid`. The binary composes none, so every `bulk_request` to it is refused. A locator
+in the retired `claude-transcript:` namespace (`TRANSCRIPT_WHAT_PREFIX`) is refused
+`transcripts-not-served` before any resolver is asked.
 
 The POST the host sends:
 
@@ -1010,7 +997,7 @@ The reasons a controller meets most, and what each is not:
 | `session-unknown`                                                                                                                                                                                                                                                                      | a handle that does not and never will exist, or a held turn over the bound                                                                                                                                                                                                               |
 | `session-configure-failed`                                                                                                                                                                                                                                                             | the agent refused one of a `session_configure`'s controls; the detail names the member, and the members before it were applied. Not `frame-malformed`, which is the host refusing a value                                                                                                |
 | `permission-decision-unavailable`, `permission-decision-unrecognised`                                                                                                                                                                                                                  | an outage, and a decision this build does not know; neither is an allow                                                                                                                                                                                                                  |
-| `transcript-path-escape`                                                                                                                                                                                                                                                               | a caller-supplied name that failed one of the discovery jail's three layers; the refusal names the layer                                                                                                                                                                                 |
+| `transcripts-not-served`                                                                                                                                                                                                                                                               | the answer to a `transcript_list`, a `transcript_tail` and a `claude-transcript:` locator: the host does not serve them. Not `bulk-target-invalid`, which names a locator no resolver serves                                                                                             |
 | `bulk-target-not-controller`, `bulk-target-invalid`                                                                                                                                                                                                                                    | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                                                                                                                          |
 | `resume-cwd-not-honoured`                                                                                                                                                                                                                                                              | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                                                                                                                         |
 | `runtime-unavailable`                                                                                                                                                                                                                                                                  | a `session_new` naming a runtime the host cannot spawn: unknown, or listed `available: false`; the detail names it and what the host offers                                                                                                                                              |

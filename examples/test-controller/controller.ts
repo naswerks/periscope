@@ -60,8 +60,6 @@ export type ToolHandler = (args: Record<string, unknown>, sessionId: string | nu
  */
 export const ASK_KINDS = [
   'session_list',
-  'transcript_list',
-  'transcript_tail',
   'workspace_list',
   'workspace_release',
   'workspace_release_bulk',
@@ -431,7 +429,7 @@ export class TestController {
     this.#render(`  ${frame.sessionId}/${frame.seq} FRAME ${payload.kind}`);
 
     // The rendezvous: an answer carries the ask's requestId, and that is the whole key. The kind is
-    // not consulted, because the three transcript asks share one failure kind.
+    // not consulted, because an ask's answer is not always its own result kind (`answer_refused`).
     const requestId = (payload as { readonly requestId?: unknown }).requestId;
     const pending = typeof requestId === 'string' ? this.#pending.get(requestId) : undefined;
     if (pending !== undefined && typeof requestId === 'string') {

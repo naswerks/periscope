@@ -262,7 +262,6 @@ function hostWith(
           reconfigure: () =>
             ok({
               workspaces: undefined,
-              transcriptsRoot: undefined,
               bulk: undefined,
               linkCapabilities: [],
               configuration: unsetHostConfiguration(),

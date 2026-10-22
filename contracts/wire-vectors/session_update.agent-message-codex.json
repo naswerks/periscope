@@ -26,6 +26,6 @@
     }
   },
   "name": "session_update.agent-message-codex",
-  "protocolVersion": 17,
+  "protocolVersion": 18,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_message\",\"message\":{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thread-1\",\"cliVersion\":\"0.162.1\"}}},\"observedAt\":\"2000-01-01T00:00:00.000Z\",\"runtime\":\"codex\"}}}"
 }

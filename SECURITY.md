@@ -578,15 +578,14 @@ over the link and without a further credential:
 - **Remove directories.** `workspace_release` deletes a worktree under the workspace root, and the
   controller can set that root through `host_configure` (a root change is refused only while a
   session is live or opening).
-- **Read files.** Every transcript under the agent home (`<agent home>/projects`, by default
-  `~/.claude/projects`), which includes sessions the operator ran from an editor or a terminal,
-  not only sessions this host started; and any directory listing or text-file head under the
-  repository root (`repository_list` / `repository_read`, read-only and bounded), a root the
-  controller can re-point through `host_configure`; and any text file up to 512 KiB inside a
-  workspace this host provisioned, a page at a time (`workspace_read`, by the workspace's key). Each
-  door is jailed to its root, and the repository and workspace doors also honour the host's
-  protected set: a path at or beneath a protected path refuses `credential-path-denied` whatever the
-  root is, on the lexical resolution and on the real path.
+- **Read files.** Any directory listing or text-file head under the repository root
+  (`repository_list` / `repository_read`, read-only and bounded), a root the controller can re-point
+  through `host_configure`; and any text file up to 512 KiB inside a workspace this host provisioned,
+  a page at a time (`workspace_read`, by the workspace's key). Each door is jailed to its root and
+  honours the host's protected set: a path at or beneath a protected path refuses
+  `credential-path-denied` whatever the root is, on the lexical resolution and on the real path.
+- **Not transcripts.** The runner does not look for, read or keep the agent's transcript files
+  (`<agent home>/projects`).
 - **Choose the agent's permission mode.** `session_new.request.permissionMode` and
   `session_configure` take the SDK's own vocabulary, `bypassPermissions` included. Under bypass the
   agent's allow and ask rules are off and the `PreToolUse` hook is the only control, so a controller

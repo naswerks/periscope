@@ -23,7 +23,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -59,10 +59,19 @@ import {
   readInitFacts,
   startAgentProcess,
 } from './agent-process.js';
-import { claudeProjectsRoot } from './claude-transcripts.js';
 import { mergeHooks, modelSwitchHooks, wiredHookEvents } from './hooks.js';
+import { defaultAgentHome } from './paths.js';
 
 const LIVE = process.env['PERISCOPE_LIVE'] === '1';
+
+/**
+ * Where the agent CLI keeps the transcripts it writes, under its default home: the probe that asks
+ * whether a read left one behind looks there. Null when the environment names no home.
+ */
+function agentProjectsDirectory(): string | null {
+  const home = defaultAgentHome(process.env);
+  return home === null ? null : join(home, 'projects');
+}
 const skip = LIVE ? false : 'PERISCOPE_LIVE is not set — this property is NOT exercised';
 
 const TURN_TIMEOUT_MS = 180_000;
@@ -813,7 +822,7 @@ test(
     );
 
     // No transcript: nothing under the projects root names this workspace.
-    const projects = claudeProjectsRoot(process.env);
+    const projects = agentProjectsDirectory();
     const named =
       projects !== null && existsSync(projects)
         ? readdirSync(projects).filter((entry) => entry.includes(basename(cwd)))

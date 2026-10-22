@@ -164,11 +164,10 @@ test('regression: SECURITY.md states what a paired controller can reach on this 
     /^### What a paired controller can reach on this machine/m,
     'the reach section is missing',
   );
-  assert.match(securityProse, /every transcript under the agent home/i, 'the transcript reach is not stated');
   assert.match(
     securityProse,
-    /editor or a terminal/i,
-    'the reach must include sessions this host did not start',
+    /Not transcripts\. The runner does not look for, read or keep the agent's transcript files \(<agent home>\/projects\)\./,
+    'the limit on the agent transcript files is not stated',
   );
   assert.match(securityProse, /repository_list/, 'the repository reach is not stated');
   assert.match(securityProse, /host_configure/, 'the write access through the configure door is not stated');

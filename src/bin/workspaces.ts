@@ -246,7 +246,6 @@ export function workspaceCapabilitiesOf(config: WorkspaceConfig): readonly strin
 
 /** The values the hello reports that the workspace config does not hold. */
 export interface HostConfigurationExtras {
-  readonly transcriptsRoot: string | null;
   readonly controllerUrl: string | null;
   readonly decisionUrl: string | null;
   readonly agentHome: string | null;
@@ -274,7 +273,9 @@ export function hostConfigurationOf(
     // The EFFECTIVE scheme: what a provision would render. In git mode that is never null; the
     // marker beside it says whether it was configured or defaulted.
     branchScheme: gitMode ? effectiveScheme(config.branchScheme) : setOrNull(config.branchScheme),
-    transcriptsRoot: setOrNull(extras.transcriptsRoot),
+    // Always null: this host does not look for the agent's transcripts, so it has no root for them.
+    // The member stays because a controller inside the protocol window requires it.
+    transcriptsRoot: null,
     controllerUrl: setOrNull(extras.controllerUrl),
     decisionUrl: setOrNull(extras.decisionUrl),
     agentHome: setOrNull(extras.agentHome),

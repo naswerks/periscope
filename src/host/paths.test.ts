@@ -10,7 +10,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isAbsolute, join, sep } from 'node:path';
 
-import { credentialPaths, nodePathResolver, periscopeCredentialDir, tokenCachePath } from './paths.js';
+import {
+  credentialPaths,
+  defaultAgentHome,
+  nodePathResolver,
+  periscopeCredentialDir,
+  tokenCachePath,
+} from './paths.js';
 
 const windows = sep === '\\';
 
@@ -202,4 +208,20 @@ test("the effective agent home's token cache is protected: passed by the composi
   // The default under the home directory is already there, and is not listed twice.
   const defaulted = credentialPaths(env, { agentHome: 'C:/Users/x/.claude' });
   assert.equal(defaulted.filter((path) => path === 'C:/Users/x/.claude/.credentials.json').length, 1);
+});
+
+test('regression: a backslash home reports the agent home in its own separator', () => {
+  assert.equal(defaultAgentHome({ USERPROFILE: 'C:\\Users\\agent' }), 'C:\\Users\\agent\\.claude');
+  assert.equal(defaultAgentHome({ HOME: '/home/agent/' }), '/home/agent/.claude');
+});
+
+test('the default agent home derives from the home directory, and no home means null, never a guess', () => {
+  assert.equal(
+    defaultAgentHome({ USERPROFILE: 'C:/Users/agent', HOME: '/home/other' }),
+    'C:/Users/agent/.claude',
+    'USERPROFILE wins over HOME',
+  );
+  assert.equal(defaultAgentHome({ HOME: '/home/agent' }), '/home/agent/.claude');
+  assert.equal(defaultAgentHome({ HOME: '  ' }), null);
+  assert.equal(defaultAgentHome({}), null);
 });

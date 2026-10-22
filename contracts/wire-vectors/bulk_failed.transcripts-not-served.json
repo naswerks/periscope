@@ -1,0 +1,22 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "bulk_failed",
+      "deliveryId": "delivery-2",
+      "refusal": {
+        "reason": "transcripts-not-served",
+        "detail": "this host does not look for, read or keep the agent transcript files"
+      }
+    }
+  },
+  "name": "bulk_failed.transcripts-not-served",
+  "protocolVersion": 18,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"bulk_failed\",\"deliveryId\":\"delivery-2\",\"refusal\":{\"reason\":\"transcripts-not-served\",\"detail\":\"this host does not look for, read or keep the agent transcript files\"}}}"
+}

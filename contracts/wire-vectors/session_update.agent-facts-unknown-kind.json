@@ -25,6 +25,6 @@
   },
   "frame": null,
   "name": "session_update.agent-facts-unknown-kind",
-  "protocolVersion": 17,
+  "protocolVersion": 18,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_facts\",\"fact\":{\"kind\":\"a-kind-from-a-newer-peer\",\"runtime\":\"claude\",\"anything\":[1,2]},\"sourceId\":\"message-uuid-9\"}}}"
 }

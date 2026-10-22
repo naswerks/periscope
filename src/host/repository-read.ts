@@ -3,12 +3,11 @@
  * operator's checkout through this host, jailed to the repository root. The workspace read is the
  * same door over a workspace's directory: one jail, with its own two refusal reasons, and pages.
  *
- * The posture is the discovery door's, over a different root. The transcripts door reads the agent
- * CLI's own directory; this reads the repository the host provisions workspaces from, so a
- * controller can show a checkout's shape and the text of a file in it without a session, a clone or
- * a bulk lane. Read-only is a property here too: the filesystem surface is `createReadStream`,
- * `readdir`, `stat` and `realpath`, and `src/pins/transcript-readonly.test.ts` holds this module's
- * closure to that allowlist beside the transcripts door.
+ * It reads the repository the host provisions workspaces from, so a controller can show a
+ * checkout's shape and the text of a file in it without a session, a clone or a bulk lane.
+ * Read-only is a property, not a promise: the filesystem surface is `createReadStream`, `readdir`,
+ * `stat` and `realpath`, and `src/pins/read-door-readonly.test.ts` holds this module's closure to
+ * that allowlist.
  *
  * The jail, for every controller-supplied path:
  *   1. a NUL byte in the text is refused before anything is resolved (it would end the path early

@@ -1146,6 +1146,17 @@ const AUTHORED = {
       name: 'bulk_failed.declared-reason',
       frame: session({ kind: 'bulk_failed', deliveryId: 'delivery-1', refusal: REFUSAL }),
     },
+    {
+      name: 'bulk_failed.transcripts-not-served',
+      frame: session({
+        kind: 'bulk_failed',
+        deliveryId: 'delivery-2',
+        refusal: {
+          reason: 'transcripts-not-served',
+          detail: 'this host does not look for, read or keep the agent transcript files',
+        },
+      }),
+    },
   ],
   session_list: [{ name: 'session_list.request', frame: session(sessionList('request-1')) }],
   session_list_result: [
@@ -1250,6 +1261,15 @@ const AUTHORED = {
         transcriptFailed('request-4', {
           reason: 'transcript-path-escape',
           detail: 'refused by the allowlist',
+        }),
+      ),
+    },
+    {
+      name: 'transcript_failed.transcripts-not-served',
+      frame: session(
+        transcriptFailed('request-4', {
+          reason: 'transcripts-not-served',
+          detail: 'this host does not look for, read or keep the agent transcript files',
         }),
       ),
     },

@@ -96,10 +96,10 @@ outbound connection, negotiates the version, answers the heartbeat, acks every f
 permission escalations over HTTP, serves a couple of tools, receives bulk posts, and renders every
 frame to a log a human can read. Two things a controller in another language copies from it:
 
-- **The doors.** `POST /asks/<kind>` for every host-scoped ask (`session_list`, `transcript_list`,
-  `transcript_tail`, `workspace_list`, `workspace_release`, `workspace_release_bulk`,
-  `host_configure`, `repository_list`, `repository_read`, `workspace_read`): the JSON body is the ask's members
-  without `requestId`, the controller mints one, sends the ask on the host's discovery channel, and
+- **The doors.** `POST /asks/<kind>` for every host-scoped ask the host serves (`session_list`,
+  `workspace_list`, `workspace_release`, `workspace_release_bulk`, `host_configure`,
+  `repository_list`, `repository_read`, `workspace_read`): the JSON body is the ask's members without
+  `requestId`, the controller mints one, sends the ask on the host's discovery channel, and
   answers the result payload whole when the frame carrying that `requestId` arrives. An ask the codec
   refuses is answered 400 before a sequence number is spent; a host that does not answer is 504.
 - **Pairing.** `POST /api/periscope/pair-codes` mints a single-use code; `POST /api/periscope/pair`

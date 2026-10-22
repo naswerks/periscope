@@ -29,24 +29,23 @@ export { readAgentCatalog } from './agent-process.js';
 export type { BulkPostReceipt, BulkPostRequest } from './bulk-post.js';
 export { postBulk } from './bulk-post.js';
 
-// The discovery door: read-only, jailed enumeration of the agent CLI's own transcripts. The root
-// derivation ships beside the reader so the composition root derives and the module only reads.
-export type { DiscoveredTranscript, TranscriptPage, TranscriptTailAnswer } from './claude-transcripts.js';
+// The names a transcript reader exported, each inert: this host does not look for, read or keep the
+// agent's transcripts. Kept so an import still resolves; they go at the next major version.
+export type { DiscoveredTranscript, TranscriptPage, TranscriptTailAnswer } from './transcripts-not-served.js';
 export { TRANSCRIPT_PAGE_SIZE, TRANSCRIPT_WHAT_PREFIX } from '../control/frames.js';
 export { packageVersion } from './package-facts.js';
 export {
   claudeProjectsRoot,
-  defaultAgentHome,
   transcriptsRootUnder,
   claudeTranscriptResolver,
   isMatchingUserEntry,
   listTranscripts,
   resolveTranscriptPath,
   tailTranscript,
-} from './claude-transcripts.js';
+} from './transcripts-not-served.js';
 
-// The repository read: the same read-only, jailed posture over the repository root, and over a
-// workspace's directory for the workspace read.
+// The repository read: a read-only, jailed door over the repository root, and over a workspace's
+// directory for the workspace read.
 export type { RepositoryListing, RepositoryText, WorkspaceText } from './repository-read.js';
 export {
   BINARY_PROBE_BYTES,
@@ -60,6 +59,7 @@ export {
 // this host's own credential material — `credentialPaths` covers it BECAUSE both come from here.
 export {
   credentialPaths,
+  defaultAgentHome,
   homeDirectory,
   nodePathResolver,
   pairedCredentialPath,

@@ -13,6 +13,6 @@
     }
   },
   "name": "refused.encode.empty-session-id",
-  "protocolVersion": 17,
+  "protocolVersion": 18,
   "wire": null
 }

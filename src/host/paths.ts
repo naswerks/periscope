@@ -90,6 +90,20 @@ export function homeDirectory(env: NodeJS.ProcessEnv = process.env): string | nu
 }
 
 /**
+ * The agent's home when nothing configures one: the folder the agent CLI keeps its state and its
+ * sign-in in, under the user's home directory. Null when the environment names no home to derive it
+ * from: the hello then reports no agent home rather than one invented under a directory nobody named.
+ *
+ * Spelled as the home is spelled: a Windows profile keeps its backslashes, so the value the hello
+ * reports and a controller displays reads like every other path on that machine.
+ */
+export function defaultAgentHome(env: NodeJS.ProcessEnv = process.env): string | null {
+  const home = env['USERPROFILE'] ?? env['HOME'];
+  if (typeof home === 'string' && home.trim() !== '') return join(home, '.claude');
+  return null;
+}
+
+/**
  * Where credential material lives, as absolute paths.
  *
  * This exists because file permissions are not a boundary here. The agent runs as the same OS

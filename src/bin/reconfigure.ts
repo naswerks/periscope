@@ -22,11 +22,7 @@ import { MAX_PLUGIN_DIRS } from '../control/frames.js';
 import { EXTRA_ENV_FLOOR, envFloorEntryCovers } from '../sessions/spawn-env.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
-import {
-  claudeTranscriptResolver,
-  defaultAgentHome,
-  transcriptsRootUnder,
-} from '../host/claude-transcripts.js';
+import { defaultAgentHome } from '../host/paths.js';
 import {
   RESTART_KEYS,
   WIRE_CONFIGURABLE_KEYS,
@@ -306,7 +302,6 @@ export function reconfigureHost(
     branchScheme: after.branchScheme,
   };
   const agentHome = after.agentHome ?? defaultAgentHome(raw);
-  const transcriptsRoot = agentHome === null ? null : transcriptsRootUnder(agentHome);
   const pluginDirs = parsePluginDirs(after.pluginDirs);
   // The addresses in effect are what the host dialled at start; absent a caller's word, the merged
   // view before this ask is the closest thing to it. A key whose file value differs is pending.
@@ -321,11 +316,10 @@ export function reconfigureHost(
   );
   return ok({
     workspaces: workspacesFor(workspaceConfig) ?? undefined,
-    transcriptsRoot: transcriptsRoot ?? undefined,
-    bulk: transcriptsRoot === null ? undefined : claudeTranscriptResolver(transcriptsRoot),
+    // The binary composes no bulk resolver, and an agent-home change rebuilds none.
+    bulk: undefined,
     linkCapabilities: workspaceCapabilitiesOf(workspaceConfig),
     configuration: hostConfigurationOf(workspaceConfig, {
-      transcriptsRoot,
       controllerUrl: after.controllerUrl,
       decisionUrl: after.decisionUrl,
       agentHome,

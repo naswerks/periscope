@@ -30,6 +30,6 @@
     }
   },
   "name": "session_update.agent-item-tool-call",
-  "protocolVersion": 17,
+  "protocolVersion": 18,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_item\",\"runtime\":\"codex\",\"item\":{\"kind\":\"tool_call\",\"itemId\":\"call-1\",\"turnId\":\"turn-1\",\"toolUseId\":\"call-1\",\"toolName\":\"Bash\",\"toolKind\":\"shell\",\"input\":{\"command\":\"ls\",\"cwd\":\"/work/repo\"},\"truncated\":false},\"observedAt\":\"2000-01-01T00:00:00.000Z\"}}}"
 }

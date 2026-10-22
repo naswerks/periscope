@@ -25,6 +25,6 @@
     }
   },
   "name": "session_update.agent-facts-compaction",
-  "protocolVersion": 17,
+  "protocolVersion": 18,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_facts\",\"fact\":{\"kind\":\"compaction\",\"runtime\":\"claude\",\"status\":\"ended\",\"trigger\":\"auto\",\"tokensBefore\":180000,\"tokensAfter\":21000},\"sourceId\":null,\"observedAt\":\"2000-01-01T00:00:00.000Z\"}}}"
 }

@@ -20,8 +20,6 @@ import {
   FileTokenCache,
   PeriscopeHost,
   defaultAgentHome,
-  transcriptsRootUnder,
-  claudeTranscriptResolver,
   credentialPaths,
   homeDirectory,
   packageVersion,
@@ -152,8 +150,8 @@ interface Config {
   /** The key an unkeyed session provisions at. Null = the session key. */
   readonly workspaceKey: string | null;
   /**
-   * The agent's home: the folder the agent CLI keeps its state in; transcripts are read under
-   * it. Null = the CLI's own default under the home directory (`defaultAgentHome`).
+   * The agent's home: the folder the agent CLI keeps its state and its sign-in in, protected from
+   * the agent's own tools. Null = the CLI's own default under the home directory (`defaultAgentHome`).
    */
   readonly agentHome: string | null;
   /** The plugin directories every session loads, as configured (a path list). Null = none. */
@@ -449,8 +447,8 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     workspaceKey: config.workspaceKey,
   });
   if (workspaceMisconfiguration !== null) return refuse(workspaceMisconfiguration);
-  // The transcripts root is read on demand and jailed, but a relative one means "relative to a
-  // cwd nobody chose"; refused at start-up like every other posture problem.
+  // The agent home names credential files the gate protects; a relative one means "relative to a cwd
+  // nobody chose", so it is refused at start-up like every other posture problem.
   if (config.agentHome !== null && config.agentHome !== '' && !isAbsolutePath(config.agentHome)) {
     return refuse(`PERISCOPE_AGENT_HOME must be an absolute path — got '${config.agentHome}'`);
   }
@@ -555,9 +553,6 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
   const workspaces = workspacesFor(config);
   const agentHome =
     config.agentHome === null || config.agentHome === '' ? defaultAgentHome(raw) : config.agentHome;
-  // The transcripts root derives from the agent home; it is reported in the hello and never set on
-  // its own.
-  const transcriptsRoot = agentHome === null ? null : transcriptsRootUnder(agentHome);
   const homeDir = raw['USERPROFILE'] ?? raw['HOME'] ?? '';
 
   // Declared before the host so the event callback can reach it: the callback runs only after
@@ -702,8 +697,8 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       // alternative (serve the survivors and exit when the last one ends) is declined: an idle
       // session never ends on its own, so that shape is a process that can stay up forever behind
       // a link that will never carry another frame, which is the quiet-death posture this file
-      // exists to prevent. The transcript mirror keeps what the sessions produced; the one number
-      // on this line tells the operator whether work was cut mid-flight.
+      // exists to prevent. What the sessions produced stays in each agent's own record of it; the
+      // one number on this line tells the operator whether work was cut mid-flight.
       const liveSessions = host?.registry.list().length ?? 0;
       // The remedy names the credential the host was actually on: a paired credential is revived by
       // re-pairing, not by signing in. Telling a paired operator to `login` sends them to a flow
@@ -767,21 +762,17 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     }),
     // The home the shell check expands `~` and `$HOME` to, from the same environment as the set above.
     home: homeDirectory(raw),
-    // The discovery door: read-only, jailed. The root is derived here because reading the
-    // environment is the composition root's job; a machine with no resolvable home gets a host
-    // whose door answers with a named failure rather than a guessed root. The bulk resolver
-    // serves `claude-transcript:` locators through the same jail, reads only; the gate's
-    // protection of `~/.claude` against the agent is untouched by either.
-    ...(transcriptsRoot === null ? {} : { transcriptsRoot, bulk: claudeTranscriptResolver(transcriptsRoot) }),
+    // No transcript reader and no bulk resolver: this host does not look for, read or keep the
+    // agent's transcripts, and serves no bulk content of its own. A transcript ask is answered
+    // `transcripts-not-served`, and any other `bulk_request` `bulk-target-invalid`.
     ...(workspaces === null ? {} : { workspaces }),
     // The workspace mode rides the hello as capability markers, derived from the same config the
     // selector above consumed: the read half of what `periscope config` writes, and what lets a
     // controller verify a host is set up rather than trusting its operator's memory.
     linkCapabilities: workspaceCapabilitiesOf(config),
-    // The values behind the markers, from the same reading: which roots, which scheme, which
-    // transcripts root, which controller this process dialled.
+    // The values behind the markers, from the same reading: which roots, which scheme, which agent
+    // home, which controller this process dialled.
     configuration: hostConfigurationOf(config, {
-      transcriptsRoot,
       controllerUrl: config.controllerUrl,
       decisionUrl: config.decisionUrl,
       agentHome,

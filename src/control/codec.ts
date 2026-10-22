@@ -699,6 +699,9 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     liveCount: z.number().int().nonnegative(),
     provisioningCount: z.number().int().nonnegative(),
   }),
+  // The transcript asks and their answers. A host of this build answers both asks `transcript_failed`
+  // with `transcripts-not-served`, and every kind here still decodes: a frame the codec refused would
+  // never reach the host to be answered, and its channel would wait on the sequence number it held.
   z.looseObject({
     kind: z.literal('transcript_list'),
     requestId: z.string().min(1),
@@ -790,7 +793,7 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     pendingRestart: pendingRestartSchema,
     refusal: refusalSchema.nullable(),
   }),
-  // The inventory. Host-scoped and paged like `transcript_list`; the result carries the
+  // The inventory. Host-scoped like `session_list` and paged by index; the result carries the
   // refusal so every exit is one kind.
   z.looseObject({
     kind: z.literal('workspace_list'),
@@ -819,7 +822,7 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     defaultBranch: z.string().max(400).nullable(),
     refusal: refusalSchema.nullable(),
   }),
-  // The repository read. Host-scoped like `transcript_list`; both results carry the refusal so
+  // The repository read. Host-scoped like `session_list`; both results carry the refusal so
   // every exit is one kind. The path is relative text the HOST jails; the codec bounds its length.
   z.looseObject({
     kind: z.literal('repository_list'),

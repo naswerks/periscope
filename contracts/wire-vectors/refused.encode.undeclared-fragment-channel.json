@@ -20,6 +20,6 @@
     }
   },
   "name": "refused.encode.undeclared-fragment-channel",
-  "protocolVersion": 17,
+  "protocolVersion": 18,
   "wire": null
 }

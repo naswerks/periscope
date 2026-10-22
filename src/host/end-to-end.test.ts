@@ -13,7 +13,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { SessionListResult, SessionPayload } from '../control/frames.js';
@@ -315,16 +315,9 @@ test(
     const homeDir = await tempDir('reference-home');
     const workspaceRoot = await tempDir('reference-workspaces');
     const repositoryRoot = await tempDir('reference-repository');
-    const transcriptsRoot = await tempDir('reference-transcripts');
     const configDir = await tempDir('reference-config');
     const pairedDir = await tempDir('reference-paired');
     await writeFile(join(repositoryRoot, 'README.md'), 'hello from the repository\n', 'utf8');
-    await mkdir(join(transcriptsRoot, 'C--work-repo'), { recursive: true });
-    await writeFile(
-      join(transcriptsRoot, 'C--work-repo', 'agent-9.jsonl'),
-      `${JSON.stringify({ type: 'user', cwd: 'C:/work/repo', message: { role: 'user', content: 'first' } })}\n`,
-      'utf8',
-    );
 
     const controller = new TestController({ render: () => undefined });
     const agents = fakeAgents();
@@ -349,7 +342,6 @@ test(
         decide: escalatingDecider({ url: controller.decisionUrl, transport: fetch }),
         protectedPaths: [],
         workspaces,
-        transcriptsRoot,
         gate: { decisionTimeoutMs: 1_000, holdAfterMs: 100, matcherTimeoutSeconds: 5 },
         reconfigure: (entries, hostBusy) =>
           reconfigureHost(raw, entries, hostBusy, {
@@ -407,12 +399,6 @@ test(
       };
       const asks: ReadonlyArray<readonly [string, Record<string, unknown>, string]> = [
         ['session_list', {}, 'session_list_result'],
-        ['transcript_list', { fromIndex: 0 }, 'transcript_list_result'],
-        [
-          'transcript_tail',
-          { projectSlug: 'C--work-repo', sessionId: 'agent-9', fromOffset: 0, needle: null },
-          'transcript_tail_result',
-        ],
         ['workspace_list', { fromIndex: 0 }, 'workspace_list_result'],
         ['repository_list', { path: '' }, 'repository_list_result'],
         ['repository_read', { path: 'README.md', maxBytes: 1024 }, 'repository_read_result'],
@@ -460,15 +446,6 @@ test(
       }
       // The content, where the fixtures make it checkable.
       assert.equal((answers.get('session_list')?.['sessions'] as unknown[]).length, 1);
-      const transcripts = answers.get('transcript_list')?.['entries'] as {
-        sessionId: string;
-        cwd: string | null;
-      }[];
-      assert.deepEqual(
-        transcripts.map((entry) => [entry.sessionId, entry.cwd]),
-        [['agent-9', 'C:/work/repo']],
-      );
-      assert.equal(answers.get('transcript_tail')?.['absent'], false, 'the tail did not find the transcript');
       const worktrees = answers.get('workspace_list')?.['entries'] as { key: string }[];
       assert.ok(
         worktrees.some((entry) => entry.key === 's-1'),
@@ -591,7 +568,7 @@ test(
         DOOR_TIMEOUT_MS,
       );
       await controller.stop();
-      for (const dir of [homeDir, workspaceRoot, repositoryRoot, transcriptsRoot, configDir, pairedDir]) {
+      for (const dir of [homeDir, workspaceRoot, repositoryRoot, configDir, pairedDir]) {
         await rm(dir, { recursive: true, force: true });
       }
     }

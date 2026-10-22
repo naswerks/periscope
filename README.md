@@ -18,7 +18,7 @@ hosts is a live conversation you can steer mid-turn, not a job you collect at th
 port and carries no opinion about what a session _means_: it emits what happened, and the
 controller decides what to do about it. The agent it hosts is Claude Code, through the Claude Agent
 SDK, behind a seam whose own vocabulary names no agent; the agent's hook and message names ride
-the wire as `cause.event`, and the transcript locator is `claude-transcript:`. A host can also offer
+the wire as `cause.event`. A host can also offer
 Codex, through Codex's app-server, when its operator points it at a Codex binary and a home of the
 runner's own ([configuration](docs/configuration.md#codex)); a Codex session is gated through
 periscope's own Codex hook, at tier `intercepted-with-residual`, and every path that can still run
@@ -113,8 +113,8 @@ credential reads and unrecognised git verbs are refused locally before the contr
 everything else is the controller's decision, and no answer is a refusal. The gate is the host's
 one control; the rest is the controller's trust: it chooses the permission mode (`bypassPermissions`
 included), it can run a command at session start, set the agent's environment, remove worktrees and
-read transcripts. [`SECURITY.md`](SECURITY.md) states that reach exactly; read it before you install
-this.
+read text files under the repository root and in its workspaces. [`SECURITY.md`](SECURITY.md) states
+that reach exactly; read it before you install this.
 [gate](docs/gate.md)
 
 **Workspaces are the host's.** A session runs in the directory the controller names, or in a plain
