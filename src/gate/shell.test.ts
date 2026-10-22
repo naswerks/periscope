@@ -500,12 +500,12 @@ test('regression: a dashed git binary behind a backslash-escaped space is git, a
 test('deliberate: an escaped space is read both ways, so reading it only adds a refusal', () => {
   // Joined alone, a word that begins with an escaped space would hide the git behind it, though ssh hands
   // the word to a remote shell that splits it again. The split reading still sees it.
-  for (const command of [
-    String.raw`timeout 10 ssh build-host \ git-send-pack.exe origin`,
-    String.raw`ssh build-host ''\ git push origin main`,
-  ]) {
-    assert.notEqual(refusalFor(command), null, `${command} flowed`);
-  }
+  // The split reading holds `git-send-pack.exe` as a word of its own behind the launcher, so the
+  // allowlist refuses it as git's plumbing, and the push after the quoted empty word parks.
+  const sendPack = String.raw`timeout 10 ssh build-host \ git-send-pack.exe origin`;
+  assert.equal(refusalFor(sendPack)?.reason, 'shell-verb-unrecognised', `${sendPack} flowed`);
+  const push = String.raw`ssh build-host ''\ git push origin main`;
+  assert.match(refusalFor(push)?.detail ?? '', /^git-push:/, `${push} flowed`);
 });
 
 test('control: PowerShell and cmd.exe read a backslash as an ordinary character, so they get no escaped reading', () => {
