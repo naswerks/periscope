@@ -79,21 +79,26 @@ function isLongOption(token: string, name: string, shortest: number): boolean {
 }
 
 /**
- * The value an option was given: `--name value`, `--name=value` or an abbreviation of the name. The
- * value has its quotes removed and its case folded; it is `''` when the option stands bare and null
- * when it could expand (`$`, a backtick), which no rule here may read as a harmless value. Undefined
- * when the option is absent.
+ * The value each occurrence of an option was given: `--name value`, `--name=value` or an abbreviation of
+ * the name, the name read once the shell has removed its quotes (`"--status"` is `--status` to the
+ * program). Each value has its quotes removed and its case folded; it is `''` when the option stands bare
+ * and null when it could expand (`$`, a backtick), which no rule here may read as a harmless value. Empty
+ * when the option is absent. Every occurrence is returned: the Azure CLI's parser keeps the last, so a
+ * rule that reads only one can be handed a harmless first value and a completing second.
  */
-function optionValue(words: readonly string[], name: string, shortest: number): string | null | undefined {
+function optionValues(words: readonly string[], name: string, shortest: number): (string | null)[] {
+  const values: (string | null)[] = [];
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i] as string;
-    if (!isLongOption(word, name, shortest)) continue;
-    const raw = word.includes('=') ? word.slice(word.indexOf('=') + 1) : words[i + 1];
-    if (raw === undefined || (!word.includes('=') && raw.startsWith('-'))) return '';
-    if (raw.includes('$') || raw.includes('`')) return null;
-    return raw.replace(/^["']|["']$/g, '').toLowerCase();
+    const received = word.replace(/["']/g, '');
+    if (!isLongOption(received, name, shortest)) continue;
+    const joined = received.includes('=');
+    const raw = joined ? word.slice(word.indexOf('=') + 1) : words[i + 1];
+    if (raw === undefined || (!joined && raw.startsWith('-'))) values.push('');
+    else if (raw.includes('$') || raw.includes('`')) values.push(null);
+    else values.push(raw.replace(/^["']|["']$/g, '').toLowerCase());
   }
-  return undefined;
+  return values;
 }
 
 /** A `git branch` option that deletes: `-d`, `-D`, a short cluster carrying either, or `--delete`. */
@@ -103,7 +108,8 @@ const isBranchDeleteFlag = (token: string): boolean =>
 /**
  * Does this `az` invocation complete an Azure DevOps pull request? `az repos pr update` with a status
  * other than `abandoned` or `active`, or `az repos pr create|update` with auto-complete set to anything
- * but `false`. A bare option, or a value that could expand, counts as completing.
+ * but `false`. A bare option, or a value that could expand, counts as completing, and so does any one
+ * occurrence of a repeated option.
  *
  * The known limit, as for `gh`: a raw REST call (`az rest`, `az devops invoke`) that completes a pull
  * request is not parsed here, as a raw `gh api` call is not.
@@ -114,11 +120,10 @@ function completesAzurePullRequest(invocation: Invocation): boolean {
   const updating = holdsAdjacent(commands, ['repos', 'pr', 'update']);
   if (!updating && !holdsAdjacent(commands, ['repos', 'pr', 'create'])) return false;
   if (updating) {
-    const status = optionValue(words, '--status', 4);
-    if (status !== undefined && status !== 'abandoned' && status !== 'active') return true;
+    const statuses = optionValues(words, '--status', 4);
+    if (statuses.some((status) => status !== 'abandoned' && status !== 'active')) return true;
   }
-  const autoComplete = optionValue(words, '--auto-complete', 3);
-  return autoComplete !== undefined && autoComplete !== 'false';
+  return optionValues(words, '--auto-complete', 3).some((value) => value !== 'false');
 }
 
 /** The boundary rules, in match order. */
@@ -229,9 +234,17 @@ const isRuledWord = (word: string): boolean => {
   return RULED_PROGRAMS.has(program) || DASHED_GIT.test(program);
 };
 
+/** A word naming its program through a Windows shim (`az.cmd`, `git.bat`), which the program name drops. */
+const SHIM = /\.(?:cmd|bat)["']?$/i;
+
 /**
  * Every invocation the rules read: each one the parser found, each git behind a launcher, and each
  * dashed binary read as git.
+ *
+ * Behind a launcher the command is read from the first ruled word, and also from the first one not
+ * named through a shim when a shim comes earlier: `xargs $G az.cmd git-send-pack.exe` is read as `az.cmd
+ * …` and as `git-send-pack.exe …`, so reading a shim as its program cannot take a git word behind it out
+ * of the allowlist's reach.
  */
 function reach(invocations: readonly Invocation[]): Invocation[] {
   const reached: Invocation[] = [];
@@ -241,6 +254,8 @@ function reach(invocations: readonly Invocation[]): Invocation[] {
     const words = wordsOf(parsed);
     const start = words.findIndex(isRuledWord);
     if (start >= 0) reached.push(normalised(invocationOf(words.slice(start))));
+    const unshimmed = words.findIndex((word) => isRuledWord(word) && !SHIM.test(word));
+    if (unshimmed > start) reached.push(normalised(invocationOf(words.slice(unshimmed))));
   }
   return reached;
 }

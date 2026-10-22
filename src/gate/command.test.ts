@@ -44,6 +44,14 @@ test('a program name drops its directory and its .exe, so a full path is still r
   assert.equal(programNameOf("'git'"), 'git');
 });
 
+test('regression: a program name drops a .cmd or .bat shim suffix in any case, as it drops .exe', () => {
+  assert.equal(programNameOf('az.cmd'), 'az');
+  assert.equal(programNameOf('C:\\Program Files\\Azure\\wbin\\AZ.CMD'), 'az');
+  assert.equal(programNameOf('git.bat'), 'git');
+  assert.equal(programNameOf('deploy.cmd'), 'deploy');
+  assert.equal(programNameOf('notes.cmdx'), 'notes.cmdx', 'only a whole suffix is dropped');
+});
+
 // ---------------------------------------------------------------------------
 // Defect 1 — a boundary word in a code comment refuses a benign script.
 // ---------------------------------------------------------------------------
@@ -249,6 +257,19 @@ test("regression: az's --description takes every word up to the next flag", () =
     !invocation?.args.some((arg) => arg.includes('line')),
     'no paragraph of the description stays in the scan',
   );
+});
+
+test("regression: az's description run ends on a quoted option name, and not on a quoted paragraph that opens with a dash", () => {
+  const ended = parseCommand('az repos pr update --id 5 --description "notes" "--status" completed')
+    .invocations[0];
+  assert.deepEqual(ended?.dataPayloads, ['"notes"']);
+  assert.ok(
+    ended?.args.includes('"--status"') && ended.args.includes('completed'),
+    'the option after the run stays in the scan',
+  );
+  const prose = parseCommand('az repos pr update --id 5 --description "- fixed it" "- tested it"')
+    .invocations[0];
+  assert.deepEqual(prose?.dataPayloads, ['"- fixed it"', '"- tested it"']);
 });
 
 test('control: az prose that could expand stays in the scan, and az outside a pull request write is not prose', () => {

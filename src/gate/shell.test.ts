@@ -601,3 +601,56 @@ test('control: an Azure DevOps pull request that is not completed flows', () => 
     assert.equal(refusalFor(command), null, `${command} was refused`);
   }
 });
+
+test('regression: an Azure DevOps completion parks through a quoted option name, a repeated option and a dash word in a description', () => {
+  for (const command of [
+    'az repos pr update --id 5 "--status" completed',
+    "az repos pr update --id 5 '--status' completed",
+    'az repos pr update --id 5 "--status=completed"',
+    'az repos pr update --id 5 --status active --status completed',
+    'az repos pr update --id 5 --auto-complete false --auto-complete true',
+    'az repos pr update --id 5 --description "notes" "--status" completed',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^az-repos-pr-complete:/, `${command} flowed`);
+  }
+});
+
+test('control: a quoted paragraph that opens with a dash stays prose, and a pull request every occurrence leaves open flows', () => {
+  for (const command of [
+    'az repos pr update --id 5 --description "- fixed it"',
+    'az repos pr update --id 5 --description "- fixed it" "- tested it" --status active',
+    'az repos pr update --id 5 --status abandoned --status active',
+    'az repos pr update --id 5 --auto-complete false --auto-complete false',
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('regression: a .cmd or .bat shim is the program it runs, to every rule and to the prose separation', () => {
+  for (const command of [
+    'az.cmd repos pr update --id 5 --status completed',
+    'AZ.CMD repos pr update --id 5 --status completed',
+    'az.bat repos pr update --id 5 --auto-complete true',
+    '"C:/Program Files/Microsoft SDKs/Azure/CLI2/wbin/az.cmd" repos pr update --id 5 --status completed',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^az-repos-pr-complete:/, `${command} flowed`);
+  }
+  assert.match(refusalFor('git.cmd push origin main')?.detail ?? '', /^git-push:/);
+  assert.match(refusalFor('git.bat push origin main')?.detail ?? '', /^git-push:/);
+  assert.match(refusalFor('gh.cmd pr merge 5')?.detail ?? '', /^gh-pr-merge:/);
+  assert.equal(refusalFor('git-send-pack.cmd origin main')?.reason, 'shell-verb-unrecognised');
+  assert.equal(refusalFor('git.cmd status'), null, 'a read through the shim flows');
+  assert.equal(
+    refusalFor('az.cmd repos pr create --title "x" --description "git push origin main"'),
+    null,
+    'a description naming a push is prose to az.cmd, as it is to az',
+  );
+});
+
+test('control: behind a launcher, a shim does not take a git word after it out of the allowlist', () => {
+  assert.equal(refusalFor('xargs $G az.cmd git-send-pack.exe origin')?.reason, 'shell-verb-unrecognised');
+  assert.match(
+    refusalFor('env az.cmd repos pr update --id 5 --status completed')?.detail ?? '',
+    /^az-repos-pr-complete:/,
+  );
+});

@@ -41,7 +41,7 @@ export interface GlobalFlag {
  * to be safe.
  */
 export interface Invocation {
-  /** The command word with any path and `.exe` stripped, lower-cased. `''` for an empty segment. */
+  /** The command word with any path and `.exe`, `.cmd` or `.bat` stripped, lower-cased. `''` for an empty segment. */
   readonly program: string;
   readonly globalFlags: readonly GlobalFlag[];
   readonly verb: string | null;
@@ -83,7 +83,7 @@ export interface ParsedCommand {
  * the classifier can see it. Without this inversion, nesting smuggles.
  *
  * A closed, named set — extend by named entry, never by wildcard. Path components are stripped and
- * `.exe` dropped, so `C:\Windows\System32\cmd.exe` fires and `deploy.sh` does not: running a script
+ * `.exe`, `.cmd` or `.bat` dropped, so `C:\Windows\System32\cmd.exe` fires and `deploy.sh` does not: running a script
  * file was never scannable at this layer, and pretending otherwise would be a claim the code cannot
  * keep.
  */
@@ -153,7 +153,7 @@ const INLINE_MESSAGE_PREFIXES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
- * Message flags whose value is every word up to the next flag, not one token: `az`'s `--description`
+ * Message flags whose value is every word up to the next option (`endsVariadicRun`), not one token: `az`'s `--description`
  * takes `"line one" "line two"` as two paragraphs. Each inert literal in the run is data; anything else
  * stays in the scan, as one word after any other message flag does.
  */
@@ -190,13 +190,26 @@ const TERMINAL_GIT_FLAGS = new Set(['--version', '--help']);
 
 // ---------------------------------------------------------------------------
 
-/** The command word with any directory prefix and a trailing `.exe` removed, lower-cased. */
+/**
+ * The command word with any directory prefix and a trailing `.exe`, `.cmd` or `.bat` removed, lower-cased.
+ * Windows runs a program through any of the three: `az` is `az.cmd`, and a `git.cmd` shim runs git.
+ */
 export function programNameOf(token: string): string {
   const bare = token.replace(/^["']|["']$/g, '');
   const lastSeparator = Math.max(bare.lastIndexOf('/'), bare.lastIndexOf('\\'));
   const component = lastSeparator >= 0 ? bare.slice(lastSeparator + 1) : bare;
-  const withoutExe = component.toLowerCase().endsWith('.exe') ? component.slice(0, -4) : component;
-  return withoutExe.toLowerCase();
+  const withoutExtension = /\.(?:exe|cmd|bat)$/i.test(component) ? component.slice(0, -4) : component;
+  return withoutExtension.toLowerCase();
+}
+
+/**
+ * Does this word end a variadic message run? `az`'s argument parser ends one on a word that starts with
+ * `-` once the shell has removed its quotes and holds no space, so a quoted option name (`"--status"`)
+ * ends it as a bare one does, and a quoted paragraph that starts with a dash (`"- fixed it"`) does not.
+ */
+function endsVariadicRun(word: string): boolean {
+  const received = word.replace(/["']/g, '');
+  return received.startsWith('-') && !received.includes(' ');
 }
 
 /**
@@ -763,7 +776,7 @@ function readInvocation(tokens: readonly string[]): { invocation: Invocation; sc
         const last = variadic.includes(token) ? tokens.length - 1 : index + 1;
         while (index + 1 <= last && index + 1 < tokens.length) {
           const payload = tokens[index + 1] as string;
-          if (variadic.includes(token) && payload.startsWith('-')) break;
+          if (variadic.includes(token) && endsVariadicRun(payload)) break;
           if (isInertLiteral(payload)) dataPayloads.push(payload);
           else {
             args.push(payload);
