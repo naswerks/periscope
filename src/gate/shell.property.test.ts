@@ -249,6 +249,9 @@ function endsOutsideQuotes(text: string): boolean {
 
 const hasInterpreterToken = (text: string): boolean => parseCommand(text).hasInterpreter;
 
+/** Does the text hold an unpaired backslash before a blank, or end in one, where a blank appended would be escaped? */
+const escapesABlank = (text: string): boolean => /(?:^|[^\\])(?:\\\\)*\\(?:[ \t]|$)/.test(text);
+
 // ---------------------------------------------------------------------------
 
 test('parsing and classifying never throw and answer the same twice for any text', () => {
@@ -375,12 +378,19 @@ test('a command that refuses still refuses with a one-line command appended afte
 
 // Outside a quote a `#` at word start opens a comment the stripper removes before anything else
 // reads the text, so the note cannot reach a rule. Inside an unbalanced quote it is quoted text,
-// which is why the command must end outside one.
-test('a trailing comment never changes the outcome of a command that ends outside a quote', () => {
+// which is why the command must end outside one. A blank after an unpaired backslash is part of the
+// word before it to a POSIX shell, so a `#` after one opens no comment: `echo a\ # ; git push` runs
+// the push, and the escaped reading reads it so. A command ending in such a backslash escapes the
+// blank in front of the note and makes the note command text, and one holding an escaped blank reads
+// its own later text, quotes included, in that reading, so the claim is stated for a command with
+// neither. Those shapes are pinned by name in shell.test.ts.
+test('a trailing comment never changes the outcome of a command that ends outside a quote and escapes no blank', () => {
   const note = fc
     .oneof(fc.string(), fc.constantFrom('git push origin main', "it's", 'do not merge', '"', 'EOF'))
     .filter((text) => !text.includes('\n') && !text.includes('\r'));
-  const eligible = anyTextArb.filter((command) => endsOutsideQuotes(stripComments(command)));
+  const eligible = anyTextArb.filter(
+    (command) => endsOutsideQuotes(stripComments(command)) && !escapesABlank(command),
+  );
   fc.assert(
     fc.property(eligible, note, (command, appended) => {
       assert.deepEqual(classifyShellCommand(`${command} # ${appended}`), classifyShellCommand(command));
@@ -470,5 +480,13 @@ test('control: the generator produces commands the classifier both refuses and a
   assert.ok(
     endsOutsideQuotes("a 'b' c") && !endsOutsideQuotes("a 'b"),
     'the quote machine must discriminate',
+  );
+  assert.ok(
+    escapesABlank('a\\') && escapesABlank('a\\ b') && escapesABlank('a\\\\\\ b'),
+    'an unpaired backslash before a blank or the end escapes it',
+  );
+  assert.ok(
+    !escapesABlank('a\\\\ b') && !escapesABlank('a\\b c'),
+    'a pair, or a backslash before a letter, does not',
   );
 });

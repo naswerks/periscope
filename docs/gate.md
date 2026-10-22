@@ -105,11 +105,22 @@ with `gh pr merge`, the completion of an Azure DevOps pull request with `az repo
 completed` or `--auto-complete`) is read from the parsed invocation — its program, its subcommand and its
 option tokens, never a word inside a path — wherever the program runs: at a command position, behind a
 launcher (`env`, `sudo`, `nohup`, `timeout`, `xargs` and the others `src/gate/shell.ts` names), as git's
-dashed binary (`git-send-pack.exe`), or named inside another program's words (`ssh host "git push"`).
-The git verb allow-list reaches the same positions. A raw REST call that merges (`gh api`, `az rest`) is
-not parsed. Such a shape is classified locally and then
-escalated like any other call, because a controller may hold it for a person to answer; refusing it
-in-process would make that answer impossible to give. With the controller unreachable it refuses at
+dashed binary (`git-send-pack.exe`), through a Windows shim (`az.cmd`, `git.bat`), named inside another
+program's words (`ssh host "git push"`), or as a command word an expansion supplies (`$(echo git) push`,
+`` `echo git` push ``, `G=git; $G push`, `g$(echo it) push`), which is read as git, `gh` and `az` in
+turn and parks only a command nothing else refuses. An option is read as the program reads it: a quoted
+option name is the option (`az repos pr update --id 5 "--status" completed`), every occurrence of a
+repeated option counts (`--status active --status completed`, where `az` keeps the last), an option's
+value is its value (`git branch --sort -committerdate` sorts, and a deletion cluster is made of
+`git branch`'s own short options), and `az`'s `--description` runs to the next word that starts with
+`-` and holds no space once its quotes are removed (`--description "- fixed it"` is prose). The git
+verb allow-list reads git at a command position, behind a launcher, as a dashed binary and through a
+shim, and nowhere else: inside another program's words and in a command word an expansion supplies
+only the boundary rules read it, because the allow-list there would refuse `rg git src` and
+`$EDITOR notes.md` (what flows for that is listed under What is deliberately not covered, below). A
+raw REST call that merges (`gh api`, `az rest`) is not parsed. Such a shape is classified locally and
+then escalated like any other call, because a controller may hold it for a person to answer; refusing
+it in-process would make that answer impossible to give. With the controller unreachable it refuses at
 the decision deadline.
 
 - It adds refusals and never removes one. No opinion returns `null` and the surrounding gate asks
@@ -146,9 +157,16 @@ the decision deadline.
 - Shell commands are parsed before they are judged (`src/gate/command.ts`, `src/gate/shell.ts`):
   the classifier sees a parsed shape, never text. An interpreter payload (`bash -c "..."`) is
   scanned as the nested command it is, with the interpreter's own delimiter closing it, so a nested
-  quote of the other kind and a `#` inside the payload are the nested command's own syntax.
-  `src/gate/shell.property.test.ts` holds totality, determinism and monotone refusal under quoting
-  and composition.
+  quote of the other kind and a `#` inside the payload are the nested command's own syntax. A POSIX
+  command with an escaped blank is read twice, split and joined as bash joins it
+  (`C:/Program\ Files/…` one path), and in the joined reading a `#` after an escaped blank is
+  mid-word, so `echo a\ # ; git push origin main` reads the push; a backslash before a quote is not
+  read as an escape, the reading that scans more. Every command is read once more with each `$( … )`,
+  `${ … }` and backtick kept inside its word, for the command words an expansion supplies. The
+  classifier refuses when any reading refuses. `src/gate/shell.property.test.ts` holds totality,
+  determinism and monotone refusal under quoting and composition, and `scripts/classifier-diff.mjs`
+  measures a change to the classifier: it classifies one corpus with two builds and prints every
+  answer that moved.
 
 ## The five outcomes that must never blur
 
@@ -445,6 +463,19 @@ opens at `intercepted-with-residual`.
 - `outputFor` cannot render a hold: `holding` is excluded by the type, not by a branch. A branch
   that returned `{}` for it would be no opinion, which the CLI reads as allow, so the one state that
   could open the door is made unrepresentable rather than handled.
+- Shell shapes the classifier lets through, each a known gap rather than a choice:
+  - git's plumbing publish where only the boundary rules read: inside another program's words
+    (`ssh build-host git send-pack origin main`), in a command word an expansion supplies
+    (`$(echo git) send-pack origin main`), and after a backslash before a quote
+    (`echo \" ; git send-pack origin main`), where the quote is read as opening a span, so the rest of
+    the line is one word of `echo`'s. The same shapes with `git push` refuse as `git-push`.
+  - a command word an expansion supplies behind a launcher (`sudo $(echo git) push origin main`,
+    `timeout 10 $G push origin main`), and `cmd`'s `%NAME%` as a command word (`%G% push origin main`).
+  - a backslash before a newline, which a POSIX shell removes with the newline: `echo a\` with
+    `# ; git push origin main` on the next line is one line to bash, which runs the push, while the
+    comment stripper ends the command at the `#`.
+  - a quoted option to git (`git reset "--hard"`, `git branch "-d" topic`), which git reads as the
+    option and the rules read as a word.
 
 ## Where things live
 

@@ -159,23 +159,32 @@ test('an unreadable line and an oversize request are closed without a decision',
 
 test('closing the channel abandons a decision it was waiting on', async () => {
   let aborted = false;
+  // Resolved inside the decider, so the channel is closed only once the decision is outstanding.
+  const outstanding = Promise.withResolvers<void>();
   const channel = openHookChannel({
     runtime: 'codex',
     version: '1.7.0',
     decide: (_event, signal) =>
       new Promise<HookDecision>((resolve) => {
-        signal.addEventListener('abort', () => {
+        const abandon = (): void => {
           aborted = true;
           resolve({ allow: false, reason: 'abandoned' });
-        });
+        };
+        if (signal.aborted) abandon();
+        else signal.addEventListener('abort', abandon, { once: true });
+        outstanding.resolve();
       }),
   });
-  await channel.ready();
-  const pending = exchange(channel.address, request(channel.token, 'nonce-one'));
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  channel.close();
-  assert.equal(await pending, null);
-  assert.equal(aborted, true, 'the decision was left outstanding');
+  try {
+    await channel.ready();
+    const pending = exchange(channel.address, request(channel.token, 'nonce-one'));
+    await outstanding.promise;
+    channel.close();
+    assert.equal(await pending, null, 'an abandoned decision was answered');
+    assert.equal(aborted, true, 'the decision was left outstanding');
+  } finally {
+    channel.close();
+  }
 });
 
 test('the only listening sockets this package opens are the hook channel, on a path, and the sign-in loopback', () => {

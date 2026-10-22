@@ -433,6 +433,48 @@ test('regression: a branch deletion refuses in a short cluster and an abbreviate
   assert.match(refusalFor('git reset --har HEAD~1')?.detail ?? '', /^git-reset-hard:/);
 });
 
+test('regression: an option value that starts with a dash is the value, not a branch deletion', () => {
+  // git reads each value below as the option's own (a sort key, a format, a commit, a colour) and deletes
+  // nothing; `-dx` is no cluster of git branch's options, and git refuses the unknown switch.
+  for (const command of [
+    'ssh build-host "git branch --sort=-committerdate"',
+    'git branch --sort -committerdate',
+    'git branch --so -committerdate',
+    'git branch --sort=-committerdate',
+    'ssh build-host "git branch --format=-d"',
+    'ssh build-host git branch --format -d',
+    'git branch --contains -d topic',
+    'ssh build-host "git branch --color=-d"',
+    'git branch -dx topic',
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('control: a real branch deletion still parks in a cluster of branch options, after an option value, and after an option that takes no separate value', () => {
+  for (const command of [
+    'git branch -fd topic',
+    'git branch --contains HEAD -d topic',
+    'git branch --sort=-committerdate -d topic',
+    'git branch --color -d topic',
+    'ssh build-host "git branch --color -d topic"',
+    'ssh build-host "git branch -d topic"',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-branch-delete:/, `${command} flowed`);
+  }
+});
+
+test("control: the text after an = in another program's words still begins a command, and an option's =value after it stays its value", () => {
+  for (const command of [
+    "git -c core.pager='git push origin main' log",
+    'rg -c core.pager=git push origin main',
+    'ssh build-host -o core.pager=git push origin main',
+    'ssh build-host git --exec-path=/x push origin main',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Git behind a launcher, and git's dashed binaries.
 // ---------------------------------------------------------------------------
@@ -500,12 +542,40 @@ test('regression: a dashed git binary behind a backslash-escaped space is git, a
 test('deliberate: an escaped space is read both ways, so reading it only adds a refusal', () => {
   // Joined alone, a word that begins with an escaped space would hide the git behind it, though ssh hands
   // the word to a remote shell that splits it again. The split reading still sees it.
+  // The split reading holds `git-send-pack.exe` as a word of its own behind the launcher, so the
+  // allowlist refuses it as git's plumbing, and the push after the quoted empty word parks.
+  const sendPack = String.raw`timeout 10 ssh build-host \ git-send-pack.exe origin`;
+  assert.equal(refusalFor(sendPack)?.reason, 'shell-verb-unrecognised', `${sendPack} flowed`);
+  const push = String.raw`ssh build-host ''\ git push origin main`;
+  assert.match(refusalFor(push)?.detail ?? '', /^git-push:/, `${push} flowed`);
+});
+
+test('regression: a `#` after an escaped blank is part of the word, so the command after it is read', () => {
+  // To a POSIX shell `a\ #` is one word, `a #`: the `#` opens no comment and the push after the `;` runs.
   for (const command of [
-    String.raw`timeout 10 ssh build-host \ git-send-pack.exe origin`,
-    String.raw`ssh build-host ''\ git push origin main`,
+    String.raw`echo a\ # ; git push origin main`,
+    'echo a\\\t# ; git push origin main',
+    String.raw`echo a\\\ # ; git push origin main`,
+    String.raw`bash -c "echo a\ # ; git push origin main"`,
   ]) {
-    assert.notEqual(refusalFor(command), null, `${command} flowed`);
+    assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
   }
+  assert.equal(
+    refusalFor(String.raw`echo a\ # ; git send-pack origin main`)?.reason,
+    'shell-verb-unrecognised',
+    'the plumbing form after the same word is refused by the allowlist',
+  );
+});
+
+test('control: a backslash pair escapes nothing, so the blank after it starts a word and the `#` a comment', () => {
+  assert.equal(refusalFor(String.raw`echo a\\ # ; git push origin main`), null);
+  assert.equal(refusalFor('echo a # ; git push origin main'), null);
+  assert.equal(refusalFor(String.raw`bash -c "echo a\\ # ; git push origin main"`), null);
+});
+
+test('deliberate: a backslash before a quote is not read as an escape, so the quote opens a span and what follows it stays in the scan', () => {
+  // bash runs only `echo "` here; reading the quote as a quote refuses instead, the direction that scans more.
+  assert.match(refusalFor(String.raw`echo \" # " ; git push origin main`)?.detail ?? '', /^git-push:/);
 });
 
 test('control: PowerShell and cmd.exe read a backslash as an ordinary character, so they get no escaped reading', () => {
@@ -572,4 +642,107 @@ test('control: an Azure DevOps pull request that is not completed flows', () => 
   ]) {
     assert.equal(refusalFor(command), null, `${command} was refused`);
   }
+});
+
+test('regression: an Azure DevOps completion parks through a quoted option name, a repeated option and a dash word in a description', () => {
+  for (const command of [
+    'az repos pr update --id 5 "--status" completed',
+    "az repos pr update --id 5 '--status' completed",
+    'az repos pr update --id 5 "--status=completed"',
+    'az repos pr update --id 5 --status active --status completed',
+    'az repos pr update --id 5 --auto-complete false --auto-complete true',
+    'az repos pr update --id 5 --description "notes" "--status" completed',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^az-repos-pr-complete:/, `${command} flowed`);
+  }
+});
+
+test('control: a quoted paragraph that opens with a dash stays prose, and a pull request every occurrence leaves open flows', () => {
+  for (const command of [
+    'az repos pr update --id 5 --description "- fixed it"',
+    'az repos pr update --id 5 --description "- fixed it" "- tested it" --status active',
+    'az repos pr update --id 5 --status abandoned --status active',
+    'az repos pr update --id 5 --auto-complete false --auto-complete false',
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('regression: a .cmd or .bat shim is the program it runs, to every rule and to the prose separation', () => {
+  for (const command of [
+    'az.cmd repos pr update --id 5 --status completed',
+    'AZ.CMD repos pr update --id 5 --status completed',
+    'az.bat repos pr update --id 5 --auto-complete true',
+    '"C:/Program Files/Microsoft SDKs/Azure/CLI2/wbin/az.cmd" repos pr update --id 5 --status completed',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^az-repos-pr-complete:/, `${command} flowed`);
+  }
+  assert.match(refusalFor('git.cmd push origin main')?.detail ?? '', /^git-push:/);
+  assert.match(refusalFor('git.bat push origin main')?.detail ?? '', /^git-push:/);
+  assert.match(refusalFor('gh.cmd pr merge 5')?.detail ?? '', /^gh-pr-merge:/);
+  assert.equal(refusalFor('git-send-pack.cmd origin main')?.reason, 'shell-verb-unrecognised');
+  assert.equal(refusalFor('git.cmd status'), null, 'a read through the shim flows');
+  assert.equal(
+    refusalFor('az.cmd repos pr create --title "x" --description "git push origin main"'),
+    null,
+    'a description naming a push is prose to az.cmd, as it is to az',
+  );
+});
+
+test('control: behind a launcher, a shim does not take a git word after it out of the allowlist', () => {
+  assert.equal(refusalFor('xargs $G az.cmd git-send-pack.exe origin')?.reason, 'shell-verb-unrecognised');
+  assert.match(
+    refusalFor('env az.cmd repos pr update --id 5 --status completed')?.detail ?? '',
+    /^az-repos-pr-complete:/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// A command word an expansion supplies.
+// ---------------------------------------------------------------------------
+
+test('regression: a command word an expansion supplies is read as each program the rules govern, so a publish behind one parks', () => {
+  for (const command of [
+    '$(echo git) push origin x',
+    '`echo git` push origin x',
+    'G=git; $G push origin main',
+    '${G} push origin main',
+    '"$(echo git)" push origin main',
+    'g$(echo it) push origin main',
+    '$(echo git) -C /repo push origin main',
+    'echo $($(echo git) push origin main)',
+    'bash -c "$(echo git) push origin main"',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
+  }
+  assert.match(refusalFor('$(echo gh) pr merge 5')?.detail ?? '', /^gh-pr-merge:/);
+  assert.match(
+    refusalFor('$AZ repos pr update --id 5 --status completed')?.detail ?? '',
+    /^az-repos-pr-complete:/,
+  );
+});
+
+test('control: a command word an expansion supplies flows when no rule fires for any program it could name', () => {
+  for (const command of [
+    '$EDITOR f',
+    '$EDITOR notes.md',
+    '$(npm bin)/tsc',
+    '$(npm bin)/tsc -p .',
+    '$(which node) script.js',
+    '"$HOME/bin/tool" run',
+    '$(git rev-parse --show-toplevel)/scripts/build.sh',
+    '$(echo git) status',
+    'echo `date` push',
+    "'$G' push",
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('control: a refusal another rule makes stays that refusal beside a command word an expansion supplies', () => {
+  assert.equal(
+    refusalFor('$G push origin main; git send-pack origin main')?.reason,
+    'shell-verb-unrecognised',
+    'the allowlist refusal stays local',
+  );
 });
