@@ -272,9 +272,10 @@ export function stripComments(command: string): string {
  * after an unpaired backslash is part of the word before it, so it starts no word and a `#` after it is
  * mid-word, as bash reads `echo a\ # ; git push` (one word `a #`, then the push). Only the blank is read
  * as escaped: a backslash before a quote is not, so a quote after one still opens a span, the reading
- * that scans more.
+ * that scans more. Not part of the gate's barrel.
+ * @internal
  */
-function stripPosixComments(command: string, escapes: boolean): string {
+export function stripPosixComments(command: string, escapes: boolean): string {
   let result = '';
   let quote = '';
   let atWordStart = true;

@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import * as fc from 'fast-check';
 import { propertyRuns } from '../test-support/property.js';
 
-import { INTERPRETER_NAMES, parseCommand, stripComments } from './command.js';
+import { INTERPRETER_NAMES, parseCommand, stripComments, stripPosixComments } from './command.js';
 import { classifyShellCommand } from './shell.js';
 
 const RUNS = propertyRuns();
@@ -249,8 +249,18 @@ function endsOutsideQuotes(text: string): boolean {
 
 const hasInterpreterToken = (text: string): boolean => parseCommand(text).hasInterpreter;
 
-/** Does the text hold an unpaired backslash before a blank, or end in one, where a blank appended would be escaped? */
-const escapesABlank = (text: string): boolean => /(?:^|[^\\])(?:\\\\)*\\(?:[ \t]|$)/.test(text);
+/** Does the text end in an unpaired backslash, which escapes a blank appended after it? */
+const endsInEscape = (text: string): boolean => /(?:^|[^\\])(?:\\\\)*\\$/.test(text);
+
+/**
+ * Does the command end outside a quote, and outside an escape, in both POSIX readings: comments stripped
+ * as the split reading strips them, and as the escaped reading does, where a `#` after an escaped blank is
+ * mid-word and the text after it is kept?
+ */
+const endsOpenInBothReadings = (command: string): boolean => {
+  const escaped = stripPosixComments(command, true);
+  return endsOutsideQuotes(stripComments(command)) && endsOutsideQuotes(escaped) && !endsInEscape(escaped);
+};
 
 // ---------------------------------------------------------------------------
 
@@ -378,19 +388,16 @@ test('a command that refuses still refuses with a one-line command appended afte
 
 // Outside a quote a `#` at word start opens a comment the stripper removes before anything else
 // reads the text, so the note cannot reach a rule. Inside an unbalanced quote it is quoted text,
-// which is why the command must end outside one. A blank after an unpaired backslash is part of the
-// word before it to a POSIX shell, so a `#` after one opens no comment: `echo a\ # ; git push` runs
-// the push, and the escaped reading reads it so. A command ending in such a backslash escapes the
-// blank in front of the note and makes the note command text, and one holding an escaped blank reads
-// its own later text, quotes included, in that reading, so the claim is stated for a command with
-// neither. Those shapes are pinned by name in shell.test.ts.
-test('a trailing comment never changes the outcome of a command that ends outside a quote and escapes no blank', () => {
+// which is why the command must end outside one, in both POSIX readings: a blank after an unpaired
+// backslash is part of the word before it, so a `#` after one opens no comment (`echo a\ # ; git push`
+// runs the push) and the escaped reading keeps the text after it, quotes included. A command that ends
+// in an unpaired backslash escapes the blank in front of the note, which is then words of the command
+// and not a comment, so the claim is stated for a command that does not.
+test('a trailing comment never changes the outcome of a command that ends outside a quote and an escape', () => {
   const note = fc
     .oneof(fc.string(), fc.constantFrom('git push origin main', "it's", 'do not merge', '"', 'EOF'))
     .filter((text) => !text.includes('\n') && !text.includes('\r'));
-  const eligible = anyTextArb.filter(
-    (command) => endsOutsideQuotes(stripComments(command)) && !escapesABlank(command),
-  );
+  const eligible = anyTextArb.filter(endsOpenInBothReadings);
   fc.assert(
     fc.property(eligible, note, (command, appended) => {
       assert.deepEqual(classifyShellCommand(`${command} # ${appended}`), classifyShellCommand(command));
@@ -481,12 +488,13 @@ test('control: the generator produces commands the classifier both refuses and a
     endsOutsideQuotes("a 'b' c") && !endsOutsideQuotes("a 'b"),
     'the quote machine must discriminate',
   );
+  assert.ok(endsInEscape('a\\') && endsInEscape('a\\\\\\'), 'an unpaired backslash at the end escapes');
   assert.ok(
-    escapesABlank('a\\') && escapesABlank('a\\ b') && escapesABlank('a\\\\\\ b'),
-    'an unpaired backslash before a blank or the end escapes it',
+    !endsInEscape('a\\\\') && !endsInEscape('a\\b'),
+    'a pair, or a backslash before a letter, does not',
   );
   assert.ok(
-    !escapesABlank('a\\\\ b') && !escapesABlank('a\\b c'),
-    'a pair, or a backslash before a letter, does not',
+    endsOpenInBothReadings('a\\ #b') && !endsOpenInBothReadings("a\\ # it's"),
+    'the escaped reading keeps its quote',
   );
 });
