@@ -411,7 +411,7 @@ it is loaded, that it is the last handler a call meets, and that nothing else is
   closes the exchange, which ends the host's decision rather than leaving pi's abort to wait on it), a
   reply that does not verify, and anything the handler throws.
 - **An allow may rewrite the input** (`canRewriteInput`). The rewrite is applied to the call's input in
-  place, and pi runs that object, unvalidated again; pi's transcript and its `tool_execution_start`
+  place, and pi runs that object, unvalidated again; pi's session record and its `tool_execution_start`
   still show the input the model wrote.
 - **pi's own `bash` command is refused.** It runs a command outside any tool call, and its handler has
   no way to block one but to throw, so the extension's handler throws: the command does not run, and
