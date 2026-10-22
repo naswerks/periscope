@@ -654,3 +654,53 @@ test('control: behind a launcher, a shim does not take a git word after it out o
     /^az-repos-pr-complete:/,
   );
 });
+
+// ---------------------------------------------------------------------------
+// A command word an expansion supplies.
+// ---------------------------------------------------------------------------
+
+test('regression: a command word an expansion supplies is read as each program the rules govern, so a publish behind one parks', () => {
+  for (const command of [
+    '$(echo git) push origin x',
+    '`echo git` push origin x',
+    'G=git; $G push origin main',
+    '${G} push origin main',
+    '"$(echo git)" push origin main',
+    'g$(echo it) push origin main',
+    '$(echo git) -C /repo push origin main',
+    'echo $($(echo git) push origin main)',
+    'bash -c "$(echo git) push origin main"',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
+  }
+  assert.match(refusalFor('$(echo gh) pr merge 5')?.detail ?? '', /^gh-pr-merge:/);
+  assert.match(
+    refusalFor('$AZ repos pr update --id 5 --status completed')?.detail ?? '',
+    /^az-repos-pr-complete:/,
+  );
+});
+
+test('control: a command word an expansion supplies flows when no rule fires for any program it could name', () => {
+  for (const command of [
+    '$EDITOR f',
+    '$EDITOR notes.md',
+    '$(npm bin)/tsc',
+    '$(npm bin)/tsc -p .',
+    '$(which node) script.js',
+    '"$HOME/bin/tool" run',
+    '$(git rev-parse --show-toplevel)/scripts/build.sh',
+    '$(echo git) status',
+    'echo `date` push',
+    "'$G' push",
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('control: a refusal another rule makes stays that refusal beside a command word an expansion supplies', () => {
+  assert.equal(
+    refusalFor('$G push origin main; git send-pack origin main')?.reason,
+    'shell-verb-unrecognised',
+    'the allowlist refusal stays local',
+  );
+});

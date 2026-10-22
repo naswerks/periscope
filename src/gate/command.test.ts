@@ -227,6 +227,25 @@ test('a compound produces one invocation per command position', () => {
   );
 });
 
+test('regression: a command word an expansion supplies is set aside with the words after it, at any depth', () => {
+  assert.deepEqual(parseCommand('$(echo git) push origin x').expandedCommands, [['push', 'origin', 'x']]);
+  assert.deepEqual(parseCommand('`echo git` push').expandedCommands, [['push']]);
+  assert.deepEqual(parseCommand('g$(echo it) push').expandedCommands, [['push']]);
+  assert.deepEqual(parseCommand('G=git; ${G} push').expandedCommands, [['push']]);
+  assert.deepEqual(parseCommand('echo $($G push)').expandedCommands, [['push']], 'inside a substitution');
+});
+
+test('control: a command word whose last path component is literal, or whose $ is single-quoted, names its program', () => {
+  for (const command of [
+    '$(npm bin)/tsc -p .',
+    '"$HOME/bin/tool" run',
+    "'$G' push",
+    'git -C $(pwd) status',
+  ]) {
+    assert.equal(parseCommand(command).expandedCommands, undefined, command);
+  }
+});
+
 // Guards the selector, not the rules: if `parseCommand` returned nothing for everything, every
 // assertion above that looks for an absence would pass while checking nothing.
 test('the parser actually produces invocations and scannable text', () => {

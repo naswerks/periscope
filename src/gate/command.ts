@@ -71,6 +71,13 @@ export interface ParsedCommand {
    * @internal
    */
   readonly escapedReading?: ParsedCommand;
+  /**
+   * The words after each command word whose name an expansion supplies (`$(echo git) push origin x`, `$G
+   * push`, `g$(echo it) push`), at any depth; absent when there is none. The program is known only once
+   * the shell runs the expansion.
+   * @internal
+   */
+  readonly expandedCommands?: readonly (readonly string[])[];
 }
 
 /**
@@ -451,7 +458,136 @@ export function readCmdCommand(command: string): string {
  * nothing else, exactly as the same text does outside the quotes.
  */
 export function tokenize(command: string, quotesAreSeparators = false): string[] {
-  return splitWords(command, quotesAreSeparators, false);
+  return splitWords(command, quotesAreSeparators, false, false);
+}
+
+/**
+ * The index just past the expansion that opens at `start` (`$( … )`, `${ … }`, or a backtick and its
+ * pair), or -1 when it does not close before the end of its line. Inside one a quoted span is skipped,
+ * so a closer inside quotes does not end it; where quotes are separators (an interpreter is named) a
+ * quote ends the attempt instead, and the text is split as it always is.
+ */
+function expansionEnd(characters: readonly string[], start: number, quotesAreSeparators: boolean): number {
+  const backtick = characters[start] === '`';
+  const open = backtick ? '`' : (characters[start + 1] as string);
+  const close = backtick ? '`' : open === '(' ? ')' : '}';
+  let depth = 0;
+  let quote = '';
+  for (let i = start + (backtick ? 1 : 2); i < characters.length; i += 1) {
+    const character = characters[i] as string;
+    if (character === '\n' || character === '\r') return -1;
+    if (quote !== '') {
+      if (character === quote) quote = '';
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      if (quotesAreSeparators) return -1;
+      quote = character;
+      continue;
+    }
+    if (character === close && depth === 0) return i + 1;
+    if (backtick) continue;
+    if (character === open) depth += 1;
+    else if (character === close) depth -= 1;
+  }
+  return -1;
+}
+
+/** Does an expansion open at this character: a `$( … )`, a `${ … }` or a backtick? */
+const opensExpansion = (characters: readonly string[], index: number): boolean =>
+  characters[index] === '`' ||
+  (characters[index] === '$' && (characters[index + 1] === '(' || characters[index + 1] === '{'));
+
+/**
+ * Does an expansion supply this command word's name: a `$NAME`, `${ … }`, `$( … )` or backtick after
+ * its last path separator? `$(npm bin)/tsc` names `tsc` and `"$HOME/bin/tool"` names `tool`; `$G`,
+ * `g$(echo it)` and `"$(echo git)"` name whatever the shell expands them to. A `$` in single quotes is
+ * literal.
+ */
+function namedByExpansion(word: string): boolean {
+  const characters = [...word];
+  let lastSeparator = -1;
+  let lastExpansion = -1;
+  let quote = '';
+  for (let i = 0; i < characters.length; i += 1) {
+    const character = characters[i] as string;
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      continue;
+    }
+    if (character === "'" && quote === '') quote = "'";
+    else if (character === '"') quote = quote === '"' ? '' : '"';
+    else if (character === '/' || character === '\\') lastSeparator = i;
+    else if (opensExpansion(characters, i)) {
+      lastExpansion = i;
+      const end = expansionEnd(characters, i, false);
+      // Unclosed, the rest of the word is the expansion's.
+      if (end === -1) return true;
+      i = end - 1;
+    } else if (character === '$' && /^[A-Za-z0-9_@*#?$!-]$/.test(characters[i + 1] ?? '')) {
+      lastExpansion = i;
+    }
+  }
+  return lastExpansion > lastSeparator;
+}
+
+/** The text inside each expansion in a word (`$( … )`, `${ … }`, a backtick pair), outside single quotes. */
+function expansionBodies(word: string): string[] {
+  const characters = [...word];
+  const bodies: string[] = [];
+  let quote = '';
+  for (let i = 0; i < characters.length; i += 1) {
+    const character = characters[i] as string;
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      continue;
+    }
+    if (character === "'" && quote === '') quote = "'";
+    else if (character === '"') quote = quote === '"' ? '' : '"';
+    else if (opensExpansion(characters, i)) {
+      const end = expansionEnd(characters, i, false);
+      if (end === -1) continue;
+      bodies.push(characters.slice(i + (character === '`' ? 1 : 2), end - 1).join(''));
+      i = end - 1;
+    }
+  }
+  return bodies;
+}
+
+/** A command's tokens split into command positions, at the separators and opener keywords `positionsOf` splits at. */
+function commandPositions(tokens: readonly string[]): string[][] {
+  const positions: string[][] = [];
+  let position: string[] = [];
+  for (const token of tokens) {
+    if ((token.length === 1 && SEPARATORS.has(token)) || OPENER_KEYWORDS.has(token.toLowerCase())) {
+      if (position.length > 0) positions.push(position);
+      position = [];
+    } else position.push(token);
+  }
+  if (position.length > 0) positions.push(position);
+  return positions;
+}
+
+/**
+ * The words after each command word whose name an expansion supplies, at every command position and
+ * inside every expansion's text, read with each expansion kept inside its word as the shell reads a word
+ * before expanding it: `$(echo git) push origin x` is the word `$(echo git)` and then `push origin x`,
+ * where the split reading has `)` end a command and `push` begin one. What the expansion will name is
+ * unknown until the shell runs it, so these are the words a classifier reads as each program it rules.
+ */
+function expansionCommands(text: string, quotesAreSeparators: boolean, escapes: boolean): string[][] {
+  const tokens = splitWords(text, quotesAreSeparators, escapes, true);
+  const found: string[][] = [];
+  for (const position of commandPositions(tokens)) {
+    if (namedByExpansion(position[0] as string)) found.push(position.slice(1));
+  }
+  for (const token of tokens) {
+    for (const body of expansionBodies(token)) {
+      const nested = tokenize(body).some((word) => INTERPRETER_NAMES.includes(programNameOf(word)));
+      found.push(...expansionCommands(body, nested, escapes));
+    }
+  }
+  return found;
 }
 
 /**
@@ -476,8 +612,16 @@ function continuesWord(character: string | undefined): boolean {
  * blank before a separator or the end is left as it was. Inside an interpreter's payload a `#` after an
  * escaped blank is joined into the word too, so it opens no comment there either. PowerShell and cmd.exe
  * read a backslash as an ordinary character, so only the POSIX reading sets it.
+ *
+ * With `keepExpansions` set, a `$( … )`, `${ … }` or backtick pair outside a quote is kept inside the word
+ * it sits in rather than split at its brackets, for `expansionCommands`.
  */
-function splitWords(command: string, quotesAreSeparators: boolean, escapes: boolean): string[] {
+function splitWords(
+  command: string,
+  quotesAreSeparators: boolean,
+  escapes: boolean,
+  keepExpansions: boolean,
+): string[] {
   const tokens: string[] = [];
   let current = '';
   let quote = '';
@@ -531,6 +675,15 @@ function splitWords(command: string, quotesAreSeparators: boolean, escapes: bool
       quote = character;
       current += character;
       continue;
+    }
+
+    if (keepExpansions && opensExpansion(characters, i)) {
+      const end = expansionEnd(characters, i, quotesAreSeparators);
+      if (end !== -1) {
+        current += characters.slice(i, end).join('');
+        i = end - 1;
+        continue;
+      }
     }
 
     if (escapes && character === '\\') {
@@ -818,7 +971,7 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
         ? readCmdCommand(command)
         : stripComments(command);
   const plain = wordsOfText(withoutComments, dialect === 'posix', false);
-  const parsed: ParsedCommand = { ...positionsOf(plain.tokens), hasInterpreter: plain.hasInterpreter };
+  const parsed = readingOf(plain, false);
   if (dialect !== 'posix') return parsed;
   // A POSIX shell joins an escaped blank into its word, so a `#` after one is inside that word and opens
   // no comment; PowerShell and cmd.exe have no such escape. Read that way too, from the comments on,
@@ -830,10 +983,24 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
     escaped.tokens.every((token, index) => token === tokens[index])
   )
     return parsed;
+  return { ...parsed, escapedReading: readingOf(escaped, true) };
+}
+
+/** One reading of a command: its invocations, its scannable text, and the commands an expansion names. */
+function readingOf(words: WordsOfText, escapes: boolean): ParsedCommand {
+  const expanded = expansionCommands(words.body, words.hasInterpreter, escapes);
   return {
-    ...parsed,
-    escapedReading: { ...positionsOf(escaped.tokens), hasInterpreter: escaped.hasInterpreter },
+    ...positionsOf(words.tokens),
+    hasInterpreter: words.hasInterpreter,
+    ...(expanded.length > 0 ? { expandedCommands: expanded } : {}),
   };
+}
+
+interface WordsOfText {
+  readonly tokens: string[];
+  readonly hasInterpreter: boolean;
+  /** The text the tokens were split from, heredoc bodies a data sink receives already set aside. */
+  readonly body: string;
 }
 
 /**
@@ -841,14 +1008,10 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
  * heredoc bodies a data sink receives set aside when `heredocs` is set, and the split. PowerShell and
  * cmd.exe have no heredoc: `<<` there is not a body to separate, so nothing is set aside as data.
  */
-function wordsOfText(
-  text: string,
-  heredocs: boolean,
-  escapes: boolean,
-): { tokens: string[]; hasInterpreter: boolean } {
+function wordsOfText(text: string, heredocs: boolean, escapes: boolean): WordsOfText {
   const hasInterpreter = tokenize(text).some((token) => INTERPRETER_NAMES.includes(programNameOf(token)));
   const body = heredocs ? separateHeredocBodies(text).text : text;
-  return { tokens: splitWords(body, hasInterpreter, escapes), hasInterpreter };
+  return { tokens: splitWords(body, hasInterpreter, escapes, false), hasInterpreter, body };
 }
 
 /** A command's tokens read position by position: its invocations and the text a classifier may scan. */
