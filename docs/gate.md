@@ -106,19 +106,25 @@ completed` or `--auto-complete`) is read from the parsed invocation — its prog
 option tokens, never a word inside a path — wherever the program runs: at a command position, behind a
 launcher (`env`, `sudo`, `nohup`, `timeout`, `xargs` and the others `src/gate/shell.ts` names), as git's
 dashed binary (`git-send-pack.exe`), through a Windows shim (`az.cmd`, `git.bat`), named inside another
-program's words (`ssh host "git push"`), or as a command word an expansion supplies (`$(echo git) push`,
-`` `echo git` push ``, `G=git; $G push`, `g$(echo it) push`), which is read as git, `gh` and `az` in
-turn and parks only a command nothing else refuses. An option is read as the program reads it: a quoted
-option name is the option (`az repos pr update --id 5 "--status" completed`), every occurrence of a
-repeated option counts (`--status active --status completed`, where `az` keeps the last), an option's
-value is its value (`git branch --sort -committerdate` sorts, and a deletion cluster is made of
-`git branch`'s own short options), and `az`'s `--description` runs to the next word that starts with
-`-` and holds no space once its quotes are removed (`--description "- fixed it"` is prose). The git
-verb allow-list reads git at a command position, behind a launcher, as a dashed binary and through a
-shim, and nowhere else: inside another program's words and in a command word an expansion supplies
-only the boundary rules read it, because the allow-list there would refuse `rg git src` and
-`$EDITOR notes.md` (what flows for that is listed under What is deliberately not covered, below). A
-raw REST call that merges (`gh api`, `az rest`) is not parsed. Such a shape is classified locally and
+program's words (`ssh host "git push"`, `ssh host "git -c user.name=x push"`), or as a command word an
+expansion supplies when the line names its program: a substitution that prints the name
+(`$(echo git) push`, `` `which git` push ``, `"$(command -v gh)" pr merge`) or a variable the line
+assigned it to earlier (`G=git; $G push`, `export G=git && $G push`). That word is read as the named
+program, by both layers, as the program written out is, and only once every other reading of the
+command has flowed, so it adds a refusal where nothing else refuses and never changes the reason of one.
+An expansion whose program the line does not name (`$DOCKER push`, `$1 push`, `"$@" push`,
+`g$(echo it) push`) is not guessed and flows, and only a POSIX reading reads one: PowerShell takes a line
+that starts with `$(…)` or `$G` for an expression, and cmd.exe expands neither. An option is read as the
+program reads it: a quoted option name is the option (`az repos pr update --id 5 "--status" completed`),
+every occurrence of a repeated option counts (`--status active --status completed`, where `az` keeps
+the last), an option's value is its value (`git branch --sort -committerdate` sorts, and a deletion
+cluster is made of `git branch`'s own short options), and `az`'s `--description` runs to the next word
+that starts with `-` and holds no space once its quotes are removed (`--description "- fixed it"` is
+prose). The git verb allow-list reads git at a command position, behind a launcher, as a dashed binary,
+through a shim and as a command word the line names, and nowhere else: inside another program's words
+only the boundary rules read it, because the allow-list there would refuse `rg git src` for naming git
+(what flows for that is listed under What is deliberately not covered, below). A raw REST call that
+merges (`gh api`, `az rest`) is not parsed. Such a shape is classified locally and
 then escalated like any other call, because a controller may hold it for a person to answer; refusing
 it in-process would make that answer impossible to give. With the controller unreachable it refuses at
 the decision deadline.
@@ -161,12 +167,12 @@ the decision deadline.
   command with an escaped blank is read twice, split and joined as bash joins it
   (`C:/Program\ Files/…` one path), and in the joined reading a `#` after an escaped blank is
   mid-word, so `echo a\ # ; git push origin main` reads the push; a backslash before a quote is not
-  read as an escape, the reading that scans more. Every command is read once more with each `$( … )`,
-  `${ … }` and backtick kept inside its word, for the command words an expansion supplies. The
-  classifier refuses when any reading refuses. `src/gate/shell.property.test.ts` holds totality,
-  determinism and monotone refusal under quoting and composition, and `scripts/classifier-diff.mjs`
-  measures a change to the classifier: it classifies one corpus with two builds and prints every
-  answer that moved.
+  read as an escape, the reading that scans more. A POSIX command is read once more with each
+  `$( … )`, `${ … }` and backtick kept inside its word, in order, for the command words an expansion
+  supplies whose program the line names. The classifier refuses when any reading refuses.
+  `src/gate/shell.property.test.ts` holds totality, determinism and monotone refusal under quoting and
+  composition, and `scripts/classifier-diff.mjs` measures a change to the classifier: it classifies one
+  corpus with two builds, prints every answer that moved, and names the controls that must not move.
 
 ## The five outcomes that must never blur
 
@@ -465,12 +471,19 @@ opens at `intercepted-with-residual`.
   could open the door is made unrepresentable rather than handled.
 - Shell shapes the classifier lets through, each a known gap rather than a choice:
   - git's plumbing publish where only the boundary rules read: inside another program's words
-    (`ssh build-host git send-pack origin main`), in a command word an expansion supplies
-    (`$(echo git) send-pack origin main`), and after a backslash before a quote
+    (`ssh build-host git send-pack origin main`), and after a backslash before a quote
     (`echo \" ; git send-pack origin main`), where the quote is read as opening a span, so the rest of
     the line is one word of `echo`'s. The same shapes with `git push` refuse as `git-push`.
-  - a command word an expansion supplies behind a launcher (`sudo $(echo git) push origin main`,
-    `timeout 10 $G push origin main`), and `cmd`'s `%NAME%` as a command word (`%G% push origin main`).
+  - a command word an expansion supplies whose program the line does not name, which is not guessed:
+    a variable set outside the line (`$G push origin main`), a parameter (`$1 push`, `"$@" push`), and a
+    word an expansion only completes (`g$(echo it) push origin main`).
+  - a command word the line names that is not at a command position the reading reads: behind `!`
+    (`G=git; ! $G push origin main`), behind assignments to the command
+    (`G=git; FOO=1 $G push origin main`, `G=git; X=$(foo) $G push origin main`), and behind a launcher
+    (`sudo $(echo git) push origin main`, `G=git; timeout 10 $G push origin main`).
+  - PowerShell's call operator on an expression (`& (Get-Command git) push origin main`,
+    `$G = 'git'; & $G push origin main`), and `cmd`'s `%NAME%` as a command word
+    (`%G% push origin main`).
   - a backslash before a newline, which a POSIX shell removes with the newline: `echo a\` with
     `# ; git push origin main` on the next line is one line to bash, which runs the push, while the
     comment stripper ends the command at the `#`.
