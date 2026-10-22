@@ -407,7 +407,7 @@ test('regression: a boundary word another program prints or searches for is not 
   }
 });
 
-test('control: `git push` in its own segment after `git status &&` still parks', () => {
+test('control: `git push` in its own segment after `git status &&` still refuses as git-push', () => {
   assert.match(refusalFor('git status && git push origin main')?.detail ?? '', /^git-push:/);
 });
 
@@ -451,7 +451,7 @@ test('regression: an option value that starts with a dash is the value, not a br
   }
 });
 
-test('control: a real branch deletion still parks in a cluster of branch options, after an option value, and after an option that takes no separate value', () => {
+test('control: a real branch deletion still refuses in a cluster of branch options, after an option value, and after an option that takes no separate value', () => {
   for (const command of [
     'git branch -fd topic',
     'git branch --contains HEAD -d topic',
@@ -473,6 +473,27 @@ test("control: the text after an = in another program's words still begins a com
   ]) {
     assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
   }
+});
+
+test("regression: git's -c key=value inside another program's words hands the pair to -c, so the verb after it is read", () => {
+  // As at a command position, where `git -c a=b push origin main` refuses as git-push.
+  assert.match(refusalFor('git -c a=b push origin main')?.detail ?? '', /^git-push:/, 'the control');
+  for (const [command, rule] of [
+    ['ssh h "git -c user.name=x push origin main"', 'git-push'],
+    ['docker exec c git -c a=b push origin main', 'git-push'],
+    ['ssh h "git -c a=b branch -d x"', 'git-branch-delete'],
+    ['ssh h "git -c a=b reset --hard"', 'git-reset-hard'],
+    ['ssh h "git -c a=b remote add o u"', 'git-remote-surgery'],
+  ] as const) {
+    assert.match(refusalFor(command)?.detail ?? '', new RegExp(`^${rule}:`), `${command} flowed`);
+  }
+  assert.equal(refusalFor('ssh h "git -c a=b status"'), null, 'a read with a -c pair flows');
+});
+
+test("control: inside another program's words a word that is not an option is still read split at its =", () => {
+  // `push=x` is no verb git ships; the split reading reads it as `push`, and reading the words whole as
+  // well adds a reading without taking that one away.
+  assert.match(refusalFor('ssh build-host "git push=x origin"')?.detail ?? '', /^git-push:/);
 });
 
 // ---------------------------------------------------------------------------
@@ -543,7 +564,7 @@ test('deliberate: an escaped space is read both ways, so reading it only adds a 
   // Joined alone, a word that begins with an escaped space would hide the git behind it, though ssh hands
   // the word to a remote shell that splits it again. The split reading still sees it.
   // The split reading holds `git-send-pack.exe` as a word of its own behind the launcher, so the
-  // allowlist refuses it as git's plumbing, and the push after the quoted empty word parks.
+  // allowlist refuses it as git's plumbing, and the push after the quoted empty word refuses as git-push.
   const sendPack = String.raw`timeout 10 ssh build-host \ git-send-pack.exe origin`;
   assert.equal(refusalFor(sendPack)?.reason, 'shell-verb-unrecognised', `${sendPack} flowed`);
   const push = String.raw`ssh build-host ''\ git push origin main`;
@@ -597,7 +618,7 @@ test('control: PowerShell and cmd.exe read a backslash as an ordinary character,
 // Merging a pull request, on GitHub and on Azure DevOps.
 // ---------------------------------------------------------------------------
 
-test('control: `gh pr merge` still parks, by any route', () => {
+test('control: `gh pr merge` still refuses, by any route', () => {
   for (const command of [
     'gh pr merge 42',
     'gh -R owner/repo pr merge 42',
@@ -608,7 +629,7 @@ test('control: `gh pr merge` still parks, by any route', () => {
   }
 });
 
-test('regression: completing an Azure DevOps pull request is a merge, and parks', () => {
+test('regression: completing an Azure DevOps pull request is a merge, and refuses as one', () => {
   for (const command of [
     'az repos pr update --id 5 --status completed',
     'az repos pr update --id 5 --status=completed',
@@ -644,7 +665,7 @@ test('control: an Azure DevOps pull request that is not completed flows', () => 
   }
 });
 
-test('regression: an Azure DevOps completion parks through a quoted option name, a repeated option and a dash word in a description', () => {
+test('regression: an Azure DevOps completion refuses through a quoted option name, a repeated option and a dash word in a description', () => {
   for (const command of [
     'az repos pr update --id 5 "--status" completed',
     "az repos pr update --id 5 '--status' completed",
@@ -701,14 +722,18 @@ test('control: behind a launcher, a shim does not take a git word after it out o
 // A command word an expansion supplies.
 // ---------------------------------------------------------------------------
 
-test('regression: a command word an expansion supplies is read as each program the rules govern, so a publish behind one parks', () => {
+test('regression: a command word an expansion supplies is read as the program the line names for it', () => {
   for (const command of [
     '$(echo git) push origin x',
     '`echo git` push origin x',
-    'G=git; $G push origin main',
-    '${G} push origin main',
     '"$(echo git)" push origin main',
-    'g$(echo it) push origin main',
+    '$(which git) push origin main',
+    'G=git; $G push origin main',
+    'G=git && $G push origin main',
+    'export G=git; $G push origin main',
+    'G=git; ${G} push origin main',
+    'G=git; "$G" push origin main',
+    'G=$(which git); $G push origin main',
     '$(echo git) -C /repo push origin main',
     'echo $($(echo git) push origin main)',
     'bash -c "$(echo git) push origin main"',
@@ -716,32 +741,56 @@ test('regression: a command word an expansion supplies is read as each program t
     assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
   }
   assert.match(refusalFor('$(echo gh) pr merge 5')?.detail ?? '', /^gh-pr-merge:/);
+  assert.match(refusalFor('$(command -v gh) pr merge 5')?.detail ?? '', /^gh-pr-merge:/);
   assert.match(
-    refusalFor('$AZ repos pr update --id 5 --status completed')?.detail ?? '',
+    refusalFor('A=az; $A repos pr update --id 5 --status completed')?.detail ?? '',
     /^az-repos-pr-complete:/,
   );
+  assert.equal(
+    refusalFor('$(echo git) send-pack origin main')?.reason,
+    'shell-verb-unrecognised',
+    'read as git, by the allowlist too',
+  );
+  assert.equal(refusalFor('$(echo git) status'), null, 'a read through the expansion flows');
 });
 
-test('control: a command word an expansion supplies flows when no rule fires for any program it could name', () => {
+test('control: a command word whose program the line does not name is not guessed, and flows', () => {
   for (const command of [
-    '$EDITOR f',
+    '$DOCKER push registry/image:tag',
+    '$(which docker) push img',
+    '"$HELM" push chart.tgz oci://r',
+    '$ADB push app.apk /data/local/tmp',
+    '$CC -O2 -o push main.c',
+    'for f in $FILES; do $f push; done',
+    '$1 push',
+    '"$@" push',
+    '$X reset --hard',
+    '$TOOL remote add foo bar',
+    '$PKG branch -d x',
+    '$G push origin main',
+    'g$(echo it) push origin main',
+    'D=docker; $D push img',
+    'G=git cmd; $G push origin main',
+    'G=git; G=docker; $G push img',
     '$EDITOR notes.md',
-    '$(npm bin)/tsc',
     '$(npm bin)/tsc -p .',
-    '$(which node) script.js',
     '"$HOME/bin/tool" run',
-    '$(git rev-parse --show-toplevel)/scripts/build.sh',
-    '$(echo git) status',
-    'echo `date` push',
     "'$G' push",
   ]) {
     assert.equal(refusalFor(command), null, `${command} was refused`);
   }
 });
 
+test('control: PowerShell and cmd.exe do not run an expansion as a command word, so their readings do not read one', () => {
+  const command = '$(echo git) push origin x';
+  assert.equal(classifyShellCommand(command, parseCommand(command, 'powershell')), null);
+  assert.equal(classifyShellCommand(command, parseCommand(command, 'cmd')), null);
+  assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, 'the POSIX reading still reads it');
+});
+
 test('control: a refusal another rule makes stays that refusal beside a command word an expansion supplies', () => {
   assert.equal(
-    refusalFor('$G push origin main; git send-pack origin main')?.reason,
+    refusalFor('G=git; $G push origin main; git send-pack origin main')?.reason,
     'shell-verb-unrecognised',
     'the allowlist refusal stays local',
   );

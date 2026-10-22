@@ -20,7 +20,9 @@ const CEREMONY = [
   'spec',
   'seat',
   'park',
+  'parks',
   'parked',
+  'parking',
   'ruling',
   'recon',
   'chain',
@@ -103,6 +105,8 @@ test('no ceremony vocabulary appears anywhere in the package', () => {
 test('control: the ceremony pattern matches ceremony and the product names, and nothing adjacent', () => {
   assert.match('a spec chain ruling', CEREMONY_PATTERN);
   assert.match('the coordinator parked it', CEREMONY_PATTERN);
+  assert.match('it parks the call', CEREMONY_PATTERN);
+  assert.match('a parking lot', CEREMONY_PATTERN);
   assert.match('the sidecar and the whereami verb', CEREMONY_PATTERN);
   assert.match('served by Aspire', CEREMONY_PATTERN);
   assert.match('the blackboard, a tldr, a callout, the cockpit, a kick', CEREMONY_PATTERN);
