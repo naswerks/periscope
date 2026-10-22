@@ -321,13 +321,16 @@ function reach(invocations: readonly Invocation[]): Invocation[] {
  * Where a ruled program's name can appear inside another's words. Quotes, expansion characters and
  * separators end a word here — `ssh host "git push"` and `-c core.pager='git push'` both hold a git
  * word — while `-`, `.`, `/` and `\` do not, so a path is one word and `pre-push.log` holds no push. An
- * `=` is read apart: the text after one can begin a command (`-c core.pager=git push`), and an option's
- * `=value` after that command's name stays its value (`git branch --sort=-committerdate`).
+ * `=` is read apart: the text after one can begin a command (`-c core.pager=git push`), and the words
+ * after that command's name are read two ways, the rules firing on either: whole, as the command reads
+ * them (`git -c user.name=x push` hands `user.name=x` to `-c` and pushes), and with each word that is not
+ * an option split at its `=`, which reads `ssh host "git push=x"` as a push. An option keeps its
+ * `=value` in both, so `git branch --sort=-committerdate` sorts.
  */
 const RESIDUAL_SPLIT = /[\s"'`$(){}[\];|&<>,]+/;
 
-/** A residual word as the command it may begin reads it: an option keeps its `=value`, any other word splits at `=`. */
-const residualWords = (word: string): string[] => (word.startsWith('-') ? [word] : word.split('='));
+/** A residual word with its `=` read as a break, unless it is an option, which keeps its `=value`. */
+const splitAtEquals = (word: string): string[] => (word.startsWith('-') ? [word] : word.split('='));
 
 /**
  * The residual check: a git, `gh` or `az` word inside any invocation's words — the arguments of a
@@ -344,10 +347,14 @@ function residualRefusal(invocations: readonly Invocation[]): BoundaryRule | nul
       const pieces = (words[i] as string).split('=');
       for (let k = 0; k < pieces.length; k += 1) {
         if (!isRuledWord(pieces[k] as string)) continue;
-        const command = [...pieces.slice(k), ...words.slice(i + 1).flatMap(residualWords)];
-        const nested = normalised(invocationOf(command.filter((word) => word !== '')));
-        const rule = BOUNDARY_RULES.find((candidate) => candidate.fires(nested));
-        if (rule !== undefined) return rule;
+        const after = words.slice(i + 1);
+        for (const rest of [after, after.flatMap(splitAtEquals)]) {
+          const nested = normalised(
+            invocationOf([...pieces.slice(k), ...rest].filter((word) => word !== '')),
+          );
+          const rule = BOUNDARY_RULES.find((candidate) => candidate.fires(nested));
+          if (rule !== undefined) return rule;
+        }
       }
     }
   }

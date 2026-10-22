@@ -475,6 +475,27 @@ test("control: the text after an = in another program's words still begins a com
   }
 });
 
+test("regression: git's -c key=value inside another program's words hands the pair to -c, so the verb after it is read", () => {
+  // As at a command position, where `git -c a=b push origin main` refuses as git-push.
+  assert.match(refusalFor('git -c a=b push origin main')?.detail ?? '', /^git-push:/, 'the control');
+  for (const [command, rule] of [
+    ['ssh h "git -c user.name=x push origin main"', 'git-push'],
+    ['docker exec c git -c a=b push origin main', 'git-push'],
+    ['ssh h "git -c a=b branch -d x"', 'git-branch-delete'],
+    ['ssh h "git -c a=b reset --hard"', 'git-reset-hard'],
+    ['ssh h "git -c a=b remote add o u"', 'git-remote-surgery'],
+  ] as const) {
+    assert.match(refusalFor(command)?.detail ?? '', new RegExp(`^${rule}:`), `${command} flowed`);
+  }
+  assert.equal(refusalFor('ssh h "git -c a=b status"'), null, 'a read with a -c pair flows');
+});
+
+test("control: inside another program's words a word that is not an option is still read split at its =", () => {
+  // `push=x` is no verb git ships; the split reading reads it as `push`, and reading the words whole as
+  // well adds a reading without taking that one away.
+  assert.match(refusalFor('ssh build-host "git push=x origin"')?.detail ?? '', /^git-push:/);
+});
+
 // ---------------------------------------------------------------------------
 // Git behind a launcher, and git's dashed binaries.
 // ---------------------------------------------------------------------------
