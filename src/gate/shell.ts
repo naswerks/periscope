@@ -231,7 +231,7 @@ const BOUNDARY_RULES: readonly BoundaryRule[] = [
   {
     name: 'gh-pr-merge',
     // `pr merge` anywhere in the words that are not options, so `gh -R owner/repo pr merge 5` still
-    // parks. A raw `gh api` call that merges is not parsed here.
+    // refuses. A raw `gh api` call that merges is not parsed here.
     fires: (invocation) =>
       invocation.program === 'gh' && holdsAdjacent(positional(wordsOf(invocation)), ['pr', 'merge']),
     detail: 'merging is a human boundary',

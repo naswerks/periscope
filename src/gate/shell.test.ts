@@ -407,7 +407,7 @@ test('regression: a boundary word another program prints or searches for is not 
   }
 });
 
-test('control: `git push` in its own segment after `git status &&` still parks', () => {
+test('control: `git push` in its own segment after `git status &&` still refuses as git-push', () => {
   assert.match(refusalFor('git status && git push origin main')?.detail ?? '', /^git-push:/);
 });
 
@@ -451,7 +451,7 @@ test('regression: an option value that starts with a dash is the value, not a br
   }
 });
 
-test('control: a real branch deletion still parks in a cluster of branch options, after an option value, and after an option that takes no separate value', () => {
+test('control: a real branch deletion still refuses in a cluster of branch options, after an option value, and after an option that takes no separate value', () => {
   for (const command of [
     'git branch -fd topic',
     'git branch --contains HEAD -d topic',
@@ -564,7 +564,7 @@ test('deliberate: an escaped space is read both ways, so reading it only adds a 
   // Joined alone, a word that begins with an escaped space would hide the git behind it, though ssh hands
   // the word to a remote shell that splits it again. The split reading still sees it.
   // The split reading holds `git-send-pack.exe` as a word of its own behind the launcher, so the
-  // allowlist refuses it as git's plumbing, and the push after the quoted empty word parks.
+  // allowlist refuses it as git's plumbing, and the push after the quoted empty word refuses as git-push.
   const sendPack = String.raw`timeout 10 ssh build-host \ git-send-pack.exe origin`;
   assert.equal(refusalFor(sendPack)?.reason, 'shell-verb-unrecognised', `${sendPack} flowed`);
   const push = String.raw`ssh build-host ''\ git push origin main`;
@@ -618,7 +618,7 @@ test('control: PowerShell and cmd.exe read a backslash as an ordinary character,
 // Merging a pull request, on GitHub and on Azure DevOps.
 // ---------------------------------------------------------------------------
 
-test('control: `gh pr merge` still parks, by any route', () => {
+test('control: `gh pr merge` still refuses, by any route', () => {
   for (const command of [
     'gh pr merge 42',
     'gh -R owner/repo pr merge 42',
@@ -629,7 +629,7 @@ test('control: `gh pr merge` still parks, by any route', () => {
   }
 });
 
-test('regression: completing an Azure DevOps pull request is a merge, and parks', () => {
+test('regression: completing an Azure DevOps pull request is a merge, and refuses as one', () => {
   for (const command of [
     'az repos pr update --id 5 --status completed',
     'az repos pr update --id 5 --status=completed',
@@ -665,7 +665,7 @@ test('control: an Azure DevOps pull request that is not completed flows', () => 
   }
 });
 
-test('regression: an Azure DevOps completion parks through a quoted option name, a repeated option and a dash word in a description', () => {
+test('regression: an Azure DevOps completion refuses through a quoted option name, a repeated option and a dash word in a description', () => {
   for (const command of [
     'az repos pr update --id 5 "--status" completed',
     "az repos pr update --id 5 '--status' completed",
