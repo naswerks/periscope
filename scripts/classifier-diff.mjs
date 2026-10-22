@@ -12,8 +12,9 @@
  * below, and 40,000 commands drawn from a fixed seed, so two runs over the same builds print the same
  * report. Each command is parsed and classified under the POSIX, PowerShell and `cmd` readings, as the
  * local gate reads them. The report counts what changed, prints every refusal that now flows, and groups
- * the new refusals and the changed reasons by the rule that answers after the change, with samples.
- * `--json` writes every change, for a reviewer to read in full.
+ * the new refusals and the changed reasons by the rule that answers after the change, with samples. The
+ * named controls (`UNMOVED`) must answer as they did before in the readings each names, and every one
+ * that moved is printed. `--json` writes every change, for a reviewer to read in full.
  *
  * A change to `src/gate/` states what it lets an agent reach and what it stops; this is the measurement
  * of that sentence. A move nobody predicted is a finding about the change.
@@ -110,7 +111,21 @@ const NAMED = [
   'git-send-pack.cmd origin main',
   'deploy.cmd --target prod',
   'npm.cmd test',
-  // A command word an expansion supplies.
+  // A command word an expansion supplies, read only as the program the line names for it.
+  '$(which git) push origin main',
+  '$(command -v gh) pr merge 5',
+  'G=git && $G push origin main',
+  'export G=git; $G push origin main',
+  'G=git; ${G} push origin main',
+  'G=$(which git); $G push origin main',
+  'A=az; $A repos pr update --id 5 --status completed',
+  'G=git; ! $G push origin main',
+  'G=git; FOO=1 $G push origin main',
+  'G=git; X=$(foo) $G push origin main',
+  'G=git; G=docker; $G push img',
+  '& (Get-Command git) push origin main',
+  '& $(echo git) push origin main',
+  "$G = 'git'; & $G push origin main",
   '$(echo git) push origin x',
   '`echo git` push origin x',
   'G=git; $G push origin main',
@@ -172,8 +187,64 @@ const NAMED = [
   'git branch -ud topic',
   'git branch --with -d topic',
   'git branch --sort -D',
+  // git's -c key=value inside another program's words: -c takes the pair, and the verb follows.
+  'git -c a=b push origin main',
+  'ssh h "git -c user.name=x push origin main"',
+  'docker exec c git -c a=b push origin main',
+  'ssh h "git -c a=b branch -d x"',
+  'ssh h "git -c a=b reset --hard"',
+  'ssh h "git -c a=b remote add o u"',
+  'ssh h "git -c a=b status"',
+  'docker exec c git -c core.editor=vim log',
 ];
 for (const command of NAMED) corpus.add(command);
+
+/**
+ * Controls that must answer as they did before, each in the readings it names: commands whose program
+ * the line does not name, which no change to how an expansion is read may stop, and the readings that
+ * never run an expansion as a command word.
+ */
+const ALL = ['posix', 'powershell', 'cmd'];
+const UNMOVED = [
+  ...[
+    '$DOCKER push registry/image:tag',
+    '$(which docker) push img',
+    '"$HELM" push chart.tgz oci://r',
+    '$ADB push app.apk /data/local/tmp',
+    '$CC -O2 -o push main.c',
+    'for f in $FILES; do $f push; done',
+    '$1 push',
+    '"$@" push',
+    '$X reset --hard',
+    '$TOOL remote add foo bar',
+    '$PKG branch -d x',
+    '$G push origin main',
+    '${G} push origin main',
+    'g$(echo it) push origin main',
+    '$AZ repos pr update --id 5 --status completed',
+    'D=docker; $D push img',
+    '$(echo docker) push img',
+    '$EDITOR f',
+    '$EDITOR notes.md',
+    '$(npm bin)/tsc -p .',
+    '$(which node) script.js',
+    '"$HOME/bin/tool" run',
+    '"$JAVA_HOME/bin/java" -jar app.jar push',
+    '$(which kubectl) apply -f deploy.yaml',
+    '$PYTHON -m pip install requests',
+    '$MAKE install',
+    '$NPM publish',
+    '$CARGO publish',
+    '$GO run . push',
+    '$(git config core.editor) notes.md',
+    '$(git var GIT_EDITOR) notes.md',
+    'G=git cmd; $G push origin main',
+  ].map((command) => [command, ALL]),
+  ...['$(echo git) push origin x', '`echo git` push origin x', 'G=git; $G push origin main'].map(
+    (command) => [command, ['powershell', 'cmd']],
+  ),
+];
+for (const [command] of UNMOVED) corpus.add(command);
 
 let seed = 7;
 const random = () => {
@@ -357,4 +428,9 @@ for (const [key, list] of grouped(moved, (change) => `${keyOf(change.before)} ->
   console.log(`${key}: ${list.length}`);
   for (const change of list.slice(0, sampleCount)) console.log(show(change));
 }
+const controlsMoved = UNMOVED.flatMap(([command, dialects]) =>
+  changes.filter((change) => change.command === command && dialects.includes(change.dialect)),
+);
+console.log(`\nnamed controls that moved (${UNMOVED.length} controls, want 0): ${controlsMoved.length}`);
+for (const change of controlsMoved) console.log(show(change));
 if (jsonPath !== null) writeFileSync(jsonPath, `${JSON.stringify(changes, null, 2)}\n`);

@@ -72,12 +72,25 @@ export interface ParsedCommand {
    */
   readonly escapedReading?: ParsedCommand;
   /**
-   * The words after each command word whose name an expansion supplies (`$(echo git) push origin x`, `$G
-   * push`, `g$(echo it) push`), at any depth; absent when there is none. The program is known only once
-   * the shell runs the expansion.
+   * Each command word an expansion supplies whose program the command line itself names, with the words
+   * after it, at any depth: `$(echo git) push origin x`, `G=git; $G push`. A POSIX reading's only;
+   * absent when there is none.
    * @internal
    */
-  readonly expandedCommands?: readonly (readonly string[])[];
+  readonly expandedCommands?: readonly ExpandedCommand[];
+}
+
+/**
+ * A command word an expansion supplies, read as the program the command line names for it: a
+ * substitution that prints the name (`$(echo git)`, `$(which git)`, `` `command -v gh` ``) or a variable
+ * the line assigned it to earlier (`G=git; $G`).
+ * @internal
+ */
+export interface ExpandedCommand {
+  /** The named program, as `programNameOf` reads a command word. */
+  readonly program: string;
+  /** The words after the command word. */
+  readonly words: readonly string[];
 }
 
 /**
@@ -499,36 +512,71 @@ const opensExpansion = (characters: readonly string[], index: number): boolean =
   (characters[index] === '$' && (characters[index + 1] === '(' || characters[index + 1] === '{'));
 
 /**
- * Does an expansion supply this command word's name: a `$NAME`, `${ … }`, `$( … )` or backtick after
- * its last path separator? `$(npm bin)/tsc` names `tsc` and `"$HOME/bin/tool"` names `tool`; `$G`,
- * `g$(echo it)` and `"$(echo git)"` name whatever the shell expands them to. A `$` in single quotes is
- * literal.
+ * Programs whose output is the name they are given, or the path of the program they are given: in a
+ * substitution, `$(echo git)`, `$(which git)` and `$(command -v gh)` print a name the line can see.
  */
-function namedByExpansion(word: string): boolean {
-  const characters = [...word];
-  let lastSeparator = -1;
-  let lastExpansion = -1;
-  let quote = '';
-  for (let i = 0; i < characters.length; i += 1) {
-    const character = characters[i] as string;
-    if (quote === "'") {
-      if (character === "'") quote = '';
-      continue;
-    }
-    if (character === "'" && quote === '') quote = "'";
-    else if (character === '"') quote = quote === '"' ? '' : '"';
-    else if (character === '/' || character === '\\') lastSeparator = i;
-    else if (opensExpansion(characters, i)) {
-      lastExpansion = i;
-      const end = expansionEnd(characters, i, false);
-      // Unclosed, the rest of the word is the expansion's.
-      if (end === -1) return true;
-      i = end - 1;
-    } else if (character === '$' && /^[A-Za-z0-9_@*#?$!-]$/.test(characters[i + 1] ?? '')) {
-      lastExpansion = i;
-    }
+const NAME_PRINTERS: ReadonlySet<string> = new Set(['echo', 'printf', 'which', 'command', 'type', 'where']);
+
+/**
+ * The program a substitution's text prints, read from its last word, when the text is one command of a
+ * program that prints a name (`echo git`, `which git`, `command -v gh`). Null for anything else: what
+ * other text prints is not visible on the line.
+ */
+function printedName(text: string): string | null {
+  const tokens = tokenize(text);
+  if (tokens.length < 2) return null;
+  if (tokens.some((token) => (token.length === 1 && SEPARATORS.has(token)) || OPENER_KEYWORDS.has(token)))
+    return null;
+  if (!NAME_PRINTERS.has(programNameOf(tokens[0] as string))) return null;
+  return programNameOf(tokens.at(-1) as string);
+}
+
+/**
+ * The program a word names when the command line makes it visible: a word that is one substitution,
+ * quoted or not, of text that prints a name (`$(echo git)`, `` `which git` ``, `"$(command -v gh)"`), or
+ * one variable (`$G`, `${G}`, `"$G"`) the line assigned a name to earlier. Null for any other expansion
+ * (`$DOCKER`, `$1`, `"$@"`, `g$(echo it)`): its program is not on the line, so it is not guessed.
+ */
+function visibleProgram(word: string, assigned: ReadonlyMap<string, string>): string | null {
+  const inner = word.length >= 2 && word.startsWith('"') && word.endsWith('"') ? word.slice(1, -1) : word;
+  const characters = [...inner];
+  if (opensExpansion(characters, 0) && expansionEnd(characters, 0, false) === characters.length) {
+    if (characters[0] === '`') return printedName(characters.slice(1, -1).join(''));
+    if (characters[1] === '(') return printedName(characters.slice(2, -1).join(''));
   }
-  return lastExpansion > lastSeparator;
+  const variable = /^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})$/.exec(inner);
+  if (variable === null) return null;
+  return assigned.get((variable[1] ?? variable[2]) as string) ?? null;
+}
+
+/** Keywords that assign the variables after them in the shell running the line. */
+const ASSIGNING_KEYWORDS: ReadonlySet<string> = new Set([
+  'export',
+  'declare',
+  'local',
+  'readonly',
+  'typeset',
+]);
+
+/**
+ * Record the variables a command position assigns in the shell itself: a statement of assignments
+ * (`G=git`) or one behind `export` and its kin (`export G=git`). A value the line can read the program of
+ * is kept under its name (a name, a path, a quoted name, or a substitution that prints one); any other
+ * value forgets the variable. Assignments before a command (`G=git cmd`) are that command's alone.
+ */
+function recordAssignments(position: readonly string[], assigned: Map<string, string>): void {
+  const keyword = ASSIGNING_KEYWORDS.has(position[0] as string);
+  const words = keyword ? position.slice(1) : position;
+  const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
+  if (!words.every((word) => assignment.test(word) || (keyword && word.startsWith('-')))) return;
+  for (const word of words) {
+    const match = assignment.exec(word);
+    if (match === null) continue;
+    const [, name, value] = match as unknown as [string, string, string];
+    const named = /[$`]/.test(value) ? visibleProgram(value, assigned) : programNameOf(value);
+    if (named === null || named === '') assigned.delete(name);
+    else assigned.set(name, named);
+  }
 }
 
 /** The text inside each expansion in a word (`$( … )`, `${ … }`, a backtick pair), outside single quotes. */
@@ -569,23 +617,29 @@ function commandPositions(tokens: readonly string[]): string[][] {
 }
 
 /**
- * The words after each command word whose name an expansion supplies, at every command position and
- * inside every expansion's text, read with each expansion kept inside its word as the shell reads a word
- * before expanding it: `$(echo git) push origin x` is the word `$(echo git)` and then `push origin x`,
- * where the split reading has `)` end a command and `push` begin one. What the expansion will name is
- * unknown until the shell runs it, so these are the words a classifier reads as each program it rules.
+ * Each command word an expansion supplies whose program the line names, with the words after it, at every
+ * command position and inside every expansion's text, read with each expansion kept inside its word as
+ * the shell reads a word before expanding it: `$(echo git) push origin x` is the word `$(echo git)` and
+ * then `push origin x`, where the split reading has `)` end a command and `push` begin one. The line is
+ * read in order, so a variable is named only by an assignment before it; the text inside an expansion
+ * sees the assignments made before it.
  */
-function expansionCommands(text: string, quotesAreSeparators: boolean, escapes: boolean): string[][] {
+function expansionCommands(
+  text: string,
+  quotesAreSeparators: boolean,
+  escapes: boolean,
+  assigned: Map<string, string> = new Map(),
+): ExpandedCommand[] {
   const tokens = splitWords(text, quotesAreSeparators, escapes, true);
-  const found: string[][] = [];
+  const found: ExpandedCommand[] = [];
   for (const position of commandPositions(tokens)) {
-    if (namedByExpansion(position[0] as string)) found.push(position.slice(1));
-  }
-  for (const token of tokens) {
-    for (const body of expansionBodies(token)) {
+    for (const body of position.flatMap(expansionBodies)) {
       const nested = tokenize(body).some((word) => INTERPRETER_NAMES.includes(programNameOf(word)));
-      found.push(...expansionCommands(body, nested, escapes));
+      found.push(...expansionCommands(body, nested, escapes, new Map(assigned)));
     }
+    const program = visibleProgram(position[0] as string, assigned);
+    if (program !== null) found.push({ program, words: position.slice(1) });
+    recordAssignments(position, assigned);
   }
   return found;
 }
@@ -971,7 +1025,9 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
         ? readCmdCommand(command)
         : stripComments(command);
   const plain = wordsOfText(withoutComments, dialect === 'posix', false);
-  const parsed = readingOf(plain, false);
+  // PowerShell reads a line that starts with `$(…)` or `$G` as an expression, not a call, and cmd.exe
+  // expands neither, so a command word an expansion supplies is a POSIX reading's alone.
+  const parsed = readingOf(plain, false, dialect === 'posix');
   if (dialect !== 'posix') return parsed;
   // A POSIX shell joins an escaped blank into its word, so a `#` after one is inside that word and opens
   // no comment; PowerShell and cmd.exe have no such escape. Read that way too, from the comments on,
@@ -983,12 +1039,12 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
     escaped.tokens.every((token, index) => token === tokens[index])
   )
     return parsed;
-  return { ...parsed, escapedReading: readingOf(escaped, true) };
+  return { ...parsed, escapedReading: readingOf(escaped, true, true) };
 }
 
 /** One reading of a command: its invocations, its scannable text, and the commands an expansion names. */
-function readingOf(words: WordsOfText, escapes: boolean): ParsedCommand {
-  const expanded = expansionCommands(words.body, words.hasInterpreter, escapes);
+function readingOf(words: WordsOfText, escapes: boolean, expansions: boolean): ParsedCommand {
+  const expanded = expansions ? expansionCommands(words.body, words.hasInterpreter, escapes) : [];
   return {
     ...positionsOf(words.tokens),
     hasInterpreter: words.hasInterpreter,

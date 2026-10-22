@@ -701,14 +701,18 @@ test('control: behind a launcher, a shim does not take a git word after it out o
 // A command word an expansion supplies.
 // ---------------------------------------------------------------------------
 
-test('regression: a command word an expansion supplies is read as each program the rules govern, so a publish behind one parks', () => {
+test('regression: a command word an expansion supplies is read as the program the line names for it', () => {
   for (const command of [
     '$(echo git) push origin x',
     '`echo git` push origin x',
-    'G=git; $G push origin main',
-    '${G} push origin main',
     '"$(echo git)" push origin main',
-    'g$(echo it) push origin main',
+    '$(which git) push origin main',
+    'G=git; $G push origin main',
+    'G=git && $G push origin main',
+    'export G=git; $G push origin main',
+    'G=git; ${G} push origin main',
+    'G=git; "$G" push origin main',
+    'G=$(which git); $G push origin main',
     '$(echo git) -C /repo push origin main',
     'echo $($(echo git) push origin main)',
     'bash -c "$(echo git) push origin main"',
@@ -716,32 +720,56 @@ test('regression: a command word an expansion supplies is read as each program t
     assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
   }
   assert.match(refusalFor('$(echo gh) pr merge 5')?.detail ?? '', /^gh-pr-merge:/);
+  assert.match(refusalFor('$(command -v gh) pr merge 5')?.detail ?? '', /^gh-pr-merge:/);
   assert.match(
-    refusalFor('$AZ repos pr update --id 5 --status completed')?.detail ?? '',
+    refusalFor('A=az; $A repos pr update --id 5 --status completed')?.detail ?? '',
     /^az-repos-pr-complete:/,
   );
+  assert.equal(
+    refusalFor('$(echo git) send-pack origin main')?.reason,
+    'shell-verb-unrecognised',
+    'read as git, by the allowlist too',
+  );
+  assert.equal(refusalFor('$(echo git) status'), null, 'a read through the expansion flows');
 });
 
-test('control: a command word an expansion supplies flows when no rule fires for any program it could name', () => {
+test('control: a command word whose program the line does not name is not guessed, and flows', () => {
   for (const command of [
-    '$EDITOR f',
+    '$DOCKER push registry/image:tag',
+    '$(which docker) push img',
+    '"$HELM" push chart.tgz oci://r',
+    '$ADB push app.apk /data/local/tmp',
+    '$CC -O2 -o push main.c',
+    'for f in $FILES; do $f push; done',
+    '$1 push',
+    '"$@" push',
+    '$X reset --hard',
+    '$TOOL remote add foo bar',
+    '$PKG branch -d x',
+    '$G push origin main',
+    'g$(echo it) push origin main',
+    'D=docker; $D push img',
+    'G=git cmd; $G push origin main',
+    'G=git; G=docker; $G push img',
     '$EDITOR notes.md',
-    '$(npm bin)/tsc',
     '$(npm bin)/tsc -p .',
-    '$(which node) script.js',
     '"$HOME/bin/tool" run',
-    '$(git rev-parse --show-toplevel)/scripts/build.sh',
-    '$(echo git) status',
-    'echo `date` push',
     "'$G' push",
   ]) {
     assert.equal(refusalFor(command), null, `${command} was refused`);
   }
 });
 
+test('control: PowerShell and cmd.exe do not run an expansion as a command word, so their readings do not read one', () => {
+  const command = '$(echo git) push origin x';
+  assert.equal(classifyShellCommand(command, parseCommand(command, 'powershell')), null);
+  assert.equal(classifyShellCommand(command, parseCommand(command, 'cmd')), null);
+  assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, 'the POSIX reading still reads it');
+});
+
 test('control: a refusal another rule makes stays that refusal beside a command word an expansion supplies', () => {
   assert.equal(
-    refusalFor('$G push origin main; git send-pack origin main')?.reason,
+    refusalFor('G=git; $G push origin main; git send-pack origin main')?.reason,
     'shell-verb-unrecognised',
     'the allowlist refusal stays local',
   );

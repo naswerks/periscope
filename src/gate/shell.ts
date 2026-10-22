@@ -355,24 +355,6 @@ function residualRefusal(invocations: readonly Invocation[]): BoundaryRule | nul
 }
 
 /**
- * A command word whose name an expansion supplies is read as each program the rules govern in turn, by
- * the boundary rules alone: `$(echo git) push origin x`, `G=git; $G push origin main` and `g$(echo it)
- * push` run `git push`, and which program a variable or a substitution names is known only when the shell
- * runs it. The allowlist does not read these: read as git, `$EDITOR notes.md` names no verb git ships,
- * and refusing it would refuse every program a variable names.
- */
-function expandedRefusal(commands: readonly (readonly string[])[]): BoundaryRule | null {
-  for (const words of commands) {
-    for (const program of RULED_PROGRAMS) {
-      const invocation = invocationOf([program, ...words]);
-      const rule = BOUNDARY_RULES.find((candidate) => candidate.fires(invocation));
-      if (rule !== undefined) return rule;
-    }
-  }
-  return null;
-}
-
-/**
  * Git verbs that are known-safe: reads, local-only writes, and download-only network.
  *
  * The organising idea is publish. None of these can send anything to a remote, which is why
@@ -534,13 +516,15 @@ export function classifyShellCommand(
     const refused = classifyReading(reading);
     if (refused !== null) return refused;
   }
-  // A command word an expansion names is read last, so it adds a boundary refusal only where nothing else
-  // refuses, and never turns a local refusal into an escalated one.
-  for (const reading of readings) {
-    const expanded = expandedRefusal(reading.expandedCommands ?? []);
-    if (expanded !== null) return refusal('shell-boundary-command', `${expanded.name}: ${expanded.detail}`);
-  }
-  return null;
+  // A command word an expansion supplies is read as the program the line names for it (`$(echo git) push`,
+  // `G=git; $G push`), by both layers, as that program written out is. It is read last, so it adds a
+  // refusal only where nothing else refuses and never changes the reason of one. A program the line does
+  // not name (`$DOCKER push`, `$1 push`) is not guessed.
+  const expanded = readings.flatMap((reading) =>
+    (reading.expandedCommands ?? []).map((command) => invocationOf([command.program, ...command.words])),
+  );
+  if (expanded.length === 0) return null;
+  return classifyReading({ invocations: expanded, scannable: '', hasInterpreter: false });
 }
 
 function classifyReading(parsed: ParsedCommand): Refusal | null {
