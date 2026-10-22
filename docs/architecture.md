@@ -76,7 +76,7 @@ everything as arguments, so it is checkable without a socket or a process, and r
 - With `agentCatalog`, `start()` reads the agent's versions and models first and dials once the
   read settles, because the hello is where a controller reads them.
   - `readAgentCatalog` is the real read. It starts the agent with a prompt stream that never
-    yields, loads no settings and no MCP server, persists no transcript, reads only the answer to
+    yields, loads no settings and no MCP server, writes no session file, reads only the answer to
     the SDK's initialize request, and closes the agent on every path.
   - A failed read, or a catalog past the hello's bounds, rides as `agent: null`, reported as an
     `agent-catalog` event. It never fails a start.
@@ -446,8 +446,9 @@ cleanup schedule) belong to the embedder. Every result is a named refusal, never
   are named in `pendingRestart` on every hello and answer until then.
 - Under a provider the controller's `cwd` is advisory; the `spawning` transition carries the
   directory the session got. One exception: a `cwd` equal to the provider's own `repositoryRoot`
-  runs there, the operator's trusted checkout, claiming no key. A resume runs where its transcript
-  lives or refuses `resume-cwd-not-honoured` on the wire.
+  runs there, the operator's trusted checkout, claiming no key. A resume runs in the session's own
+  working directory (the agent CLI keeps a session per directory) or refuses `resume-cwd-not-honoured`
+  on the wire.
 
 ## MCP
 

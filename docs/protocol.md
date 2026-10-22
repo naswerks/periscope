@@ -116,8 +116,8 @@ it (link cause `replay_requested`). Any other 1002 close is read as the version 
 
 `configuration` is a `HostConfiguration`: seven strings, each `T | null`, in this order:
 `repositoryRoot`, `workspaceRoot`, `branchScheme` (the effective scheme, `{repo}/{key}` when none is
-configured), `transcriptsRoot` (always null; kept because a controller inside the window requires it),
-`controllerUrl`, `decisionUrl`, `agentHome` — each at most `MAX_CONFIGURATION_VALUE_LENGTH` — and,
+configured), `transcriptsRoot` (always null; kept because a controller inside the window requires
+it), `controllerUrl`, `decisionUrl`, `agentHome` — each at most `MAX_CONFIGURATION_VALUE_LENGTH` — and,
 from v11, `plugins`: the plugin directories the host loads into every session, each as
 `{ name, version, path }` from its manifest (`version` null when the manifest declares none), at
 most `MAX_PLUGIN_DIRS` entries. A controller that wants a session to have a plugin reads this list
@@ -370,8 +370,9 @@ turn can be rendered as it happens; `thinking` is left at the SDK's own default,
 `thinking_delta` events with empty prose. Ask for `{ type: 'adaptive', display: 'summarized' }` in
 `session_new.request.thinking` and real reasoning prose streams (measured against the pinned SDK: 0
 characters by default, 227 over 4 deltas with `summarized`, same prompt). It is opt-in because that
-prose costs tokens on the wire and puts reasoning text into transcripts and mirrors; whether a run is
-watched is not something the host can know, so it offers the knob instead of guessing a policy.
+prose costs tokens on the wire and puts reasoning text into the session's history and mirrors;
+whether a run is watched is not something the host can know, so it offers the knob instead of
+guessing a policy.
 
 ## The fact layer
 
@@ -522,7 +523,7 @@ a delta like any other: droppable, and never stored.
 From v16 the session's conversation also rides the update lane as items, one shape for every
 runtime: `{ update: 'agent_item', runtime, item, observedAt? }`, read through `readAgentItem`. A
 consumer folds every runtime's conversation with one reader; the native message still rides
-`agent_message` beside the items, for the transcript store and anyone who wants it whole. Items are
+`agent_message` beside the items, for a session store and anyone who wants it whole. Items are
 an addition: every other frame a session sends is the same with them or without them
 (`src/host/claude-wire-replay.test.ts` holds Claude's recorded wire both ways).
 

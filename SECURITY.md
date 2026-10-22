@@ -457,8 +457,8 @@ does not:
   handlers before the ones it was handed, so periscope's handler is the last a call meets: the input
   it decides is the input that runs. A deny, the extension's own deadline, an interrupt, a reply that
   does not verify, or anything the handler throws blocks the call. An allow may rewrite the input,
-  which pi runs without validating it again, as a Claude session does; pi's own transcript keeps the
-  input the model wrote. pi's `bash` command, which runs a command outside any tool call, is refused.
+  which pi runs without validating it again, as a Claude session does; pi's own session record keeps
+  the input the model wrote. pi's `bash` command, which runs a command outside any tool call, is refused.
 - **The whole pi home is protected.** `PERISCOPE_PI_HOME` holds pi's agent home (your sign-in and the
   endpoints' keys), the session store and each session's run directory (the channel's token and the
   MCP servers' tickets), and all of it is in the protected set, named literally, through a
@@ -604,7 +604,8 @@ over the link and without a further credential:
   ([Codex sessions](#codex-sessions)).
 - **Start sessions** that run the agent with the interactive prompt replaced by the gate, and
   answer every permission decision those sessions raise; and **end** one it no longer needs
-  (`session_end`): the agent's process exits, and its transcript stays where the agent CLI wrote it.
+  (`session_end`): the agent's process exits, and its session history stays where the agent CLI wrote
+  it.
 
 None of this is a defect to be closed: a runner that could not run a tool server, set a session's
 environment or clean up its worktrees would not be a runner. It is the trust a pairing extends, so

@@ -150,7 +150,7 @@ inside an agent session. Re-measure it after an agent SDK bump.
 **The model catalog.** Before it dials, `serve` asks the agent which models it offers.
 
 - It starts the agent with no prompt, reads the models from the agent's answer to the SDK's
-  initialize request, and closes it. That took under a second, wrote no transcript and left no
+  initialize request, and closes it. That took under a second, wrote no session file and left no
   process running; the read is bounded at 20 seconds.
 - The hello carries the list as `configuration.agent` ([the wire protocol](protocol.md)).
 - A session takes a model by the catalog's `value`: an alias (`default`, `opus`, `sonnet`, `haiku`)

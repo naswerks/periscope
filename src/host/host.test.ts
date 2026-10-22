@@ -1745,7 +1745,7 @@ test('control: the same degrade on a session composed without the host reaches n
   // recorded-but-undelivered state is the defect the pin above guards against, reproduced on purpose.
 });
 
-// --- the discovery door -------------------------------------------------------
+// --- the dispatcher's closed set, and the discovery asks ----------------------
 
 /**
  * The closed-set pin: every payload kind is classified, and the classification is exhaustive.

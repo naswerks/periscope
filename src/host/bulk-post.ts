@@ -2,11 +2,11 @@
  * The host half of the bulk lane: bytes leave over an outbound HTTP POST, never over the link.
  *
  * The link carries a locator and gets back a receipt; the content travels here. That inversion is
- * what keeps a megabyte transcript off a socket that also carries the transitions telling you what
- * a session is doing — a single large frame would otherwise stall every session sharing the link.
+ * what keeps a megabyte file off a socket that also carries the transitions telling you what a
+ * session is doing — a single large frame would otherwise stall every session sharing the link.
  *
- * The read is streamed. Buffering a whole transcript to send it would block the event loop for
- * every other session this host is serving, which is the same failure in a different costume.
+ * The read is streamed. Buffering a whole file to send it would block the event loop for every
+ * other session this host is serving, which is the same failure in a different costume.
  */
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -72,8 +72,8 @@ export interface BulkPostReceipt {
   readonly byteCount: number;
   /**
    * The file's stat at the moment the delivery was read (size total, mtime as floored epoch ms).
-   * Carried so a transcript puller can detect the CLI rewriting the file under it — a byte-offset
-   * resume across a rewrite is invalid, and only the deliverer's own stat can say.
+   * Carried so a caller pulling a file in pieces can detect it being rewritten under it — a
+   * byte-offset resume across a rewrite is invalid, and only the deliverer's own stat can say.
    */
   readonly sizeBytes: number;
   readonly mtimeMs: number;
@@ -98,8 +98,8 @@ export async function postBulk(request: BulkPostRequest): Promise<Result<BulkPos
   // The caller attaches this host's durable, non-expiring paired credential to the request (see
   // `host.ts`'s `#deliver`). With a credential riding along, a peer-named `postUrl` is an
   // exfiltration surface: any code path that can compose a `BulkRequest` could name
-  // `http://attacker.example/x` and receive the operator's transcript and the device credential
-  // that outlives the discovery of the theft.
+  // `http://attacker.example/x` and receive the operator's file and the device credential that
+  // outlives the discovery of the theft.
   //
   // Checked after the scheme, on purpose. A garbled URL should still say it is garbled; this reason
   // is reserved for a target that is well-formed and simply is not this host's controller.
@@ -108,7 +108,7 @@ export async function postBulk(request: BulkPostRequest): Promise<Result<BulkPos
       'bulk-target-not-controller',
       `refusing to deliver to ${target.origin}: this host posts bulk content only to its own ` +
         `controller at ${request.allowedOrigin}. The destination rides the wire, so a peer that ` +
-        `names another origin is asking for the transcript AND this host's durable credential`,
+        `names another origin is asking for the file AND this host's durable credential`,
     );
   }
 
@@ -118,8 +118,8 @@ export async function postBulk(request: BulkPostRequest): Promise<Result<BulkPos
     const byteCount = stats.size - start;
 
     // Bounded to the bytes the header promised. `content-length` is declared from the stat above,
-    // but the stream was opened after it: reading a live transcript (the headline use case) lets
-    // the CLI append between the two, so an unbounded stream drains past the declared length and
+    // but the stream was opened after it: reading a file still being written lets its writer
+    // append between the two, so an unbounded stream drains past the declared length and
     // the delivery dies as `bulk-delivery-failed`, a name that blames the delivery for a file that
     // simply moved. The end offset is inclusive, hence the -1.
     //
