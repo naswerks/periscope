@@ -18,11 +18,11 @@ import { rawText } from '../test-support/raw-text.js';
 
 type Answer = { readonly welcome: number } | { readonly close: [code: number, reason: string] };
 
-// A patch release keeps the wire: the window it speaks is the window the last minor spoke, so every
-// controller already linked to a runner keeps linking when the runner is updated. Moving either end is
-// a protocol bump, a minor release, and this line with it.
-test('deliberate: this release speaks the window [16, 17], unchanged from the minor it patches', () => {
-  assert.deepEqual([PROTOCOL_VERSION_MIN, PROTOCOL_VERSION], [16, 17]);
+// The window moves at a protocol bump, a minor release, and this line with it: the new version and
+// the one before it. A patch release keeps the window its minor spoke, so every controller already
+// linked to a runner keeps linking when the runner is updated.
+test('deliberate: this release speaks the window [17, 18]', () => {
+  assert.deepEqual([PROTOCOL_VERSION_MIN, PROTOCOL_VERSION], [17, 18]);
 });
 
 /** A controller that reads the hello's window and answers as told; the hello it saw is kept for assertions. */

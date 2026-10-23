@@ -457,8 +457,8 @@ does not:
   handlers before the ones it was handed, so periscope's handler is the last a call meets: the input
   it decides is the input that runs. A deny, the extension's own deadline, an interrupt, a reply that
   does not verify, or anything the handler throws blocks the call. An allow may rewrite the input,
-  which pi runs without validating it again, as a Claude session does; pi's own transcript keeps the
-  input the model wrote. pi's `bash` command, which runs a command outside any tool call, is refused.
+  which pi runs without validating it again, as a Claude session does; pi's own session record keeps
+  the input the model wrote. pi's `bash` command, which runs a command outside any tool call, is refused.
 - **The whole pi home is protected.** `PERISCOPE_PI_HOME` holds pi's agent home (your sign-in and the
   endpoints' keys), the session store and each session's run directory (the channel's token and the
   MCP servers' tickets), and all of it is in the protected set, named literally, through a
@@ -578,15 +578,17 @@ over the link and without a further credential:
 - **Remove directories.** `workspace_release` deletes a worktree under the workspace root, and the
   controller can set that root through `host_configure` (a root change is refused only while a
   session is live or opening).
-- **Read files.** Every transcript under the agent home (`<agent home>/projects`, by default
-  `~/.claude/projects`), which includes sessions the operator ran from an editor or a terminal,
-  not only sessions this host started; and any directory listing or text-file head under the
-  repository root (`repository_list` / `repository_read`, read-only and bounded), a root the
-  controller can re-point through `host_configure`; and any text file up to 512 KiB inside a
-  workspace this host provisioned, a page at a time (`workspace_read`, by the workspace's key). Each
-  door is jailed to its root, and the repository and workspace doors also honour the host's
-  protected set: a path at or beneath a protected path refuses `credential-path-denied` whatever the
-  root is, on the lexical resolution and on the real path.
+- **Read files.** Any directory listing under the repository root, and any text file there: its
+  head, whatever its size, and its first 512 KiB a page at a time (`repository_list` /
+  `repository_read`, read-only and bounded), a root the controller can re-point through
+  `host_configure`; and any text file up to 512 KiB inside a workspace this host provisioned, a page
+  at a time (`workspace_read`, by the workspace's key). Each door is jailed to its root and honours
+  the host's protected set: a path at or beneath a protected path refuses `credential-path-denied`
+  whatever the root is, on the lexical resolution and on the real path.
+- **Not transcripts.** The runner does not look for, read or keep the agents' transcript files
+  (Claude Code's `<agent home>/projects`; Codex's `sessions`, `archived_sessions`, `history.jsonl`
+  and thread database; Qwen Code's `projects` and `tmp`; pi's `sessions`), and its read doors and
+  bulk lane refuse them whatever their root (`transcripts-not-served`).
 - **Choose the agent's permission mode.** `session_new.request.permissionMode` and
   `session_configure` take the SDK's own vocabulary, `bypassPermissions` included. Under bypass the
   agent's allow and ask rules are off and the `PreToolUse` hook is the only control, so a controller
@@ -597,14 +599,16 @@ over the link and without a further credential:
   that call's permission keys can ride along (`pins/permission-config.test.ts`).
 - **Reconfigure the host.** The workspace root, the repository root, the branch scheme, the agent
   home, the plugin directories and the two controller URLs through `host_configure`, written to the
-  config file; the URLs apply at the next start.
+  config file; the URLs and the agent home apply at the next start (the hello names them in
+  `pendingRestart` until then), so the protected set always covers the agent home the host runs with.
 - **Start a Codex session, where you configured Codex.** Its tool calls go through the gate by
   periscope's own hook, with the residual paths named, under Codex's sandbox and approval policy for
   the permission mode the controller names, `bypassPermissions` (no sandbox) included
   ([Codex sessions](#codex-sessions)).
 - **Start sessions** that run the agent with the interactive prompt replaced by the gate, and
   answer every permission decision those sessions raise; and **end** one it no longer needs
-  (`session_end`): the agent's process exits, and its transcript stays where the agent CLI wrote it.
+  (`session_end`): the agent's process exits, and its session history stays where the agent CLI wrote
+  it.
 
 None of this is a defect to be closed: a runner that could not run a tool server, set a session's
 environment or clean up its worktrees would not be a runner. It is the trust a pairing extends, so

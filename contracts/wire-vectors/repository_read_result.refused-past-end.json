@@ -1,0 +1,26 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "repository_read_result",
+      "requestId": "request-15",
+      "text": null,
+      "sizeBytes": 0,
+      "truncated": false,
+      "nextOffset": null,
+      "refusal": {
+        "reason": "repository-read-failed",
+        "detail": "the offset 98304 is past the end of the file (70656 bytes)"
+      }
+    }
+  },
+  "name": "repository_read_result.refused-past-end",
+  "protocolVersion": 18,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"repository_read_result\",\"requestId\":\"request-15\",\"text\":null,\"sizeBytes\":0,\"truncated\":false,\"nextOffset\":null,\"refusal\":{\"reason\":\"repository-read-failed\",\"detail\":\"the offset 98304 is past the end of the file (70656 bytes)\"}}}"
+}

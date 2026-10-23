@@ -8,6 +8,168 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-22
+
+Protocol 18; the window is `[17, 18]`, so a version-17 controller is still spoken to. Version 18 adds
+paging to `repository_read` (an optional `offset` on the ask, an optional `nextOffset` on the answer)
+and one refusal reason, `transcripts-not-served`, and no payload kind. A version-17 controller reads
+the reason on kinds it already reads (`transcript_failed`, `bulk_failed`) as a reason it does not know;
+`nextOffset` is never composed for a link negotiated below 18, so the answer it reads has the members
+version 17's had; the cut lands on a character boundary where 1.8.2's could split one. Every frame it
+sends decodes unchanged. The shell backstop reads more publish and
+merge shapes: a runner whose controller classifies shell calls itself was already held on them; a
+local-only gate, or one linked to a controller that does not, let them run.
+
+- Changed: the runner no longer looks for, reads or keeps the agents' transcript files. `transcript_list` and `transcript_tail` still decode and are answered
+  `transcript_failed` with the new reason `transcripts-not-served`, so an older controller's ask is
+  answered by name and its channel keeps its sequence; a `bulk_request` whose `what` names the
+  `claude-transcript:` namespace is answered `bulk_failed` with the same reason, before any resolver is
+  asked. The repository and workspace reads refuse a path at or beneath an agent's session records
+  with the same reason, whatever their root, on the lexical resolution and on the real path, so a
+  root pointed at an agent's home or the user's home serves none of them; a listing of the directory
+  that holds one names everything else in it and leaves the record out. The records are
+  `agentTranscriptPaths`, verified against each pinned release's own source:
+  - Claude Code's `projects` under the CLI's default home, under `CLAUDE_CONFIG_DIR` when set, and under
+    the effective agent home, the homes whose credential files the protected set names;
+  - Codex's `sessions` (the rollouts), `archived_sessions`, `history.jsonl` and
+    `thread_history_1.sqlite`, under `~/.codex`, `CODEX_HOME` when set and the runner's own Codex
+    home, the database also under `CODEX_SQLITE_HOME`;
+  - Qwen Code's `projects` (the chats) and `tmp` (the prompt log and saved chats), under `~/.qwen`,
+    `QWEN_HOME` and `QWEN_RUNTIME_DIR` when set, and the runner's own base's `runtime`;
+  - pi's `sessions` under `~/.pi/agent` and `PI_CODING_AGENT_DIR` when set; the runner's own pi home is
+    in the protected set whole. The
+    hello's `configuration.transcriptsRoot` is always null, whatever configuration an embedder composes
+    (a required member inside the window, so it is still sent). The agent home itself is unchanged: its
+    credential files stay in the gate's protected set, and the hello still reports it.
+- Changed: the bulk lane checks the file a resolver names against both of the read doors' fences
+  before it posts it, on the lexical resolution and on the real path: a file at or beneath a protected
+  path answers `bulk_failed` with `credential-path-denied`, and one at or beneath an agent's session
+  records with `transcripts-not-served`, whatever the namespace. The lane is otherwise as it was:
+  `BulkResolver`, `PeriscopeHostOptions.bulk`, `postBulk`, the `bulk-post` capability and the receipts
+  behave as before, and an embedder's resolver still delivers through the bulk POST any other file it
+  gives meaning to. The binary composes no resolver, so every other `bulk_request` to it answers
+  `bulk-target-invalid`, as a host with no resolver always has.
+- Deprecated: `TRANSCRIPT_PAGE_SIZE`, `TRANSCRIPT_WHAT_PREFIX`, the `transcript_list`,
+  `transcript_list_result`, `transcript_tail` and `transcript_tail_result` types and builders;
+  `PeriscopeHostOptions.transcriptsRoot`, never read and now fenced (a root given there joins the
+  folders the read doors and the bulk lane refuse), and the `transcriptsRoot` member a reconfigure
+  seam may return (`HostReconfigured`, kept as optional), ignored. `HostConfiguration.transcriptsRoot` is
+  always null. The names the transcript reader exported through the host module (`listTranscripts`,
+  `tailTranscript`, `resolveTranscriptPath`, `claudeTranscriptResolver`, `isMatchingUserEntry`,
+  `transcriptsRootUnder`, `claudeProjectsRoot` and their three types) are kept and inert: the readers
+  list nothing or refuse `transcripts-not-served`, and the path helpers still derive a path. Each goes
+  at the next major version. `transcript-path-escape` stays in the vocabulary and is never raised.
+- Added: `repository_read` pages, like `workspace_read`. `repository_read.offset` (optional; absent or
+  null is 0) starts a page and `repository_read_result.nextOffset` (optional) says where the next one
+  starts, null at the end of the file or at the new `MAX_REPOSITORY_FILE_BYTES` (512 KiB, beside
+  `MAX_REPOSITORY_READ_BYTES`). Offset 0 is the head of a file of any size, the read version 17 made,
+  with the cut on a character boundary where 1.8.2's could split one; the pages after it reach the
+  bound, or at most three bytes past it when the last page carries a character that straddles it,
+  and `truncated` stays "bytes remain". An offset
+  past the end, past the bound or inside a character is refused `repository-read-failed`, naming why.
+  The host honours an `offset` at either version; `nextOffset` is composed only for a link negotiated
+  at 18 or above, so on a link at 17 the answer has the same members; the cut lands on a character
+  boundary where 1.8.2's could split one. `repositoryRead` takes an optional `offset` and
+  `repositoryReadResult` an optional `nextOffset`; `readRepositoryFile` takes an optional trailing
+  `offset`, and `RepositoryText` gains `nextOffset`.
+- Changed: the repository read and the workspace read cut a page through one reader. A byte is inside a
+  character only when a UTF-8 lead byte at most three bytes before it claims it, so offset 0 is never
+  refused, and a file in another encoding is served from offset 0 and walked by its `nextOffset` to
+  the end. For the workspace read that changes only such a file: one whose first byte
+  continues no character was refused at offset 0, and one with more continuation bytes than its lead
+  byte claims could be refused at the `nextOffset` its previous page gave; UTF-8 text reads as before.
+  A repository head read asked for fewer bytes than its first character now carries that character
+  whole (at most three bytes over `maxBytes`), where it answered empty text, because a page must make
+  progress.
+- Added: `agentTranscriptPaths(env, { agentHome, codexHome, qwenHome })`, beside `credentialPaths`,
+  and `PeriscopeHostOptions.transcriptPaths`, which the read doors and the bulk lane refuse; absent,
+  the host computes it from the process environment. `listRepositoryDirectory`, `readRepositoryFile` and `readWorkspaceFile`
+  take it as an optional trailing parameter.
+- Fixed: an agent home written over the link (`host_configure`) is pending until the next start, as
+  the two controller URLs are: it is written to the config file and named in `pendingRestart` in the
+  answer and every hello, and the protected set keeps the agent home the host started with. Applied
+  live, the host ran with a home whose credential files the protected set did not yet name, since a
+  session's gate keeps the set it opened with.
+- Changed: `defaultAgentHome` is defined in the host's paths module; its export and behaviour are
+  unchanged.
+- Fixed: a repository read with `maxBytes` of 8 KiB or more could end inside a multibyte character,
+  whose bytes before the cut decoded as a replacement character: the cut was stepped back only over
+  bytes read past it, and at that size none were. The cut now lands on a character boundary, as the
+  workspace read's always did, so such a page carries up to three bytes fewer and no replacement
+  character; the default `maxBytes` (48 KiB) is in that range.
+- Fixed: a `#` after a backslash-escaped blank is part of the word, as a POSIX shell reads it, so the
+  command after it is classified. `echo a\ # ; git push origin main` refuses as `git-push`, inside
+  `bash -c "…"` too, where the comment stripper took the `#` for a comment and the push flowed. The
+  escaped reading only adds refusals, and a backslash before a quote is still not read as an escape, so
+  `echo \" # " ; git push origin main` keeps refusing.
+- Fixed: a POSIX command word is read after quote removal, as bash reads the name it runs, so
+  `g''it push origin main`, `"g"it push origin main` and `g\it push origin main` refuse as `git-push`
+  and `b''ash -c "git send-pack origin main"` inverts as `bash -c` does. Inside a double-quoted span a
+  backslash escapes `"`, `\`, `$` and a backtick, so `echo "a \" # " ; git push origin main` reads the
+  push, inside `bash -c "…"` too. Both are read in the escaped reading, beside the split one, so they
+  only add refusals: the split reading keeps a backslash as a path separator (`C:\Git\bin\git.exe` is
+  git there), and outside a quote a backslash before a quote is still not an escape.
+- Fixed: completing an Azure DevOps pull request is held in four more forms: a quoted option name
+  (`az repos pr update --id 5 "--status" completed`), a repeated option where any occurrence completes
+  (`--status active --status completed`, as `az` keeps the last), a word that starts with `-` and holds
+  no space once its quotes are removed ending a `--description` run
+  (`--description "notes" "--status" completed`, while `"- fixed it"` stays prose), and the `.cmd` and
+  `.bat` shims below.
+- Fixed: a program named through `.cmd` or `.bat`, in any case, is that program, as one named through
+  `.exe` is. `az.cmd`, `git.cmd`, `git.bat` and `gh.cmd` are read by every rule:
+  `git.cmd push origin main` refuses as `git-push`, `gh.cmd pr merge 5` as `gh-pr-merge`, and the verb
+  allow-list reads `git.cmd`. A shim's prose and data are read as its program's are, so these flow where
+  they refused: `az.cmd repos pr create --description "git push origin main"`,
+  `gh.cmd pr create --body "git push origin main"`, `git.cmd commit -m "git push origin main"`, a
+  heredoc into `git.cmd commit -F -`, and a heredoc into `cat.cmd` or `tee.bat`. Behind a launcher a shim
+  does not take a git word after it out of the allow-list.
+- Fixed: a command word an expansion supplies is read as the program the command line names for it: a
+  substitution of `echo`, `printf`, `which`, `command`, `type` or `where` whose last word is the name
+  (`$(echo git) push origin x`, `` `echo git` push ``, `"$(which git)" push`, `$(command -v gh) pr merge 5`),
+  or a variable the line assigned earlier (`G=git; $G push origin main`, `export G=git && $G push`). That
+  word is read by both layers, as the program written out is, and only once every other reading has
+  flowed, so it adds a refusal where nothing else refuses and never changes the reason of one. An
+  expansion whose program the line does not name is not guessed and flows as before: `$DOCKER push`,
+  `$(which docker) push img`, `$1 push`, `"$@" push`, `$X reset --hard`, `$PKG branch -d x`,
+  `g$(echo it) push`. Only a POSIX reading reads one: PowerShell takes a line that starts with `$(…)` or
+  `$G` for an expression, and `cmd` expands neither. In that reading a redirection's word names a file
+  and `do`, `then`, `else` and `elif` open a command only as its first word, so `G=git; echo hi > $G`
+  and `G=git; echo then $G push` flow and `> out $(echo git) push origin main` refuses as `git-push`.
+  `docs/gate.md` lists the shell shapes that flow.
+- Fixed: a git command named inside another program's words reads git's `-c key=value` as `-c`'s pair,
+  so the verb after it is read: `ssh h "git -c user.name=x push origin main"` and
+  `docker exec c git -c a=b push origin main` refuse as `git-push`, as `git -c a=b push origin main`
+  does at a command position, and a branch deletion, a hard reset and remote surgery behind a `-c` pair
+  refuse under their rules.
+- Fixed: a `git branch` option's value is its value. `ssh build-host "git branch --sort=-committerdate"`,
+  `git branch --sort -committerdate`, `git branch --contains -d topic` and `--format=-d` inside another
+  program's words flow, where `git-branch-delete` refused them. A deletion cluster is made of
+  `git branch`'s own short options: `-dr`, `-rD` and `-fd` still refuse, and `-dx`, an unknown switch to
+  git, flows. In another program's words an option's `=value` stays its value, so
+  `ssh build-host git --exec-path=/x push origin main` refuses as `git-push`.
+- Added: `scripts/classifier-diff.mjs` (not shipped, and run by hand: nothing in `package.json` or CI
+  runs it) classifies one corpus with two builds, prints every answer that moved, and checks named
+  controls against the later build, exiting 1 when one does not hold: 40 that must flow (expansions
+  whose program the line does not name, `$(echo git) push` in the PowerShell and `cmd` readings, a
+  redirection's word, a Windows path to a read) and 8 that must refuse (`git push`, `gh pr merge`,
+  `az repos pr update --status completed`, `git branch -D`, `git reset --hard`, `git remote add`,
+  `git send-pack`, and `git push` inside `ssh`'s words). Against 1.8.2, over 37,155 commands in the
+  POSIX, PowerShell and `cmd` readings, 1,380 answers changed, each in a form above, and all 48 controls
+  hold. 1,322 flow to refused: 945 through a `.cmd` or `.bat` shim (873 of them on the allow-list, each
+  with a git shim word); 303 a command word an expansion supplies whose line names git, `gh` or `az`, in
+  the POSIX reading (271 on the allow-list, `$(echo git) send-pack origin main` among them); 23 a command
+  word read after quote removal; 17 the four `az` forms; 15 a `-c` pair inside another program's words;
+  12 an escaped blank before a `#`; 3 an escaped quote inside a double-quoted span; 3 the `--exec-path=`
+  push; and 1 a redirection before a named command word. 48 refused to flows: 11 `git branch` option
+  values and clusters in each of the three readings, and 15 shim forms whose prose or data is now read
+  as their program's: `az.cmd`'s description, `gh.cmd`'s body, and `git.cmd`'s and `git.bat`'s
+  messages in each reading, and the heredocs into `cat.cmd`, `tee.bat` and `git.cmd commit -F -` in the
+  POSIX reading. 10 allow-list refusals keep their reason and name `git.cmd`'s verb in the detail.
+- Docs: `SECURITY.md` states the limit as its own bullet ("Not transcripts.") and the repository read's
+  paging; the README, configuration, architecture, gate and protocol documents and the reference
+  controller (which no longer offers the transcript asks as doors) follow, and the documents name the
+  agent's own session files in neutral words.
+
 ## [1.8.2] - 2026-10-21
 
 No wire or API change: the protocol, the window `[16, 17]` and the public exports are as they were, so a

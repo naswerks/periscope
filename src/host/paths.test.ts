@@ -10,7 +10,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isAbsolute, join, sep } from 'node:path';
 
-import { credentialPaths, nodePathResolver, periscopeCredentialDir, tokenCachePath } from './paths.js';
+import {
+  agentTranscriptPaths,
+  credentialPaths,
+  defaultAgentHome,
+  nodePathResolver,
+  periscopeCredentialDir,
+  tokenCachePath,
+} from './paths.js';
 
 const windows = sep === '\\';
 
@@ -202,4 +209,102 @@ test("the effective agent home's token cache is protected: passed by the composi
   // The default under the home directory is already there, and is not listed twice.
   const defaulted = credentialPaths(env, { agentHome: 'C:/Users/x/.claude' });
   assert.equal(defaulted.filter((path) => path === 'C:/Users/x/.claude/.credentials.json').length, 1);
+});
+
+test('regression: a backslash home reports the agent home in its own separator', () => {
+  assert.equal(defaultAgentHome({ USERPROFILE: 'C:\\Users\\agent' }), 'C:\\Users\\agent\\.claude');
+  assert.equal(defaultAgentHome({ HOME: '/home/agent/' }), '/home/agent/.claude');
+});
+
+test('the default agent home derives from the home directory, and no home means null, never a guess', () => {
+  assert.equal(
+    defaultAgentHome({ USERPROFILE: 'C:/Users/agent', HOME: '/home/other' }),
+    'C:/Users/agent/.claude',
+    'USERPROFILE wins over HOME',
+  );
+  assert.equal(defaultAgentHome({ HOME: '/home/agent' }), '/home/agent/.claude');
+  assert.equal(defaultAgentHome({ HOME: '  ' }), null);
+  assert.equal(defaultAgentHome({}), null);
+});
+
+test("the agents' session records come from every home of each runtime this host knows, each once", () => {
+  const claude = (paths: readonly string[]): string[] =>
+    paths.filter((path) => path.endsWith('/projects') && path.includes('claude'));
+  assert.deepEqual(claude(agentTranscriptPaths({ HOME: '/home/agent' })), ['/home/agent/.claude/projects']);
+  assert.deepEqual(
+    claude(
+      agentTranscriptPaths({
+        HOME: '/home/agent',
+        CLAUDE_CONFIG_DIR: '/opt/claude',
+        PERISCOPE_AGENT_HOME: '/srv/claude-home',
+      }),
+    ),
+    ['/home/agent/.claude/projects', '/opt/claude/projects', '/srv/claude-home/projects'],
+  );
+  // The composition root's agent home wins over the environment's, and the default is not listed twice.
+  const resolved = agentTranscriptPaths(
+    { HOME: '/home/agent', PERISCOPE_AGENT_HOME: '/srv/ignored' },
+    { agentHome: '/home/agent/.claude' },
+  );
+  assert.equal(resolved.filter((path) => path === '/home/agent/.claude/projects').length, 1);
+  assert.ok(!resolved.some((path) => path.startsWith('/srv/ignored')));
+  assert.ok(
+    agentTranscriptPaths({ USERPROFILE: 'C:\\Users\\agent' }).includes('C:\\Users\\agent\\.claude\\projects'),
+  );
+
+  // Each runtime's records under the operator's own homes, as the pinned releases name them.
+  const operator = agentTranscriptPaths({ HOME: '/home/agent' });
+  for (const path of [
+    '/home/agent/.codex/sessions',
+    '/home/agent/.codex/archived_sessions',
+    '/home/agent/.codex/history.jsonl',
+    '/home/agent/.codex/thread_history_1.sqlite',
+    '/home/agent/.qwen/projects',
+    '/home/agent/.qwen/tmp',
+    '/home/agent/.pi/agent/sessions',
+  ]) {
+    assert.ok(operator.includes(path), `${path} is not fenced`);
+  }
+  assert.equal(new Set(operator).size, operator.length, 'a path is listed twice');
+
+  // The homes the environment moves them to, and the homes this host runs each runtime from.
+  const moved = agentTranscriptPaths(
+    {
+      HOME: '/home/agent',
+      CODEX_HOME: '/opt/codex',
+      CODEX_SQLITE_HOME: '/opt/codex-db',
+      QWEN_HOME: '/opt/qwen',
+      QWEN_RUNTIME_DIR: '/opt/qwen-runtime',
+      PI_CODING_AGENT_DIR: '/opt/pi-agent',
+      PERISCOPE_CODEX_HOME: '/srv/ignored-codex',
+    },
+    { codexHome: '/srv/codex', qwenHome: '/srv/qwen' },
+  );
+  for (const path of [
+    '/opt/codex/sessions',
+    '/opt/codex/history.jsonl',
+    '/opt/codex-db/thread_history_1.sqlite',
+    '/srv/codex/sessions',
+    '/srv/codex/archived_sessions',
+    '/opt/qwen/projects',
+    '/opt/qwen-runtime/projects',
+    '/opt/qwen-runtime/tmp',
+    '/srv/qwen/runtime/projects',
+    '/srv/qwen/runtime/tmp',
+    '/opt/pi-agent/sessions',
+  ]) {
+    assert.ok(moved.includes(path), `${path} is not fenced`);
+  }
+  assert.ok(!moved.some((path) => path.startsWith('/srv/ignored-codex')), "the composition root's home wins");
+
+  // Every Claude Code home whose credential files are protected has its projects folder fenced.
+  const env = {
+    HOME: '/home/agent',
+    CLAUDE_CONFIG_DIR: '/opt/claude',
+    PERISCOPE_AGENT_HOME: '/srv/claude-home',
+  };
+  for (const projects of claude(agentTranscriptPaths(env))) {
+    const agentHome = projects.slice(0, -'/projects'.length);
+    assert.ok(credentialPaths(env).includes(`${agentHome}/.credentials.json`), agentHome);
+  }
 });

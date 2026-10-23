@@ -41,7 +41,7 @@ export interface GlobalFlag {
  * to be safe.
  */
 export interface Invocation {
-  /** The command word with any path and `.exe` stripped, lower-cased. `''` for an empty segment. */
+  /** The command word with any path and `.exe`, `.cmd` or `.bat` stripped, lower-cased. `''` for an empty segment. */
   readonly program: string;
   readonly globalFlags: readonly GlobalFlag[];
   readonly verb: string | null;
@@ -64,12 +64,33 @@ export interface ParsedCommand {
   /** True when a shell interpreter or eval token is present anywhere. See `INTERPRETER_NAMES`. */
   readonly hasInterpreter: boolean;
   /**
-   * The POSIX reading with each escaped blank joined into its word (`C:/Program\ Files/…` one path), when
-   * that changes the words. The classifier refuses when either reading refuses, so the second reading
-   * can only add a refusal: a word that begins with an escaped blank is read both ways.
+   * The POSIX reading with each escaped blank joined into its word (`C:/Program\ Files/…` one path, and
+   * `a\ #` one word whose `#` opens no comment), when that changes the words. The classifier refuses when
+   * either reading refuses, so the second reading can only add a refusal: a word that begins with an
+   * escaped blank is read both ways.
    * @internal
    */
   readonly escapedReading?: ParsedCommand;
+  /**
+   * Each command word an expansion supplies whose program the command line itself names, with the words
+   * after it, at any depth: `$(echo git) push origin x`, `G=git; $G push`. A POSIX reading's only;
+   * absent when there is none.
+   * @internal
+   */
+  readonly expandedCommands?: readonly ExpandedCommand[];
+}
+
+/**
+ * A command word an expansion supplies, read as the program the command line names for it: a
+ * substitution that prints the name (`$(echo git)`, `$(which git)`, `` `command -v gh` ``) or a variable
+ * the line assigned it to earlier (`G=git; $G`).
+ * @internal
+ */
+export interface ExpandedCommand {
+  /** The named program, as `programNameOf` reads a command word. */
+  readonly program: string;
+  /** The words after the command word. */
+  readonly words: readonly string[];
 }
 
 /**
@@ -82,7 +103,7 @@ export interface ParsedCommand {
  * the classifier can see it. Without this inversion, nesting smuggles.
  *
  * A closed, named set — extend by named entry, never by wildcard. Path components are stripped and
- * `.exe` dropped, so `C:\Windows\System32\cmd.exe` fires and `deploy.sh` does not: running a script
+ * `.exe`, `.cmd` or `.bat` dropped, so `C:\Windows\System32\cmd.exe` fires and `deploy.sh` does not: running a script
  * file was never scannable at this layer, and pretending otherwise would be a claim the code cannot
  * keep.
  */
@@ -152,7 +173,7 @@ const INLINE_MESSAGE_PREFIXES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
- * Message flags whose value is every word up to the next flag, not one token: `az`'s `--description`
+ * Message flags whose value is every word up to the next option (`endsVariadicRun`), not one token: `az`'s `--description`
  * takes `"line one" "line two"` as two paragraphs. Each inert literal in the run is data; anything else
  * stays in the scan, as one word after any other message flag does.
  */
@@ -189,13 +210,26 @@ const TERMINAL_GIT_FLAGS = new Set(['--version', '--help']);
 
 // ---------------------------------------------------------------------------
 
-/** The command word with any directory prefix and a trailing `.exe` removed, lower-cased. */
+/**
+ * The command word with any directory prefix and a trailing `.exe`, `.cmd` or `.bat` removed, lower-cased.
+ * Windows runs a program through any of the three: `az` is `az.cmd`, and a `git.cmd` shim runs git.
+ */
 export function programNameOf(token: string): string {
   const bare = token.replace(/^["']|["']$/g, '');
   const lastSeparator = Math.max(bare.lastIndexOf('/'), bare.lastIndexOf('\\'));
   const component = lastSeparator >= 0 ? bare.slice(lastSeparator + 1) : bare;
-  const withoutExe = component.toLowerCase().endsWith('.exe') ? component.slice(0, -4) : component;
-  return withoutExe.toLowerCase();
+  const withoutExtension = /\.(?:exe|cmd|bat)$/i.test(component) ? component.slice(0, -4) : component;
+  return withoutExtension.toLowerCase();
+}
+
+/**
+ * Does this word end a variadic message run? `az`'s argument parser ends one on a word that starts with
+ * `-` once the shell has removed its quotes and holds no space, so a quoted option name (`"--status"`)
+ * ends it as a bare one does, and a quoted paragraph that starts with a dash (`"- fixed it"`) does not.
+ */
+function endsVariadicRun(word: string): boolean {
+  const received = word.replace(/["']/g, '');
+  return received.startsWith('-') && !received.includes(' ');
 }
 
 /**
@@ -230,15 +264,38 @@ export function isInertLiteral(token: string): boolean {
  * to an interpreter and interpreters do not honour this parser's idea of a comment.
  */
 export function stripComments(command: string): string {
+  return stripPosixComments(command, false);
+}
+
+/** The characters a backslash escapes inside a POSIX double-quoted span. */
+const DOUBLE_QUOTE_ESCAPES: ReadonlySet<string> = new Set(['"', '\\', '$', '`']);
+
+/**
+ * `stripComments`, with a POSIX shell's escapes read when `escapes` is set. Outside a quote, a blank
+ * after an unpaired backslash is part of the word before it, so it starts no word and a `#` after it is
+ * mid-word, as bash reads `echo a\ # ; git push` (one word `a #`, then the push); a backslash before a
+ * quote there is not read as an escape, so the quote still opens a span, the reading that scans more.
+ * Inside a double-quoted span a backslash escapes `"`, `\`, `$` and a backtick, so `\"` does not close
+ * the span: `echo "a \" # " ; git push` is one argument and then the push. A single-quoted span has no
+ * escapes. Not part of the gate's barrel.
+ * @internal
+ */
+export function stripPosixComments(command: string, escapes: boolean): string {
   let result = '';
   let quote = '';
   let atWordStart = true;
+  let backslashes = 0;
 
   for (let i = 0; i < command.length; i += 1) {
     const character = command[i] as string;
 
     if (quote !== '') {
       result += character;
+      if (escapes && quote === '"' && character === '\\' && DOUBLE_QUOTE_ESCAPES.has(command[i + 1] ?? '')) {
+        result += command[i + 1] as string;
+        i += 1;
+        continue;
+      }
       if (character === quote) quote = '';
       continue;
     }
@@ -247,6 +304,7 @@ export function stripComments(command: string): string {
       quote = character;
       result += character;
       atWordStart = false;
+      backslashes = 0;
       continue;
     }
 
@@ -255,16 +313,20 @@ export function stripComments(command: string): string {
       while (i < command.length && command[i] !== '\n') i += 1;
       if (i < command.length) result += '\n';
       atWordStart = true;
+      backslashes = 0;
       continue;
     }
 
     result += character;
+    const escapedBlank = escapes && backslashes % 2 === 1 && (character === ' ' || character === '\t');
+    backslashes = character === '\\' ? backslashes + 1 : 0;
     atWordStart =
-      character === ' ' ||
-      character === '\t' ||
-      character === '\n' ||
-      character === '\r' ||
-      SEPARATORS.has(character);
+      !escapedBlank &&
+      (character === ' ' ||
+        character === '\t' ||
+        character === '\n' ||
+        character === '\r' ||
+        SEPARATORS.has(character));
   }
 
   return result;
@@ -420,10 +482,202 @@ export function readCmdCommand(command: string): string {
  * nothing else, exactly as the same text does outside the quotes.
  */
 export function tokenize(command: string, quotesAreSeparators = false): string[] {
-  return splitWords(command, quotesAreSeparators, false);
+  return splitWords(command, quotesAreSeparators, false, false);
 }
 
-/** Does this character, after an escaped blank, continue the word? A comment opener does not. */
+/**
+ * The index just past the expansion that opens at `start` (`$( … )`, `${ … }`, or a backtick and its
+ * pair), or -1 when it does not close before the end of its line. Inside one a quoted span is skipped,
+ * so a closer inside quotes does not end it; where quotes are separators (an interpreter is named) a
+ * quote ends the attempt instead, and the text is split as it always is.
+ */
+function expansionEnd(characters: readonly string[], start: number, quotesAreSeparators: boolean): number {
+  const backtick = characters[start] === '`';
+  const open = backtick ? '`' : (characters[start + 1] as string);
+  const close = backtick ? '`' : open === '(' ? ')' : '}';
+  let depth = 0;
+  let quote = '';
+  for (let i = start + (backtick ? 1 : 2); i < characters.length; i += 1) {
+    const character = characters[i] as string;
+    if (character === '\n' || character === '\r') return -1;
+    if (quote !== '') {
+      if (character === quote) quote = '';
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      if (quotesAreSeparators) return -1;
+      quote = character;
+      continue;
+    }
+    if (character === close && depth === 0) return i + 1;
+    if (backtick) continue;
+    if (character === open) depth += 1;
+    else if (character === close) depth -= 1;
+  }
+  return -1;
+}
+
+/** Does an expansion open at this character: a `$( … )`, a `${ … }` or a backtick? */
+const opensExpansion = (characters: readonly string[], index: number): boolean =>
+  characters[index] === '`' ||
+  (characters[index] === '$' && (characters[index + 1] === '(' || characters[index + 1] === '{'));
+
+/**
+ * Programs whose output is the name they are given, or the path of the program they are given: in a
+ * substitution, `$(echo git)`, `$(which git)` and `$(command -v gh)` print a name the line can see.
+ */
+const NAME_PRINTERS: ReadonlySet<string> = new Set(['echo', 'printf', 'which', 'command', 'type', 'where']);
+
+/**
+ * The program a substitution's text prints, read from its last word, when the text is one command of a
+ * program that prints a name (`echo git`, `which git`, `command -v gh`). Null for anything else: what
+ * other text prints is not visible on the line.
+ */
+function printedName(text: string): string | null {
+  const tokens = tokenize(text);
+  if (tokens.length < 2) return null;
+  if (tokens.some((token) => (token.length === 1 && SEPARATORS.has(token)) || OPENER_KEYWORDS.has(token)))
+    return null;
+  if (!NAME_PRINTERS.has(programNameOf(tokens[0] as string))) return null;
+  return programNameOf(tokens.at(-1) as string);
+}
+
+/**
+ * The program a word names when the command line makes it visible: a word that is one substitution,
+ * quoted or not, of text that prints a name (`$(echo git)`, `` `which git` ``, `"$(command -v gh)"`), or
+ * one variable (`$G`, `${G}`, `"$G"`) the line assigned a name to earlier. Null for any other expansion
+ * (`$DOCKER`, `$1`, `"$@"`, `g$(echo it)`): its program is not on the line, so it is not guessed.
+ */
+function visibleProgram(word: string, assigned: ReadonlyMap<string, string>): string | null {
+  const inner = word.length >= 2 && word.startsWith('"') && word.endsWith('"') ? word.slice(1, -1) : word;
+  const characters = [...inner];
+  if (opensExpansion(characters, 0) && expansionEnd(characters, 0, false) === characters.length) {
+    if (characters[0] === '`') return printedName(characters.slice(1, -1).join(''));
+    if (characters[1] === '(') return printedName(characters.slice(2, -1).join(''));
+  }
+  const variable = /^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})$/.exec(inner);
+  if (variable === null) return null;
+  return assigned.get((variable[1] ?? variable[2]) as string) ?? null;
+}
+
+/** Keywords that assign the variables after them in the shell running the line. */
+const ASSIGNING_KEYWORDS: ReadonlySet<string> = new Set([
+  'export',
+  'declare',
+  'local',
+  'readonly',
+  'typeset',
+]);
+
+/**
+ * Record the variables a command position assigns in the shell itself: a statement of assignments
+ * (`G=git`) or one behind `export` and its kin (`export G=git`). A value the line can read the program of
+ * is kept under its name (a name, a path, a quoted name, or a substitution that prints one); any other
+ * value forgets the variable. Assignments before a command (`G=git cmd`) are that command's alone.
+ */
+function recordAssignments(position: readonly string[], assigned: Map<string, string>): void {
+  const keyword = ASSIGNING_KEYWORDS.has(position[0] as string);
+  const words = keyword ? position.slice(1) : position;
+  const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
+  if (!words.every((word) => assignment.test(word) || (keyword && word.startsWith('-')))) return;
+  for (const word of words) {
+    const match = assignment.exec(word);
+    if (match === null) continue;
+    const [, name, value] = match as unknown as [string, string, string];
+    const named = /[$`]/.test(value) ? visibleProgram(value, assigned) : programNameOf(value);
+    if (named === null || named === '') assigned.delete(name);
+    else assigned.set(name, named);
+  }
+}
+
+/** The text inside each expansion in a word (`$( … )`, `${ … }`, a backtick pair), outside single quotes. */
+function expansionBodies(word: string): string[] {
+  const characters = [...word];
+  const bodies: string[] = [];
+  let quote = '';
+  for (let i = 0; i < characters.length; i += 1) {
+    const character = characters[i] as string;
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      continue;
+    }
+    if (character === "'" && quote === '') quote = "'";
+    else if (character === '"') quote = quote === '"' ? '' : '"';
+    else if (opensExpansion(characters, i)) {
+      const end = expansionEnd(characters, i, false);
+      if (end === -1) continue;
+      bodies.push(characters.slice(i + (character === '`' ? 1 : 2), end - 1).join(''));
+      i = end - 1;
+    }
+  }
+  return bodies;
+}
+
+/** The characters a redirection operator is made of after its first `<` or `>`: `>>`, `>&`, `>|`, `<<`. */
+const REDIRECTION_TAIL: ReadonlySet<string> = new Set(['<', '>', '&', '|']);
+
+/**
+ * A command's tokens split into command positions as a POSIX shell starts a command: at a separator, and
+ * at `do`, `then`, `else` or `elif` when one is the first word of a position. A redirection (`> out`,
+ * `< in`, `2>&1`, `<<EOF`) belongs to the command it sits in, and the word after it names a file, not a
+ * command: `G=git; echo hi > $G` runs `echo`, and `> out $G push` runs `$G`. The expansion reading's
+ * alone: the split reading starts a command at every `<`, `>` and keyword, the reading that scans more.
+ */
+function commandPositions(tokens: readonly string[]): string[][] {
+  const positions: string[][] = [];
+  let position: string[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i] as string;
+    if (token === '<' || token === '>') {
+      let next = i + 1;
+      while (next < tokens.length && REDIRECTION_TAIL.has(tokens[next] as string)) next += 1;
+      const target = tokens[next];
+      // The target is skipped; a separator where one would be is left to end the position.
+      i = target !== undefined && !(target.length === 1 && SEPARATORS.has(target)) ? next : next - 1;
+      continue;
+    }
+    if (token.length === 1 && SEPARATORS.has(token)) {
+      if (position.length > 0) positions.push(position);
+      position = [];
+    } else if (position.length === 0 && OPENER_KEYWORDS.has(token.toLowerCase())) continue;
+    else position.push(token);
+  }
+  if (position.length > 0) positions.push(position);
+  return positions;
+}
+
+/**
+ * Each command word an expansion supplies whose program the line names, with the words after it, at every
+ * command position and inside every expansion's text, read with each expansion kept inside its word as
+ * the shell reads a word before expanding it: `$(echo git) push origin x` is the word `$(echo git)` and
+ * then `push origin x`, where the split reading has `)` end a command and `push` begin one. The line is
+ * read in order, so a variable is named only by an assignment before it; the text inside an expansion
+ * sees the assignments made before it.
+ */
+function expansionCommands(
+  text: string,
+  quotesAreSeparators: boolean,
+  escapes: boolean,
+  assigned: Map<string, string> = new Map(),
+): ExpandedCommand[] {
+  const tokens = splitWords(text, quotesAreSeparators, escapes, true);
+  const found: ExpandedCommand[] = [];
+  for (const position of commandPositions(tokens)) {
+    for (const body of position.flatMap(expansionBodies)) {
+      const nested = tokenize(body).some((word) => INTERPRETER_NAMES.includes(programNameOf(word)));
+      found.push(...expansionCommands(body, nested, escapes, new Map(assigned)));
+    }
+    const program = visibleProgram(position[0] as string, assigned);
+    if (program !== null) found.push({ program, words: position.slice(1) });
+    recordAssignments(position, assigned);
+  }
+  return found;
+}
+
+/**
+ * Does this character, after an escaped blank, continue the word? A `#` does: the escaped blank started
+ * no word, so the `#` is mid-word and opens no comment.
+ */
 function continuesWord(character: string | undefined): boolean {
   return (
     character !== undefined &&
@@ -431,7 +685,6 @@ function continuesWord(character: string | undefined): boolean {
     character !== '\t' &&
     character !== '\n' &&
     character !== '\r' &&
-    character !== '#' &&
     !SEPARATORS.has(character)
   );
 }
@@ -440,10 +693,19 @@ function continuesWord(character: string | undefined): boolean {
  * `tokenize`, with a POSIX shell's escaped blank read when `escapes` is set: outside a quote, a
  * backslash before a blank that continues the word joins the word, as `C:/Program\ Files/…` is one path
  * to bash. Read only where it splits words: `\\` is a pair, so its second backslash escapes nothing, and a
- * blank before a separator, a comment or the end is left as it was. PowerShell and cmd.exe read a
- * backslash as an ordinary character, so only the POSIX reading sets it.
+ * blank before a separator or the end is left as it was. Inside an interpreter's payload a `#` after an
+ * escaped blank is joined into the word too, so it opens no comment there either. PowerShell and cmd.exe
+ * read a backslash as an ordinary character, so only the POSIX reading sets it.
+ *
+ * With `keepExpansions` set, a `$( … )`, `${ … }` or backtick pair outside a quote is kept inside the word
+ * it sits in rather than split at its brackets, for `expansionCommands`.
  */
-function splitWords(command: string, quotesAreSeparators: boolean, escapes: boolean): string[] {
+function splitWords(
+  command: string,
+  quotesAreSeparators: boolean,
+  escapes: boolean,
+  keepExpansions: boolean,
+): string[] {
   const tokens: string[] = [];
   let current = '';
   let quote = '';
@@ -491,12 +753,31 @@ function splitWords(command: string, quotesAreSeparators: boolean, escapes: bool
       }
     } else if (quote !== '') {
       current += character;
+      if (
+        escapes &&
+        quote === '"' &&
+        character === '\\' &&
+        DOUBLE_QUOTE_ESCAPES.has(characters[i + 1] ?? '')
+      ) {
+        current += characters[i + 1] as string;
+        i += 1;
+        continue;
+      }
       if (character === quote) quote = '';
       continue;
     } else if (character === '"' || character === "'") {
       quote = character;
       current += character;
       continue;
+    }
+
+    if (keepExpansions && opensExpansion(characters, i)) {
+      const end = expansionEnd(characters, i, quotesAreSeparators);
+      if (end !== -1) {
+        current += characters.slice(i, end).join('');
+        i = end - 1;
+        continue;
+      }
     }
 
     if (escapes && character === '\\') {
@@ -742,7 +1023,7 @@ function readInvocation(tokens: readonly string[]): { invocation: Invocation; sc
         const last = variadic.includes(token) ? tokens.length - 1 : index + 1;
         while (index + 1 <= last && index + 1 < tokens.length) {
           const payload = tokens[index + 1] as string;
-          if (variadic.includes(token) && payload.startsWith('-')) break;
+          if (variadic.includes(token) && endsVariadicRun(payload)) break;
           if (isInertLiteral(payload)) dataPayloads.push(payload);
           else {
             args.push(payload);
@@ -783,23 +1064,101 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
       : dialect === 'cmd'
         ? readCmdCommand(command)
         : stripComments(command);
-  const hasInterpreter = tokenize(withoutComments).some((token) =>
-    INTERPRETER_NAMES.includes(programNameOf(token)),
-  );
-  // PowerShell and cmd.exe have no heredoc: `<<` there is not a body to separate, so nothing is set
-  // aside as data.
-  const heredocs =
-    dialect === 'posix' ? separateHeredocBodies(withoutComments) : { text: withoutComments, payloads: [] };
-
-  const tokens = tokenize(heredocs.text, hasInterpreter);
-  const parsed: ParsedCommand = { ...positionsOf(tokens), hasInterpreter };
+  const plain = wordsOfText(withoutComments, dialect === 'posix', false);
+  // PowerShell reads a line that starts with `$(…)` or `$G` as an expression, not a call, and cmd.exe
+  // expands neither, so a command word an expansion supplies is a POSIX reading's alone.
+  const parsed = readingOf(plain, false, dialect === 'posix');
   if (dialect !== 'posix') return parsed;
-  // A POSIX shell joins an escaped blank into its word; PowerShell and cmd.exe have no such escape. Read
-  // that way too, beside the reading above, only when it changes the words.
-  const escaped = splitWords(heredocs.text, hasInterpreter, true);
-  if (escaped.length === tokens.length && escaped.every((token, index) => token === tokens[index]))
+  // A POSIX shell joins an escaped blank into its word, so a `#` after one is inside that word and opens
+  // no comment; PowerShell and cmd.exe have no such escape. Read that way too, from the comments on,
+  // beside the reading above, only when it changes the words.
+  const escaped = wordsOfText(stripPosixComments(command, true), true, true);
+  const tokens = plain.tokens;
+  if (
+    escaped.tokens.length === tokens.length &&
+    escaped.tokens.every((token, index) => token === tokens[index])
+  )
     return parsed;
-  return { ...parsed, escapedReading: { ...positionsOf(escaped), hasInterpreter } };
+  return { ...parsed, escapedReading: readingOf(escaped, true, true) };
+}
+
+/** One reading of a command: its invocations, its scannable text, and the commands an expansion names. */
+function readingOf(words: WordsOfText, escapes: boolean, expansions: boolean): ParsedCommand {
+  const expanded = expansions ? expansionCommands(words.body, words.hasInterpreter, escapes) : [];
+  return {
+    ...positionsOf(words.tokens),
+    hasInterpreter: words.hasInterpreter,
+    ...(expanded.length > 0 ? { expandedCommands: expanded } : {}),
+  };
+}
+
+interface WordsOfText {
+  readonly tokens: string[];
+  readonly hasInterpreter: boolean;
+  /** The text the tokens were split from, heredoc bodies a data sink receives already set aside. */
+  readonly body: string;
+}
+
+/**
+ * A command's text, its comments already removed, split into words: whether an interpreter is named, the
+ * heredoc bodies a data sink receives set aside when `heredocs` is set, and the split. PowerShell and
+ * cmd.exe have no heredoc: `<<` there is not a body to separate, so nothing is set aside as data.
+ */
+function wordsOfText(text: string, heredocs: boolean, escapes: boolean): WordsOfText {
+  const names = (token: string): string[] =>
+    escapes ? [programNameOf(token), programNameOf(removeQuotes(token))] : [programNameOf(token)];
+  const hasInterpreter = tokenize(text).some((token) =>
+    names(token).some((name) => INTERPRETER_NAMES.includes(name)),
+  );
+  const body = heredocs ? separateHeredocBodies(text).text : text;
+  const tokens = splitWords(body, hasInterpreter, escapes, false);
+  return { tokens: escapes ? withCommandWordsUnquoted(tokens) : tokens, hasInterpreter, body };
+}
+
+/**
+ * A word as a POSIX shell hands it to the program it names: single quotes removed with what they hold
+ * kept as written, double quotes removed with `\"`, `\\`, `\$` and `\`` inside them resolved, and a
+ * backslash outside a quote dropped before the character it escapes. An expansion is left as written.
+ */
+function removeQuotes(word: string): string {
+  let result = '';
+  let quote = '';
+  for (let i = 0; i < word.length; i += 1) {
+    const character = word[i] as string;
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      else result += character;
+    } else if (quote === '"') {
+      if (character === '"') quote = '';
+      else if (character === '\\' && DOUBLE_QUOTE_ESCAPES.has(word[i + 1] ?? '')) {
+        result += word[i + 1] as string;
+        i += 1;
+      } else result += character;
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === '\\' && i + 1 < word.length) {
+      result += word[i + 1] as string;
+      i += 1;
+    } else result += character;
+  }
+  return result;
+}
+
+/**
+ * The words with each command word read after quote removal, as a POSIX shell reads the name of the
+ * program it runs: `g''it`, `"g"it` and `g\it` are all `git`. Only the escaped reading reads them so; the
+ * split reading keeps a backslash as a path separator, which is how `C:\Git\bin\git.exe` names git there.
+ */
+function withCommandWordsUnquoted(tokens: readonly string[]): string[] {
+  let atCommandPosition = true;
+  return tokens.map((token) => {
+    if ((token.length === 1 && SEPARATORS.has(token)) || OPENER_KEYWORDS.has(token.toLowerCase())) {
+      atCommandPosition = true;
+      return token;
+    }
+    const word = atCommandPosition ? removeQuotes(token) : token;
+    atCommandPosition = false;
+    return word;
+  });
 }
 
 /** A command's tokens read position by position: its invocations and the text a classifier may scan. */

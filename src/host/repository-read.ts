@@ -3,12 +3,11 @@
  * operator's checkout through this host, jailed to the repository root. The workspace read is the
  * same door over a workspace's directory: one jail, with its own two refusal reasons, and pages.
  *
- * The posture is the discovery door's, over a different root. The transcripts door reads the agent
- * CLI's own directory; this reads the repository the host provisions workspaces from, so a
- * controller can show a checkout's shape and the text of a file in it without a session, a clone or
- * a bulk lane. Read-only is a property here too: the filesystem surface is `createReadStream`,
- * `readdir`, `stat` and `realpath`, and `src/pins/transcript-readonly.test.ts` holds this module's
- * closure to that allowlist beside the transcripts door.
+ * It reads the repository the host provisions workspaces from, so a controller can show a
+ * checkout's shape and the text of a file in it without a session, a clone or a bulk lane.
+ * Read-only is a property, not a promise: the filesystem surface is `createReadStream`, `readdir`,
+ * `stat` and `realpath`, and `src/pins/read-door-readonly.test.ts` holds this module's closure to
+ * that allowlist.
  *
  * The jail, for every controller-supplied path:
  *   1. a NUL byte in the text is refused before anything is resolved (it would end the path early
@@ -19,16 +18,22 @@
  *      root's real path, so a link planted inside the checkout cannot point the read outside it;
  *   4. the protected set: a path at or beneath one of the host's protected paths (the credential
  *      directories the gate keeps from the agent) is refused whatever the root is, on the lexical
- *      resolution and again on the real path.
+ *      resolution and again on the real path;
+ *   5. the agents' session records: a path at or beneath one (`agentTranscriptPaths`) is refused the
+ *      same way, whatever the root is, and a listing leaves it out.
  * A jail violation refuses `repository-path-escape`; a protected path refuses
- * `credential-path-denied`. A path that is inside the root but is not what was asked for (a file
- * where a directory was asked, nothing at all) refuses `repository-read-failed`; absence is a
- * refusal here, not a value, because the ask named one thing and it is not there.
+ * `credential-path-denied`; a session record refuses `transcripts-not-served`. A path that is
+ * inside the root but is not what was asked for (a file where a directory was asked, nothing at all)
+ * refuses `repository-read-failed`; absence is a refusal here, not a value, because the ask named one
+ * thing and it is not there.
  *
  * Bounded twice: a listing carries at most `MAX_REPOSITORY_ENTRIES` names and says when it stopped;
- * a read carries at most `maxBytes` (itself capped at `MAX_REPOSITORY_READ_BYTES`), cut on a UTF-8
- * boundary, and says the file's whole size. A file with a NUL byte in its first
- * `BINARY_PROBE_BYTES` is refused as binary: the answer is a string and a string cannot carry it.
+ * a read carries one page, at most `maxBytes` (itself capped at `MAX_REPOSITORY_READ_BYTES`), cut on
+ * a UTF-8 boundary, and says the file's whole size. Offset 0 is the head of a file of any size; the
+ * pages after it end at `MAX_REPOSITORY_FILE_BYTES`, or at most three bytes past it when a page
+ * starting within three bytes of it carries its first character whole. Both doors read a page the same
+ * way (`readTextPage`). A file with a NUL byte in its first `BINARY_PROBE_BYTES` is refused as
+ * binary: the answer is a string and a string cannot carry it.
  */
 import { createReadStream } from 'node:fs';
 import { readdir, realpath, stat } from 'node:fs/promises';
@@ -36,6 +41,7 @@ import { readdir, realpath, stat } from 'node:fs/promises';
 import type { RepositoryEntry } from '../control/frames.js';
 import {
   MAX_REPOSITORY_ENTRIES,
+  MAX_REPOSITORY_FILE_BYTES,
   MAX_REPOSITORY_READ_BYTES,
   MAX_WORKSPACE_FILE_BYTES,
   MAX_WORKSPACE_READ_BYTES,
@@ -55,11 +61,17 @@ export interface RepositoryListing {
   readonly truncated: boolean;
 }
 
-/** One file's head as text, with the whole size so a caller can see what `truncated` left behind. */
+/** One page of a file as text, with the whole size so a caller can see what `truncated` left behind. */
 export interface RepositoryText {
   readonly text: string;
   readonly sizeBytes: number;
+  /** True when bytes of the file remain past this page. */
   readonly truncated: boolean;
+  /**
+   * Where the next page starts, or null when this page reached the end of the file or
+   * `MAX_REPOSITORY_FILE_BYTES`.
+   */
+  readonly nextOffset: number | null;
 }
 
 /** One page of a workspace file as text: the file's whole size, and where the next page starts. */
@@ -151,25 +163,32 @@ function protectedPathRefusal(resolved: string, protectedPaths: readonly string[
   return ok(null);
 }
 
-/** The jail and the protected set together; the real path of the target on success. */
-async function admittedRealPath(
-  root: string,
-  relative: string,
-  protectedPaths: readonly string[],
-  door: ReadDoor = REPOSITORY_DOOR,
-): Promise<Result<string>> {
-  const resolved = resolveUnder(root, relative, door);
-  if (!resolved.ok) return resolved;
-  const lexical = protectedPathRefusal(resolved.value, protectedPaths);
-  if (!lexical.ok) return lexical;
-  const real = await containedRealPath(root, resolved.value, door);
-  if (!real.ok) return real;
-  // The real path is compared against the protected set's real paths, not its spellings: a
-  // component `realpath` rewrites (a short name, a linked directory) would otherwise make the
-  // resolved target and the protected directory disagree about a prefix that names one place. A
-  // protected path that does not exist is compared as spelled; absence protects nothing.
-  const realProtected = await Promise.all(
-    protectedPaths.map(async (candidate) => {
+/**
+ * The agents' session records apply to this door the way the protected set does: a path at or
+ * beneath one is refused whatever the root is, on the lexical resolution and again on the real path,
+ * so neither a root pointed at an agent's home (or the user's) nor a link into a session-record
+ * folder serves an agent's transcript files to a controller.
+ */
+function transcriptPathRefusal(resolved: string, transcriptPaths: readonly string[]): Result<null> {
+  for (const candidate of transcriptPaths) {
+    if (isContainedByIgnoringCase(resolved, candidate)) {
+      return refuse(
+        'transcripts-not-served',
+        `the path is at or beneath ${candidate}, where the agent keeps its transcript files; the read doors do not serve them`,
+      );
+    }
+  }
+  return ok(null);
+}
+
+/**
+ * Each path as the filesystem names it, so a component `realpath` rewrites (a short name, a linked
+ * directory) cannot make a target and a fenced directory disagree about a prefix that names one
+ * place. A path that does not exist is kept as spelled; absence fences nothing.
+ */
+async function realPathsOf(paths: readonly string[]): Promise<string[]> {
+  return Promise.all(
+    paths.map(async (candidate) => {
       try {
         return normalizePath(await realpath(candidate));
       } catch {
@@ -177,23 +196,88 @@ async function admittedRealPath(
       }
     }),
   );
-  const physical = protectedPathRefusal(real.value, realProtected);
+}
+
+/** The two fences on one spelling of a path: the protected set first, then the transcript folders. */
+function fencesRefusal(
+  path: string,
+  protectedPaths: readonly string[],
+  transcriptPaths: readonly string[],
+): Result<null> {
+  const credential = protectedPathRefusal(path, protectedPaths);
+  if (!credential.ok) return credential;
+  return transcriptPathRefusal(path, transcriptPaths);
+}
+
+/** The real path is compared against each fence's real paths, not its spellings. */
+async function realFencesRefusal(
+  real: string,
+  protectedPaths: readonly string[],
+  transcriptPaths: readonly string[],
+): Promise<Result<null>> {
+  return fencesRefusal(real, await realPathsOf(protectedPaths), await realPathsOf(transcriptPaths));
+}
+
+/**
+ * The two fences on a file that is about to leave for a controller by another door than these: the
+ * bulk lane runs it on the file its resolver names, so whatever the namespace, the lane posts neither
+ * credential material (`credential-path-denied`) nor the agent's transcript files
+ * (`transcripts-not-served`). Checked on the lexical resolution and again on the real path, as the
+ * read doors check. A path with nothing at it passes the real check: the delivery then fails by name
+ * when it reads the file.
+ */
+export async function fencedFileRefusal(
+  path: string,
+  protectedPaths: readonly string[],
+  transcriptPaths: readonly string[],
+): Promise<Result<null>> {
+  const lexical = fencesRefusal(normalizePath(nodePathResolver(path)), protectedPaths, transcriptPaths);
+  if (!lexical.ok) return lexical;
+  let real: string;
+  try {
+    real = normalizePath(await realpath(path));
+  } catch {
+    return ok(null);
+  }
+  return realFencesRefusal(real, protectedPaths, transcriptPaths);
+}
+
+/** The jail, the protected set and the transcript folders together; the real path of the target on success. */
+async function admittedRealPath(
+  root: string,
+  relative: string,
+  protectedPaths: readonly string[],
+  door: ReadDoor = REPOSITORY_DOOR,
+  transcriptPaths: readonly string[] = [],
+): Promise<Result<string>> {
+  const resolved = resolveUnder(root, relative, door);
+  if (!resolved.ok) return resolved;
+  const lexical = fencesRefusal(resolved.value, protectedPaths, transcriptPaths);
+  if (!lexical.ok) return lexical;
+  const real = await containedRealPath(root, resolved.value, door);
+  if (!real.ok) return real;
+  const physical = await realFencesRefusal(real.value, protectedPaths, transcriptPaths);
   if (!physical.ok) return physical;
   return real;
 }
 
 /**
  * List one directory under the root: files and directories by name, sorted, at most `cap` of
- * them. Anything that is neither (a link, a socket) is left out rather than followed.
+ * them. Anything that is neither (a link, a socket) is left out rather than followed, and so is an
+ * agent's session record: a listing of the directory that holds one (an agent home) names everything
+ * else in it, as before, and not the record. A protected path inside a listed directory is still
+ * named; its contents are what the protected set refuses.
  */
 export async function listRepositoryDirectory(
   root: string,
   relative: string,
   cap = MAX_REPOSITORY_ENTRIES,
   protectedPaths: readonly string[] = [],
+  transcriptPaths: readonly string[] = [],
 ): Promise<Result<RepositoryListing>> {
-  const real = await admittedRealPath(root, relative, protectedPaths);
+  const real = await admittedRealPath(root, relative, protectedPaths, REPOSITORY_DOOR, transcriptPaths);
   if (!real.ok) return real;
+  const fenced = [...transcriptPaths, ...(await realPathsOf(transcriptPaths))];
 
   let children;
   try {
@@ -206,6 +290,10 @@ export async function listRepositoryDirectory(
   }
   const named = children
     .filter((child) => child.isDirectory() || child.isFile())
+    .filter(
+      (child) =>
+        !fenced.some((candidate) => isContainedByIgnoringCase(`${real.value}/${child.name}`, candidate)),
+    )
     .map((child) => ({ name: child.name, directory: child.isDirectory() }))
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const limit = Math.max(1, cap);
@@ -228,60 +316,64 @@ export async function listRepositoryDirectory(
 }
 
 /**
- * Read the head of one text file under the root: at most `maxBytes` (capped at the wire's bound),
- * cut back to a UTF-8 boundary so the text never ends mid-character. Binary is refused by the NUL
- * probe; a directory or an absent path is refused by name.
+ * Read one page of a text file under the root: from byte `offset`, at most `maxBytes` (capped at the
+ * wire's bound), cut back to a character boundary. Offset 0 is the head of a file of any size, the
+ * read a controller one release behind makes. A page after it starts no further than
+ * `MAX_REPOSITORY_FILE_BYTES` and ends there, or at the end of the file, whichever is first; a page
+ * starting within three bytes of the bound on a longer character carries it whole, so it may end at
+ * most three bytes past. `nextOffset` is null at either end. Binary is refused by the NUL probe; a directory, an absent path,
+ * and an offset past the end, past that bound or inside a character are refused by name.
  */
 export async function readRepositoryFile(
   root: string,
   relative: string,
   maxBytes = MAX_REPOSITORY_READ_BYTES,
   protectedPaths: readonly string[] = [],
+  offset = 0,
+  transcriptPaths: readonly string[] = [],
 ): Promise<Result<RepositoryText>> {
-  const real = await admittedRealPath(root, relative, protectedPaths);
+  const door = REPOSITORY_DOOR;
+  const real = await admittedRealPath(root, relative, protectedPaths, door, transcriptPaths);
   if (!real.ok) return real;
 
   let stats;
   try {
     stats = await stat(real.value);
   } catch (error) {
-    return refuse('repository-read-failed', `the file could not be read: ${describe(error)}`);
+    return refuse(door.failed, `the file could not be read: ${describe(error)}`);
   }
-  if (!stats.isFile()) return refuse('repository-read-failed', 'the path is not a file');
+  if (!stats.isFile()) return refuse(door.failed, 'the path is not a file');
 
-  const wanted = Math.min(Math.max(1, Math.floor(maxBytes)), MAX_REPOSITORY_READ_BYTES);
-  const probe = Math.max(wanted, BINARY_PROBE_BYTES);
-  const chunks: Buffer[] = [];
-  try {
-    if (stats.size > 0) {
-      for await (const chunk of createReadStream(real.value, { start: 0, end: probe - 1 })) {
-        chunks.push(chunk as Buffer);
-      }
-    }
-  } catch (error) {
-    return refuse('repository-read-failed', `the file could not be read: ${describe(error)}`);
+  const start = Math.max(0, Math.floor(offset));
+  if (start > stats.size) {
+    return refuse(door.failed, `the offset ${start} is past the end of the file (${stats.size} bytes)`);
   }
-  const head = Buffer.concat(chunks);
-  if (head.subarray(0, BINARY_PROBE_BYTES).includes(0)) {
+  // How far pages reach: the end of the file, or the bound, whichever is first.
+  const reach = Math.min(stats.size, MAX_REPOSITORY_FILE_BYTES);
+  if (start > reach) {
     return refuse(
-      'repository-read-failed',
-      'the file holds a NUL byte in its head and is not served as text',
+      door.failed,
+      `the offset ${start} is past the ${MAX_REPOSITORY_FILE_BYTES} bytes the repository read pages through; the head of any file is read at offset 0`,
     );
   }
 
-  let cut = Math.min(head.length, wanted);
-  // A continuation byte at the cut means a character straddles it: step back to its first byte.
-  while (cut > 0 && cut < head.length && (head[cut]! & 0xc0) === 0x80) cut -= 1;
-  const text = head.subarray(0, cut).toString('utf8');
-  return ok({ text, sizeBytes: stats.size, truncated: cut < stats.size });
+  const wanted = Math.min(Math.max(1, Math.floor(maxBytes)), MAX_REPOSITORY_READ_BYTES, reach - start);
+  const page = await readTextPage(real.value, stats.size, start, wanted, door);
+  if (!page.ok) return page;
+  const end = page.value.end;
+  return ok({
+    text: page.value.text,
+    sizeBytes: stats.size,
+    truncated: end < stats.size,
+    nextOffset: end < reach ? end : null,
+  });
 }
 
 /**
  * Read one page of a text file inside a workspace's directory: from byte `offset`, at most `maxBytes`
- * (capped at the wire's bound), cut back to a character boundary. A page that would end inside its
- * first character carries that whole character, so every page makes progress. The file must be at
- * most `MAX_WORKSPACE_FILE_BYTES` and text by the repository read's rule (no NUL byte in its first
- * `BINARY_PROBE_BYTES`); an offset past the end or inside a character is refused.
+ * (capped at the wire's bound), cut back to a character boundary. The file must be at most
+ * `MAX_WORKSPACE_FILE_BYTES` and text by the repository read's rule; an offset past the end or inside
+ * a character is refused.
  */
 export async function readWorkspaceFile(
   root: string,
@@ -289,9 +381,10 @@ export async function readWorkspaceFile(
   offset = 0,
   maxBytes = MAX_WORKSPACE_READ_BYTES,
   protectedPaths: readonly string[] = [],
+  transcriptPaths: readonly string[] = [],
 ): Promise<Result<WorkspaceText>> {
   const door = WORKSPACE_DOOR;
-  const real = await admittedRealPath(root, relative, protectedPaths, door);
+  const real = await admittedRealPath(root, relative, protectedPaths, door, transcriptPaths);
   if (!real.ok) return real;
 
   let stats;
@@ -313,19 +406,49 @@ export async function readWorkspaceFile(
   }
 
   const wanted = Math.min(Math.max(1, Math.floor(maxBytes)), MAX_WORKSPACE_READ_BYTES);
+  const page = await readTextPage(real.value, stats.size, start, wanted, door);
+  if (!page.ok) return page;
+  const end = page.value.end;
+  return ok({ text: page.value.text, sizeBytes: stats.size, nextOffset: end < stats.size ? end : null });
+}
+
+/**
+ * One page of a text file, the read both doors share: from `start`, at most `wanted` bytes, cut back
+ * to a character boundary. A page that would end inside its first character carries that whole
+ * character, so every page makes progress; a page asked for no bytes is empty. The file is text by
+ * one rule wherever the page starts: no NUL byte in its first `BINARY_PROBE_BYTES`.
+ *
+ * A character is what a UTF-8 lead byte claims: a byte is inside one only when a lead byte at most
+ * three bytes before it declares a length that reaches it, across continuation bytes. A later start
+ * inside a character is refused, because a page from there would begin with half of one; offset 0
+ * never is. A byte no lead claims (text in another encoding) is a character of its own, so a file
+ * that is not UTF-8 is served from offset 0 and walked to its end, and no answer's `nextOffset` is a
+ * start the next ask refuses.
+ */
+async function readTextPage(
+  path: string,
+  size: number,
+  start: number,
+  wanted: number,
+  door: ReadDoor,
+): Promise<Result<{ readonly text: string; readonly end: number }>> {
   let head: Buffer;
+  let before: Buffer;
   let page: Buffer;
   try {
-    head = await readRange(real.value, 0, Math.min(stats.size, BINARY_PROBE_BYTES));
+    head = await readRange(path, 0, Math.min(size, BINARY_PROBE_BYTES));
+    // Up to three bytes before the start: enough to see whether a lead byte claims it.
+    before =
+      start === 0 ? Buffer.alloc(0) : await readRange(path, Math.max(0, start - 3), Math.min(3, start));
     // Three bytes past the page: enough to see whether a character straddles the cut.
-    page = await readRange(real.value, start, Math.min(stats.size - start, wanted + 3));
+    page = await readRange(path, start, Math.min(size - start, wanted + 3));
   } catch (error) {
     return refuse(door.failed, `the file could not be read: ${describe(error)}`);
   }
   if (head.includes(0)) {
     return refuse(door.failed, 'the file holds a NUL byte in its head and is not served as text');
   }
-  if (page.length > 0 && (page[0]! & 0xc0) === 0x80) {
+  if (page.length > 0 && claimingLead(Buffer.concat([before, page]), before.length) !== null) {
     return refuse(
       door.failed,
       `the offset ${start} falls inside a character; start at 0 or at the nextOffset an answer gave`,
@@ -333,19 +456,39 @@ export async function readWorkspaceFile(
   }
 
   let cut = Math.min(page.length, wanted);
-  // A continuation byte at the cut means a character straddles it: step back to its first byte.
-  while (cut > 0 && cut < page.length && (page[cut]! & 0xc0) === 0x80) cut -= 1;
-  if (cut === 0 && page.length > 0) {
-    // The first character is longer than `maxBytes`: the page carries it whole rather than nothing.
+  // A byte at the cut that a lead byte before it claims means a character straddles the cut: step
+  // back to that lead.
+  if (cut > 0 && cut < page.length) cut = claimingLead(page, cut) ?? cut;
+  if (cut === 0 && page.length > 0 && wanted > 0) {
+    // The first character is longer than `wanted`: the page carries it whole rather than nothing.
     cut = 1;
-    while (cut < page.length && (page[cut]! & 0xc0) === 0x80) cut += 1;
+    while (cut < page.length && claimingLead(page, cut) === 0) cut += 1;
   }
-  const end = start + cut;
-  return ok({
-    text: page.subarray(0, cut).toString('utf8'),
-    sizeBytes: stats.size,
-    nextOffset: end < stats.size ? end : null,
-  });
+  return ok({ text: page.subarray(0, cut).toString('utf8'), end: start + cut });
+}
+
+/** The length a UTF-8 lead byte declares, or null for a byte that leads no multi-byte character. */
+function declaredLength(byte: number): number | null {
+  if ((byte & 0xe0) === 0xc0) return 2;
+  if ((byte & 0xf0) === 0xe0) return 3;
+  if ((byte & 0xf8) === 0xf0) return 4;
+  return null;
+}
+
+/**
+ * The index of the lead byte whose character covers `bytes[index]`, or null when none does: `index`
+ * is a continuation byte, the bytes between it and the lead are continuation bytes, the lead is at
+ * most three bytes back, and the length it declares reaches `index`.
+ */
+function claimingLead(bytes: Buffer, index: number): number | null {
+  if (index >= bytes.length || (bytes[index]! & 0xc0) !== 0x80) return null;
+  for (let back = 1; back <= 3 && index - back >= 0; back += 1) {
+    const byte = bytes[index - back]!;
+    if ((byte & 0xc0) === 0x80) continue;
+    const length = declaredLength(byte);
+    return length !== null && length > back ? index - back : null;
+  }
+  return null;
 }
 
 /** `length` bytes of a file from `start`; fewer when the file ends first. */

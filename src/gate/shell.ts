@@ -79,31 +79,96 @@ function isLongOption(token: string, name: string, shortest: number): boolean {
 }
 
 /**
- * The value an option was given: `--name value`, `--name=value` or an abbreviation of the name. The
- * value has its quotes removed and its case folded; it is `''` when the option stands bare and null
- * when it could expand (`$`, a backtick), which no rule here may read as a harmless value. Undefined
- * when the option is absent.
+ * The value each occurrence of an option was given: `--name value`, `--name=value` or an abbreviation of
+ * the name, the name read once the shell has removed its quotes (`"--status"` is `--status` to the
+ * program). Each value has its quotes removed and its case folded; it is `''` when the option stands bare
+ * and null when it could expand (`$`, a backtick), which no rule here may read as a harmless value. Empty
+ * when the option is absent. Every occurrence is returned: the Azure CLI's parser keeps the last, so a
+ * rule that reads only one can be handed a harmless first value and a completing second.
  */
-function optionValue(words: readonly string[], name: string, shortest: number): string | null | undefined {
+function optionValues(words: readonly string[], name: string, shortest: number): (string | null)[] {
+  const values: (string | null)[] = [];
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i] as string;
-    if (!isLongOption(word, name, shortest)) continue;
-    const raw = word.includes('=') ? word.slice(word.indexOf('=') + 1) : words[i + 1];
-    if (raw === undefined || (!word.includes('=') && raw.startsWith('-'))) return '';
-    if (raw.includes('$') || raw.includes('`')) return null;
-    return raw.replace(/^["']|["']$/g, '').toLowerCase();
+    const received = word.replace(/["']/g, '');
+    if (!isLongOption(received, name, shortest)) continue;
+    const joined = received.includes('=');
+    const raw = joined ? word.slice(word.indexOf('=') + 1) : words[i + 1];
+    if (raw === undefined || (!joined && raw.startsWith('-'))) values.push('');
+    else if (raw.includes('$') || raw.includes('`')) values.push(null);
+    else values.push(raw.replace(/^["']|["']$/g, '').toLowerCase());
   }
-  return undefined;
+  return values;
 }
 
-/** A `git branch` option that deletes: `-d`, `-D`, a short cluster carrying either, or `--delete`. */
+/** `git branch`'s short options, as `git branch -h` lists them. */
+const BRANCH_SHORT_OPTIONS: ReadonlySet<string> = new Set([
+  'v',
+  'q',
+  't',
+  'u',
+  'r',
+  'a',
+  'd',
+  'D',
+  'm',
+  'M',
+  'c',
+  'C',
+  'l',
+  'f',
+  'i',
+]);
+
+/**
+ * `git branch`'s long options whose value is the next word when it is not joined with `=`, each with the
+ * shortest abbreviation git accepts for it.
+ */
+const BRANCH_VALUE_OPTIONS: ReadonlyArray<readonly [string, number]> = [
+  ['--sort', 4],
+  ['--format', 6],
+  ['--contains', 5],
+  ['--no-contains', 8],
+  ['--with', 6],
+  ['--without', 7],
+  ['--merged', 4],
+  ['--no-merged', 7],
+  ['--points-at', 3],
+  ['--set-upstream-to', 15],
+];
+
+/**
+ * A `git branch` option that deletes: `-d`, `-D`, a cluster of git branch's own short options carrying
+ * either (`-dr`, `-rD`), or `--delete`. A dash word holding a letter git branch has no short option for is
+ * not a cluster of them: `-committerdate` is a sort key.
+ */
 const isBranchDeleteFlag = (token: string): boolean =>
-  /^-[A-Za-z]*[dD][A-Za-z]*$/.test(token) || isLongOption(token, '--delete', 3);
+  (/^-[A-Za-z]+$/.test(token) &&
+    /[dD]/.test(token) &&
+    [...token.slice(1)].every((letter) => BRANCH_SHORT_OPTIONS.has(letter))) ||
+  isLongOption(token, '--delete', 3);
+
+/**
+ * Do `git branch`'s arguments delete a branch? An option's value is its value and never an option of its
+ * own: `--sort=-committerdate`, and `--sort -committerdate` with the key as the next word, as git reads them.
+ */
+function deletesBranch(args: readonly string[]): boolean {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] as string;
+    if (isBranchDeleteFlag(arg)) return true;
+    const takesNext =
+      !arg.includes('=') &&
+      BRANCH_VALUE_OPTIONS.some(([name, shortest]) => isLongOption(arg, name, shortest));
+    if (takesNext) i += 1;
+  }
+  return false;
+}
 
 /**
  * Does this `az` invocation complete an Azure DevOps pull request? `az repos pr update` with a status
  * other than `abandoned` or `active`, or `az repos pr create|update` with auto-complete set to anything
- * but `false`. A bare option, or a value that could expand, counts as completing.
+ * but `false`. A bare option, or a value that could expand, counts as completing, and so does any one
+ * occurrence of a repeated option.
  *
  * The known limit, as for `gh`: a raw REST call (`az rest`, `az devops invoke`) that completes a pull
  * request is not parsed here, as a raw `gh api` call is not.
@@ -114,11 +179,10 @@ function completesAzurePullRequest(invocation: Invocation): boolean {
   const updating = holdsAdjacent(commands, ['repos', 'pr', 'update']);
   if (!updating && !holdsAdjacent(commands, ['repos', 'pr', 'create'])) return false;
   if (updating) {
-    const status = optionValue(words, '--status', 4);
-    if (status !== undefined && status !== 'abandoned' && status !== 'active') return true;
+    const statuses = optionValues(words, '--status', 4);
+    if (statuses.some((status) => status !== 'abandoned' && status !== 'active')) return true;
   }
-  const autoComplete = optionValue(words, '--auto-complete', 3);
-  return autoComplete !== undefined && autoComplete !== 'false';
+  return optionValues(words, '--auto-complete', 3).some((value) => value !== 'false');
 }
 
 /** The boundary rules, in match order. */
@@ -150,9 +214,7 @@ const BOUNDARY_RULES: readonly BoundaryRule[] = [
     // the publish rule above. The flag is read from this invocation's own words, so a downstream
     // `tr -d ' '` cannot lend it one.
     fires: (invocation) =>
-      invocation.program === 'git' &&
-      invocation.verb === 'branch' &&
-      invocation.args.some(isBranchDeleteFlag),
+      invocation.program === 'git' && invocation.verb === 'branch' && deletesBranch(invocation.args),
     detail: 'deleting a branch destroys history a human may still need',
   },
   {
@@ -169,7 +231,7 @@ const BOUNDARY_RULES: readonly BoundaryRule[] = [
   {
     name: 'gh-pr-merge',
     // `pr merge` anywhere in the words that are not options, so `gh -R owner/repo pr merge 5` still
-    // parks. A raw `gh api` call that merges is not parsed here.
+    // refuses. A raw `gh api` call that merges is not parsed here.
     fires: (invocation) =>
       invocation.program === 'gh' && holdsAdjacent(positional(wordsOf(invocation)), ['pr', 'merge']),
     detail: 'merging is a human boundary',
@@ -229,9 +291,17 @@ const isRuledWord = (word: string): boolean => {
   return RULED_PROGRAMS.has(program) || DASHED_GIT.test(program);
 };
 
+/** A word naming its program through a Windows shim (`az.cmd`, `git.bat`), which the program name drops. */
+const SHIM = /\.(?:cmd|bat)["']?$/i;
+
 /**
  * Every invocation the rules read: each one the parser found, each git behind a launcher, and each
  * dashed binary read as git.
+ *
+ * Behind a launcher the command is read from the first ruled word, and also from the first one not
+ * named through a shim when a shim comes earlier: `xargs $G az.cmd git-send-pack.exe` is read as `az.cmd
+ * …` and as `git-send-pack.exe …`, so reading a shim as its program cannot take a git word behind it out
+ * of the allowlist's reach.
  */
 function reach(invocations: readonly Invocation[]): Invocation[] {
   const reached: Invocation[] = [];
@@ -241,6 +311,8 @@ function reach(invocations: readonly Invocation[]): Invocation[] {
     const words = wordsOf(parsed);
     const start = words.findIndex(isRuledWord);
     if (start >= 0) reached.push(normalised(invocationOf(words.slice(start))));
+    const unshimmed = words.findIndex((word) => isRuledWord(word) && !SHIM.test(word));
+    if (unshimmed > start) reached.push(normalised(invocationOf(words.slice(unshimmed))));
   }
   return reached;
 }
@@ -248,9 +320,17 @@ function reach(invocations: readonly Invocation[]): Invocation[] {
 /**
  * Where a ruled program's name can appear inside another's words. Quotes, expansion characters and
  * separators end a word here — `ssh host "git push"` and `-c core.pager='git push'` both hold a git
- * word — while `-`, `.`, `/` and `\` do not, so a path is one word and `pre-push.log` holds no push.
+ * word — while `-`, `.`, `/` and `\` do not, so a path is one word and `pre-push.log` holds no push. An
+ * `=` is read apart: the text after one can begin a command (`-c core.pager=git push`), and the words
+ * after that command's name are read two ways, the rules firing on either: whole, as the command reads
+ * them (`git -c user.name=x push` hands `user.name=x` to `-c` and pushes), and with each word that is not
+ * an option split at its `=`, which reads `ssh host "git push=x"` as a push. An option keeps its
+ * `=value` in both, so `git branch --sort=-committerdate` sorts.
  */
-const RESIDUAL_SPLIT = /[\s"'`=$(){}[\];|&<>,]+/;
+const RESIDUAL_SPLIT = /[\s"'`$(){}[\];|&<>,]+/;
+
+/** A residual word with its `=` read as a break, unless it is an option, which keeps its `=value`. */
+const splitAtEquals = (word: string): string[] => (word.startsWith('-') ? [word] : word.split('='));
 
 /**
  * The residual check: a git, `gh` or `az` word inside any invocation's words — the arguments of a
@@ -264,10 +344,18 @@ function residualRefusal(invocations: readonly Invocation[]): BoundaryRule | nul
       .flatMap((word) => word.split(RESIDUAL_SPLIT))
       .filter((word) => word !== '');
     for (let i = 0; i < words.length; i += 1) {
-      if (!isRuledWord(words[i] as string)) continue;
-      const nested = normalised(invocationOf(words.slice(i)));
-      const rule = BOUNDARY_RULES.find((candidate) => candidate.fires(nested));
-      if (rule !== undefined) return rule;
+      const pieces = (words[i] as string).split('=');
+      for (let k = 0; k < pieces.length; k += 1) {
+        if (!isRuledWord(pieces[k] as string)) continue;
+        const after = words.slice(i + 1);
+        for (const rest of [after, after.flatMap(splitAtEquals)]) {
+          const nested = normalised(
+            invocationOf([...pieces.slice(k), ...rest].filter((word) => word !== '')),
+          );
+          const rule = BOUNDARY_RULES.find((candidate) => candidate.fires(nested));
+          if (rule !== undefined) return rule;
+        }
+      }
     }
   }
   return null;
@@ -430,9 +518,20 @@ export function classifyShellCommand(
 ): Refusal | null {
   // A POSIX reading with an escaped blank is read both ways — split, and joined as a POSIX shell joins
   // it — and refused when either refuses, so reading the escape can only add a refusal.
-  const refused = classifyReading(parsed);
-  if (refused !== null || parsed.escapedReading === undefined) return refused;
-  return classifyReading(parsed.escapedReading);
+  const readings = parsed.escapedReading === undefined ? [parsed] : [parsed, parsed.escapedReading];
+  for (const reading of readings) {
+    const refused = classifyReading(reading);
+    if (refused !== null) return refused;
+  }
+  // A command word an expansion supplies is read as the program the line names for it (`$(echo git) push`,
+  // `G=git; $G push`), by both layers, as that program written out is. It is read last, so it adds a
+  // refusal only where nothing else refuses and never changes the reason of one. A program the line does
+  // not name (`$DOCKER push`, `$1 push`) is not guessed.
+  const expanded = readings.flatMap((reading) =>
+    (reading.expandedCommands ?? []).map((command) => invocationOf([command.program, ...command.words])),
+  );
+  if (expanded.length === 0) return null;
+  return classifyReading({ invocations: expanded, scannable: '', hasInterpreter: false });
 }
 
 function classifyReading(parsed: ParsedCommand): Refusal | null {

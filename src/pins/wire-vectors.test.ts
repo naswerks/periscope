@@ -1146,6 +1146,17 @@ const AUTHORED = {
       name: 'bulk_failed.declared-reason',
       frame: session({ kind: 'bulk_failed', deliveryId: 'delivery-1', refusal: REFUSAL }),
     },
+    {
+      name: 'bulk_failed.transcripts-not-served',
+      frame: session({
+        kind: 'bulk_failed',
+        deliveryId: 'delivery-2',
+        refusal: {
+          reason: 'transcripts-not-served',
+          detail: 'this host does not look for, read or keep the agent transcript files',
+        },
+      }),
+    },
   ],
   session_list: [{ name: 'session_list.request', frame: session(sessionList('request-1')) }],
   session_list_result: [
@@ -1250,6 +1261,15 @@ const AUTHORED = {
         transcriptFailed('request-4', {
           reason: 'transcript-path-escape',
           detail: 'refused by the allowlist',
+        }),
+      ),
+    },
+    {
+      name: 'transcript_failed.transcripts-not-served',
+      frame: session(
+        transcriptFailed('request-4', {
+          reason: 'transcripts-not-served',
+          detail: 'this host does not look for, read or keep the agent transcript files',
         }),
       ),
     },
@@ -1479,12 +1499,70 @@ const AUTHORED = {
       name: 'repository_read.head',
       frame: session(repositoryRead('request-10', 'docs/guides/getting-started.md', 16384)),
     },
+    {
+      name: 'repository_read.paged',
+      frame: session(repositoryRead('request-12', 'docs/guides/getting-started.md', 49152, 49152)),
+    },
   ],
   repository_read_result: [
     {
       name: 'repository_read_result.truncated',
       frame: session(
         repositoryReadResult('request-10', { text: '# The brief\n', sizeBytes: 20480, truncated: true }),
+      ),
+    },
+    // A walk of one 70656-byte file at the default maxBytes, as a host answers it: the head ends at
+    // 49152 (`.page`), the paged ask continues there (`repository_read.paged`) and its answer is the
+    // last page (`.last`).
+    {
+      name: 'repository_read_result.page',
+      frame: session(
+        repositoryReadResult('request-13', {
+          text: '## Platform state\n',
+          sizeBytes: 70656,
+          truncated: true,
+          nextOffset: 49152,
+        }),
+      ),
+    },
+    {
+      name: 'repository_read_result.last',
+      frame: session(
+        repositoryReadResult('request-12', {
+          text: 'the end of the brief\n',
+          sizeBytes: 70656,
+          truncated: false,
+          nextOffset: null,
+        }),
+      ),
+    },
+    {
+      name: 'repository_read_result.refused-past-end',
+      frame: session(
+        // An ask at 98304 on the same file.
+        repositoryReadResult(
+          'request-15',
+          { text: null, sizeBytes: 0, truncated: false, nextOffset: null },
+          {
+            reason: 'repository-read-failed',
+            detail: 'the offset 98304 is past the end of the file (70656 bytes)',
+          },
+        ),
+      ),
+    },
+    {
+      name: 'repository_read_result.refused-past-ceiling',
+      frame: session(
+        // An ask at 589824 on a 614400-byte file: inside the file, past the bound.
+        repositoryReadResult(
+          'request-14',
+          { text: null, sizeBytes: 0, truncated: false, nextOffset: null },
+          {
+            reason: 'repository-read-failed',
+            detail:
+              'the offset 589824 is past the 524288 bytes the repository read pages through; the head of any file is read at offset 0',
+          },
+        ),
       ),
     },
     {
@@ -2020,6 +2098,33 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
     name: 'refused.over-limit',
     wire: `{"padding":"${'x'.repeat(MAX_FRAME_BYTES)}"}`,
     expect: refused('frame-too-large'),
+  },
+  // The well-formed twin is `repository_read.paged`; only the offset differs: an offset is whole bytes.
+  {
+    name: 'refused.repository-read-offset-fraction',
+    wire: sessionWire({
+      kind: 'repository_read',
+      requestId: 'request-12',
+      path: 'docs/guides/getting-started.md',
+      maxBytes: 49152,
+      offset: 1.5,
+    }),
+    expect: refused('frame-malformed'),
+  },
+  // The well-formed twin is `repository_read_result.page`; only the next offset differs: a next page
+  // starts after the first byte, and the last page says null.
+  {
+    name: 'refused.repository-read-result-next-offset-zero',
+    wire: sessionWire({
+      kind: 'repository_read_result',
+      requestId: 'request-13',
+      text: '## Platform state\n',
+      sizeBytes: 70656,
+      truncated: true,
+      nextOffset: 0,
+      refusal: null,
+    }),
+    expect: refused('frame-malformed'),
   },
   // The well-formed twin is `session_update.agent-item-tool-result`; only the exit code differs.
   {

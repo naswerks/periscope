@@ -699,6 +699,9 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     liveCount: z.number().int().nonnegative(),
     provisioningCount: z.number().int().nonnegative(),
   }),
+  // The transcript asks and their answers. A host of this build answers both asks `transcript_failed`
+  // with `transcripts-not-served`, and every kind here still decodes: a frame the codec refused would
+  // never reach the host to be answered, and its channel would wait on the sequence number it held.
   z.looseObject({
     kind: z.literal('transcript_list'),
     requestId: z.string().min(1),
@@ -790,7 +793,7 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     pendingRestart: pendingRestartSchema,
     refusal: refusalSchema.nullable(),
   }),
-  // The inventory. Host-scoped and paged like `transcript_list`; the result carries the
+  // The inventory. Host-scoped like `session_list` and paged by index; the result carries the
   // refusal so every exit is one kind.
   z.looseObject({
     kind: z.literal('workspace_list'),
@@ -819,7 +822,7 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     defaultBranch: z.string().max(400).nullable(),
     refusal: refusalSchema.nullable(),
   }),
-  // The repository read. Host-scoped like `transcript_list`; both results carry the refusal so
+  // The repository read. Host-scoped like `session_list`; both results carry the refusal so
   // every exit is one kind. The path is relative text the HOST jails; the codec bounds its length.
   z.looseObject({
     kind: z.literal('repository_list'),
@@ -847,6 +850,10 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     requestId: z.string().min(1),
     path: z.string().min(1).max(MAX_CONFIGURATION_VALUE_LENGTH),
     maxBytes: z.number().int().min(1).max(MAX_REPOSITORY_READ_BYTES),
+    // Protocol 18, and optional: a controller one release behind omits it, and its ask is the head
+    // read. Bounded below only: an offset past the most of a file the read serves is the host's to
+    // refuse by name, since a frame the codec refused would never reach the host to be answered.
+    offset: z.number().int().nonnegative().nullable().optional(),
   }),
   z.looseObject({
     kind: z.literal('repository_read_result'),
@@ -854,6 +861,9 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
     text: z.string().nullable(),
     sizeBytes: z.number().int().nonnegative(),
     truncated: z.boolean(),
+    // Protocol 18, optional for the same reason: a host one release behind, or one answering a link
+    // below 18, states no next page.
+    nextOffset: z.number().int().positive().nullable().optional(),
     refusal: refusalSchema.nullable(),
   }),
   z.looseObject({

@@ -589,7 +589,7 @@ test('the agent home is read from the merged view: a relative one refuses by nam
     );
   }));
 
-test('a merged view carrying PERISCOPE_TRANSCRIPTS_ROOT configures nothing: the transcripts root derives from the agent home', () =>
+test('a merged view carrying PERISCOPE_TRANSCRIPTS_ROOT configures nothing: the key is not read', () =>
   inDir(async (dir) => {
     const raw = rawEnv(dir);
     const run = serve({

@@ -12,7 +12,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { fixedClock, fixedTicker } from '../core/time.js';
@@ -35,9 +35,9 @@ import type {
   SessionPayload,
   SessionPayloadKind,
   TranscriptFailed,
-  TranscriptTailResult,
 } from '../control/frames.js';
 import {
+  TRANSCRIPT_WHAT_PREFIX,
   readStateTransition,
   sessionList,
   sessionListResult,
@@ -80,8 +80,8 @@ import type {
 import { GitWorktreeProvider } from '../workspace/git-worktree.js';
 import { nodeCommandEffects, nodeWorkspaceEffects } from './workspace-fs.js';
 import type { AgentProcess, AgentProcessRequest, HookInput } from './agent-process.js';
-import type { HostReconfigurer, HostEvent, HostLink } from './host.js';
-import { PeriscopeHost, composeSession } from './host.js';
+import type { HostReconfigured, HostReconfigurer, HostEvent, HostLink } from './host.js';
+import { PeriscopeHost, composeSession, pagedAtLinkVersion } from './host.js';
 import type { SessionDegrade } from '../sessions/session.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import type { FakeAgents } from '../test-support/fake-agent.js';
@@ -98,6 +98,8 @@ class FakeLink implements HostLink {
   started = false;
   stopped = false;
   handlers: LinkHandlers | null = null;
+  /** The version a handshake chose; null, as before any handshake, unless a case sets it. */
+  negotiatedVersion: number | null = null;
 
   send(sessionId: string, payload: SessionPayload): Result<void> {
     this.sent.push({ sessionId, payload });
@@ -573,6 +575,7 @@ function hostOver(
     workspaces?: WorkspaceProvider;
     events?: HostEvent[];
     bulk?: (what: string) => Result<string>;
+    /** The deprecated option, which the host ignores. */
     transcriptsRoot?: string;
     credential?: ControllerCredential;
     /**
@@ -592,6 +595,12 @@ function hostOver(
     controllerEnvKeys?: readonly string[];
     /** The registry's start window. Absent means its default. */
     startTimeoutMs?: number;
+    /** The configuration the embedder composed. Absent means every value unset. */
+    configuration?: HostConfiguration;
+    /** The protected set. Absent means none. */
+    protectedPaths?: readonly string[];
+    /** The transcript folders the doors refuse. Absent means the host derives them from the process. */
+    transcriptPaths?: readonly string[];
   } = {},
 ): { host: PeriscopeHost; link: FakeLink; processes: FakeAgents } {
   const processes = options.processes ?? fakeAgents();
@@ -600,7 +609,8 @@ function hostOver(
     controllerUrl: options.controllerUrl ?? 'ws://unused',
     hostId: 'test-host',
     decide: allow,
-    protectedPaths: [],
+    protectedPaths: options.protectedPaths ?? [],
+    ...(options.transcriptPaths === undefined ? {} : { transcriptPaths: options.transcriptPaths }),
     registry: registryOver(processes.start, options.startTimeoutMs),
     link: (handlers) => {
       link.handlers = handlers;
@@ -617,6 +627,7 @@ function hostOver(
     ...(options.reconfigure === undefined ? {} : { reconfigure: options.reconfigure }),
     ...(options.toolFamilies === undefined ? {} : { toolFamilies: options.toolFamilies }),
     ...(options.controllerEnvKeys === undefined ? {} : { controllerEnvKeys: options.controllerEnvKeys }),
+    ...(options.configuration === undefined ? {} : { configuration: options.configuration }),
   });
   return { host, link, processes };
 }
@@ -1742,7 +1753,7 @@ test('control: the same degrade on a session composed without the host reaches n
   // recorded-but-undelivered state is the defect the pin above guards against, reproduced on purpose.
 });
 
-// --- the discovery door -------------------------------------------------------
+// --- the dispatcher's closed set, and the discovery asks ----------------------
 
 /**
  * The closed-set pin: every payload kind is classified, and the classification is exhaustive.
@@ -1809,7 +1820,7 @@ const PAYLOAD_SAMPLES: { [K in SessionPayloadKind]: Extract<SessionPayload, { ki
   session_list_result: sessionListResult('r', [], { liveCount: 0, provisioningCount: 0 }),
   transcript_list_result: transcriptListResult('r', [], { totalCount: 0 }),
   transcript_tail_result: transcriptTailResult('r', { found: false, absent: true, newOffset: 0 }),
-  transcript_failed: transcriptFailed('r', { reason: 'transcript-path-escape', detail: 'x' }),
+  transcript_failed: transcriptFailed('r', { reason: 'transcripts-not-served', detail: 'x' }),
   answer_refused: answerRefused('r', { reason: 'frame-too-large', detail: 'x' }),
   workspace_release: workspaceRelease('r', 'w1'),
   workspace_release_result: workspaceReleaseResult('r'),
@@ -1893,60 +1904,144 @@ async function answered(
   throw new Error(`timed out waiting for ${what}`);
 }
 
-test('transcript_list serves a page from the discovery root, and absence of a root is a named wire answer', async () => {
+test('transcript_list and transcript_tail are answered transcripts-not-served on the asking channel, whatever the host was composed with', async () => {
   const root = await tempDir('host-discovery');
   try {
-    await writeFile(join(root, 'notes.txt'), 'not a slug dir\n', 'utf8');
+    // A transcript on disk where an older host would have looked, and the deprecated option naming
+    // it: the host reads neither.
+    await mkdir(join(root, 'C--work-repo'), { recursive: true });
+    await writeFile(join(root, 'C--work-repo', 'session-1.jsonl'), '{"type":"user"}\n', 'utf8');
     const { link } = hostOver({ transcriptsRoot: root });
     link.deliver('discovery-channel', transcriptList('req-2'));
-    await answered(link, 'transcript_list_result', 'the page answer');
-
-    const answers = link.sent.filter((entry) => entry.payload.kind === 'transcript_list_result');
-    assert.equal(answers.length, 1, 'a configured root must answer with a page, even an empty one');
-
-    // The same ask against a host with no root: still an answer, still on the wire, still named.
-    const bare = hostOver();
-    bare.link.deliver('discovery-channel', transcriptList('req-3'));
-    await answered(bare.link, 'transcript_failed', 'the no-root failure answer');
-    const failed = bare.link.sent.filter(
-      (entry): entry is { sessionId: string; payload: TranscriptFailed } =>
-        entry.payload.kind === 'transcript_failed',
-    );
-    assert.equal(failed.length, 1, 'a host with no root must say so, not go quiet');
-    assert.equal(failed[0]?.payload.refusal.reason, 'path-input-missing');
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('regression: a jailed transcript_tail refusal arrives on the wire as transcript_failed, never as silence', async () => {
-  const root = await tempDir('host-discovery');
-  try {
-    const { link } = hostOver({ transcriptsRoot: root });
-    link.deliver('discovery-channel', transcriptTail('req-4', '..', 'session-id', 0));
-    await answered(link, 'transcript_failed', 'the jail failure answer');
+    link.deliver('discovery-channel', transcriptTail('req-3', 'C--work-repo', 'session-1', 0));
+    await settle();
 
     const failed = link.sent.filter(
       (entry): entry is { sessionId: string; payload: TranscriptFailed } =>
         entry.payload.kind === 'transcript_failed',
     );
-    assert.equal(failed.length, 1, 'the jail refusal must reach the asker');
-    assert.equal(failed[0]?.payload.refusal.reason, 'transcript-path-escape');
-    assert.equal(failed[0]?.payload.requestId, 'req-4', 'the failure names the request it answers');
-
-    // And an absent transcript is a value: the tail result says absent, no failure anywhere.
-    link.deliver('discovery-channel', transcriptTail('req-5', 'no-such-slug', 'no-such-id', 0));
-    await answered(link, 'transcript_tail_result', 'the absent-transcript answer');
-    const tails = link.sent.filter(
-      (entry): entry is { sessionId: string; payload: TranscriptTailResult } =>
-        entry.payload.kind === 'transcript_tail_result',
+    assert.deepEqual(
+      failed.map((entry) => [entry.sessionId, entry.payload.requestId, entry.payload.refusal.reason]),
+      [
+        ['discovery-channel', 'req-2', 'transcripts-not-served'],
+        ['discovery-channel', 'req-3', 'transcripts-not-served'],
+      ],
+      'each ask is answered by name, on the channel it rode',
     );
-    assert.equal(tails.length, 1);
-    assert.equal(tails[0]?.payload.absent, true);
-    assert.equal(tails[0]?.payload.found, false);
+    assert.equal(
+      link.sent.some(
+        (entry) =>
+          entry.payload.kind === 'transcript_list_result' || entry.payload.kind === 'transcript_tail_result',
+      ),
+      false,
+      'nothing about a transcript was served',
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("regression: the file an embedder's resolver names meets the read doors' fences: a transcript folder answers transcripts-not-served and a protected file credential-path-denied, lexical and real", async () => {
+  const root = await tempDir('bulk-fences');
+  try {
+    const projects = join(root, 'home', '.claude', 'projects');
+    await mkdir(join(projects, 'C--work-repo'), { recursive: true });
+    await writeFile(join(projects, 'C--work-repo', 'session-1.jsonl'), '{"type":"user"}\n', 'utf8');
+    await writeFile(join(root, 'home', '.claude', '.credentials.json'), '{}\n', 'utf8');
+    await writeFile(join(root, 'notes.txt'), 'notes\n', 'utf8');
+    let linked = true;
+    try {
+      await symlink(projects, join(root, 'linked'), 'junction');
+    } catch {
+      // A filesystem that refuses link creation cannot host the real-path case.
+      linked = false;
+    }
+    // A resolver that gives meaning to a generic namespace: any path under the root.
+    const { link } = hostOver({
+      bulk: (what) => ok(join(root, what.slice('file:'.length))),
+      protectedPaths: [join(root, 'home', '.claude', '.credentials.json')],
+      transcriptPaths: [projects],
+    });
+    const ask = (deliveryId: string, path: string): void =>
+      link.deliver('handle-1', {
+        kind: 'bulk_request',
+        deliveryId,
+        what: `file:${path}`,
+        fromOffset: 0,
+        postUrl: 'http://c/',
+      });
+    ask('d-transcript', 'home/.claude/projects/C--work-repo/session-1.jsonl');
+    ask('d-credential', 'home/.claude/.credentials.json');
+    if (linked) ask('d-linked', 'linked/C--work-repo/session-1.jsonl');
+    ask('d-notes', 'notes.txt');
+    await answeredTimes(link, 'bulk_failed', linked ? 4 : 3, 'the four receipts');
+
+    const failures = new Map(
+      link.sent.flatMap((entry) =>
+        entry.payload.kind === 'bulk_failed'
+          ? [[entry.payload.deliveryId, entry.payload.refusal.reason]]
+          : [],
+      ),
+    );
+    assert.equal(failures.get('d-transcript'), 'transcripts-not-served');
+    assert.equal(failures.get('d-credential'), 'credential-path-denied');
+    if (linked) assert.equal(failures.get('d-linked'), 'transcripts-not-served', 'a link into the folder');
+    // control: a file beside them passes both fences and meets the next check, the POST's origin.
+    assert.equal(failures.get('d-notes'), 'bulk-target-not-controller');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('regression: a bulk_request in the claude-transcript: namespace answers transcripts-not-served before any resolver is asked; another namespace reaches the resolver', async () => {
+  const asked: string[] = [];
+  const { link } = hostOver({
+    bulk: (what) => {
+      asked.push(what);
+      return refuse('bulk-target-invalid', `the test resolver names nothing for ${what}`);
+    },
+  });
+  const ask = (deliveryId: string, what: string): void =>
+    link.deliver('handle-1', { kind: 'bulk_request', deliveryId, what, fromOffset: 0, postUrl: 'http://c/' });
+  ask('d-transcript', `${TRANSCRIPT_WHAT_PREFIX}C--work-repo/session-1`);
+  ask('d-other', 'notes:readme');
+  await settle();
+
+  const failures = link.sent.flatMap((entry) =>
+    entry.payload.kind === 'bulk_failed' ? [[entry.payload.deliveryId, entry.payload.refusal.reason]] : [],
+  );
+  assert.deepEqual(failures, [
+    ['d-transcript', 'transcripts-not-served'],
+    ['d-other', 'bulk-target-invalid'],
+  ]);
+  assert.deepEqual(asked, ['notes:readme'], 'the transcript locator reached the resolver');
+
+  // A host with no resolver at all answers the namespace by the same name, and anything else as before.
+  const bare = hostOver();
+  bare.link.deliver('handle-1', {
+    kind: 'bulk_request',
+    deliveryId: 'd-bare',
+    what: `${TRANSCRIPT_WHAT_PREFIX}C--work-repo/session-1`,
+    fromOffset: 0,
+    postUrl: 'http://c/',
+  });
+  bare.link.deliver('handle-1', {
+    kind: 'bulk_request',
+    deliveryId: 'd-bare-other',
+    what: 'notes:readme',
+    fromOffset: 0,
+    postUrl: 'http://c/',
+  });
+  await settle();
+  assert.deepEqual(
+    bare.link.sent.flatMap((entry) =>
+      entry.payload.kind === 'bulk_failed' ? [[entry.payload.deliveryId, entry.payload.refusal.reason]] : [],
+    ),
+    [
+      ['d-bare', 'transcripts-not-served'],
+      ['d-bare-other', 'bulk-target-invalid'],
+    ],
+  );
 });
 
 // --- the workspace key, and the reap (protocol v5) ---------------------------
@@ -2500,63 +2595,120 @@ test('host_configure without a configuration seam answers config-write-failed on
   );
 });
 
-test('a reconfigure that applies swaps the transcripts root live, reports the new view, and re-announces the hello', async () => {
-  const root = await tempDir('host-reconfigure');
-  try {
-    const asked: { entries: readonly HostConfigureEntry[]; hostBusy: boolean }[] = [];
-    const configuration: HostConfiguration = {
-      ...unsetHostConfiguration(),
-      transcriptsRoot: root,
-      controllerUrl: 'ws://unused',
-      decisionUrl: null,
-      agentHome: null,
-    };
-    const { link } = hostOver({
-      reconfigure: (entries, hostBusy) => {
-        asked.push({ entries, hostBusy });
-        return ok({
-          workspaces: undefined,
-          transcriptsRoot: root,
-          bulk: undefined,
-          linkCapabilities: ['workspace:none'],
-          configuration,
-          pluginDirs: [],
-          overriddenByEnvironment: ['PERISCOPE_REPOSITORY_ROOT'],
-          pendingRestart: [],
-        });
-      },
+test('a reconfigure that applies swaps the bulk resolver live, reports the new view, and re-announces the hello', async () => {
+  const asked: { entries: readonly HostConfigureEntry[]; hostBusy: boolean }[] = [];
+  const resolved: string[] = [];
+  const configuration: HostConfiguration = {
+    ...unsetHostConfiguration(),
+    controllerUrl: 'ws://unused',
+    decisionUrl: null,
+    agentHome: '/srv/agent-home',
+  };
+  const { link } = hostOver({
+    reconfigure: (entries, hostBusy) => {
+      asked.push({ entries, hostBusy });
+      return ok({
+        workspaces: undefined,
+        bulk: (what) => {
+          resolved.push(what);
+          return refuse('bulk-target-invalid', 'the swapped resolver names nothing');
+        },
+        linkCapabilities: ['workspace:none'],
+        configuration,
+        pluginDirs: [],
+        overriddenByEnvironment: ['PERISCOPE_REPOSITORY_ROOT'],
+        pendingRestart: [],
+      });
+    },
+  });
+  const ask = (deliveryId: string): void =>
+    link.deliver('handle-1', {
+      kind: 'bulk_request',
+      deliveryId,
+      what: 'notes:readme',
+      fromOffset: 0,
+      postUrl: 'http://c/',
     });
 
-    // Before: no transcripts root, so the discovery door refuses by name.
-    link.deliver('discovery-channel', transcriptList('before'));
-    await answered(link, 'transcript_failed', 'the no-root failure');
+  // Before: no resolver, so the ask is refused without one being asked.
+  ask('before');
+  await settle();
+  assert.deepEqual(resolved, []);
 
-    link.deliver('discovery-channel', hostConfigure('cfg-2', [{ key: 'PERISCOPE_AGENT_HOME', value: root }]));
-    await settle();
-    const answers = configureResults(link);
-    assert.equal(answers.length, 1);
-    assert.equal(answers[0]?.refusal, null, 'the seam applied, so the answer is the applied one');
-    assert.deepEqual(answers[0]?.configuration, configuration);
-    assert.deepEqual(answers[0]?.overriddenByEnvironment, ['PERISCOPE_REPOSITORY_ROOT']);
-    assert.deepEqual(
-      asked,
-      [{ entries: [{ key: 'PERISCOPE_AGENT_HOME', value: root }], hostBusy: false }],
-      'an idle host asks the seam with hostBusy false',
-    );
-    assert.deepEqual(
-      link.announced,
-      { capabilities: ['workspace:none'], configuration, pendingRestart: [] },
-      'the next hello must declare the new view',
-    );
+  link.deliver(
+    'discovery-channel',
+    hostConfigure('cfg-2', [{ key: 'PERISCOPE_AGENT_HOME', value: '/srv/agent-home' }]),
+  );
+  await settle();
+  const answers = configureResults(link);
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0]?.refusal, null, 'the seam applied, so the answer is the applied one');
+  assert.deepEqual(answers[0]?.configuration, configuration);
+  assert.deepEqual(answers[0]?.overriddenByEnvironment, ['PERISCOPE_REPOSITORY_ROOT']);
+  assert.deepEqual(
+    asked,
+    [{ entries: [{ key: 'PERISCOPE_AGENT_HOME', value: '/srv/agent-home' }], hostBusy: false }],
+    'an idle host asks the seam with hostBusy false',
+  );
+  assert.deepEqual(
+    link.announced,
+    { capabilities: ['workspace:none'], configuration, pendingRestart: [] },
+    'the next hello must declare the new view',
+  );
 
-    // After: the same ask now serves a page from the new root. The swap is observable, not asserted
-    // from the answer alone.
-    link.deliver('discovery-channel', transcriptList('after'));
-    await answered(link, 'transcript_list_result', 'the page from the new root');
-    assert.equal(link.sent.filter((entry) => entry.payload.kind === 'transcript_list_result').length, 1);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  // After: the same ask reaches the swapped resolver. The swap is observable, not asserted from the
+  // answer alone.
+  ask('after');
+  await settle();
+  assert.deepEqual(resolved, ['notes:readme']);
+});
+
+test("regression: the hello's transcriptsRoot is null whatever configuration an embedder composes, at construction and after a reconfigure", async () => {
+  const composed: HostConfiguration = {
+    ...unsetHostConfiguration(),
+    transcriptsRoot: '/home/agent/.claude/projects',
+    agentHome: '/home/agent/.claude',
+  };
+  // A seam written against the release before still names the root it rebuilt; it compiles, and is
+  // ignored.
+  const rebuilt: HostReconfigured = {
+    workspaces: undefined,
+    transcriptsRoot: '/home/agent/.claude/projects',
+    bulk: undefined,
+    linkCapabilities: ['workspace:none'],
+    configuration: { ...composed, branchScheme: 'x/{key}' },
+    pluginDirs: [],
+    overriddenByEnvironment: [],
+    pendingRestart: [],
+  };
+  const { link } = hostOver({ configuration: composed, reconfigure: () => ok(rebuilt) });
+  link.deliver(
+    'discovery-channel',
+    hostConfigure('cfg-1', [{ key: 'PERISCOPE_BRANCH_SCHEME', value: 'x/{key}' }]),
+  );
+  await settle();
+  const answers = configureResults(link);
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0]?.configuration.transcriptsRoot, null, 'the answer reports a transcripts root');
+  assert.equal(
+    answers[0]?.configuration.agentHome,
+    '/home/agent/.claude',
+    'the rest is reported as composed',
+  );
+  assert.equal(
+    link.announced?.configuration.transcriptsRoot,
+    null,
+    'the next hello reports a transcripts root',
+  );
+
+  // And as composed, before any reconfigure: a configure the host has no seam for answers the view.
+  const bare = hostOver({ configuration: composed });
+  bare.link.deliver(
+    'discovery-channel',
+    hostConfigure('cfg-2', [{ key: 'PERISCOPE_BRANCH_SCHEME', value: 'y/{key}' }]),
+  );
+  await settle();
+  assert.equal(configureResults(bare.link)[0]?.configuration.transcriptsRoot, null);
 });
 
 test('a seam refusal is relayed by name with the unchanged view, and nothing is swapped', async () => {
@@ -2774,6 +2926,99 @@ test("repository_list and repository_read answer under the provider's repository
   }
 });
 
+test('repository_read pages: on a link at 18 every answer states nextOffset, and on a link at 17 none does, the head read unchanged', async () => {
+  const root = await tempDir('repository-read');
+  try {
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(join(root, 'docs', 'brief.md'), '0123456789', 'utf8');
+    const { link } = hostOver({ workspaces: providerRootedAt(root) });
+
+    link.negotiatedVersion = 18;
+    link.deliver('discovery-channel', repositoryRead('rr-head', 'docs/brief.md', 4));
+    await answeredTimes(link, 'repository_read_result', 1, 'the head');
+    link.deliver('discovery-channel', repositoryRead('rr-page', 'docs/brief.md', 4, 4));
+    await answeredTimes(link, 'repository_read_result', 2, 'the second page');
+    link.deliver('discovery-channel', repositoryRead('rr-last', 'docs/brief.md', 4, 8));
+    await answeredTimes(link, 'repository_read_result', 3, 'the last page');
+    link.deliver('discovery-channel', repositoryRead('rr-past', 'docs/brief.md', 4, 11));
+    await answeredTimes(link, 'repository_read_result', 4, 'the refused page');
+    assert.deepEqual(
+      repositoryReads(link).map((read) => [read.requestId, read.text, read.truncated, read.nextOffset]),
+      [
+        ['rr-head', '0123', true, 4],
+        ['rr-page', '4567', true, 8],
+        ['rr-last', '89', false, null],
+        ['rr-past', null, false, null],
+      ],
+    );
+    assert.equal(repositoryReads(link)[3]?.refusal?.reason, 'repository-read-failed');
+    assert.match(repositoryReads(link)[3]?.refusal?.detail ?? '', /past the end/);
+
+    // The same asks on a link at 17: the head is the read it always was, and no answer names a page.
+    link.negotiatedVersion = 17;
+    link.deliver('discovery-channel', repositoryRead('rr-head-17', 'docs/brief.md', 4));
+    await answeredTimes(link, 'repository_read_result', 5, 'the head at 17');
+    link.deliver('discovery-channel', repositoryRead('rr-past-17', 'docs/brief.md', 4, 11));
+    await answeredTimes(link, 'repository_read_result', 6, 'the refusal at 17');
+    const at17 = repositoryReads(link).slice(4);
+    assert.deepEqual(
+      at17.map((read) => [read.requestId, read.text, read.truncated, 'nextOffset' in read]),
+      [
+        ['rr-head-17', '0123', true, false],
+        ['rr-past-17', null, false, false],
+      ],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('before any handshake the answer states nextOffset; the shaping reads the version when the answer is composed', () => {
+  const page = { text: 'x', sizeBytes: 2, truncated: true, nextOffset: 1 };
+  assert.deepEqual(pagedAtLinkVersion(page, null), page);
+  assert.deepEqual(pagedAtLinkVersion(page, 18), page);
+  assert.deepEqual(pagedAtLinkVersion(page, 19), page);
+  assert.deepEqual(pagedAtLinkVersion(page, 17), { text: 'x', sizeBytes: 2, truncated: true });
+});
+
+test('the deprecated transcriptsRoot an embedder still passes is fenced: the read doors refuse it, beside the folders it composed', async () => {
+  const root = await tempDir('repository-read');
+  try {
+    await mkdir(join(root, 'old-transcripts', 'C--work-repo'), { recursive: true });
+    await writeFile(
+      join(root, 'old-transcripts', 'C--work-repo', 'session-1.jsonl'),
+      '{"type":"user"}\n',
+      'utf8',
+    );
+    await writeFile(join(root, 'README.md'), 'read me\n', 'utf8');
+    const fenced = hostOver({
+      workspaces: providerRootedAt(root),
+      transcriptPaths: [],
+      transcriptsRoot: join(root, 'old-transcripts'),
+    });
+    fenced.link.deliver(
+      'discovery-channel',
+      repositoryRead('rr-old', 'old-transcripts/C--work-repo/session-1.jsonl'),
+    );
+    fenced.link.deliver('discovery-channel', repositoryRead('rr-readme', 'README.md'));
+    await answeredTimes(fenced.link, 'repository_read_result', 2, 'the two reads');
+    const reads = new Map(repositoryReads(fenced.link).map((read) => [read.requestId, read]));
+    assert.equal(reads.get('rr-old')?.refusal?.reason, 'transcripts-not-served');
+    assert.equal(reads.get('rr-readme')?.text, 'read me\n');
+
+    // control: without the option the same folder is an ordinary directory under the root.
+    const plain = hostOver({ workspaces: providerRootedAt(root), transcriptPaths: [] });
+    plain.link.deliver(
+      'discovery-channel',
+      repositoryRead('rr-old', 'old-transcripts/C--work-repo/session-1.jsonl'),
+    );
+    await answered(plain.link, 'repository_read_result', 'the unfenced read');
+    assert.equal(repositoryReads(plain.link)[0]?.refusal, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a host with no repository root answers repository-path-escape to both asks: nothing to read under', async () => {
   const { link } = hostOver();
   link.deliver('discovery-channel', repositoryList('rl-3', ''));
@@ -2981,7 +3226,6 @@ test("host_configure_result carries the seam's pendingRestart, and a refusal kee
       entries[0]?.key === 'PERISCOPE_DECISION_URL'
         ? ok({
             workspaces: undefined,
-            transcriptsRoot: undefined,
             bulk: undefined,
             linkCapabilities: ['workspace:none'],
             configuration: { ...unsetHostConfiguration(), decisionUrl: 'https://next.example/decision' },

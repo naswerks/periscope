@@ -105,11 +105,31 @@ with `gh pr merge`, the completion of an Azure DevOps pull request with `az repo
 completed` or `--auto-complete`) is read from the parsed invocation — its program, its subcommand and its
 option tokens, never a word inside a path — wherever the program runs: at a command position, behind a
 launcher (`env`, `sudo`, `nohup`, `timeout`, `xargs` and the others `src/gate/shell.ts` names), as git's
-dashed binary (`git-send-pack.exe`), or named inside another program's words (`ssh host "git push"`).
-The git verb allow-list reaches the same positions. A raw REST call that merges (`gh api`, `az rest`) is
-not parsed. Such a shape is classified locally and then
-escalated like any other call, because a controller may hold it for a person to answer; refusing it
-in-process would make that answer impossible to give. With the controller unreachable it refuses at
+dashed binary (`git-send-pack.exe`), through a Windows shim (`az.cmd`, `git.bat`), named inside another
+program's words (`ssh host "git push"`, `ssh host "git -c user.name=x push"`), or as a command word an
+expansion supplies when the line names its program: a substitution that prints the name
+(`$(echo git) push`, `` `which git` push ``, `"$(command -v gh)" pr merge`) or a variable the line
+assigned it to earlier (`G=git; $G push`, `export G=git && $G push`). That word is read as the named
+program, by both layers, as the program written out is, and only once every other reading of the
+command has flowed, so it adds a refusal where nothing else refuses and never changes the reason of one.
+An expansion whose program the line does not name (`$DOCKER push`, `$1 push`, `"$@" push`,
+`g$(echo it) push`) is not guessed and flows, and only a POSIX reading reads one: PowerShell takes a line
+that starts with `$(…)` or `$G` for an expression, and cmd.exe expands neither. An option is read as the
+program reads it: a quoted option name is the option (`az repos pr update --id 5 "--status" completed`),
+every occurrence of a repeated option counts (`--status active --status completed`, where `az` keeps
+the last), an option's value is its value (`git branch --sort -committerdate` sorts, and a deletion
+cluster is made of `git branch`'s own short options), and `az`'s `--description` runs to the next word
+that starts with `-` and holds no space once its quotes are removed (`--description "- fixed it"` is
+prose). The git verb allow-list reads git where git is a command position's first word (the line's
+start, after a separator, or after `do`, `then`, `else` or `elif`), behind a launcher, as a dashed
+binary, through a shim and as a command word the line names, and nowhere else: behind an assignment,
+`!`, `if`, `while` or `until`, git is another word of that command, and there and inside another
+program's words only the boundary rules read it, because the allow-list there would refuse
+`rg git src` for naming git (what flows for that is listed under What is deliberately not covered,
+below). A raw REST call that
+merges (`gh api`, `az rest`) is not parsed. Such a shape is classified locally and
+then escalated like any other call, because a controller may hold it for a person to answer; refusing
+it in-process would make that answer impossible to give. With the controller unreachable it refuses at
 the decision deadline.
 
 - It adds refusals and never removes one. No opinion returns `null` and the surrounding gate asks
@@ -146,9 +166,22 @@ the decision deadline.
 - Shell commands are parsed before they are judged (`src/gate/command.ts`, `src/gate/shell.ts`):
   the classifier sees a parsed shape, never text. An interpreter payload (`bash -c "..."`) is
   scanned as the nested command it is, with the interpreter's own delimiter closing it, so a nested
-  quote of the other kind and a `#` inside the payload are the nested command's own syntax.
-  `src/gate/shell.property.test.ts` holds totality, determinism and monotone refusal under quoting
-  and composition.
+  quote of the other kind and a `#` inside the payload are the nested command's own syntax. A POSIX
+  command is also read as bash reads its escapes and quotes, beside the split reading, when that changes
+  its words: an escaped blank joins its word (`C:/Program\ Files/…` one path) and a `#` after one is
+  mid-word, so `echo a\ # ; git push origin main` reads the push; inside a double-quoted span a
+  backslash escapes `"`, `\`, `$` and a backtick, so `echo "a \" # " ; git push origin main` reads it
+  too; and each command word is read after quote removal, so `g''it`, `"g"it` and `g\it` are git.
+  Outside a quote a backslash before a quote is not read as an escape (`echo \" ; …` keeps the quote),
+  and the split reading keeps a backslash as a path separator (`C:\Git\bin\git.exe` is git there), the
+  readings that scan more. A POSIX command is read once more with each `$( … )`, `${ … }` and backtick
+  kept inside its word, in order, for the command words an expansion supplies whose program the line
+  names; in that reading the word a redirection names is a file (`G=git; echo hi > $G` runs `echo`),
+  and `do`, `then`, `else` and `elif` open a command only as a command's first word. The classifier
+  refuses when any reading refuses. `src/gate/shell.property.test.ts` holds totality, determinism and
+  monotone refusal under quoting and composition, and `scripts/classifier-diff.mjs` measures a change
+  to the classifier: it classifies one corpus with two builds, prints every answer that moved, and
+  checks named controls that must flow and must refuse. Nothing runs it but a person.
 
 ## The five outcomes that must never blur
 
@@ -393,7 +426,7 @@ it is loaded, that it is the last handler a call meets, and that nothing else is
   closes the exchange, which ends the host's decision rather than leaving pi's abort to wait on it), a
   reply that does not verify, and anything the handler throws.
 - **An allow may rewrite the input** (`canRewriteInput`). The rewrite is applied to the call's input in
-  place, and pi runs that object, unvalidated again; pi's transcript and its `tool_execution_start`
+  place, and pi runs that object, unvalidated again; pi's session record and its `tool_execution_start`
   still show the input the model wrote.
 - **pi's own `bash` command is refused.** It runs a command outside any tool call, and its handler has
   no way to block one but to throw, so the extension's handler throws: the command does not run, and
@@ -445,6 +478,45 @@ opens at `intercepted-with-residual`.
 - `outputFor` cannot render a hold: `holding` is excluded by the type, not by a branch. A branch
   that returned `{}` for it would be no opinion, which the CLI reads as allow, so the one state that
   could open the door is made unrepresentable rather than handled.
+- Shell shapes the classifier lets through, each a known gap rather than a choice:
+  - git's plumbing publish where only the boundary rules read: inside another program's words
+    (`ssh build-host git send-pack origin main`), and after a backslash before a quote
+    (`echo \" ; git send-pack origin main`), where the quote is read as opening a span, so the rest of
+    the line is one word of `echo`'s. The same shapes with `git push` refuse as `git-push`.
+  - a command word an expansion supplies whose program the line does not name, which is not guessed:
+    a variable set outside the line (`$G push origin main`), a parameter (`$1 push`, `"$@" push`), a
+    word an expansion only completes (`g$(echo it) push origin main`), and a variable a loop sets
+    (`for G in git; do $G push origin main; done`).
+  - a command word the line names that is not at a command position the reading reads: behind `!`
+    (`G=git; ! $G push origin main`), behind assignments to the command
+    (`G=git; FOO=1 $G push origin main`, `G=git; X=$(foo) $G push origin main`), and behind a launcher
+    (`sudo $(echo git) push origin main`, `G=git; timeout 10 $G push origin main`), and as `eval`'s
+    unquoted words (`G=git; eval $G push origin main`; the quoted `eval "$G push origin main"` refuses).
+  - PowerShell's call operator on an expression (`& (Get-Command git) push origin main`,
+    `$G = 'git'; & $G push origin main`), and `cmd`'s `%NAME%` as a command word
+    (`%G% push origin main`).
+  - a backslash before a newline, which a POSIX shell removes with the newline: `echo a\` with
+    `# ; git push origin main` on the next line is one line to bash, which runs the push, while the
+    comment stripper ends the command at the `#`.
+  - a command word the line names through more than a name: a substitution whose last word is not the
+    name (`$(echo git -C .) push origin main`, `$(echo git --no-pager) push origin main`,
+    `$(echo git -c x=y) push origin main`); a value holding more than a name
+    (`G="git push"; $G origin main`, `G="git -C ."; $G push origin main`); an assignment a shell
+    inherits (`G=git bash -c '$G push origin main'`, `env G=git bash -c '$G push origin main'`,
+    `bash -c "G=git; \$G push origin main"`); and a value set another way (`${X:-git} push origin main`,
+    `G=gi; G+=t; $G push origin main`, `export G=git PATH; $G push origin main`,
+    `printf -v G git; $G push origin main`).
+  - a named command word behind `if`, `while` or `until` (`G=git; if $G push origin main; then :; fi`,
+    `G=git; while $G push origin main; do :; done`).
+  - git's plumbing publish behind an assignment or a keyword, where only the boundary rules read it
+    (`FOO=1 git send-pack origin main`, `! git send-pack origin main`,
+    `if git send-pack origin main; then :; fi`); the same shapes with `git push` refuse as `git-push`.
+  - a quoted option or subcommand (`git reset "--hard"`, `git branch "-d" topic`, `gh pr "merge" 5`,
+    `gh "pr" merge 5`), which the program reads as the option and the rules read as a word.
+  - a ruled program's name as a launcher option's value, which takes the place of the command the
+    launcher runs (`env -u gh git send-pack origin main`, `sudo -u az git send-pack origin main`).
+  - the Azure CLI run as a Python module (`python -m azure.cli repos pr update --id 5 --status completed`),
+    beside the raw REST call above.
 
 ## Where things live
 

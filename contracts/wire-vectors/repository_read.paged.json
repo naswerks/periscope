@@ -1,0 +1,21 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "repository_read",
+      "requestId": "request-12",
+      "path": "docs/guides/getting-started.md",
+      "maxBytes": 49152,
+      "offset": 49152
+    }
+  },
+  "name": "repository_read.paged",
+  "protocolVersion": 18,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"repository_read\",\"requestId\":\"request-12\",\"path\":\"docs/guides/getting-started.md\",\"maxBytes\":49152,\"offset\":49152}}"
+}

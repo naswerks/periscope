@@ -1,27 +1,28 @@
 /**
- * The discovery door on a real socket: the whole path, no substitutes. A real `WebSocketServer`
- * playing the controller, the real `ControllerLink`, the real `PeriscopeHost`, the real jail over a
- * real fixture directory, and a real HTTP sink for the bulk pull.
+ * The discovery channel on a real socket: the whole path, no substitutes. A real `WebSocketServer`
+ * playing the controller, the real `ControllerLink`, the real `PeriscopeHost`, a resolver of the
+ * test's own over a real fixture file, and a real HTTP sink for the bulk pull.
  *
- * The frame COUNT is the assertion: four asks produce exactly four answers plus one delivery
- * receipt, and a decodable non-command produces none — so a handler quietly dropping a kind, or the
- * closed set quietly widening, both move a number this test reads off the wire itself.
+ * The frame COUNT is the assertion: five asks produce exactly five answers, and a decodable
+ * non-command produces none, so a handler quietly dropping a kind, or the closed set quietly
+ * widening, both move a number this test reads off the wire itself. The transcript asks ride the
+ * channel first, so every answer after them also shows that the channel kept its sequence.
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket as ServerSocket } from 'ws';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Frame, SessionPayload } from '../control/frames.js';
 import { PROTOCOL_VERSION, sessionList, transcriptList, transcriptTail } from '../control/frames.js';
 import { decode, encode } from '../control/codec.js';
+import { ok } from '../core/result.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { PeriscopeHost } from './host.js';
 import { TRANSCRIPT_WHAT_PREFIX } from '../control/frames.js';
-import { claudeTranscriptResolver } from './claude-transcripts.js';
 import { tempDir } from '../test-support/temp-dir.js';
 import { waitFor } from '../test-support/ws-peer.js';
 import { rawText } from '../test-support/raw-text.js';
@@ -104,11 +105,10 @@ class Peer {
   }
 }
 
-test('regression: the discovery round trip on a real socket: four asks, four answers, one delivery, none extra', async () => {
+test('regression: the discovery round trip on a real socket: the transcript asks answered by name, a resolver of the embedder delivers, none extra', async () => {
   const root = await tempDir('socket-discovery');
-  const userLine = JSON.stringify({ type: 'user', message: { role: 'user', content: 'the live entry' } });
-  await mkdir(join(root, 'C--Dev-fixture'), { recursive: true });
-  await writeFile(join(root, 'C--Dev-fixture', 'session-1.jsonl'), `${userLine}\n`, 'utf8');
+  const file = join(root, 'notes.txt');
+  await writeFile(file, 'the fixture bytes\n', 'utf8');
 
   // One origin serves both the link and the bulk receiver, and that is a property rather than a
   // convenience. The host binds `postUrl`'s origin to its configured controller, so a bulk receiver
@@ -127,6 +127,7 @@ test('regression: the discovery round trip on a real socket: four asks, four ans
 
   const server = new WebSocketServer({ server: sink });
   const peer = new Peer(server);
+  const resolved: string[] = [];
 
   const host = new PeriscopeHost({
     controllerUrl: `ws://127.0.0.1:${peer.port}`,
@@ -134,8 +135,12 @@ test('regression: the discovery round trip on a real socket: four asks, four ans
     decide: allow,
     protectedPaths: [],
     registry: new SessionRegistry({ baseEnv: {}, homeDir: root }),
-    transcriptsRoot: root,
-    bulk: claudeTranscriptResolver(root),
+    // A resolver that would serve any locator at all, the transcript namespace included: the host
+    // answers that namespace before it asks.
+    bulk: (what) => {
+      resolved.push(what);
+      return ok(file);
+    },
   });
 
   try {
@@ -145,13 +150,20 @@ test('regression: the discovery round trip on a real socket: four asks, four ans
       'the handshake',
     );
 
-    peer.ask(sessionList('req-sessions'));
     peer.ask(transcriptList('req-page'));
     peer.ask(transcriptTail('req-probe', 'C--Dev-fixture', 'session-1', 0, 'the live entry'));
     peer.ask({
       kind: 'bulk_request',
-      deliveryId: 'req-pull',
+      deliveryId: 'req-transcript',
       what: `${TRANSCRIPT_WHAT_PREFIX}C--Dev-fixture/session-1`,
+      fromOffset: 0,
+      postUrl: `http://127.0.0.1:${sinkPort}/bulk/req-transcript`,
+    });
+    peer.ask(sessionList('req-sessions'));
+    peer.ask({
+      kind: 'bulk_request',
+      deliveryId: 'req-pull',
+      what: 'fixture:notes.txt',
       fromOffset: 0,
       postUrl: `http://127.0.0.1:${sinkPort}/bulk/req-pull`,
     });
@@ -167,8 +179,8 @@ test('regression: the discovery round trip on a real socket: four asks, four ans
         peer
           .answers()
           .filter((payload) => payload.kind !== 'session_update' && payload.kind !== 'session_delta')
-          .length >= 4,
-      'the four discovery answers',
+          .length >= 5,
+      'the five answers',
     );
     // Let anything extra arrive before counting — an over-answering host must not pass on a race.
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -178,37 +190,37 @@ test('regression: the discovery round trip on a real socket: four asks, four ans
       .filter((payload) => payload.kind !== 'session_update' && payload.kind !== 'session_delta');
     assert.equal(
       answers.length,
-      4,
-      `four asks must produce exactly four answers, saw: ${answers.map((a) => a.kind).join(', ')}`,
+      5,
+      `five asks must produce exactly five answers, saw: ${answers.map((a) => a.kind).join(', ')}`,
     );
+
+    const refusedByName = answers.flatMap((payload) =>
+      payload.kind === 'transcript_failed'
+        ? [`${payload.requestId}: ${payload.refusal.reason}`]
+        : payload.kind === 'bulk_failed'
+          ? [`${payload.deliveryId}: ${payload.refusal.reason}`]
+          : [],
+    );
+    assert.deepEqual(refusedByName, [
+      'req-page: transcripts-not-served',
+      'req-probe: transcripts-not-served',
+      'req-transcript: transcripts-not-served',
+    ]);
+    assert.deepEqual(resolved, ['fixture:notes.txt'], 'the transcript locator reached the resolver');
 
     const sessions = answers.find((payload) => payload.kind === 'session_list_result');
     assert.ok(sessions !== undefined, 'no session_list_result arrived');
     assert.equal(sessions.requestId, 'req-sessions');
     assert.deepEqual([sessions.liveCount, sessions.provisioningCount, sessions.sessions.length], [0, 0, 0]);
 
-    const page = answers.find((payload) => payload.kind === 'transcript_list_result');
-    assert.ok(page !== undefined, 'no transcript_list_result arrived');
-    assert.equal(page.totalCount, 1);
-    assert.equal(page.entries[0]?.projectSlug, 'C--Dev-fixture');
-
-    const probe = answers.find((payload) => payload.kind === 'transcript_tail_result');
-    assert.ok(probe !== undefined, 'no transcript_tail_result arrived');
-    assert.equal(probe.found, true, 'the planted entry must be found over the wire');
-
     const receipt = answers.find((payload) => payload.kind === 'bulk_delivered');
     assert.ok(receipt !== undefined, 'no bulk_delivered arrived — the pull went unreceipted');
+    assert.equal(receipt.deliveryId, 'req-pull');
     assert.ok((receipt.sizeBytes ?? 0) > 0, 'the receipt must carry the stat pair');
     assert.equal(
       Buffer.concat(pulled).toString('utf8'),
-      `${userLine}\n`,
-      'the sink must hold the transcript bytes',
-    );
-
-    assert.equal(
-      answers.some((payload) => payload.kind === 'transcript_failed'),
-      false,
-      'the non-command control produced an answer — the closed set has widened',
+      'the fixture bytes\n',
+      'the sink must hold the bytes the resolver named',
     );
   } finally {
     host.stop('test over');

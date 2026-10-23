@@ -277,9 +277,8 @@ test('regression: workspaceCapabilitiesOf names the mode workspacesFor would cho
 
 // --- the values behind the markers -----------------------------------------------
 
-test('hostConfigurationOf reports the values the selector read, null where the selector saw absence', () => {
+test('hostConfigurationOf reports the values the selector read, null where the selector saw absence, and never a transcripts root', () => {
   const extras = {
-    transcriptsRoot: '/home/agent/.claude/projects',
     controllerUrl: 'wss://c.example/link',
     decisionUrl: 'https://c.example/decision',
     agentHome: '/home/agent/.claude',
@@ -290,7 +289,7 @@ test('hostConfigurationOf reports the values the selector read, null where the s
     repositoryRoot: null,
     workspaceRoot: null,
     branchScheme: null,
-    transcriptsRoot: '/home/agent/.claude/projects',
+    transcriptsRoot: null,
     controllerUrl: 'wss://c.example/link',
     decisionUrl: 'https://c.example/decision',
     agentHome: '/home/agent/.claude',
@@ -305,7 +304,7 @@ test('hostConfigurationOf reports the values the selector read, null where the s
       repositoryRoot: '/srv/repo',
       workspaceRoot: '/srv/ws',
       branchScheme: 'p/{key}',
-      transcriptsRoot: '/home/agent/.claude/projects',
+      transcriptsRoot: null,
       controllerUrl: 'wss://c.example/link',
       decisionUrl: 'https://c.example/decision',
       agentHome: '/home/agent/.claude',
@@ -323,7 +322,6 @@ test('hostConfigurationOf reports the values the selector read, null where the s
   // controller rendering '' as a path would show a root the host is not in.
   assert.deepEqual(
     hostConfigurationOf(config({ workspaceRoot: '', repositoryRoot: '' }), {
-      transcriptsRoot: '',
       controllerUrl: null,
       decisionUrl: '',
       agentHome: '',
@@ -344,7 +342,6 @@ test('hostConfigurationOf reports the values the selector read, null where the s
 
 test('control: the reported values and the mode marker agree for every posture', () => {
   const extras = {
-    transcriptsRoot: null,
     controllerUrl: null,
     decisionUrl: null,
     agentHome: null,

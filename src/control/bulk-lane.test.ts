@@ -14,7 +14,7 @@ test('bulk_request carries a locator and no content field', () => {
   const request: BulkRequest = {
     kind: 'bulk_request',
     deliveryId: 'd-1',
-    what: 'transcript',
+    what: 'notes:readme',
     fromOffset: 0,
     postUrl: 'https://controller.example/bulk/d-1',
   };
@@ -22,7 +22,7 @@ test('bulk_request carries a locator and no content field', () => {
 });
 
 test('the bulk receipts carry counts and reasons, never bytes', () => {
-  // Protocol v4 widened the receipt by two stat numbers (rewrite detection for a transcript pull);
+  // Protocol v4 widened the receipt by two stat numbers (rewrite detection for a pull in pieces);
   // the property this test pins is unchanged: counts and reasons, never bytes.
   const delivered: BulkDelivered = {
     kind: 'bulk_delivered',

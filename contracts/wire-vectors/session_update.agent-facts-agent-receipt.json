@@ -56,6 +56,6 @@
     }
   },
   "name": "session_update.agent-facts-agent-receipt",
-  "protocolVersion": 17,
+  "protocolVersion": 18,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_facts\",\"fact\":{\"kind\":\"agent_receipt\",\"runtime\":\"claude\",\"runtimeVersion\":\"2.1.284\",\"model\":\"model-id-1[1m]\",\"permissionMode\":\"bypassPermissions\",\"effort\":\"high\",\"skills\":[\"skill-one\",\"plugin-one:skill-two\"],\"plugins\":[{\"name\":\"plugin-one\",\"version\":\"1.0.0\",\"path\":\"/plugins/one\"},{\"name\":\"plugin-two\",\"version\":null,\"path\":null}],\"pluginErrors\":[{\"plugin\":\"plugin-three\",\"type\":\"path-not-found\",\"message\":\"no such directory\",\"path\":null}],\"mcpServers\":[{\"name\":\"docs\",\"status\":\"connected\"}],\"source\":\"runtime\"},\"sourceId\":\"message-uuid-1\",\"observedAt\":\"2000-01-01T00:00:00.000Z\"}}}"
 }

@@ -23,6 +23,6 @@
     }
   },
   "name": "session_update.agent-message-qwen-code",
-  "protocolVersion": 17,
+  "protocolVersion": 18,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_message\",\"message\":{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"qwen-session-1\",\"qwen_code_version\":\"0.25.1\"},\"observedAt\":\"2000-01-01T00:00:00.000Z\",\"runtime\":\"qwen-code\"}}}"
 }

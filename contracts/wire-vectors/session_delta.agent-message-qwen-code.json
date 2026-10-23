@@ -29,6 +29,6 @@
     }
   },
   "name": "session_delta.agent-message-qwen-code",
-  "protocolVersion": 17,
+  "protocolVersion": 18,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_delta\",\"body\":{\"update\":\"agent_message\",\"message\":{\"type\":\"stream_event\",\"session_id\":\"qwen-session-1\",\"event\":{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}},\"observedAt\":\"2000-01-01T00:00:00.000Z\",\"runtime\":\"qwen-code\"}}}"
 }

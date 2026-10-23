@@ -60,8 +60,6 @@ import type {
   WireRefusal,
   SessionNewGate,
   SessionPayload,
-  TranscriptList,
-  TranscriptTail,
   WorkspaceRelease,
   WorkspaceReleaseBulk,
   WorkspaceReleaseEntry,
@@ -74,8 +72,6 @@ import {
   workspaceListResult,
   answerRefused,
   transcriptFailed,
-  transcriptListResult,
-  transcriptTailResult,
   unsetHostConfiguration,
   workspaceReleaseBulkResult,
   workspaceReleaseEntryResult,
@@ -86,6 +82,7 @@ import {
   workspaceReadResult,
   DEFAULT_RUNTIME,
   MAX_AGENT_CATALOG_BYTES,
+  TRANSCRIPT_WHAT_PREFIX,
 } from '../control/frames.js';
 import type { FrameSink } from '../control/stream.js';
 import { forwardNativeSession, forwardSession } from '../control/stream.js';
@@ -166,9 +163,13 @@ import { readWhere } from './git-facts.js';
 import { normalizePath } from '../core/paths.js';
 import { mergeHooks, modelSwitchHooks, observationHooks } from './hooks.js';
 import { createToolServer } from './mcp-server.js';
-import { listTranscripts, tailTranscript } from './claude-transcripts.js';
-import { listRepositoryDirectory, readRepositoryFile, readWorkspaceFile } from './repository-read.js';
-import { homeDirectory, nodePathResolver } from './paths.js';
+import {
+  fencedFileRefusal,
+  listRepositoryDirectory,
+  readRepositoryFile,
+  readWorkspaceFile,
+} from './repository-read.js';
+import { agentTranscriptPaths, homeDirectory, nodePathResolver } from './paths.js';
 import {
   QWEN_MODE_MAP,
   isBypassMode,
@@ -754,11 +755,16 @@ export interface HostLink extends FrameSink {
 
 /**
  * What a reconfigure produced: the pieces the host swaps in place of the ones it was composed with.
- * `undefined` members mean the same as an omitted option at composition (no provider, no root).
+ * `undefined` members mean the same as an omitted option at composition (no provider, no resolver).
  */
 export interface HostReconfigured {
   readonly workspaces: WorkspaceProvider | undefined;
-  readonly transcriptsRoot: string | undefined;
+  /**
+   * Ignored: this host keeps no transcripts root, so a reconfigure has none to swap in.
+   *
+   * @deprecated Kept so a seam that returns it still compiles; it goes at the next major version.
+   */
+  readonly transcriptsRoot?: string;
   readonly bulk: BulkResolver | undefined;
   readonly linkCapabilities: readonly string[];
   readonly configuration: HostConfiguration;
@@ -808,6 +814,14 @@ export interface PeriscopeHostOptions {
    * it in, because reading the environment is that file's job and only that file's.
    */
   readonly protectedPaths: readonly string[];
+  /**
+   * Where the agents keep their session records: the repository and workspace reads, and the bulk
+   * lane's resolved file, refuse a path at or beneath one `transcripts-not-served`, on the lexical
+   * resolution and on the real path, whatever the root, and a listing leaves it out.
+   * `host/paths.ts`'s `agentTranscriptPaths(env, homes)` computes the set; absent, it is computed from
+   * the process environment, so no host serves them by default.
+   */
+  readonly transcriptPaths?: readonly string[];
   /**
    * The home directory a shell command's `~` and `$HOME` forms name, for the credential check.
    * Defaults to the process environment's (`host/paths.ts`'s `homeDirectory`).
@@ -882,14 +896,22 @@ export interface PeriscopeHostOptions {
    * accepted and ignored.
    */
   readonly tools?: Omit<McpServerOptions, 'identity'>;
+  /**
+   * Turns a `bulk_request`'s locator into the file this host POSTs: the namespaces a controller may
+   * ask for are the ones the embedder's resolver gives meaning. Absent, every `bulk_request` answers
+   * `bulk-target-invalid`. A locator in the `claude-transcript:` namespace never reaches it: this
+   * host answers that one `transcripts-not-served` before any resolver is asked. The file a resolver
+   * names meets the read doors' fences before it is posted, on the lexical resolution and on the real
+   * path: one at or beneath a protected path answers `credential-path-denied`, and one at or beneath an
+   * agent's session records (`transcriptPaths`) `transcripts-not-served`.
+   */
   readonly bulk?: BulkResolver;
   /**
-   * Where the agent CLI's transcripts live (`~/.claude/projects`), for the discovery door.
+   * Never read: this host does not look for, read or keep the agent's transcripts, and a
+   * `transcript_list` or `transcript_tail` is answered `transcripts-not-served`. A root given here is
+   * fenced instead: it joins `transcriptPaths`, so the read doors and the bulk lane refuse it.
    *
-   * The composition root derives it (`claudeProjectsRoot(env)` in `host/claude-transcripts.ts`),
-   * because reading the environment is that layer's job. Absent means the door answers every
-   * `transcript_list` / `transcript_tail` with a named failure rather than guessing a root;
-   * `session_list` needs no filesystem and always answers.
+   * @deprecated Kept so an embedder that passes it still compiles; it goes at the next major version.
    */
   readonly transcriptsRoot?: string;
   readonly gate?: GateTimings;
@@ -907,8 +929,8 @@ export interface PeriscopeHostOptions {
    */
   readonly linkCapabilities?: readonly string[];
   /**
-   * The values behind those markers: which roots, which scheme, which transcripts root,
-   * which controller. The composition root computes `hostConfigurationOf(config, ...)` beside the
+   * The values behind those markers: which roots, which scheme, which agent home, which
+   * controller. The composition root computes `hostConfigurationOf(config, ...)` beside the
    * markers, from the same reading, so the two cannot disagree. Omitted, the hello reports every
    * value as null.
    */
@@ -1195,7 +1217,6 @@ export class PeriscopeHost {
    * swaps them in one place and every handler reads the current one. Initialised from the options.
    */
   #workspaces: WorkspaceProvider | undefined;
-  #transcriptsRoot: string | undefined;
   #bulk: BulkResolver | undefined;
   #linkCapabilities: readonly string[];
   #configuration: HostConfiguration;
@@ -1211,6 +1232,8 @@ export class PeriscopeHost {
   #agent: HostAgent | null | undefined;
   /** The endpoints as the hello lists them, or null when this host was composed with none. */
   readonly #hostEndpoints: readonly HostEndpoint[] | null;
+  /** The agents' session records the doors and the lane refuse, as composed or derived at construction. */
+  readonly #transcriptPaths: readonly string[];
   /**
    * The endpoint each live session runs on, by the controller's handle: a session with none is absent.
    * A `session_configure` reads it, so a switch to a model the endpoint must not be sent is refused
@@ -1235,7 +1258,6 @@ export class PeriscopeHost {
   constructor(options: PeriscopeHostOptions) {
     this.#options = options;
     this.#workspaces = options.workspaces;
-    this.#transcriptsRoot = options.transcriptsRoot;
     this.#bulk = options.bulk;
     this.#linkCapabilities = options.linkCapabilities ?? [];
     this.#hostEndpoints = options.endpoints === undefined ? null : hostEndpointsOf(options.endpoints);
@@ -1250,6 +1272,12 @@ export class PeriscopeHost {
         throw new Error('PeriscopeHostOptions.endpoints: an endpoint name is declared twice');
       }
     }
+    // An embedder that still names the folder it once had read gets it fenced, whatever else it passes.
+    const named = options.transcriptsRoot?.trim() ?? '';
+    this.#transcriptPaths = [
+      ...(options.transcriptPaths ?? agentTranscriptPaths()),
+      ...(named === '' ? [] : [named]),
+    ];
     this.#configuration = this.#withAgent(options.configuration ?? unsetHostConfiguration());
     this.#pluginDirs = options.pluginDirs ?? [];
     this.#overriddenByEnvironment = options.overriddenByEnvironment ?? [];
@@ -1530,12 +1558,11 @@ export class PeriscopeHost {
       // the session-existence machinery above applies. The answer rides back on the same key.
       case 'session_list':
         return this.#answerSessionList(frame.sessionId, payload);
+      // The transcript asks still decode, so an older controller's ask rides its channel's sequence
+      // like any other and is answered by name: this host serves no transcripts.
       case 'transcript_list':
-        void this.#answerTranscriptList(frame.sessionId, payload);
-        return;
       case 'transcript_tail':
-        void this.#answerTranscriptTail(frame.sessionId, payload);
-        return;
+        return this.#failDiscovery(frame.sessionId, payload.requestId, transcriptsNotServed());
       case 'workspace_release':
         void this.#answerWorkspaceRelease(frame.sessionId, payload);
         return;
@@ -2147,74 +2174,6 @@ export class PeriscopeHost {
   }
 
   /**
-   * Answer `transcript_list` from the discovery door, one page per request.
-   *
-   * Every exit sends a wire answer. A missing root, a failed walk and a thrown error all become a
-   * `transcript_failed` naming the reason; an answer that dies inside the host would read to the
-   * asker as a host that hung, which is the exact failure the closed dispatch set exists to end.
-   * (`#send` reports a send the link refused locally; the attempt is what every exit guarantees.)
-   */
-  async #answerTranscriptList(channelKey: string, asked: TranscriptList): Promise<void> {
-    const root = this.#transcriptsRoot;
-    if (root === undefined) {
-      return this.#failDiscovery(
-        channelKey,
-        asked.requestId,
-        refusal(
-          'path-input-missing',
-          'this host has no transcripts root configured — the discovery door cannot look',
-        ),
-      );
-    }
-    try {
-      const page = await listTranscripts(root, { fromIndex: asked.fromIndex });
-      this.#send(
-        channelKey,
-        transcriptListResult(asked.requestId, page.entries, {
-          totalCount: page.totalCount,
-          ...(page.nextIndex === null ? {} : { nextIndex: page.nextIndex }),
-        }),
-      );
-    } catch (error) {
-      this.#failDiscovery(channelKey, asked.requestId, refusal('transcript-read-failed', describe(error)));
-    }
-  }
-
-  /** Answer `transcript_tail`. Same exit discipline as the listing: every path answers. */
-  async #answerTranscriptTail(channelKey: string, asked: TranscriptTail): Promise<void> {
-    const root = this.#transcriptsRoot;
-    if (root === undefined) {
-      return this.#failDiscovery(
-        channelKey,
-        asked.requestId,
-        refusal(
-          'path-input-missing',
-          'this host has no transcripts root configured — the discovery door cannot look',
-        ),
-      );
-    }
-    try {
-      const answer = await tailTranscript(root, asked.projectSlug, asked.sessionId, {
-        fromOffset: asked.fromOffset,
-        needle: asked.needle,
-      });
-      if (!answer.ok) return this.#failDiscovery(channelKey, asked.requestId, answer.refusal);
-      this.#send(
-        channelKey,
-        transcriptTailResult(asked.requestId, {
-          found: answer.value.found,
-          absent: answer.value.absent,
-          newOffset: answer.value.newOffset,
-          ...(answer.value.sizeBytes === null ? {} : { sizeBytes: answer.value.sizeBytes }),
-          ...(answer.value.mtimeMs === null ? {} : { mtimeMs: answer.value.mtimeMs }),
-        }),
-      );
-    } catch (error) {
-      this.#failDiscovery(channelKey, asked.requestId, refusal('transcript-read-failed', describe(error)));
-    }
-  }
-
-  /**
    * Answer `repository_list`: one directory of the repository this host provisions from,
    * names only, jailed to the repository root by `listRepositoryDirectory`. Every exit is the one
    * result kind; a host with no repository root has nothing to read under and says so by name.
@@ -2229,7 +2188,13 @@ export class PeriscopeHost {
     const root = this.#workspaces?.repositoryRoot;
     if (root === undefined) return refused(noRepositoryRoot());
     try {
-      const listed = await listRepositoryDirectory(root, asked.path, undefined, this.#options.protectedPaths);
+      const listed = await listRepositoryDirectory(
+        root,
+        asked.path,
+        undefined,
+        this.#options.protectedPaths,
+        this.#transcriptPaths,
+      );
       if (!listed.ok) return refused(listed.refusal);
       this.#send(
         channelKey,
@@ -2240,21 +2205,35 @@ export class PeriscopeHost {
     }
   }
 
-  /** Answer `repository_read`: the head of one text file under the repository root. */
+  /**
+   * Answer `repository_read`: one page of a text file under the repository root, the head when the
+   * ask names no offset. Every answer is shaped for the link's protocol (`pagedAtLinkVersion`).
+   */
   async #answerRepositoryRead(channelKey: string, asked: RepositoryRead): Promise<void> {
-    const nothing = { text: null, sizeBytes: 0, truncated: false };
+    const version = (): number | null => this.#link.negotiatedVersion ?? null;
+    const nothing = { text: null, sizeBytes: 0, truncated: false, nextOffset: null };
     const refused = (why: Refusal): void =>
       this.#refuseRepository(
         channelKey,
-        repositoryReadResult(asked.requestId, nothing, wireRefusalOf(why)),
+        repositoryReadResult(asked.requestId, pagedAtLinkVersion(nothing, version()), wireRefusalOf(why)),
         why,
       );
     const root = this.#workspaces?.repositoryRoot;
     if (root === undefined) return refused(noRepositoryRoot());
     try {
-      const read = await readRepositoryFile(root, asked.path, asked.maxBytes, this.#options.protectedPaths);
+      const read = await readRepositoryFile(
+        root,
+        asked.path,
+        asked.maxBytes,
+        this.#options.protectedPaths,
+        asked.offset ?? 0,
+        this.#transcriptPaths,
+      );
       if (!read.ok) return refused(read.refusal);
-      this.#send(channelKey, repositoryReadResult(asked.requestId, read.value));
+      this.#send(
+        channelKey,
+        repositoryReadResult(asked.requestId, pagedAtLinkVersion(read.value, version())),
+      );
     } catch (error) {
       refused(refusal('repository-read-failed', describe(error)));
     }
@@ -2306,6 +2285,7 @@ export class PeriscopeHost {
         asked.offset,
         asked.maxBytes,
         this.#options.protectedPaths,
+        this.#transcriptPaths,
       );
       if (!read.ok) return refused(read.refusal);
       this.#send(channelKey, workspaceReadResult(asked.requestId, read.value));
@@ -2324,7 +2304,7 @@ export class PeriscopeHost {
     this.#refuse(channelKey, why);
   }
 
-  /** A discovery request that could not be answered says so on the wire; the `#failDelivery` twin. */
+  /** A transcript ask is answered by name on the wire; the `#failDelivery` twin. */
   #failDiscovery(channelKey: string, requestId: string, refused: Refusal): void {
     this.#send(channelKey, transcriptFailed(requestId, { reason: refused.reason, detail: refused.detail }));
     this.#refuse(channelKey, refused);
@@ -2504,9 +2484,9 @@ export class PeriscopeHost {
   }
 
   /**
-   * List the worktrees under the workspace root, read from disk now. Paged like the transcript
-   * listing; every exit is one `workspace_list_result`, refusal or page, so a host that cannot look
-   * says so by name rather than going quiet.
+   * List the worktrees under the workspace root, read from disk now. Paged by index; every exit is
+   * one `workspace_list_result`, refusal or page, so a host that cannot look says so by name rather
+   * than going quiet.
    */
   async #answerWorkspaceList(channelKey: string, asked: WorkspaceList): Promise<void> {
     const answer = (
@@ -2595,7 +2575,8 @@ export class PeriscopeHost {
     }
     // Busy means a workspace is claimed or being claimed: a session releases through the provider
     // that provisioned it, so the roots cannot move under one. The seam refuses only when the ask
-    // actually changes a root; a scheme or transcripts-root change applies live regardless.
+    // actually changes a root; a scheme change applies live regardless, and an address or an agent
+    // home waits for the next start.
     const hostBusy = this.#sessions.size > 0 || this.#opening.size > 0;
     let outcome: Result<HostReconfigured>;
     try {
@@ -2607,7 +2588,6 @@ export class PeriscopeHost {
 
     const rebuilt = outcome.value;
     this.#workspaces = rebuilt.workspaces;
-    this.#transcriptsRoot = rebuilt.transcriptsRoot;
     this.#bulk = rebuilt.bulk;
     this.#linkCapabilities = rebuilt.linkCapabilities;
     // Rebuilt from the file, which holds no catalog: the one read at start is carried over.
@@ -2700,7 +2680,9 @@ export class PeriscopeHost {
     ];
   }
 
-  #withAgent(configuration: HostConfiguration): HostConfiguration {
+  #withAgent(composed: HostConfiguration): HostConfiguration {
+    // Null whatever an embedder composed: this host keeps no transcripts root, and the hello says so.
+    const configuration = { ...composed, transcriptsRoot: null };
     const endpoints = this.#hostEndpoints === null ? {} : { endpoints: this.#hostEndpoints };
     if (this.#agent === undefined) return { ...configuration, ...endpoints };
     const agents = this.#agent === null ? null : [...hostAgentEntries(this.#agent), ...this.#otherEntries];
@@ -2721,6 +2703,12 @@ export class PeriscopeHost {
     postUrl: string,
     fromOffset: number,
   ): Promise<void> {
+    // The agent's transcripts are not served, whatever resolver this host was composed with: the
+    // namespace is answered by name before any resolver is asked, and the file a resolver names for
+    // any other namespace meets the read doors' two fences below.
+    if (what.startsWith(TRANSCRIPT_WHAT_PREFIX)) {
+      return this.#failDelivery(sessionKey, deliveryId, transcriptsNotServed());
+    }
     const resolve = this.#bulk;
     if (resolve === undefined) {
       return this.#failDelivery(
@@ -2732,6 +2720,16 @@ export class PeriscopeHost {
 
     const filePath = resolve(what, sessionKey);
     if (!filePath.ok) return this.#failDelivery(sessionKey, deliveryId, filePath.refusal);
+
+    // The resolver is the embedder's, and its file is not trusted for being named: the protected set
+    // and the agents' session records hold on the lane as on the read doors, lexical and real.
+    let fenced: Result<null>;
+    try {
+      fenced = await fencedFileRefusal(filePath.value, this.#options.protectedPaths, this.#transcriptPaths);
+    } catch (error) {
+      fenced = refuse('bulk-delivery-failed', describe(error));
+    }
+    if (!fenced.ok) return this.#failDelivery(sessionKey, deliveryId, fenced.refusal);
 
     // The one origin this host will POST to, derived from the link it already dials. Resolved per
     // delivery rather than cached so a reconfigured controller URL cannot leave a stale trusted
@@ -2769,8 +2767,8 @@ export class PeriscopeHost {
       kind: 'bulk_delivered',
       deliveryId,
       byteCount: receipt.value.byteCount,
-      // The stat pair rides the receipt so a transcript puller can detect a rewrite. See
-      // `BulkDelivered` in frames.ts.
+      // The stat pair rides the receipt so a puller can detect the file being rewritten under it.
+      // See `BulkDelivered` in frames.ts.
       sizeBytes: receipt.value.sizeBytes,
       mtimeMs: receipt.value.mtimeMs,
     });
@@ -2967,6 +2965,28 @@ export function decideAtLinkVersion(decide: Decider, version: () => number | nul
   };
 }
 
+/** The first protocol a `repository_read_result` may carry `nextOffset` at. */
+const FIRST_PROTOCOL_CARRYING_REPOSITORY_PAGING = 18;
+
+/**
+ * A repository read's answer as the link's protocol carries it: `nextOffset` is stated on a link at
+ * 18 or above, and before the first handshake, as on a link that negotiates nothing; below 18 it is
+ * left out, and the answer is the head read version 17 made.
+ *
+ * The version is read when the answer is composed, and a frame retained for replay keeps that shape.
+ * One composed at 18 and replayed on a link renegotiated at 17 carries `nextOffset` to a controller
+ * whose decoder does not declare it and carries it unread; one composed at 17 and replayed at 18
+ * states no next page, which reads as not stated.
+ */
+export function pagedAtLinkVersion<T extends { readonly nextOffset: number | null }>(
+  read: T,
+  version: number | null,
+): T | Omit<T, 'nextOffset'> {
+  if (version === null || version >= FIRST_PROTOCOL_CARRYING_REPOSITORY_PAGING) return read;
+  const { nextOffset: _nextOffset, ...head } = read;
+  return head;
+}
+
 /** The Qwen Code read, settled: a read that throws is reported as an unavailable runtime, never a failed start. */
 async function settledQwenRead(read: () => Promise<QwenRuntimeRead>): Promise<QwenRuntimeRead> {
   try {
@@ -3003,6 +3023,14 @@ async function settledCatalog(read: () => Promise<AgentCatalog>): Promise<AgentC
   } catch (error) {
     return { ok: false, detail: `the catalog read failed: ${describe(error)}` };
   }
+}
+
+/** The answer to every ask for the agent's transcripts. */
+function transcriptsNotServed(): Refusal {
+  return refusal(
+    'transcripts-not-served',
+    'this host does not look for, read or keep the agent transcript files',
+  );
 }
 
 /** The repository asks on a host composed without a repository root: nothing to read under. */

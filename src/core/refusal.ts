@@ -341,17 +341,23 @@ export const REFUSAL_REASONS = [
   'retention-window-invalid',
   'gate-cannot-grant',
 
-  // The discovery door: reading the agent CLI's own transcript directory, jailed.
+  // The agent's transcript files: this host does not look for, read or keep them.
   //
-  //   transcript-path-escape    A name that could shape a path outside the projects root. One
-  //                             reason for all three layers of the jail (the name allowlist, the
-  //                             explicit dot-name reject, and the resolve-then-containment check)
-  //                             with `detail` naming which layer refused. It is not
-  //                             `path-escapes-root`: that names the workspace jail around a
-  //                             session's own files; this names the read-only door over a directory
-  //                             the host reads on the controller's behalf. An absent transcript is
-  //                             not this: absence is a value the door reports, never a refusal.
+  //   transcript-path-escape    A name that could shape a path outside a transcript directory.
+  //                             Never raised by this host, which resolves no transcript path; kept
+  //                             in the vocabulary so a peer's frame carrying it is still read as a
+  //                             known reason.
+  //   transcripts-not-served    The answer to every ask for the agent's transcripts: a
+  //                             `transcript_list` or `transcript_tail`, on `transcript_failed`, and a
+  //                             `bulk_request` whose locator names the `claude-transcript:`
+  //                             namespace, on `bulk_failed`. The asks still decode, so an older
+  //                             controller's ask is answered by name rather than dropped, and the
+  //                             channel it rode keeps its sequence. A repository or workspace read,
+  //                             or a resolver's bulk file, at or beneath an agent's session records
+  //                             (`agentTranscriptPaths`) is refused with it too, whatever the root.
+  //                             Not `credential-path-denied`, which names the protected set.
   'transcript-path-escape',
+  'transcripts-not-served',
 
   // The configure ask: a controller changing this host's own config file over the wire.
   //
@@ -387,12 +393,13 @@ export const REFUSAL_REASONS = [
   // checkout through this host, jailed to the repository root.
   //
   //   repository-path-escape    The asked path resolves outside the repository root, or this host
-  //                             has no repository root to read under. The same shape as
-  //                             `transcript-path-escape`, over a different root; an absent file or
-  //                             directory is not this, it is `repository-read-failed`.
+  //                             has no repository root to read under. An absent file or directory
+  //                             is not this, it is `repository-read-failed`.
   //   repository-read-failed    The path is not a directory (for a listing) or not a file (for a
   //                             read), the file holds a NUL byte in its head (binary; the answer is
-  //                             a string), or the filesystem refused. The detail names which.
+  //                             a string), a page's offset is past the end of the file, past
+  //                             `MAX_REPOSITORY_FILE_BYTES` or inside a character, or the filesystem
+  //                             refused. The detail names which.
   'repository-path-escape',
   'repository-read-failed',
 

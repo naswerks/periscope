@@ -1,13 +1,13 @@
 /**
- * The read-only pin: the discovery door cannot write.
+ * The read-only pin: the repository and workspace read door cannot write.
  *
- * `host/claude-transcripts.ts` is admitted as read-only over `~/.claude/projects`; the write posture
- * (`credential-path-denied`) is untouched. This pin makes the read-only half a property of the
- * module's import surface rather than a promise in its header: every filesystem name imported
- * anywhere in the module's closure must come from a short read-only allowlist, and any other name
- * (`writeFile`, `appendFile`, `rm`, `mkdir`, `rename`, `open`, whose flags can write,
- * `createWriteStream`, a namespace import that would carry the whole surface) is a violation by
- * name.
+ * `host/repository-read.ts` is admitted as read-only over the repository root and a workspace's
+ * directory; the write posture (`credential-path-denied`) is untouched. This pin makes the read-only
+ * half a property of the module's import surface rather than a promise in its header: every
+ * filesystem name imported anywhere in the module's closure must come from a short read-only
+ * allowlist, and any other name (`writeFile`, `appendFile`, `rm`, `mkdir`, `rename`, `open`, whose
+ * flags can write, `createWriteStream`, a namespace import that would carry the whole surface) is a
+ * violation by name.
  *
  * The selector has its own control below, because a scanner that matches nothing reports the same
  * empty array as a clean tree.
@@ -17,12 +17,12 @@ import assert from 'node:assert/strict';
 
 import { allFiles, closureFrom } from './walk.js';
 
-const ENTRY = 'host/claude-transcripts.ts';
-
-/** The repository read shares the posture and the allowlist, plus `realpath` for its physical containment check. */
 const REPOSITORY_ENTRY = 'host/repository-read.ts';
 
-/** The entire read-only surface the door is allowed. Adding a name here is a decision, not a fix. */
+/**
+ * The entire read-only surface the door is allowed, `realpath` for its physical containment check
+ * among it. Adding a name here is a decision, not a fix.
+ */
 const ALLOWED_FS_IMPORTS = new Set(['createReadStream', 'readdir', 'stat', 'realpath']);
 
 const FS_SPECIFIER = /^node:fs(\/\w+)?$/;
@@ -67,34 +67,6 @@ export function fsImportsIn(path: string, text: string): FsImport[] {
 
   return found;
 }
-
-test('regression: the discovery closure imports no write-capable filesystem name', () => {
-  const closure = closureFrom(ENTRY);
-
-  // Positive control on the walk itself: an untraversed closure would pass the assertion below
-  // over nothing. The door reaches the real resolver and the core path rules by design.
-  assert.ok(closure.has(ENTRY), 'the walk lost its own entry point');
-  assert.ok(closure.has('host/paths.ts'), 'the closure missed the resolver; the walk is wrong');
-  assert.ok(closure.has('core/paths.ts'), 'the closure missed the containment rules; the walk is wrong');
-
-  const byPath = new Map(allFiles().map((file) => [file.path, file.text]));
-  const violations: string[] = [];
-  let sawAllowed = 0;
-
-  for (const path of closure) {
-    const text = byPath.get(path);
-    if (text === undefined) continue;
-    for (const { name } of fsImportsIn(path, text)) {
-      if (ALLOWED_FS_IMPORTS.has(name)) sawAllowed += 1;
-      else violations.push(`${path} imports ${name}`);
-    }
-  }
-
-  assert.deepEqual(violations, [], `the discovery door must stay read-only:\n  ${violations.join('\n  ')}`);
-  // A boundary around an empty room is not a boundary: the door genuinely reads, so the allowed
-  // names must actually appear. Zero here means the extractor rotted, not that the door is pure.
-  assert.ok(sawAllowed >= 3, `expected the read-only surface in use, saw ${sawAllowed} allowed imports`);
-});
 
 test('regression: the repository read closure imports no write-capable filesystem name', () => {
   const closure = closureFrom(REPOSITORY_ENTRY);

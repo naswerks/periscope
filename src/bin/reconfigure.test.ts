@@ -143,15 +143,15 @@ test("the environment wins: a written value the environment sets is reported as 
       assert.equal(outcome.value.configuration.agentHome, '/from/env', 'the environment wins per key');
       assert.equal(
         outcome.value.configuration.transcriptsRoot,
-        '/from/env/projects',
-        'the transcripts root derives from the home in effect',
+        null,
+        'no transcripts root is reported, whatever the agent home',
       );
       // The scratch environment also sets the controller URL, a wire key since v8, so it is shadowed too.
       assert.deepEqual(outcome.value.overriddenByEnvironment, [
         'PERISCOPE_AGENT_HOME',
         'PERISCOPE_CONTROLLER_URL',
       ]);
-      assert.equal(outcome.value.transcriptsRoot, '/from/env/projects');
+      assert.equal(outcome.value.bulk, undefined, 'an agent-home change rebuilds no bulk resolver');
     }
     assert.deepEqual(
       readConfigFile(env).values,
@@ -277,6 +277,64 @@ test('control: an address the act cannot use refuses config-value-invalid and wr
   }
 });
 
+test('regression: a written agent home is pending until the next start, so the host never runs with a home whose credential files are not yet protected', async () => {
+  const { env, dir } = await scratchEnv();
+  try {
+    const live = {
+      controllerUrl: 'ws://controller.example/link',
+      decisionUrl: null,
+      agentHome: '/srv/agent-home',
+    };
+    const moved = reconfigureHost(
+      env,
+      [{ key: 'PERISCOPE_AGENT_HOME', value: '/srv/other-home' }],
+      true,
+      live,
+    );
+    assert.equal(moved.ok, true, moved.ok ? '' : moved.refusal.detail);
+    if (moved.ok) {
+      assert.deepEqual(
+        moved.value.pendingRestart,
+        ['PERISCOPE_AGENT_HOME'],
+        'the new home waits for the start',
+      );
+      assert.equal(
+        moved.value.configuration.agentHome,
+        '/srv/other-home',
+        'the file value is what is reported',
+      );
+    }
+    assert.deepEqual(readConfigFile(env).values, { PERISCOPE_AGENT_HOME: '/srv/other-home' });
+
+    // Written back to the home in effect, it is not pending.
+    const back = reconfigureHost(
+      env,
+      [{ key: 'PERISCOPE_AGENT_HOME', value: '/srv/agent-home' }],
+      false,
+      live,
+    );
+    assert.equal(back.ok, true);
+    if (back.ok) assert.deepEqual(back.value.pendingRestart, []);
+
+    // A host that started on the default home has the default in effect: unsetting the key is not pending,
+    // and naming a home is.
+    const onDefault = { controllerUrl: 'ws://controller.example/link', decisionUrl: null, agentHome: null };
+    const unset = reconfigureHost(env, [{ key: 'PERISCOPE_AGENT_HOME', value: null }], false, onDefault);
+    assert.equal(unset.ok, true);
+    if (unset.ok) assert.deepEqual(unset.value.pendingRestart, []);
+    const named = reconfigureHost(
+      env,
+      [{ key: 'PERISCOPE_AGENT_HOME', value: '/srv/agent-home' }],
+      false,
+      onDefault,
+    );
+    assert.equal(named.ok, true);
+    if (named.ok) assert.deepEqual(named.value.pendingRestart, ['PERISCOPE_AGENT_HOME']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('an address written back to the value in effect is not pending', async () => {
   const { env, dir } = await scratchEnv();
   try {
@@ -298,7 +356,7 @@ test('an address written back to the value in effect is not pending', async () =
   }
 });
 
-test('PERISCOPE_TRANSCRIPTS_ROOT is an unknown key, over the wire and in the file; the transcripts root derives from the agent home', async () => {
+test('PERISCOPE_TRANSCRIPTS_ROOT is an unknown key, over the wire and in the file; an agent-home change reports no transcripts root', async () => {
   const { env, dir } = await scratchEnv();
   try {
     const refused = reconfigureHost(env, [{ key: 'PERISCOPE_TRANSCRIPTS_ROOT', value: '/old/way' }], false);
@@ -314,7 +372,8 @@ test('PERISCOPE_TRANSCRIPTS_ROOT is an unknown key, over the wire and in the fil
     assert.equal(outcome.ok, true, outcome.ok ? '' : outcome.refusal.detail);
     if (outcome.ok) {
       assert.equal(outcome.value.configuration.agentHome, '/new/home');
-      assert.equal(outcome.value.transcriptsRoot, '/new/home/projects', 'derived from the agent home');
+      assert.equal(outcome.value.configuration.transcriptsRoot, null, 'nothing derives from the agent home');
+      assert.equal(outcome.value.bulk, undefined);
     }
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -36,7 +36,7 @@ import type { ControlTier, SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -46,22 +46,22 @@ export const PROTOCOL_VERSION = 17;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 17 adds `qwen-code` as a runtime a hello may list and a session may name, whose forwarded
- * messages are its own stream-json messages and control requests with `runtime: "qwen-code"`; its
- * agent events (`qwen-code:{type}`, `qwen-code:system/{subtype}` and `qwen-code:{answer}`); `pi` the
- * same way, its forwarded messages what pi wrote in RPC mode with `runtime: "pi"` and its agent events
- * `pi:*`; six refusal reasons (`qwen-ask-rules-not-active`, `gate-tool-unruled`, `gate-mode-widened`,
- * `gate-credential-in-shell`, `pi-extension-not-active`, `gate-foreign-extension`); and `cmd` as the
- * grammar of a decision request's shell call. A
- * transition's cause is carried unnarrowed, a runtime is a word, and a reason a controller does not
- * know is read tolerantly, so a version-16 controller is still spoken to: what it sends decodes here
- * unchanged, and what it receives decodes on its side. The one closed word it would refuse, `cmd`, is
- * never sent on a link negotiated below 17: a decision request names no dialect there. The narrowing of
- * `session_new.request.env` that version 14 made (a key a controller places in the spawn environment
- * must be one this host's operator declared, above the floor) holds at every version this host
- * negotiates.
+ * Version 18 adds paging to the repository read: `repository_read.offset`, where a page starts, and
+ * `repository_read_result.nextOffset`, where the next one does, null at the end of the file or at
+ * `MAX_REPOSITORY_FILE_BYTES`. Both are optional: an ask with no offset is the head read version 17
+ * made, with the same members (its cut lands on a character boundary, where 1.8.2's could split one),
+ * and `nextOffset` is never composed for a link negotiated below 18. It adds one refusal reason,
+ * `transcripts-not-served`: a host of this build does not look for, read or keep the agent's
+ * transcript files, and gives that answer to every `transcript_list` and `transcript_tail` (on
+ * `transcript_failed`) and to every `bulk_request` whose locator names the `claude-transcript:`
+ * namespace (on `bulk_failed`). Every transcript kind still decodes, and both answers are kinds a
+ * version-17 controller already reads, its reason read tolerantly, so a version-17 controller is
+ * still spoken to: what it sends decodes here unchanged, and what it receives decodes on its side.
+ * The narrowing of `session_new.request.env` that version 14 made (a key a controller places in the
+ * spawn environment must be one this host's operator declared, above the floor) holds at every
+ * version this host negotiates.
  */
-export const PROTOCOL_VERSION_MIN = 16;
+export const PROTOCOL_VERSION_MIN = 17;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {
@@ -1284,7 +1284,9 @@ export interface SessionConfigure {
  *
  * The host answers with an outbound HTTP POST to `postUrl` and reports the outcome back over the
  * link. `bulk` is this package's noun, not ACP's; ACP has no equivalent concept, so nothing is
- * being renamed.
+ * being renamed. What a locator names is the host's resolver's to say (`BulkResolver`): an embedder
+ * composes the namespaces its controller asks for. A locator in the `claude-transcript:` namespace
+ * is answered `bulk_failed` with `transcripts-not-served` whatever the resolver.
  */
 export interface BulkRequest {
   readonly kind: 'bulk_request';
@@ -1297,9 +1299,9 @@ export interface BulkRequest {
 /**
  * The bytes were POSTed. A receipt, so it is not droppable.
  *
- * `sizeBytes` / `mtimeMs`: the delivered file's stat at the moment it was streamed, so a
- * caller pulling a transcript can detect the CLI rewriting the file under it. The CLI rewrites
- * transcripts on compaction, which makes a byte-offset resume across a rewrite invalid. Both are
+ * `sizeBytes` / `mtimeMs`: the delivered file's stat at the moment it was streamed, so a caller
+ * pulling a file in pieces can detect it being rewritten under it, which makes a byte-offset resume
+ * across the rewrite invalid. Both are
  * `T | null` (the wire's optionality rule): null means the deliverer did not read a stat, which is
  * exactly what an older host sends, so a v3 receipt decodes as a v4 receipt with the two unknowns
  * stated rather than invented.
@@ -1337,16 +1339,16 @@ export interface BulkFailed {
 }
 
 // ---------------------------------------------------------------------------
-// Discovery payloads: ask the host what is running, and what the agent CLI
-// has on this machine. Requests travel; content that is bulk stays on the bulk lane.
+// Discovery payloads: ask the host what it is running. Requests travel; content that is bulk
+// stays on the bulk lane.
 // ---------------------------------------------------------------------------
 
 /*
  * The test that admits these, so the next addition is decided rather than argued: a list, a
- * probe or a read request is a decision about sessions and travels; the transcript bytes are bulk
- * content and ride the bulk-post lane (`bulk_request` with a `claude-transcript:` locator), never
- * the link. Every request carries a `requestId` the answer echoes (the `deliveryId` model) so a
- * controller can have several in flight without guessing which answer is whose.
+ * probe or a read request is a decision about sessions and travels; bulk content rides the
+ * bulk-post lane (`bulk_request`), never the link. Every request carries a `requestId` the answer
+ * echoes (the `deliveryId` model) so a controller can have several in flight without guessing which
+ * answer is whose.
  *
  * None of these are droppable, deliberately. The results are receipts: losing one under pressure
  * would be an answer that silently never arrived, on a link whose whole doctrine is that silence
@@ -1386,7 +1388,14 @@ export interface SessionListResult {
   readonly provisioningCount: number;
 }
 
-/** Ask which Claude sessions exist on this machine, from `fromIndex`, newest first. */
+/**
+ * Ask which Claude sessions the agent's transcript files record on this machine. A host of this build
+ * answers it `transcript_failed` with `transcripts-not-served`: it does not look for, read or keep
+ * the agent's transcript files. It still decodes, so an older controller's ask is answered by name.
+ *
+ * @deprecated Answered `transcripts-not-served`. Kept so an import still resolves; it goes at the next
+ * major version.
+ */
 export interface TranscriptList {
   readonly kind: 'transcript_list';
   readonly requestId: string;
@@ -1394,9 +1403,11 @@ export interface TranscriptList {
 }
 
 /**
- * One transcript on disk: an opaque project slug, the session id, the stat pair, and the working directory
- * the CLI recorded on it — the cwd a resume of this transcript must run in (transcripts live per cwd).
- * Null when the file's head carries none.
+ * One transcript on disk, as a `transcript_list_result` described it. A host of this build sends
+ * none.
+ *
+ * @deprecated A host of this build sends no `transcript_list_result`. Kept so an import still
+ * resolves; it goes at the next major version.
  */
 export interface TranscriptListEntry {
   readonly projectSlug: string;
@@ -1407,10 +1418,11 @@ export interface TranscriptListEntry {
 }
 
 /**
- * One page of the enumeration. Paged because the answer must fit `MAX_FRAME_BYTES`: a machine's
- * corpus reaches hundreds of sessions, and one frame carrying all of them would be refused by the
- * very codec that carries it. `nextIndex` null means this page ends the listing; re-ask from it
- * otherwise. An empty first page is a fresh machine, not an error.
+ * One page of a transcript listing. A host of this build sends none: it answers `transcript_list`
+ * with `transcript_failed`. It still decodes, so a frame from an older host is read.
+ *
+ * @deprecated A host of this build sends no `transcript_list_result`. Kept so an import still
+ * resolves; it goes at the next major version.
  */
 export interface TranscriptListResult {
   readonly kind: 'transcript_list_result';
@@ -1421,10 +1433,12 @@ export interface TranscriptListResult {
 }
 
 /**
- * Probe one transcript's tail: has a matching user entry landed at or past `fromOffset`?
+ * Probe one transcript's tail for a user entry at or past `fromOffset`. A host of this build answers
+ * it `transcript_failed` with `transcripts-not-served`. It still decodes, so an older controller's
+ * ask is answered by name.
  *
- * `needle` null means "any user-text entry". The answer carries the file's current size as the
- * offset to resume from, plus the stat pair for rewrite detection.
+ * @deprecated Answered `transcripts-not-served`. Kept so an import still resolves; it goes at the next
+ * major version.
  */
 export interface TranscriptTail {
   readonly kind: 'transcript_tail';
@@ -1436,9 +1450,11 @@ export interface TranscriptTail {
 }
 
 /**
- * The probe's answer. `absent` is a value, not a failure: a transcript that does not exist is a
- * real negative the asker may trust, and it must not wear a refusal's clothes; a refusal here
- * names a malformed request, never a missing file. When `absent` is true the stat pair is null.
+ * A tail probe's answer. A host of this build sends none: it answers `transcript_tail` with
+ * `transcript_failed`. It still decodes, so a frame from an older host is read.
+ *
+ * @deprecated A host of this build sends no `transcript_tail_result`. Kept so an import still
+ * resolves; it goes at the next major version.
  */
 export interface TranscriptTailResult {
   readonly kind: 'transcript_tail_result';
@@ -1452,9 +1468,10 @@ export interface TranscriptTailResult {
 }
 
 /**
- * A discovery request that could not be answered, and which named way it failed. The `bulk_failed`
- * model: a request that dies in the host must say so on the wire, because to the asker a swallowed
- * failure and a host that hung are the same silence.
+ * A transcript ask answered by name: a host of this build sends it for every `transcript_list` and
+ * `transcript_tail`, with `transcripts-not-served`. The `bulk_failed` model: an ask the host does not
+ * serve must say so on the wire, because to the asker a swallowed ask and a host that hung are the
+ * same silence.
  */
 export interface TranscriptFailed {
   readonly kind: 'transcript_failed';
@@ -1684,7 +1701,7 @@ export interface HostConfigureResult {
   readonly requestId: string;
   readonly configuration: HostConfiguration;
   readonly overriddenByEnvironment: readonly string[];
-  /** The keys written but not in effect until the next start: the two control-plane URLs. */
+  /** The keys written but not in effect until the next start: the two control-plane URLs and the agent home. */
   readonly pendingRestart: readonly string[];
   /** Null = every entry applied. Otherwise the named reason nothing was written. */
   readonly refusal: WireRefusal | null;
@@ -1692,29 +1709,26 @@ export interface HostConfigureResult {
 
 /**
  * How many worktrees one `workspace_list_result` carries. A path is bounded at 1000 characters, a
- * branch at 400 and a key at 200, so a full page stays under the frame cap with the same margin
- * the transcript page keeps.
+ * branch at 400 and a key at 200, so a full page stays under half the frame cap.
  */
 export const WORKSPACE_PAGE_SIZE = 25;
 
 /**
- * How many entries one `transcript_list_result` carries.
+ * How many entries one `transcript_list_result` carried. A host of this build sends none.
  *
- * Bounded so the frame stays well under `MAX_FRAME_BYTES` (64 KiB): an entry is a slug (measured
- * up to about 80 characters on one real 139-slug corpus), a 36-character session id and two
- * integers, comfortably under 300 bytes of JSON each, so 100 entries is under half the cap even
- * with slugs twice as long as any measured one.
+ * @deprecated A host of this build sends no `transcript_list_result`. Kept so an import still
+ * resolves; it goes at the next major version.
  */
 export const TRANSCRIPT_PAGE_SIZE = 100;
 
 /**
- * The bulk-lane locator namespace for a transcript read: `claude-transcript:{projectSlug}/{sessionId}`.
- * A `bulk_request.what` that a host resolves to the agent CLI's own transcript files starts with
- * this prefix; the slug is the CLI's flattened project directory name and is opaque.
+ * The bulk-lane locator namespace of the agent's transcript files:
+ * `claude-transcript:{projectSlug}/{sessionId}`. A host of this build answers a `bulk_request` whose
+ * `what` starts with it `bulk_failed` with `transcripts-not-served`, before any resolver is asked: it
+ * does not look for, read or keep the agent's transcript files.
  *
- * It is the one instance of the namespace `{runtime}-transcript:{...}`: a runtime's transcripts are
- * addressed under that runtime's name, so a locator says whose files it reads. This host serves the
- * `claude` instance and refuses every other prefix `bulk-target-invalid`.
+ * @deprecated The namespace is not served. Kept so an import still resolves; it goes at the next
+ * major version.
  */
 export const TRANSCRIPT_WHAT_PREFIX = 'claude-transcript:';
 
@@ -1744,8 +1758,8 @@ export interface WorkspaceListEntry {
 }
 
 /**
- * Ask this host what worktrees exist under its workspace root, from disk. Host-scoped and paged
- * like `transcript_list`. Only what the host provisioned is listed: the repository itself and any
+ * Ask this host what worktrees exist under its workspace root, from disk. Host-scoped like
+ * `session_list`, and paged by index. Only what the host provisioned is listed: the repository itself and any
  * checkout outside the workspace root never appear, so no cleanup a controller composes from this
  * answer can name them.
  */
@@ -1832,12 +1846,22 @@ export function sessionListResult(
   };
 }
 
-/** Build a `transcript_list`. `fromIndex` defaults to the start. */
+/**
+ * Build a `transcript_list`. `fromIndex` defaults to the start.
+ *
+ * @deprecated A host of this build answers it `transcripts-not-served`. Kept so an import still
+ * resolves; it goes at the next major version.
+ */
 export function transcriptList(requestId: string, fromIndex = 0): TranscriptList {
   return { kind: 'transcript_list', requestId, fromIndex };
 }
 
-/** Build a `transcript_list_result`. Fills `nextIndex` with null so absence is stated, not deleted. */
+/**
+ * Build a `transcript_list_result`. Fills `nextIndex` with null so absence is stated, not deleted.
+ *
+ * @deprecated A host of this build sends none. Kept so an import still resolves; it goes at the next
+ * major version.
+ */
 export function transcriptListResult(
   requestId: string,
   entries: readonly TranscriptListEntry[],
@@ -1852,7 +1876,12 @@ export function transcriptListResult(
   };
 }
 
-/** Build a `transcript_tail`. Fills `needle` with null, meaning "any user-text entry". */
+/**
+ * Build a `transcript_tail`. Fills `needle` with null, meaning "any user-text entry".
+ *
+ * @deprecated A host of this build answers it `transcripts-not-served`. Kept so an import still
+ * resolves; it goes at the next major version.
+ */
 export function transcriptTail(
   requestId: string,
   projectSlug: string,
@@ -1863,7 +1892,12 @@ export function transcriptTail(
   return { kind: 'transcript_tail', requestId, projectSlug, sessionId, fromOffset, needle: needle ?? null };
 }
 
-/** Build a `transcript_tail_result`. Fills the stat pair with null so absence is stated. */
+/**
+ * Build a `transcript_tail_result`. Fills the stat pair with null so absence is stated.
+ *
+ * @deprecated A host of this build sends none. Kept so an import still resolves; it goes at the next
+ * major version.
+ */
 export function transcriptTailResult(
   requestId: string,
   answer: { found: boolean; absent: boolean; newOffset: number; sizeBytes?: number; mtimeMs?: number },
@@ -1898,13 +1932,22 @@ export const MAX_REPOSITORY_ENTRIES = 500;
 /**
  * The most text one `repository_read_result` carries. The frame cap is 64 KiB and the envelope plus
  * JSON escaping must fit inside it, so the text is bounded below the cap with margin; a longer file
- * is answered to this many bytes and marked `truncated`.
+ * is answered a page at a time, each page marked `truncated` while bytes remain.
  */
 export const MAX_REPOSITORY_READ_BYTES = 48 * 1024;
 
 /**
+ * The most of a file the repository read pages through (protocol 18). The head of any file is
+ * served at offset 0, whatever its size; pages after it continue while they end before this bound
+ * and the end of the file (the last may end at most three bytes past it, to carry a character that
+ * straddles it whole), so the link stays a command lane rather than a file transfer. An offset past
+ * this bound is refused by name.
+ */
+export const MAX_REPOSITORY_FILE_BYTES = 512 * 1024;
+
+/**
  * Ask this host to list one directory of its repository, by a path relative to the repository root
- * (`''` is the root itself). Host-scoped like `transcript_list`. The host answers names only and
+ * (`''` is the root itself). Host-scoped like `session_list`. The host answers names only and
  * never leaves the root: a path that resolves outside it is refused by name, so a controller can
  * show a checkout's shape and pick a file to read without the host ever serving another directory.
  */
@@ -1935,25 +1978,42 @@ export interface RepositoryListResult {
 
 /**
  * Ask this host for the text of one file of its repository, by a path relative to the repository
- * root, at most `maxBytes` of it (1 to `MAX_REPOSITORY_READ_BYTES`). Text files only: a file with a
- * NUL byte in its head is refused rather than served, because the answer is a string.
+ * root, from byte `offset` and at most `maxBytes` of it (1 to `MAX_REPOSITORY_READ_BYTES`). Text
+ * files only: a file with a NUL byte in its head is refused rather than served, because the answer
+ * is a string. Offset 0 reads the head of a file of any size; a later page must start before
+ * `MAX_REPOSITORY_FILE_BYTES`.
  */
 export interface RepositoryRead {
   readonly kind: 'repository_read';
   readonly requestId: string;
   readonly path: string;
   readonly maxBytes: number;
+  /**
+   * Where the page starts, in bytes: 0, or the `nextOffset` of the answer before it (protocol 18).
+   * Null or absent = 0, the head; a controller one release behind never sends it.
+   */
+  readonly offset?: number | null;
 }
 
 /** The read's answer; every exit is this one kind. `text` is null exactly when `refusal` is not. */
 export interface RepositoryReadResult {
   readonly kind: 'repository_read_result';
   readonly requestId: string;
-  /** UTF-8 text, the first `maxBytes` of the file at most. */
+  /**
+   * UTF-8 text from the asked offset, at most `maxBytes` of it, cut on a character boundary; a page
+   * smaller than its first character carries that character whole.
+   */
   readonly text: string | null;
   /** The file's whole size, so a caller can see how much `truncated` left behind. */
   readonly sizeBytes: number;
+  /** True when bytes of the file remain past this page. */
   readonly truncated: boolean;
+  /**
+   * Where the next page starts (protocol 18), or null when this page reached the end of the file or
+   * `MAX_REPOSITORY_FILE_BYTES`. Composed only for a link negotiated at 18 or above; absent = not
+   * stated, as from a host one release behind.
+   */
+  readonly nextOffset?: number | null;
   readonly refusal: WireRefusal | null;
 }
 
@@ -1972,19 +2032,31 @@ export function repositoryListResult(
   return { kind: 'repository_list_result', requestId, entries, truncated, refusal: refusal ?? null };
 }
 
-/** Build a `repository_read`. Fills `maxBytes` with the cap. */
+/**
+ * Build a `repository_read`. Fills `maxBytes` with the cap. Added inside the window, `offset` is
+ * stated only when given: an ask without one is the head read.
+ */
 export function repositoryRead(
   requestId: string,
   path: string,
   maxBytes = MAX_REPOSITORY_READ_BYTES,
+  offset?: number,
 ): RepositoryRead {
-  return { kind: 'repository_read', requestId, path, maxBytes };
+  return { kind: 'repository_read', requestId, path, maxBytes, ...(offset === undefined ? {} : { offset }) };
 }
 
-/** Build a `repository_read_result`. Fills `refusal` with null, the read answer. */
+/**
+ * Build a `repository_read_result`. Fills `refusal` with null, the read answer. Added inside the
+ * window, `nextOffset` is stated only when given, so an answer to a link below 18 carries none.
+ */
 export function repositoryReadResult(
   requestId: string,
-  read: { readonly text: string | null; readonly sizeBytes: number; readonly truncated: boolean },
+  read: {
+    readonly text: string | null;
+    readonly sizeBytes: number;
+    readonly truncated: boolean;
+    readonly nextOffset?: number | null;
+  },
   refusal?: WireRefusal,
 ): RepositoryReadResult {
   return {
@@ -1993,6 +2065,7 @@ export function repositoryReadResult(
     text: read.text,
     sizeBytes: read.sizeBytes,
     truncated: read.truncated,
+    ...(read.nextOffset === undefined ? {} : { nextOffset: read.nextOffset }),
     refusal: refusal ?? null,
   };
 }
@@ -2334,7 +2407,13 @@ export interface HostConfiguration {
   readonly repositoryRoot: string | null;
   readonly workspaceRoot: string | null;
   readonly branchScheme: string | null;
-  /** Where the agent keeps its transcripts: derived from `agentHome`. Reported, never set on its own. */
+  /**
+   * Always null from a host of this build, whatever configuration its embedder composed: it does not
+   * look for, read or keep the agent's transcript files, so it has no root for them. A required member
+   * inside the protocol window, so it is sent.
+   *
+   * @deprecated Always null. It leaves the hello at the first protocol outside the window.
+   */
   readonly transcriptsRoot: string | null;
   /**
    * The controller link URL the host's configuration names. Settable over the link; the value
@@ -2343,7 +2422,11 @@ export interface HostConfiguration {
   readonly controllerUrl: string | null;
   /** The decision endpoint the host's configuration names. Settable over the link, same rule. */
   readonly decisionUrl: string | null;
-  /** Where the agent CLI keeps its state. Settable over the link; the transcripts root derives from it. */
+  /**
+   * Where the agent CLI keeps its state and its sign-in; its credential files are in the gate's
+   * protected set. Settable over the link, the URLs' rule: the home in effect is the one read at
+   * start, so a change rides `pendingRestart` until the next start.
+   */
   readonly agentHome: string | null;
   /**
    * The plugins every session on this host loads, from `PERISCOPE_PLUGIN_DIRS`. Settable over the
@@ -2402,8 +2485,8 @@ export interface LinkHello {
   /** The values this host runs with. Reported, never negotiated. */
   readonly configuration: HostConfiguration;
   /**
-   * The keys whose configured value is not the one in effect: written to the file, dialled
-   * only at the next start. Empty on a host that runs what its file says.
+   * The keys whose configured value is not the one in effect: written to the file, applied only at
+   * the next start. Empty on a host that runs what its file says.
    */
   readonly pendingRestart: readonly string[];
   /**

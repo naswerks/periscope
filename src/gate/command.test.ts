@@ -44,6 +44,14 @@ test('a program name drops its directory and its .exe, so a full path is still r
   assert.equal(programNameOf("'git'"), 'git');
 });
 
+test('regression: a program name drops a .cmd or .bat shim suffix in any case, as it drops .exe', () => {
+  assert.equal(programNameOf('az.cmd'), 'az');
+  assert.equal(programNameOf('C:\\Program Files\\Azure\\wbin\\AZ.CMD'), 'az');
+  assert.equal(programNameOf('git.bat'), 'git');
+  assert.equal(programNameOf('deploy.cmd'), 'deploy');
+  assert.equal(programNameOf('notes.cmdx'), 'notes.cmdx', 'only a whole suffix is dropped');
+});
+
 // ---------------------------------------------------------------------------
 // Defect 1 — a boundary word in a code comment refuses a benign script.
 // ---------------------------------------------------------------------------
@@ -64,6 +72,25 @@ test('a hash mid-token is not a comment — only word position opens one', () =>
 
 test('a comment ends at its newline and the command after it survives', () => {
   assert.match(stripComments('echo hi # a note\ngit status'), /git status/);
+});
+
+test('regression: the escaped reading keeps a `#` after an escaped blank inside its word, and reads the command after it', () => {
+  const parsed = parseCommand(String.raw`echo a\ # ; git push origin main`);
+  assert.equal(
+    parsed.escapedReading?.invocations[0]?.verb,
+    'a #',
+    'the escaped blank and the # are one word',
+  );
+  assert.equal(parsed.escapedReading?.invocations[1]?.verb, 'push', 'the push after the ; was not read');
+  assert.equal(parsed.invocations.length, 1, 'the split reading still takes the # for a comment');
+});
+
+test('regression: the escaped reading reads a command word after quote removal, and the split reading keeps it as written', () => {
+  const parsed = parseCommand("g''it push origin main");
+  assert.equal(parsed.escapedReading?.invocations[0]?.program, 'git');
+  assert.equal(parsed.invocations[0]?.program, "g''it");
+  assert.equal(parseCommand('"g"it push').escapedReading?.invocations[0]?.program, 'git');
+  assert.equal(parseCommand(String.raw`g\it push`).escapedReading?.invocations[0]?.program, 'git');
 });
 
 // ---------------------------------------------------------------------------
@@ -208,6 +235,36 @@ test('a compound produces one invocation per command position', () => {
   );
 });
 
+test('regression: a command word an expansion supplies is set aside with the program the line names for it, at any depth', () => {
+  const named = (command: string): unknown => parseCommand(command).expandedCommands;
+  assert.deepEqual(named('$(echo git) push origin x'), [{ program: 'git', words: ['push', 'origin', 'x'] }]);
+  assert.deepEqual(named('`which /usr/bin/git` push'), [{ program: 'git', words: ['push'] }]);
+  assert.deepEqual(named('$(command -v gh) pr merge 5'), [{ program: 'gh', words: ['pr', 'merge', '5'] }]);
+  assert.deepEqual(named('G=git; ${G} push'), [{ program: 'git', words: ['push'] }]);
+  assert.deepEqual(named('export G="git"; "$G" push'), [{ program: 'git', words: ['push'] }]);
+  assert.deepEqual(named('G=git; echo $($G push)'), [{ program: 'git', words: ['push'] }], 'inside one');
+  assert.deepEqual(named('$(which docker) push img'), [{ program: 'docker', words: ['push', 'img'] }]);
+});
+
+test('control: a command word whose program the line does not name is not set aside', () => {
+  for (const command of [
+    '$G push',
+    'g$(echo it) push',
+    '$(git config core.editor) notes.md',
+    'G=git cmd; $G push',
+    '$G push; G=git',
+    'G=git; G=$X; $G push',
+    '$(npm bin)/tsc -p .',
+    '"$HOME/bin/tool" run',
+    "'$G' push",
+    'git -C $(pwd) status',
+  ]) {
+    assert.equal(parseCommand(command).expandedCommands, undefined, command);
+  }
+  assert.equal(parseCommand('$(echo git) push', 'powershell').expandedCommands, undefined);
+  assert.equal(parseCommand('$(echo git) push', 'cmd').expandedCommands, undefined);
+});
+
 // Guards the selector, not the rules: if `parseCommand` returned nothing for everything, every
 // assertion above that looks for an absence would pass while checking nothing.
 test('the parser actually produces invocations and scannable text', () => {
@@ -238,6 +295,19 @@ test("regression: az's --description takes every word up to the next flag", () =
     !invocation?.args.some((arg) => arg.includes('line')),
     'no paragraph of the description stays in the scan',
   );
+});
+
+test("regression: az's description run ends on a quoted option name, and not on a quoted paragraph that opens with a dash", () => {
+  const ended = parseCommand('az repos pr update --id 5 --description "notes" "--status" completed')
+    .invocations[0];
+  assert.deepEqual(ended?.dataPayloads, ['"notes"']);
+  assert.ok(
+    ended?.args.includes('"--status"') && ended.args.includes('completed'),
+    'the option after the run stays in the scan',
+  );
+  const prose = parseCommand('az repos pr update --id 5 --description "- fixed it" "- tested it"')
+    .invocations[0];
+  assert.deepEqual(prose?.dataPayloads, ['"- fixed it"', '"- tested it"']);
 });
 
 test('control: az prose that could expand stays in the scan, and az outside a pull request write is not prose', () => {

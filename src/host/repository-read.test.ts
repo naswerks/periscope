@@ -9,7 +9,11 @@ import { join } from 'node:path';
 import { tempDir } from '../test-support/temp-dir.js';
 import { isContainedBy, normalizePath } from '../core/paths.js';
 import { nodePathResolver } from './paths.js';
-import { MAX_REPOSITORY_READ_BYTES, MAX_WORKSPACE_FILE_BYTES } from '../control/frames.js';
+import {
+  MAX_REPOSITORY_FILE_BYTES,
+  MAX_REPOSITORY_READ_BYTES,
+  MAX_WORKSPACE_FILE_BYTES,
+} from '../control/frames.js';
 import {
   BINARY_PROBE_BYTES,
   listRepositoryDirectory,
@@ -122,7 +126,62 @@ test('the read carries the head of a text file, cut at maxBytes on a character b
       readRepositoryFile(root, 'empty.md'),
     );
     assert.ok(empty.ok);
-    assert.deepEqual(empty.value, { text: '', sizeBytes: 0, truncated: false });
+    assert.deepEqual(empty.value, { text: '', sizeBytes: 0, truncated: false, nextOffset: null });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The head read 1.8.2 made, kept here as the control: a probe of `max(wanted, BINARY_PROBE_BYTES)`
+ * bytes, and a step back only over bytes read past the cut, of which there are none once `wanted`
+ * reaches the probe's size.
+ */
+function headAsReleased(bytes: Buffer, wanted: number): string {
+  const head = bytes.subarray(0, Math.max(wanted, BINARY_PROBE_BYTES));
+  let cut = Math.min(head.length, wanted);
+  while (cut > 0 && cut < head.length && (head[cut]! & 0xc0) === 0x80) cut -= 1;
+  return head.subarray(0, cut).toString('utf8');
+}
+
+test('regression: a head read at the default maxBytes ends on a character boundary when a character straddles the cut', async () => {
+  const root = await tempDir('repository');
+  try {
+    // '漢' is three bytes and starts at byte 49151, so the default cut (49152) falls inside it.
+    const bytes = Buffer.concat([
+      Buffer.alloc(MAX_REPOSITORY_READ_BYTES - 1, 0x61),
+      Buffer.from('漢', 'utf8'),
+      Buffer.alloc(16, 0x62),
+    ]);
+    await writeFile(join(root, 'brief.md'), bytes);
+
+    const head = await readRepositoryFile(root, 'brief.md');
+    assert.ok(head.ok);
+    assert.equal(
+      head.value.text,
+      'a'.repeat(MAX_REPOSITORY_READ_BYTES - 1),
+      'the page ends before the character',
+    );
+    assert.deepEqual(
+      [head.value.truncated, head.value.nextOffset],
+      [true, MAX_REPOSITORY_READ_BYTES - 1],
+      'the next page starts on the character',
+    );
+    const next = await readRepositoryFile(root, 'brief.md', 1024, [], MAX_REPOSITORY_READ_BYTES - 1);
+    assert.ok(next.ok);
+    assert.equal(next.value.text, `漢${'b'.repeat(16)}`);
+
+    // control: 1.8.2's loop split the character here, ending the page on a replacement character; below
+    // the probe's size the two reads agree.
+    assert.equal(
+      headAsReleased(bytes, MAX_REPOSITORY_READ_BYTES),
+      `${'a'.repeat(MAX_REPOSITORY_READ_BYTES - 1)}\uFFFD`,
+    );
+    const small = Buffer.concat([Buffer.alloc(99, 0x61), Buffer.from('漢', 'utf8')]);
+    await writeFile(join(root, 'small.md'), small);
+    const smallHead = await readRepositoryFile(root, 'small.md', 100);
+    assert.ok(smallHead.ok);
+    assert.equal(smallHead.value.text, headAsReleased(small, 100));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -296,6 +355,294 @@ test('the protected set is checked on the real path too: a link into a protected
     assert.ok(unprotected.ok);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a repository file is read in pages that never split a character: offset 0 is the head, each page says where the next starts, and the last says null', async () => {
+  const root = await tempDir('repository');
+  try {
+    // 'a' (1 byte), 'é' (2 bytes), '漢' (3 bytes), 'b' (1 byte): seven bytes.
+    await writeFile(join(root, 'mixed.md'), 'aé漢b', 'utf8');
+
+    const head = await readRepositoryFile(root, 'mixed.md', 2);
+    assert.ok(head.ok);
+    assert.deepEqual(
+      head.value,
+      { text: 'a', sizeBytes: 7, truncated: true, nextOffset: 1 },
+      'the head steps back off the é, as the head read always did',
+    );
+
+    const second = await readRepositoryFile(root, 'mixed.md', 4, [], 1);
+    assert.ok(second.ok);
+    assert.deepEqual(second.value, { text: 'é', sizeBytes: 7, truncated: true, nextOffset: 3 });
+
+    const third = await readRepositoryFile(root, 'mixed.md', 1, [], 3);
+    assert.ok(third.ok);
+    assert.deepEqual(
+      third.value,
+      { text: '漢', sizeBytes: 7, truncated: true, nextOffset: 6 },
+      'a page smaller than its first character carries that character whole, so paging makes progress',
+    );
+
+    const last = await readRepositoryFile(root, 'mixed.md', 100, [], 6);
+    assert.ok(last.ok);
+    assert.deepEqual(last.value, { text: 'b', sizeBytes: 7, truncated: false, nextOffset: null });
+
+    // The pages, joined, are the file.
+    assert.equal(
+      [head, second, third, last].map((page) => (page.ok ? page.value.text : '')).join(''),
+      'aé漢b',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an offset past the end or inside a character refuses repository-read-failed by name; the end itself answers an empty last page', async () => {
+  const root = await tempDir('repository');
+  try {
+    await writeFile(join(root, 'mixed.md'), 'aé', 'utf8');
+    const inside = await readRepositoryFile(root, 'mixed.md', 10, [], 2);
+    assert.ok(!inside.ok);
+    assert.equal(inside.refusal.reason, 'repository-read-failed');
+    assert.match(inside.refusal.detail, /inside a character/);
+
+    const past = await readRepositoryFile(root, 'mixed.md', 10, [], 9);
+    assert.ok(!past.ok);
+    assert.equal(past.refusal.reason, 'repository-read-failed');
+    assert.match(past.refusal.detail, /past the end of the file \(3 bytes\)/);
+
+    // control: the end itself is a valid offset and answers an empty last page.
+    const atEnd = await readRepositoryFile(root, 'mixed.md', 10, [], 3);
+    assert.ok(atEnd.ok);
+    assert.deepEqual(atEnd.value, { text: '', sizeBytes: 3, truncated: false, nextOffset: null });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the head of a file past the bound is served at offset 0; pages stop at the bound, and an offset past it is refused by name', async () => {
+  const root = await tempDir('repository');
+  try {
+    const size = MAX_REPOSITORY_FILE_BYTES + 100;
+    await writeFile(join(root, 'large.txt'), 'x'.repeat(size), 'utf8');
+
+    const head = await readRepositoryFile(root, 'large.txt');
+    assert.ok(head.ok, 'a file of any size has a head');
+    assert.equal(head.value.text.length, MAX_REPOSITORY_READ_BYTES);
+    assert.deepEqual(
+      [head.value.sizeBytes, head.value.truncated, head.value.nextOffset],
+      [size, true, MAX_REPOSITORY_READ_BYTES],
+    );
+
+    // A page that reaches the bound ends there: no next page, and the bytes past it remain.
+    const atBound = await readRepositoryFile(root, 'large.txt', 1000, [], MAX_REPOSITORY_FILE_BYTES - 10);
+    assert.ok(atBound.ok);
+    assert.deepEqual(
+      [atBound.value.text.length, atBound.value.truncated, atBound.value.nextOffset],
+      [10, true, null],
+    );
+
+    const bound = await readRepositoryFile(root, 'large.txt', 1000, [], MAX_REPOSITORY_FILE_BYTES);
+    assert.ok(bound.ok);
+    assert.deepEqual(bound.value, { text: '', sizeBytes: size, truncated: true, nextOffset: null });
+
+    const past = await readRepositoryFile(root, 'large.txt', 1000, [], MAX_REPOSITORY_FILE_BYTES + 1);
+    assert.ok(!past.ok);
+    assert.equal(past.refusal.reason, 'repository-read-failed');
+    assert.match(past.refusal.detail, new RegExp(`past the ${MAX_REPOSITORY_FILE_BYTES} bytes`));
+
+    // control: a file under the bound pages to its end, and the last page says null there.
+    await writeFile(join(root, 'small.txt'), 'y'.repeat(MAX_REPOSITORY_READ_BYTES + 5), 'utf8');
+    const tail = await readRepositoryFile(
+      root,
+      'small.txt',
+      MAX_REPOSITORY_READ_BYTES,
+      [],
+      MAX_REPOSITORY_READ_BYTES,
+    );
+    assert.ok(tail.ok);
+    assert.deepEqual([tail.value.text, tail.value.truncated, tail.value.nextOffset], ['yyyyy', false, null]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the head of a file whose first byte continues no character is served, decoded as the head read always decoded it', async () => {
+  const root = await tempDir('repository');
+  try {
+    // Text in a single-byte encoding: a curly quote (0x93 in Windows-1252) leads the file.
+    const bytes = Buffer.from([0x93, 0x61, 0x62, 0x63]);
+    await writeFile(join(root, 'quoted.txt'), bytes);
+    const head = await readRepositoryFile(root, 'quoted.txt');
+    assert.ok(head.ok, head.ok ? '' : head.refusal.detail);
+    assert.deepEqual(
+      head.value,
+      { text: bytes.toString('utf8'), sizeBytes: 4, truncated: false, nextOffset: null },
+      'the stray byte decoded as a replacement character, never refused as inside a character',
+    );
+    const workspaceHead = await readWorkspaceFile(root, 'quoted.txt');
+    assert.ok(workspaceHead.ok, workspaceHead.ok ? '' : workspaceHead.refusal.detail);
+    assert.equal(workspaceHead.value.text, bytes.toString('utf8'));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('regression: walking a file that is not UTF-8 by nextOffset never refuses, and the pages cover every byte once', async () => {
+  const root = await tempDir('repository');
+  try {
+    // A lead byte that claims three bytes, then more continuation bytes than any lead claims, a
+    // stray continuation byte after an ASCII one, and a lead byte the file ends inside.
+    const bytes = Buffer.from([0xe9, 0xa9, 0xa9, 0xa9, 0xa9, 0xa9, 0x41, 0xa9, 0x42, 0xc3]);
+    await writeFile(join(root, 'latin.txt'), bytes);
+    for (const maxBytes of [1, 2, 3, 5]) {
+      const ends: number[] = [];
+      let offset: number | null = 0;
+      while (offset !== null) {
+        const page = await readRepositoryFile(root, 'latin.txt', maxBytes, [], offset);
+        assert.ok(page.ok, `maxBytes ${maxBytes}, offset ${offset}: ${page.ok ? '' : page.refusal.detail}`);
+        offset = page.value.nextOffset;
+        ends.push(offset ?? bytes.length);
+        assert.ok(ends.length <= bytes.length, 'the walk does not end');
+      }
+      assert.equal(
+        ends.at(-1),
+        bytes.length,
+        `maxBytes ${maxBytes} stops before the end: ${ends.join(', ')}`,
+      );
+      assert.deepEqual(
+        ends,
+        [...ends].sort((a, b) => a - b),
+        `maxBytes ${maxBytes} moves backwards: ${ends.join(', ')}`,
+      );
+
+      // The workspace read walks the same file the same way.
+      const workspaceEnds: number[] = [];
+      let at: number | null = 0;
+      while (at !== null) {
+        const page = await readWorkspaceFile(root, 'latin.txt', at, maxBytes);
+        assert.ok(
+          page.ok,
+          `workspace maxBytes ${maxBytes}, offset ${at}: ${page.ok ? '' : page.refusal.detail}`,
+        );
+        at = page.value.nextOffset;
+        workspaceEnds.push(at ?? bytes.length);
+      }
+      assert.deepEqual(workspaceEnds, ends);
+    }
+
+    // control: a start a lead byte claims is still inside a character, and refused.
+    const inside = await readRepositoryFile(root, 'latin.txt', 3, [], 1);
+    assert.ok(!inside.ok);
+    assert.match(inside.refusal.detail, /inside a character/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the transcript folders: a path at or beneath one refuses transcripts-not-served whatever the root, read and list, and a listing leaves the folder out', async () => {
+  const home = await tempDir('agent-home');
+  try {
+    const projects = join(home, 'projects');
+    await mkdir(join(projects, 'C--work-repo'), { recursive: true });
+    await writeFile(join(projects, 'C--work-repo', 'session-1.jsonl'), '{"type":"user"}\n', 'utf8');
+    await writeFile(join(home, 'settings.json'), '{}\n', 'utf8');
+    const fence = [projects];
+
+    const read = await readRepositoryFile(
+      home,
+      'projects/C--work-repo/session-1.jsonl',
+      undefined,
+      [],
+      0,
+      fence,
+    );
+    assert.ok(!read.ok);
+    assert.equal(read.refusal.reason, 'transcripts-not-served');
+    assert.match(read.refusal.detail, /transcript files/);
+
+    const listed = await listRepositoryDirectory(home, 'projects/C--work-repo', undefined, [], fence);
+    assert.ok(!listed.ok);
+    assert.equal(listed.refusal.reason, 'transcripts-not-served');
+
+    // The folder spelled in another case is the same folder on a filesystem that folds case.
+    const upper = await readRepositoryFile(home, 'projects/C--work-repo/session-1.jsonl', undefined, [], 0, [
+      normalizePath(projects).toUpperCase(),
+    ]);
+    assert.ok(!upper.ok);
+    assert.equal(upper.refusal.reason, 'transcripts-not-served');
+
+    const top = await listRepositoryDirectory(home, '', undefined, [], fence);
+    assert.ok(top.ok);
+    assert.deepEqual(
+      top.value.entries.map((entry) => entry.name),
+      ['settings.json'],
+      'the agent home is listed, without its transcript folder',
+    );
+
+    const workspace = await readWorkspaceFile(
+      home,
+      'projects/C--work-repo/session-1.jsonl',
+      0,
+      100,
+      [],
+      fence,
+    );
+    assert.ok(!workspace.ok);
+    assert.equal(workspace.refusal.reason, 'transcripts-not-served');
+
+    // Control: without the fence the same reads are served, and beside it nothing changes.
+    const unfenced = await readRepositoryFile(home, 'projects/C--work-repo/session-1.jsonl');
+    assert.ok(unfenced.ok);
+    const beside = await readRepositoryFile(home, 'settings.json', undefined, [], 0, fence);
+    assert.ok(beside.ok);
+    assert.equal(beside.value.text, '{}\n');
+    const neighbour = await listRepositoryDirectory(home, '', undefined, [], [`${projects}-old`]);
+    assert.ok(neighbour.ok);
+    assert.ok(
+      neighbour.value.entries.some((entry) => entry.name === 'projects'),
+      'a segment-wise neighbour fences nothing',
+    );
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('the transcript folders are checked on the real path too: a link into one is refused by name', async () => {
+  const home = await tempDir('agent-home');
+  try {
+    const projects = join(home, 'projects');
+    await mkdir(join(projects, 'C--work-repo'), { recursive: true });
+    await writeFile(join(projects, 'C--work-repo', 'session-1.jsonl'), '{"type":"user"}\n', 'utf8');
+    // A link inside a home used as a root, whose lexical resolution is innocent and whose real path is
+    // the transcript folder.
+    const inside = join(home, 'linked');
+    try {
+      await symlink(projects, inside, 'junction');
+    } catch {
+      // A filesystem that refuses link creation cannot host the attack either.
+      return;
+    }
+    const through = await readRepositoryFile(home, 'linked/C--work-repo/session-1.jsonl', undefined, [], 0, [
+      projects,
+    ]);
+    assert.ok(!through.ok);
+    assert.equal(through.refusal.reason, 'transcripts-not-served');
+
+    // The folder spelled through the link names the same folder.
+    const spelled = await readRepositoryFile(
+      home,
+      'projects/C--work-repo/session-1.jsonl',
+      undefined,
+      [],
+      0,
+      [inside],
+    );
+    assert.ok(!spelled.ok);
+    assert.equal(spelled.refusal.reason, 'transcripts-not-served');
+  } finally {
+    await rm(home, { recursive: true, force: true });
   }
 });
 
