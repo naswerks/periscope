@@ -907,8 +907,9 @@ export interface PeriscopeHostOptions {
    */
   readonly bulk?: BulkResolver;
   /**
-   * Ignored: this host does not look for, read or keep the agent's transcripts, so it has no root to
-   * read them under. A `transcript_list` or `transcript_tail` is answered `transcripts-not-served`.
+   * Never read: this host does not look for, read or keep the agent's transcripts, and a
+   * `transcript_list` or `transcript_tail` is answered `transcripts-not-served`. A root given here is
+   * fenced instead: it joins `transcriptPaths`, so the read doors and the bulk lane refuse it.
    *
    * @deprecated Kept so an embedder that passes it still compiles; it goes at the next major version.
    */
@@ -1271,7 +1272,12 @@ export class PeriscopeHost {
         throw new Error('PeriscopeHostOptions.endpoints: an endpoint name is declared twice');
       }
     }
-    this.#transcriptPaths = options.transcriptPaths ?? agentTranscriptPaths();
+    // An embedder that still names the folder it once had read gets it fenced, whatever else it passes.
+    const named = options.transcriptsRoot?.trim() ?? '';
+    this.#transcriptPaths = [
+      ...(options.transcriptPaths ?? agentTranscriptPaths()),
+      ...(named === '' ? [] : [named]),
+    ];
     this.#configuration = this.#withAgent(options.configuration ?? unsetHostConfiguration());
     this.#pluginDirs = options.pluginDirs ?? [];
     this.#overriddenByEnvironment = options.overriddenByEnvironment ?? [];

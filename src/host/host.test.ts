@@ -2981,6 +2981,44 @@ test('before any handshake the answer states nextOffset; the shaping reads the v
   assert.deepEqual(pagedAtLinkVersion(page, 17), { text: 'x', sizeBytes: 2, truncated: true });
 });
 
+test('the deprecated transcriptsRoot an embedder still passes is fenced: the read doors refuse it, beside the folders it composed', async () => {
+  const root = await tempDir('repository-read');
+  try {
+    await mkdir(join(root, 'old-transcripts', 'C--work-repo'), { recursive: true });
+    await writeFile(
+      join(root, 'old-transcripts', 'C--work-repo', 'session-1.jsonl'),
+      '{"type":"user"}\n',
+      'utf8',
+    );
+    await writeFile(join(root, 'README.md'), 'read me\n', 'utf8');
+    const fenced = hostOver({
+      workspaces: providerRootedAt(root),
+      transcriptPaths: [],
+      transcriptsRoot: join(root, 'old-transcripts'),
+    });
+    fenced.link.deliver(
+      'discovery-channel',
+      repositoryRead('rr-old', 'old-transcripts/C--work-repo/session-1.jsonl'),
+    );
+    fenced.link.deliver('discovery-channel', repositoryRead('rr-readme', 'README.md'));
+    await answeredTimes(fenced.link, 'repository_read_result', 2, 'the two reads');
+    const reads = new Map(repositoryReads(fenced.link).map((read) => [read.requestId, read]));
+    assert.equal(reads.get('rr-old')?.refusal?.reason, 'transcripts-not-served');
+    assert.equal(reads.get('rr-readme')?.text, 'read me\n');
+
+    // control: without the option the same folder is an ordinary directory under the root.
+    const plain = hostOver({ workspaces: providerRootedAt(root), transcriptPaths: [] });
+    plain.link.deliver(
+      'discovery-channel',
+      repositoryRead('rr-old', 'old-transcripts/C--work-repo/session-1.jsonl'),
+    );
+    await answered(plain.link, 'repository_read_result', 'the unfenced read');
+    assert.equal(repositoryReads(plain.link)[0]?.refusal, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a host with no repository root answers repository-path-escape to both asks: nothing to read under', async () => {
   const { link } = hostOver();
   link.deliver('discovery-channel', repositoryList('rl-3', ''));
