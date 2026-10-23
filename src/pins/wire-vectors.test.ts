@@ -1511,14 +1511,17 @@ const AUTHORED = {
         repositoryReadResult('request-10', { text: '# The brief\n', sizeBytes: 20480, truncated: true }),
       ),
     },
+    // A walk of one 70656-byte file at the default maxBytes, as a host answers it: the head ends at
+    // 49152 (`.page`), the paged ask continues there (`repository_read.paged`) and its answer is the
+    // last page (`.last`).
     {
       name: 'repository_read_result.page',
       frame: session(
-        repositoryReadResult('request-12', {
+        repositoryReadResult('request-13', {
           text: '## Platform state\n',
           sizeBytes: 70656,
           truncated: true,
-          nextOffset: 65536,
+          nextOffset: 49152,
         }),
       ),
     },
@@ -1536,8 +1539,9 @@ const AUTHORED = {
     {
       name: 'repository_read_result.refused-past-end',
       frame: session(
+        // An ask at 98304 on the same file.
         repositoryReadResult(
-          'request-12',
+          'request-15',
           { text: null, sizeBytes: 0, truncated: false, nextOffset: null },
           {
             reason: 'repository-read-failed',
@@ -1549,8 +1553,9 @@ const AUTHORED = {
     {
       name: 'repository_read_result.refused-past-ceiling',
       frame: session(
+        // An ask at 589824 on a 614400-byte file: inside the file, past the bound.
         repositoryReadResult(
-          'request-12',
+          'request-14',
           { text: null, sizeBytes: 0, truncated: false, nextOffset: null },
           {
             reason: 'repository-read-failed',
@@ -2112,7 +2117,7 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
     name: 'refused.repository-read-result-next-offset-zero',
     wire: sessionWire({
       kind: 'repository_read_result',
-      requestId: 'request-12',
+      requestId: 'request-13',
       text: '## Platform state\n',
       sizeBytes: 70656,
       truncated: true,

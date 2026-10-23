@@ -6,5 +6,5 @@
   "frame": null,
   "name": "refused.repository-read-result-next-offset-zero",
   "protocolVersion": 18,
-  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"repository_read_result\",\"requestId\":\"request-12\",\"text\":\"## Platform state\\n\",\"sizeBytes\":70656,\"truncated\":true,\"nextOffset\":0,\"refusal\":null}}"
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"repository_read_result\",\"requestId\":\"request-13\",\"text\":\"## Platform state\\n\",\"sizeBytes\":70656,\"truncated\":true,\"nextOffset\":0,\"refusal\":null}}"
 }
