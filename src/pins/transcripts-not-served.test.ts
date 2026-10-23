@@ -16,7 +16,7 @@
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,6 +29,7 @@ import type {
   RepositoryReadResult,
   SessionFrame,
   SessionPayload,
+  WorkspaceReadResult,
 } from '../control/frames.js';
 import {
   TRANSCRIPT_WHAT_PREFIX,
@@ -36,11 +37,13 @@ import {
   repositoryRead,
   transcriptList,
   transcriptTail,
+  workspaceRead,
 } from '../control/frames.js';
 import type { LinkHandlers } from '../control/link.js';
 import { PeriscopeHost } from '../host/host.js';
 import type { HostLink } from '../host/host.js';
 import { runServe } from '../bin/serve.js';
+import { readConfigFile, withConfigFallback } from '../host/config-file.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { fakeAgents, settle } from '../test-support/fake-agent.js';
 import { withTempDir } from '../test-support/temp-dir.js';
@@ -184,17 +187,31 @@ async function plantHome(dir: string): Promise<string> {
   return home;
 }
 
-/** The binary, started over `home` with the merged view's extra keys, on a recording link. */
+/**
+ * The binary, started over `home` with the merged view's extra keys, on a recording link. `file` is
+ * written to the config file and merged under the environment the way the binary's own start merges
+ * it, so a key named there alone reaches `serve` as the file's; `raw` adds to the process environment.
+ */
 async function serveOver(
   dir: string,
   home: string,
   extra: NodeJS.ProcessEnv = {},
+  more: { readonly file?: Readonly<Record<string, string>>; readonly raw?: NodeJS.ProcessEnv } = {},
 ): Promise<{ readonly link: RecordingLink; readonly stop: () => void }> {
   // The host's own credential directory beside the home, not above it: above, it would protect the
   // whole home and hide what the transcript folders refuse.
-  const raw: NodeJS.ProcessEnv = { PERISCOPE_CONFIG_DIR: join(dir, 'config'), HOME: home, USERPROFILE: home };
+  const raw: NodeJS.ProcessEnv = {
+    PERISCOPE_CONFIG_DIR: join(dir, 'config'),
+    HOME: home,
+    USERPROFILE: home,
+    ...more.raw,
+  };
+  await mkdir(join(dir, 'config'), { recursive: true });
+  await writeFile(join(dir, 'config', 'config.json'), JSON.stringify(more.file ?? {}), 'utf8');
+  const reading = readConfigFile(raw);
+  assert.equal(reading.problem, null, reading.problem ?? '');
   const merged: NodeJS.ProcessEnv = {
-    ...raw,
+    ...withConfigFallback(raw, reading.values),
     PERISCOPE_CONTROLLER_URL: 'ws://127.0.0.1:1/link',
     PERISCOPE_DECISION_URL: 'http://127.0.0.1:1/decision',
     PERISCOPE_HOST_ID: 'transcripts-pin',
@@ -346,6 +363,99 @@ test('regression: the read doors refuse the agent transcript files whatever thei
       } finally {
         stop();
       }
+    }
+  }));
+
+test('regression: an agent home the config file alone names has its transcript folder refused by the binary, read and list', () =>
+  withTempDir('transcripts-configured-home', async (dir) => {
+    const home = await plantHome(dir);
+    // The configured home is not the default and the environment does not name it: only the file does.
+    const configured = join(dir, 'agent-home');
+    await mkdir(join(configured, 'projects', 'C--work-repo'), { recursive: true });
+    await writeFile(
+      join(configured, 'projects', 'C--work-repo', 'session-2.jsonl'),
+      '{"type":"user"}\n',
+      'utf8',
+    );
+    await writeFile(join(configured, 'settings.json'), '{"theme":"light"}\n', 'utf8');
+    const { link, stop } = await serveOver(
+      dir,
+      home,
+      { PERISCOPE_WORKSPACE_ROOT: join(dir, 'workspaces'), PERISCOPE_REPOSITORY_ROOT: configured },
+      { file: { PERISCOPE_AGENT_HOME: configured } },
+    );
+    try {
+      assert.equal(link.announced?.agentHome, configured, 'the hello does not report the configured home');
+      link.deliver(
+        'discovery',
+        1,
+        repositoryRead('read-transcript', 'projects/C--work-repo/session-2.jsonl'),
+      );
+      link.deliver('discovery', 2, repositoryList('list-home', ''));
+      link.deliver('discovery', 3, repositoryRead('read-settings', 'settings.json'));
+      const answers = await repositoryAnswers(link, 3);
+      assert.equal(answers.get('read-transcript')?.refusal?.reason, 'transcripts-not-served');
+      const listed = answers.get('list-home');
+      const names =
+        listed?.kind === 'repository_list_result' ? listed.entries.map((entry) => entry.name) : [];
+      assert.deepEqual(names, ['settings.json'], 'the listing names the transcript folder');
+      assert.equal(answers.get('read-settings')?.refusal, null);
+    } finally {
+      stop();
+    }
+  }));
+
+test('regression: a workspace_read through the binary through a link to a transcript folder is refused by name on the real path', () =>
+  withTempDir('transcripts-workspace-link', async (dir) => {
+    const home = await plantHome(dir);
+    // An agent home kept inside a workspace (its CLAUDE_CONFIG_DIR), and a link beside it whose lexical
+    // path is innocent and whose real path is that home's transcript folder.
+    const workspace = join(dir, 'workspaces', 'w1');
+    const agentConfig = join(workspace, 'agent-config');
+    await mkdir(join(agentConfig, 'projects', 'C--work-repo'), { recursive: true });
+    await writeFile(
+      join(agentConfig, 'projects', 'C--work-repo', 'session-3.jsonl'),
+      '{"type":"user"}\n',
+      'utf8',
+    );
+    await writeFile(join(workspace, 'notes.md'), 'notes\n', 'utf8');
+    try {
+      await symlink(join(agentConfig, 'projects'), join(workspace, 'linked'), 'junction');
+    } catch {
+      // A filesystem that refuses link creation cannot host the case either.
+      return;
+    }
+    const { link, stop } = await serveOver(
+      dir,
+      home,
+      { PERISCOPE_WORKSPACE_ROOT: join(dir, 'workspaces') },
+      { raw: { CLAUDE_CONFIG_DIR: agentConfig } },
+    );
+    try {
+      link.deliver('discovery', 1, workspaceRead('read-linked', 'w1', 'linked/C--work-repo/session-3.jsonl'));
+      link.deliver(
+        'discovery',
+        2,
+        workspaceRead('read-direct', 'w1', 'agent-config/projects/C--work-repo/session-3.jsonl'),
+      );
+      link.deliver('discovery', 3, workspaceRead('read-notes', 'w1', 'notes.md'));
+      const answers = (): WorkspaceReadResult[] =>
+        link.sent.flatMap(({ payload }) => (payload.kind === 'workspace_read_result' ? [payload] : []));
+      for (let turn = 0; turn < 500 && answers().length < 3; turn += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const byId = new Map(answers().map((answer) => [answer.requestId, answer]));
+      assert.equal(
+        byId.get('read-linked')?.refusal?.reason,
+        'transcripts-not-served',
+        'the link was followed',
+      );
+      assert.equal(byId.get('read-linked')?.text, null);
+      assert.equal(byId.get('read-direct')?.refusal?.reason, 'transcripts-not-served');
+      // control: the workspace's own file is served.
+      assert.equal(byId.get('read-notes')?.text, 'notes\n');
+    } finally {
+      stop();
     }
   }));
 
