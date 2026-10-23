@@ -19,10 +19,10 @@
  *   4. the protected set: a path at or beneath one of the host's protected paths (the credential
  *      directories the gate keeps from the agent) is refused whatever the root is, on the lexical
  *      resolution and again on the real path;
- *   5. the agent's transcript folders: a path at or beneath one (`agentTranscriptPaths`) is refused
- *      the same way, whatever the root is, and a listing leaves such a folder out.
+ *   5. the agents' session records: a path at or beneath one (`agentTranscriptPaths`) is refused the
+ *      same way, whatever the root is, and a listing leaves it out.
  * A jail violation refuses `repository-path-escape`; a protected path refuses
- * `credential-path-denied`; a transcript folder refuses `transcripts-not-served`. A path that is
+ * `credential-path-denied`; a session record refuses `transcripts-not-served`. A path that is
  * inside the root but is not what was asked for (a file where a directory was asked, nothing at all)
  * refuses `repository-read-failed`; absence is a refusal here, not a value, because the ask named one
  * thing and it is not there.
@@ -163,10 +163,10 @@ function protectedPathRefusal(resolved: string, protectedPaths: readonly string[
 }
 
 /**
- * The agent's transcript folders apply to this door the way the protected set does: a path at or
+ * The agents' session records apply to this door the way the protected set does: a path at or
  * beneath one is refused whatever the root is, on the lexical resolution and again on the real path,
- * so neither a root pointed at the agent's home (or the user's) nor a link into a transcript folder
- * serves the agent's transcript files to a controller.
+ * so neither a root pointed at an agent's home (or the user's) nor a link into a session-record
+ * folder serves an agent's transcript files to a controller.
  */
 function transcriptPathRefusal(resolved: string, transcriptPaths: readonly string[]): Result<null> {
   for (const candidate of transcriptPaths) {
@@ -262,9 +262,9 @@ async function admittedRealPath(
 
 /**
  * List one directory under the root: files and directories by name, sorted, at most `cap` of
- * them. Anything that is neither (a link, a socket) is left out rather than followed, and so is a
- * transcript folder: a listing of the directory that holds one (an agent home) names everything
- * else in it, as before, and not the folder. A protected path inside a listed directory is still
+ * them. Anything that is neither (a link, a socket) is left out rather than followed, and so is an
+ * agent's session record: a listing of the directory that holds one (an agent home) names everything
+ * else in it, as before, and not the record. A protected path inside a listed directory is still
  * named; its contents are what the protected set refuses.
  */
 export async function listRepositoryDirectory(

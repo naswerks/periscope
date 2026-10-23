@@ -585,9 +585,10 @@ over the link and without a further credential:
   at a time (`workspace_read`, by the workspace's key). Each door is jailed to its root and honours
   the host's protected set: a path at or beneath a protected path refuses `credential-path-denied`
   whatever the root is, on the lexical resolution and on the real path.
-- **Not transcripts.** The runner does not look for, read or keep the agent's transcript files
-  (`<agent home>/projects`), and its read doors refuse them whatever their root
-  (`transcripts-not-served`).
+- **Not transcripts.** The runner does not look for, read or keep the agents' transcript files
+  (Claude Code's `<agent home>/projects`; Codex's `sessions`, `archived_sessions`, `history.jsonl`
+  and thread database; Qwen Code's `projects` and `tmp`; pi's `sessions`), and its read doors and
+  bulk lane refuse them whatever their root (`transcripts-not-served`).
 - **Choose the agent's permission mode.** `session_new.request.permissionMode` and
   `session_configure` take the SDK's own vocabulary, `bypassPermissions` included. Under bypass the
   agent's allow and ask rules are off and the `PreToolUse` hook is the only control, so a controller

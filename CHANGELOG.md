@@ -20,24 +20,31 @@ sends decodes unchanged. The shell backstop reads more publish and
 merge shapes: a runner whose controller classifies shell calls itself was already held on them; a
 local-only gate, or one linked to a controller that does not, let them run.
 
-- Changed: the runner no longer looks for, reads or keeps the agent's transcript files
-  (`<agent home>/projects`). `transcript_list` and `transcript_tail` still decode and are answered
+- Changed: the runner no longer looks for, reads or keeps the agents' transcript files. `transcript_list` and `transcript_tail` still decode and are answered
   `transcript_failed` with the new reason `transcripts-not-served`, so an older controller's ask is
   answered by name and its channel keeps its sequence; a `bulk_request` whose `what` names the
   `claude-transcript:` namespace is answered `bulk_failed` with the same reason, before any resolver is
-  asked. The repository and workspace reads refuse a path at or beneath an agent's `projects` folder
+  asked. The repository and workspace reads refuse a path at or beneath an agent's session records
   with the same reason, whatever their root, on the lexical resolution and on the real path, so a
-  root pointed at the agent home or the user's home serves none of them; a listing of the directory
-  that holds one names everything else in it and leaves the folder out. The folders are
-  `agentTranscriptPaths`: `projects` under the CLI's default home, under `CLAUDE_CONFIG_DIR` when set,
-  and under the effective agent home, the homes whose credential files the protected set names. The
-  hello's `configuration.transcriptsRoot` is always null, whatever configuration an embedder composes
-  (a required member inside the window, so it is still sent). The agent home itself is unchanged: its
-  credential files stay in the gate's protected set, and the hello still reports it.
+  root pointed at an agent's home or the user's home serves none of them; a listing of the directory
+  that holds one names everything else in it and leaves the record out. The records are
+  `agentTranscriptPaths`, verified against each pinned release's own source:
+  - Claude Code's `projects` under the CLI's default home, under `CLAUDE_CONFIG_DIR` when set, and under
+    the effective agent home, the homes whose credential files the protected set names;
+  - Codex's `sessions` (the rollouts), `archived_sessions`, `history.jsonl` and
+    `thread_history_1.sqlite`, under `~/.codex`, `CODEX_HOME` when set and the runner's own Codex
+    home, the database also under `CODEX_SQLITE_HOME`;
+  - Qwen Code's `projects` (the chats) and `tmp` (the prompt log and saved chats), under `~/.qwen`,
+    `QWEN_HOME` and `QWEN_RUNTIME_DIR` when set, and the runner's own base's `runtime`;
+  - pi's `sessions` under `~/.pi/agent` and `PI_CODING_AGENT_DIR` when set; the runner's own pi home is
+    in the protected set whole. The
+    hello's `configuration.transcriptsRoot` is always null, whatever configuration an embedder composes
+    (a required member inside the window, so it is still sent). The agent home itself is unchanged: its
+    credential files stay in the gate's protected set, and the hello still reports it.
 - Changed: the bulk lane checks the file a resolver names against both of the read doors' fences
   before it posts it, on the lexical resolution and on the real path: a file at or beneath a protected
-  path answers `bulk_failed` with `credential-path-denied`, and one at or beneath a transcript folder
-  with `transcripts-not-served`, whatever the namespace. The lane is otherwise as it was:
+  path answers `bulk_failed` with `credential-path-denied`, and one at or beneath an agent's session
+  records with `transcripts-not-served`, whatever the namespace. The lane is otherwise as it was:
   `BulkResolver`, `PeriscopeHostOptions.bulk`, `postBulk`, the `bulk-post` capability and the receipts
   behave as before, and an embedder's resolver still delivers through the bulk POST any other file it
   gives meaning to. The binary composes no resolver, so every other `bulk_request` to it answers
@@ -72,9 +79,9 @@ local-only gate, or one linked to a controller that does not, let them run.
   A repository head read asked for fewer bytes than its first character now carries that character
   whole (at most three bytes over `maxBytes`), where it answered empty text, because a page must make
   progress.
-- Added: `agentTranscriptPaths(env, { agentHome })`, beside `credentialPaths`, and
-  `PeriscopeHostOptions.transcriptPaths`, which the read doors refuse; absent, the host computes it from
-  the process environment. `listRepositoryDirectory`, `readRepositoryFile` and `readWorkspaceFile`
+- Added: `agentTranscriptPaths(env, { agentHome, codexHome, qwenHome })`, beside `credentialPaths`,
+  and `PeriscopeHostOptions.transcriptPaths`, which the read doors and the bulk lane refuse; absent,
+  the host computes it from the process environment. `listRepositoryDirectory`, `readRepositoryFile` and `readWorkspaceFile`
   take it as an optional trailing parameter.
 - Fixed: an agent home written over the link (`host_configure`) is pending until the next start, as
   the two controller URLs are: it is written to the config file and named in `pendingRestart` in the

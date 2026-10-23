@@ -815,10 +815,11 @@ export interface PeriscopeHostOptions {
    */
   readonly protectedPaths: readonly string[];
   /**
-   * The agent's transcript folders: the repository and workspace reads refuse a path at or beneath
-   * one `transcripts-not-served`, on the lexical resolution and on the real path, whatever the root,
-   * and a listing leaves such a folder out. `host/paths.ts`'s `agentTranscriptPaths(env)` computes
-   * the set; absent, it is computed from the process environment, so no host serves them by default.
+   * Where the agents keep their session records: the repository and workspace reads, and the bulk
+   * lane's resolved file, refuse a path at or beneath one `transcripts-not-served`, on the lexical
+   * resolution and on the real path, whatever the root, and a listing leaves it out.
+   * `host/paths.ts`'s `agentTranscriptPaths(env, homes)` computes the set; absent, it is computed from
+   * the process environment, so no host serves them by default.
    */
   readonly transcriptPaths?: readonly string[];
   /**
@@ -901,8 +902,8 @@ export interface PeriscopeHostOptions {
    * `bulk-target-invalid`. A locator in the `claude-transcript:` namespace never reaches it: this
    * host answers that one `transcripts-not-served` before any resolver is asked. The file a resolver
    * names meets the read doors' fences before it is posted, on the lexical resolution and on the real
-   * path: one at or beneath a protected path answers `credential-path-denied`, and one at or beneath a
-   * transcript folder (`transcriptPaths`) `transcripts-not-served`.
+   * path: one at or beneath a protected path answers `credential-path-denied`, and one at or beneath an
+   * agent's session records (`transcriptPaths`) `transcripts-not-served`.
    */
   readonly bulk?: BulkResolver;
   /**
@@ -1230,7 +1231,7 @@ export class PeriscopeHost {
   #agent: HostAgent | null | undefined;
   /** The endpoints as the hello lists them, or null when this host was composed with none. */
   readonly #hostEndpoints: readonly HostEndpoint[] | null;
-  /** The agent's transcript folders the read doors refuse, as composed or derived at construction. */
+  /** The agents' session records the doors and the lane refuse, as composed or derived at construction. */
   readonly #transcriptPaths: readonly string[];
   /**
    * The endpoint each live session runs on, by the controller's handle: a session with none is absent.
@@ -2715,7 +2716,7 @@ export class PeriscopeHost {
     if (!filePath.ok) return this.#failDelivery(sessionKey, deliveryId, filePath.refusal);
 
     // The resolver is the embedder's, and its file is not trusted for being named: the protected set
-    // and the transcript folders hold on the lane as on the read doors, lexical and real.
+    // and the agents' session records hold on the lane as on the read doors, lexical and real.
     let fenced: Result<null>;
     try {
       fenced = await fencedFileRefusal(filePath.value, this.#options.protectedPaths, this.#transcriptPaths);

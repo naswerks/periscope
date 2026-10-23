@@ -104,30 +104,70 @@ export function defaultAgentHome(env: NodeJS.ProcessEnv = process.env): string |
 }
 
 /**
- * Where the agent CLI keeps its transcript files: the `projects` folder of every agent home whose
- * credential files `credentialPaths` protects, from the same sources. The CLI's default home under
- * the user's home directory, an explicitly configured `CLAUDE_CONFIG_DIR`, and the effective agent
- * home (passed by the composition root, else `PERISCOPE_AGENT_HOME`).
+ * Where the agents keep their session records: the folders and files on this machine that hold a
+ * conversation, each runtime's in its own layout, under every home of it this host knows.
  *
- * The read doors refuse a path at or beneath one `transcripts-not-served` whatever their root, so a
- * root pointed at a home cannot serve the agent's transcripts. The set is returned, not applied: the
- * embedder hands it to the host beside the protected set.
+ * - Claude Code: `projects` under the CLI's default home (`<user home>/.claude`), under an explicitly
+ *   configured `CLAUDE_CONFIG_DIR`, and under the effective agent home (passed by the composition
+ *   root, else `PERISCOPE_AGENT_HOME`): the homes whose credential files `credentialPaths` protects.
+ * - Codex: `sessions` (the rollouts), `archived_sessions`, `history.jsonl` (every prompt) and
+ *   `thread_history_1.sqlite` (the threads' items), under the operator's own home (`<user home>/.codex`,
+ *   and `CODEX_HOME` when set) and under the home this host runs Codex from (`codexHome`, else
+ *   `PERISCOPE_CODEX_HOME`); the database also under `CODEX_SQLITE_HOME` when set.
+ * - Qwen Code: `projects` (each project's chats and sub-agent records) and `tmp` (each project's
+ *   prompt log and saved chats), under the operator's own home (`<user home>/.qwen`, and `QWEN_HOME`
+ *   when set), under `QWEN_RUNTIME_DIR` when set (where the CLI then keeps them), and under the
+ *   runtime directory of the base this host runs Qwen Code from (`<qwenHome>/runtime`, else
+ *   `PERISCOPE_QWEN_HOME`'s).
+ * - pi: `sessions` under the operator's own agent home (`<user home>/.pi/agent`, and
+ *   `PI_CODING_AGENT_DIR` when set). The home this host runs pi from is in the protected set whole.
+ *
+ * The read doors and the bulk lane refuse a path at or beneath one `transcripts-not-served` whatever
+ * their root, so a root pointed at a home cannot serve an agent's records. The set is returned, not
+ * applied: the embedder hands it to the host beside the protected set.
  */
 export function agentTranscriptPaths(
   env: NodeJS.ProcessEnv = process.env,
-  options: { readonly agentHome?: string | null } = {},
+  options: {
+    readonly agentHome?: string | null;
+    readonly codexHome?: string | null;
+    readonly qwenHome?: string | null;
+  } = {},
 ): string[] {
   const paths: string[] = [];
-  const add = (agentHome: string): void => {
-    const projects = join(agentHome.trim(), 'projects');
-    if (!paths.includes(projects)) paths.push(projects);
+  const add = (path: string): void => {
+    if (!paths.includes(path)) paths.push(path);
+  };
+  const named = (value: string | null | undefined): string | null =>
+    typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+  const under = (base: string | null, ...entries: string[]): void => {
+    if (base !== null) for (const entry of entries) add(join(base, entry));
   };
   const home = homeDirectory(env);
-  if (home !== null) add(join(home, '.claude'));
-  const configured = env['CLAUDE_CONFIG_DIR'];
-  if (typeof configured === 'string' && configured.trim() !== '') add(configured);
-  const agentHome = options.agentHome ?? env['PERISCOPE_AGENT_HOME'] ?? null;
-  if (typeof agentHome === 'string' && agentHome.trim() !== '') add(agentHome);
+
+  // Claude Code: each agent home's `projects`.
+  under(home === null ? null : join(home, '.claude'), 'projects');
+  under(named(env['CLAUDE_CONFIG_DIR']), 'projects');
+  under(named(options.agentHome ?? env['PERISCOPE_AGENT_HOME']), 'projects');
+
+  // Codex: the rollouts, the archived ones, the prompt history and the threads' database.
+  const codexRecords = ['sessions', 'archived_sessions', 'history.jsonl', 'thread_history_1.sqlite'];
+  under(home === null ? null : join(home, '.codex'), ...codexRecords);
+  under(named(env['CODEX_HOME']), ...codexRecords);
+  under(named(options.codexHome ?? env['PERISCOPE_CODEX_HOME']), ...codexRecords);
+  under(named(env['CODEX_SQLITE_HOME']), 'thread_history_1.sqlite');
+
+  // Qwen Code: each project's chats and records, and its prompt log and saved chats.
+  const qwenRecords = ['projects', 'tmp'];
+  under(home === null ? null : join(home, '.qwen'), ...qwenRecords);
+  under(named(env['QWEN_HOME']), ...qwenRecords);
+  under(named(env['QWEN_RUNTIME_DIR']), ...qwenRecords);
+  const qwenBase = named(options.qwenHome ?? env['PERISCOPE_QWEN_HOME']);
+  under(qwenBase === null ? null : join(qwenBase, 'runtime'), ...qwenRecords);
+
+  // pi: the operator's own agent home's sessions.
+  under(home === null ? null : join(home, '.pi', 'agent'), 'sessions');
+  under(named(env['PI_CODING_AGENT_DIR']), 'sessions');
   return paths;
 }
 

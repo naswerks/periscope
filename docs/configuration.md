@@ -140,7 +140,8 @@ choose what runs as a session, and whose sign-in it runs under; and the Qwen Cod
 `PERISCOPE_PI_HOME`), for the same reason. A controller can also list one directory or read one
 text file under the repository root (`repository_list` / `repository_read`: the head of any file,
 and its first 512 KiB a page at a time), jailed to that root, to the protected set and away from the
-agent's projects folders, bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
+agents' session records (Claude Code's `projects`, Codex's rollouts and history, Qwen Code's `projects`
+and `tmp`, pi's `sessions`, under every home of each the host knows), bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
 a time, by the workspace's key (`workspace_read`), under the same jail and protected set. [The wire
 protocol](protocol.md) states the three doors.
 

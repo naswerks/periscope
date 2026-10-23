@@ -366,6 +366,60 @@ test('regression: the read doors refuse the agent transcript files whatever thei
     }
   }));
 
+test("regression: the other runtimes' session records under the operator's home are refused by the binary, read and list, and what sits beside them is served", () =>
+  withTempDir('transcripts-other-runtimes', async (dir) => {
+    const home = await plantHome(dir);
+    const plant = async (path: string, text: string): Promise<void> => {
+      await mkdir(join(home, path, '..'), { recursive: true });
+      await writeFile(join(home, path), text, 'utf8');
+    };
+    const records = [
+      '.codex/sessions/2026/10/22/rollout-2026-10-22T09-00-00-thread-1.jsonl',
+      '.codex/archived_sessions/rollout-2026-10-21T09-00-00-thread-0.jsonl',
+      '.codex/history.jsonl',
+      '.qwen/projects/c--work-repo/chats/session-1.jsonl',
+      '.qwen/tmp/0123abcd/logs.json',
+      '.pi/agent/sessions/session-1.jsonl',
+    ];
+    for (const record of records) await plant(record, '{"type":"user"}\n');
+    const beside = ['.codex/config.toml', '.qwen/QWEN.md', '.pi/agent/settings.json'];
+    for (const file of beside) await plant(file, 'beside\n');
+
+    const { link, stop } = await serveOver(dir, home, {
+      PERISCOPE_WORKSPACE_ROOT: join(dir, 'workspaces'),
+      PERISCOPE_REPOSITORY_ROOT: home,
+    });
+    try {
+      let seq = 0;
+      for (const record of records)
+        link.deliver('discovery', (seq += 1), repositoryRead(`read ${record}`, record));
+      for (const file of beside) link.deliver('discovery', (seq += 1), repositoryRead(`read ${file}`, file));
+      for (const folder of ['.codex', '.qwen', '.pi/agent']) {
+        link.deliver('discovery', (seq += 1), repositoryList(`list ${folder}`, folder));
+      }
+      const answers = await repositoryAnswers(link, seq);
+      for (const record of records) {
+        assert.equal(
+          answers.get(`read ${record}`)?.refusal?.reason,
+          'transcripts-not-served',
+          `${record} was read`,
+        );
+      }
+      for (const file of beside) {
+        assert.equal(answers.get(`read ${file}`)?.refusal, null, `${file}, beside the records, was refused`);
+      }
+      const names = (folder: string): string[] => {
+        const listed = answers.get(`list ${folder}`);
+        return listed?.kind === 'repository_list_result' ? listed.entries.map((entry) => entry.name) : [];
+      };
+      assert.deepEqual(names('.codex'), ['config.toml'], 'the Codex home lists its records');
+      assert.deepEqual(names('.qwen'), ['QWEN.md'], 'the Qwen Code home lists its records');
+      assert.deepEqual(names('.pi/agent'), ['settings.json'], 'the pi agent home lists its records');
+    } finally {
+      stop();
+    }
+  }));
+
 test('regression: an agent home the config file alone names has its transcript folder refused by the binary, read and list', () =>
   withTempDir('transcripts-configured-home', async (dir) => {
     const home = await plantHome(dir);

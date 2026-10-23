@@ -83,7 +83,7 @@ host: const LOOPBACK_HOST: "127.0.0.1"
 host: const MODEL_ALIAS_TIERS: readonly ["opus", "sonnet", "haiku", "fable"]
 host: const TRANSCRIPT_PAGE_SIZE: 100
 host: const TRANSCRIPT_WHAT_PREFIX: "claude-transcript:"
-host: function agentTranscriptPaths(env?: NodeJS.ProcessEnv, options?: { readonly agentHome?: string | null; }): string[]
+host: function agentTranscriptPaths(env?: NodeJS.ProcessEnv, options?: { readonly agentHome?: string | null; readonly codexHome?: string | null; readonly qwenHome?: string | null; }): string[]
 host: function asSessionStore(store: TranscriptStore): SessionStore
 host: function claudeProjectsRoot(env?: NodeJS.ProcessEnv): string | null
 host: function claudeTranscriptResolver(root: string): (what: string, sessionKey: string) => Result<string>
@@ -344,7 +344,7 @@ index: function agentItemUpdate(runtime: string, item: AgentItem, observedAt?: s
 index: function agentMessageDelta(message: JsonObject, observedAt?: string | null, runtime?: string | null): SessionDelta
 index: function agentMessageUpdate(message: JsonObject, observedAt?: string | null, runtime?: string | null): SessionUpdate
 index: function agentSkillsFor(runtimes: readonly string[]): HostAgentSkills[]
-index: function agentTranscriptPaths(env?: NodeJS.ProcessEnv, options?: { readonly agentHome?: string | null; }): string[]
+index: function agentTranscriptPaths(env?: NodeJS.ProcessEnv, options?: { readonly agentHome?: string | null; readonly codexHome?: string | null; readonly qwenHome?: string | null; }): string[]
 index: function asSessionStore(store: TranscriptStore): SessionStore
 index: function authorizationValue(tokens: TokenSet): string
 index: function baselineAnchor(entries: readonly TranscriptEntry[]): string | null

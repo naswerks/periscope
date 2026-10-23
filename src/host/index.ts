@@ -57,7 +57,7 @@ export {
 
 // The two impure inputs the host's own gate takes at construction, plus the derived location of
 // this host's own credential material — `credentialPaths` covers it BECAUSE both come from here —
-// and the agent's transcript folders, which the read doors refuse.
+// and where the agents keep their session records, which the read doors and the bulk lane refuse.
 export {
   agentTranscriptPaths,
   credentialPaths,

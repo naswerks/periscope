@@ -761,9 +761,13 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       ...(config.qwen === null ? {} : { qwenHome: config.qwen.home }),
       ...(config.pi === null ? {} : { piHome: config.pi.home }),
     }),
-    // The agent's transcript folders, from the same sources and the same agent home as the set above:
-    // the read doors refuse them whatever their root.
-    transcriptPaths: agentTranscriptPaths(raw, { agentHome }),
+    // Where the agents keep their session records, from the same sources and the same homes as the set
+    // above: the read doors and the bulk lane refuse them whatever their root.
+    transcriptPaths: agentTranscriptPaths(raw, {
+      agentHome,
+      ...(config.codex === null ? {} : { codexHome: config.codex.home }),
+      ...(config.qwen === null ? {} : { qwenHome: config.qwen.home }),
+    }),
     // The home the shell check expands `~` and `$HOME` to, from the same environment as the set above.
     home: homeDirectory(raw),
     // No transcript reader and no bulk resolver: this host does not look for, read or keep the

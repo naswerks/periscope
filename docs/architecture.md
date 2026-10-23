@@ -398,10 +398,11 @@ write. Read-only is a property: the module's whole filesystem surface is `create
 `readdir`, `stat` and `realpath`, held by `pins/read-door-readonly.test.ts`. Two fences hold
 whatever the root is, on the lexical resolution and again on the real path: the protected set
 (`credentialPaths`, the files the gate keeps from the agent) refuses `credential-path-denied`, and the
-agent's projects folders (`agentTranscriptPaths`: `projects` under every agent home the protected set
-names) refuse `transcripts-not-served`, so a root pointed at the agent home or the user's home reads
-neither. A listing of a directory that holds a projects folder names everything else and leaves the
-folder out; a protected file in a listed directory is still named, and refused when read. The bulk
+agents' session records (`agentTranscriptPaths`: Claude Code's `projects` under every agent home the
+protected set names; Codex's rollouts, prompt history and thread database; Qwen Code's `projects` and
+`tmp`; pi's `sessions`; under the operator's homes and the ones the runner runs each runtime from)
+refuse `transcripts-not-served`, so a root pointed at an agent's home or the user's home reads
+neither. A listing of a directory that holds one names everything else and leaves it out; a protected file in a listed directory is still named, and refused when read. The bulk
 lane applies the same two fences, through the same helpers, to the file an embedder's resolver names
 before it posts it. The asks the wire retired are answered by name ([protocol.md](protocol.md)).
 
