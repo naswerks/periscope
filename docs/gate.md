@@ -120,10 +120,13 @@ every occurrence of a repeated option counts (`--status active --status complete
 the last), an option's value is its value (`git branch --sort -committerdate` sorts, and a deletion
 cluster is made of `git branch`'s own short options), and `az`'s `--description` runs to the next word
 that starts with `-` and holds no space once its quotes are removed (`--description "- fixed it"` is
-prose). The git verb allow-list reads git at a command position, behind a launcher, as a dashed binary,
-through a shim and as a command word the line names, and nowhere else: inside another program's words
-only the boundary rules read it, because the allow-list there would refuse `rg git src` for naming git
-(what flows for that is listed under What is deliberately not covered, below). A raw REST call that
+prose). The git verb allow-list reads git where git is a command position's first word (the line's
+start, after a separator, or after `do`, `then`, `else` or `elif`), behind a launcher, as a dashed
+binary, through a shim and as a command word the line names, and nowhere else: behind an assignment,
+`!`, `if`, `while` or `until`, git is another word of that command, and there and inside another
+program's words only the boundary rules read it, because the allow-list there would refuse
+`rg git src` for naming git (what flows for that is listed under What is deliberately not covered,
+below). A raw REST call that
 merges (`gh api`, `az rest`) is not parsed. Such a shape is classified locally and
 then escalated like any other call, because a controller may hold it for a person to answer; refusing
 it in-process would make that answer impossible to give. With the controller unreachable it refuses at
@@ -164,15 +167,21 @@ the decision deadline.
   the classifier sees a parsed shape, never text. An interpreter payload (`bash -c "..."`) is
   scanned as the nested command it is, with the interpreter's own delimiter closing it, so a nested
   quote of the other kind and a `#` inside the payload are the nested command's own syntax. A POSIX
-  command with an escaped blank is read twice, split and joined as bash joins it
-  (`C:/Program\ Files/…` one path), and in the joined reading a `#` after an escaped blank is
-  mid-word, so `echo a\ # ; git push origin main` reads the push; a backslash before a quote is not
-  read as an escape, the reading that scans more. A POSIX command is read once more with each
-  `$( … )`, `${ … }` and backtick kept inside its word, in order, for the command words an expansion
-  supplies whose program the line names. The classifier refuses when any reading refuses.
-  `src/gate/shell.property.test.ts` holds totality, determinism and monotone refusal under quoting and
-  composition, and `scripts/classifier-diff.mjs` measures a change to the classifier: it classifies one
-  corpus with two builds, prints every answer that moved, and names the controls that must not move.
+  command is also read as bash reads its escapes and quotes, beside the split reading, when that changes
+  its words: an escaped blank joins its word (`C:/Program\ Files/…` one path) and a `#` after one is
+  mid-word, so `echo a\ # ; git push origin main` reads the push; inside a double-quoted span a
+  backslash escapes `"`, `\`, `$` and a backtick, so `echo "a \" # " ; git push origin main` reads it
+  too; and each command word is read after quote removal, so `g''it`, `"g"it` and `g\it` are git.
+  Outside a quote a backslash before a quote is not read as an escape (`echo \" ; …` keeps the quote),
+  and the split reading keeps a backslash as a path separator (`C:\Git\bin\git.exe` is git there), the
+  readings that scan more. A POSIX command is read once more with each `$( … )`, `${ … }` and backtick
+  kept inside its word, in order, for the command words an expansion supplies whose program the line
+  names; in that reading the word a redirection names is a file (`G=git; echo hi > $G` runs `echo`),
+  and `do`, `then`, `else` and `elif` open a command only as a command's first word. The classifier
+  refuses when any reading refuses. `src/gate/shell.property.test.ts` holds totality, determinism and
+  monotone refusal under quoting and composition, and `scripts/classifier-diff.mjs` measures a change
+  to the classifier: it classifies one corpus with two builds, prints every answer that moved, and
+  checks named controls that must flow and must refuse. Nothing runs it but a person.
 
 ## The five outcomes that must never blur
 
@@ -489,8 +498,25 @@ opens at `intercepted-with-residual`.
   - a backslash before a newline, which a POSIX shell removes with the newline: `echo a\` with
     `# ; git push origin main` on the next line is one line to bash, which runs the push, while the
     comment stripper ends the command at the `#`.
-  - a quoted option to git (`git reset "--hard"`, `git branch "-d" topic`), which git reads as the
-    option and the rules read as a word.
+  - a command word the line names through more than a name: a substitution whose last word is not the
+    name (`$(echo git -C .) push origin main`, `$(echo git --no-pager) push origin main`,
+    `$(echo git -c x=y) push origin main`); a value holding more than a name
+    (`G="git push"; $G origin main`, `G="git -C ."; $G push origin main`); an assignment a shell
+    inherits (`G=git bash -c '$G push origin main'`, `env G=git bash -c '$G push origin main'`,
+    `bash -c "G=git; \$G push origin main"`); and a value set another way (`${X:-git} push origin main`,
+    `G=gi; G+=t; $G push origin main`, `export G=git PATH; $G push origin main`,
+    `printf -v G git; $G push origin main`).
+  - a named command word behind `if`, `while` or `until` (`G=git; if $G push origin main; then :; fi`,
+    `G=git; while $G push origin main; do :; done`).
+  - git's plumbing publish behind an assignment or a keyword, where only the boundary rules read it
+    (`FOO=1 git send-pack origin main`, `! git send-pack origin main`,
+    `if git send-pack origin main; then :; fi`); the same shapes with `git push` refuse as `git-push`.
+  - a quoted option or subcommand (`git reset "--hard"`, `git branch "-d" topic`, `gh pr "merge" 5`,
+    `gh "pr" merge 5`), which the program reads as the option and the rules read as a word.
+  - a ruled program's name as a launcher option's value, which takes the place of the command the
+    launcher runs (`env -u gh git send-pack origin main`, `sudo -u az git send-pack origin main`).
+  - the Azure CLI run as a Python module (`python -m azure.cli repos pr update --id 5 --status completed`),
+    beside the raw REST call above.
 
 ## Where things live
 
