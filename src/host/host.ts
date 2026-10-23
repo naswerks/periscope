@@ -163,7 +163,12 @@ import { readWhere } from './git-facts.js';
 import { normalizePath } from '../core/paths.js';
 import { mergeHooks, modelSwitchHooks, observationHooks } from './hooks.js';
 import { createToolServer } from './mcp-server.js';
-import { listRepositoryDirectory, readRepositoryFile, readWorkspaceFile } from './repository-read.js';
+import {
+  fencedFileRefusal,
+  listRepositoryDirectory,
+  readRepositoryFile,
+  readWorkspaceFile,
+} from './repository-read.js';
 import { agentTranscriptPaths, homeDirectory, nodePathResolver } from './paths.js';
 import {
   QWEN_MODE_MAP,
@@ -888,7 +893,10 @@ export interface PeriscopeHostOptions {
    * Turns a `bulk_request`'s locator into the file this host POSTs: the namespaces a controller may
    * ask for are the ones the embedder's resolver gives meaning. Absent, every `bulk_request` answers
    * `bulk-target-invalid`. A locator in the `claude-transcript:` namespace never reaches it: this
-   * host answers that one `transcripts-not-served` before any resolver is asked.
+   * host answers that one `transcripts-not-served` before any resolver is asked. The file a resolver
+   * names meets the read doors' fences before it is posted, on the lexical resolution and on the real
+   * path: one at or beneath a protected path answers `credential-path-denied`, and one at or beneath a
+   * transcript folder (`transcriptPaths`) `transcripts-not-served`.
    */
   readonly bulk?: BulkResolver;
   /**
@@ -2683,7 +2691,8 @@ export class PeriscopeHost {
     fromOffset: number,
   ): Promise<void> {
     // The agent's transcripts are not served, whatever resolver this host was composed with: the
-    // namespace is answered by name before any resolver is asked.
+    // namespace is answered by name before any resolver is asked, and the file a resolver names for
+    // any other namespace meets the read doors' two fences below.
     if (what.startsWith(TRANSCRIPT_WHAT_PREFIX)) {
       return this.#failDelivery(sessionKey, deliveryId, transcriptsNotServed());
     }
@@ -2698,6 +2707,16 @@ export class PeriscopeHost {
 
     const filePath = resolve(what, sessionKey);
     if (!filePath.ok) return this.#failDelivery(sessionKey, deliveryId, filePath.refusal);
+
+    // The resolver is the embedder's, and its file is not trusted for being named: the protected set
+    // and the transcript folders hold on the lane as on the read doors, lexical and real.
+    let fenced: Result<null>;
+    try {
+      fenced = await fencedFileRefusal(filePath.value, this.#options.protectedPaths, this.#transcriptPaths);
+    } catch (error) {
+      fenced = refuse('bulk-delivery-failed', describe(error));
+    }
+    if (!fenced.ok) return this.#failDelivery(sessionKey, deliveryId, fenced.refusal);
 
     // The one origin this host will POST to, derived from the link it already dials. Resolved per
     // delivery rather than cached so a reconfigured controller URL cannot leave a stale trusted

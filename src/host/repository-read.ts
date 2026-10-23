@@ -197,6 +197,50 @@ async function realPathsOf(paths: readonly string[]): Promise<string[]> {
   );
 }
 
+/** The two fences on one spelling of a path: the protected set first, then the transcript folders. */
+function fencesRefusal(
+  path: string,
+  protectedPaths: readonly string[],
+  transcriptPaths: readonly string[],
+): Result<null> {
+  const credential = protectedPathRefusal(path, protectedPaths);
+  if (!credential.ok) return credential;
+  return transcriptPathRefusal(path, transcriptPaths);
+}
+
+/** The real path is compared against each fence's real paths, not its spellings. */
+async function realFencesRefusal(
+  real: string,
+  protectedPaths: readonly string[],
+  transcriptPaths: readonly string[],
+): Promise<Result<null>> {
+  return fencesRefusal(real, await realPathsOf(protectedPaths), await realPathsOf(transcriptPaths));
+}
+
+/**
+ * The two fences on a file that is about to leave for a controller by another door than these: the
+ * bulk lane runs it on the file its resolver names, so whatever the namespace, the lane posts neither
+ * credential material (`credential-path-denied`) nor the agent's transcript files
+ * (`transcripts-not-served`). Checked on the lexical resolution and again on the real path, as the
+ * read doors check. A path with nothing at it passes the real check: the delivery then fails by name
+ * when it reads the file.
+ */
+export async function fencedFileRefusal(
+  path: string,
+  protectedPaths: readonly string[],
+  transcriptPaths: readonly string[],
+): Promise<Result<null>> {
+  const lexical = fencesRefusal(normalizePath(nodePathResolver(path)), protectedPaths, transcriptPaths);
+  if (!lexical.ok) return lexical;
+  let real: string;
+  try {
+    real = normalizePath(await realpath(path));
+  } catch {
+    return ok(null);
+  }
+  return realFencesRefusal(real, protectedPaths, transcriptPaths);
+}
+
 /** The jail, the protected set and the transcript folders together; the real path of the target on success. */
 async function admittedRealPath(
   root: string,
@@ -207,17 +251,12 @@ async function admittedRealPath(
 ): Promise<Result<string>> {
   const resolved = resolveUnder(root, relative, door);
   if (!resolved.ok) return resolved;
-  const lexical = protectedPathRefusal(resolved.value, protectedPaths);
+  const lexical = fencesRefusal(resolved.value, protectedPaths, transcriptPaths);
   if (!lexical.ok) return lexical;
-  const lexicalTranscripts = transcriptPathRefusal(resolved.value, transcriptPaths);
-  if (!lexicalTranscripts.ok) return lexicalTranscripts;
   const real = await containedRealPath(root, resolved.value, door);
   if (!real.ok) return real;
-  // The real path is compared against each fence's real paths, not its spellings.
-  const physical = protectedPathRefusal(real.value, await realPathsOf(protectedPaths));
+  const physical = await realFencesRefusal(real.value, protectedPaths, transcriptPaths);
   if (!physical.ok) return physical;
-  const physicalTranscripts = transcriptPathRefusal(real.value, await realPathsOf(transcriptPaths));
-  if (!physicalTranscripts.ok) return physicalTranscripts;
   return real;
 }
 

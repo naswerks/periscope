@@ -34,11 +34,14 @@ local-only gate, or one linked to a controller that does not, let them run.
   hello's `configuration.transcriptsRoot` is always null, whatever configuration an embedder composes
   (a required member inside the window, so it is still sent). The agent home itself is unchanged: its
   credential files stay in the gate's protected set, and the hello still reports it.
-- Changed: the bulk lane is otherwise as it was. `BulkResolver`, `PeriscopeHostOptions.bulk`,
-  `postBulk`, the `bulk-post` capability and the receipts behave as before, and an embedder's resolver
-  still delivers through the bulk POST for any namespace it gives meaning to. The binary composes no
-  resolver, so every other `bulk_request` to it answers `bulk-target-invalid`, as a host with no
-  resolver always has.
+- Changed: the bulk lane checks the file a resolver names against both of the read doors' fences
+  before it posts it, on the lexical resolution and on the real path: a file at or beneath a protected
+  path answers `bulk_failed` with `credential-path-denied`, and one at or beneath a transcript folder
+  with `transcripts-not-served`, whatever the namespace. The lane is otherwise as it was:
+  `BulkResolver`, `PeriscopeHostOptions.bulk`, `postBulk`, the `bulk-post` capability and the receipts
+  behave as before, and an embedder's resolver still delivers through the bulk POST any other file it
+  gives meaning to. The binary composes no resolver, so every other `bulk_request` to it answers
+  `bulk-target-invalid`, as a host with no resolver always has.
 - Deprecated: `TRANSCRIPT_PAGE_SIZE`, `TRANSCRIPT_WHAT_PREFIX`, the `transcript_list`,
   `transcript_list_result`, `transcript_tail` and `transcript_tail_result` types and builders, and
   `PeriscopeHostOptions.transcriptsRoot`, which is ignored. `HostConfiguration.transcriptsRoot` is

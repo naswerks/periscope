@@ -12,7 +12,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { fixedClock, fixedTicker } from '../core/time.js';
@@ -597,6 +597,10 @@ function hostOver(
     startTimeoutMs?: number;
     /** The configuration the embedder composed. Absent means every value unset. */
     configuration?: HostConfiguration;
+    /** The protected set. Absent means none. */
+    protectedPaths?: readonly string[];
+    /** The transcript folders the doors refuse. Absent means the host derives them from the process. */
+    transcriptPaths?: readonly string[];
   } = {},
 ): { host: PeriscopeHost; link: FakeLink; processes: FakeAgents } {
   const processes = options.processes ?? fakeAgents();
@@ -605,7 +609,8 @@ function hostOver(
     controllerUrl: options.controllerUrl ?? 'ws://unused',
     hostId: 'test-host',
     decide: allow,
-    protectedPaths: [],
+    protectedPaths: options.protectedPaths ?? [],
+    ...(options.transcriptPaths === undefined ? {} : { transcriptPaths: options.transcriptPaths }),
     registry: registryOver(processes.start, options.startTimeoutMs),
     link: (handlers) => {
       link.handlers = handlers;
@@ -1931,6 +1936,58 @@ test('transcript_list and transcript_tail are answered transcripts-not-served on
       false,
       'nothing about a transcript was served',
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("regression: the file an embedder's resolver names meets the read doors' fences: a transcript folder answers transcripts-not-served and a protected file credential-path-denied, lexical and real", async () => {
+  const root = await tempDir('bulk-fences');
+  try {
+    const projects = join(root, 'home', '.claude', 'projects');
+    await mkdir(join(projects, 'C--work-repo'), { recursive: true });
+    await writeFile(join(projects, 'C--work-repo', 'session-1.jsonl'), '{"type":"user"}\n', 'utf8');
+    await writeFile(join(root, 'home', '.claude', '.credentials.json'), '{}\n', 'utf8');
+    await writeFile(join(root, 'notes.txt'), 'notes\n', 'utf8');
+    let linked = true;
+    try {
+      await symlink(projects, join(root, 'linked'), 'junction');
+    } catch {
+      // A filesystem that refuses link creation cannot host the real-path case.
+      linked = false;
+    }
+    // A resolver that gives meaning to a generic namespace: any path under the root.
+    const { link } = hostOver({
+      bulk: (what) => ok(join(root, what.slice('file:'.length))),
+      protectedPaths: [join(root, 'home', '.claude', '.credentials.json')],
+      transcriptPaths: [projects],
+    });
+    const ask = (deliveryId: string, path: string): void =>
+      link.deliver('handle-1', {
+        kind: 'bulk_request',
+        deliveryId,
+        what: `file:${path}`,
+        fromOffset: 0,
+        postUrl: 'http://c/',
+      });
+    ask('d-transcript', 'home/.claude/projects/C--work-repo/session-1.jsonl');
+    ask('d-credential', 'home/.claude/.credentials.json');
+    if (linked) ask('d-linked', 'linked/C--work-repo/session-1.jsonl');
+    ask('d-notes', 'notes.txt');
+    await answeredTimes(link, 'bulk_failed', linked ? 4 : 3, 'the four receipts');
+
+    const failures = new Map(
+      link.sent.flatMap((entry) =>
+        entry.payload.kind === 'bulk_failed'
+          ? [[entry.payload.deliveryId, entry.payload.refusal.reason]]
+          : [],
+      ),
+    );
+    assert.equal(failures.get('d-transcript'), 'transcripts-not-served');
+    assert.equal(failures.get('d-credential'), 'credential-path-denied');
+    if (linked) assert.equal(failures.get('d-linked'), 'transcripts-not-served', 'a link into the folder');
+    // control: a file beside them passes both fences and meets the next check, the POST's origin.
+    assert.equal(failures.get('d-notes'), 'bulk-target-not-controller');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -953,7 +953,10 @@ byte offset to start from) and `postUrl`. What a locator names is the embedder's
 to the namespaces its controller asks for, and a locator no resolver serves is refused
 `bulk-target-invalid`. The binary composes none, so every `bulk_request` to it is refused. A locator
 in the retired `claude-transcript:` namespace (`TRANSCRIPT_WHAT_PREFIX`) is refused
-`transcripts-not-served` before any resolver is asked.
+`transcripts-not-served` before any resolver is asked. The file a resolver names meets the read
+doors' two fences before it is posted, on the lexical resolution and on the real path: a protected
+path refuses `credential-path-denied`, and a folder of an agent's session records
+(`agentTranscriptPaths`) `transcripts-not-served`.
 
 The POST the host sends:
 

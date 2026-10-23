@@ -401,8 +401,9 @@ whatever the root is, on the lexical resolution and again on the real path: the 
 agent's projects folders (`agentTranscriptPaths`: `projects` under every agent home the protected set
 names) refuse `transcripts-not-served`, so a root pointed at the agent home or the user's home reads
 neither. A listing of a directory that holds a projects folder names everything else and leaves the
-folder out; a protected file in a listed directory is still named, and refused when read. The asks
-the wire retired are answered by name ([protocol.md](protocol.md)).
+folder out; a protected file in a listed directory is still named, and refused when read. The bulk
+lane applies the same two fences, through the same helpers, to the file an embedder's resolver names
+before it posts it. The asks the wire retired are answered by name ([protocol.md](protocol.md)).
 
 It reads the repository under `PERISCOPE_REPOSITORY_ROOT`: `repository_list` (names, sorted,
 capped at `MAX_REPOSITORY_ENTRIES`) and `repository_read` (a page of text capped at
