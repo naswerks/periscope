@@ -80,7 +80,7 @@ import type {
 import { GitWorktreeProvider } from '../workspace/git-worktree.js';
 import { nodeCommandEffects, nodeWorkspaceEffects } from './workspace-fs.js';
 import type { AgentProcess, AgentProcessRequest, HookInput } from './agent-process.js';
-import type { HostReconfigurer, HostEvent, HostLink } from './host.js';
+import type { HostReconfigured, HostReconfigurer, HostEvent, HostLink } from './host.js';
 import { PeriscopeHost, composeSession, pagedAtLinkVersion } from './host.js';
 import type { SessionDegrade } from '../sessions/session.js';
 import { SessionRegistry } from '../sessions/registry.js';
@@ -2669,19 +2669,19 @@ test("regression: the hello's transcriptsRoot is null whatever configuration an 
     transcriptsRoot: '/home/agent/.claude/projects',
     agentHome: '/home/agent/.claude',
   };
-  const { link } = hostOver({
-    configuration: composed,
-    reconfigure: () =>
-      ok({
-        workspaces: undefined,
-        bulk: undefined,
-        linkCapabilities: ['workspace:none'],
-        configuration: { ...composed, branchScheme: 'x/{key}' },
-        pluginDirs: [],
-        overriddenByEnvironment: [],
-        pendingRestart: [],
-      }),
-  });
+  // A seam written against the release before still names the root it rebuilt; it compiles, and is
+  // ignored.
+  const rebuilt: HostReconfigured = {
+    workspaces: undefined,
+    transcriptsRoot: '/home/agent/.claude/projects',
+    bulk: undefined,
+    linkCapabilities: ['workspace:none'],
+    configuration: { ...composed, branchScheme: 'x/{key}' },
+    pluginDirs: [],
+    overriddenByEnvironment: [],
+    pendingRestart: [],
+  };
+  const { link } = hostOver({ configuration: composed, reconfigure: () => ok(rebuilt) });
   link.deliver(
     'discovery-channel',
     hostConfigure('cfg-1', [{ key: 'PERISCOPE_BRANCH_SCHEME', value: 'x/{key}' }]),

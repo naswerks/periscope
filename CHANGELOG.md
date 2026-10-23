@@ -43,8 +43,9 @@ local-only gate, or one linked to a controller that does not, let them run.
   gives meaning to. The binary composes no resolver, so every other `bulk_request` to it answers
   `bulk-target-invalid`, as a host with no resolver always has.
 - Deprecated: `TRANSCRIPT_PAGE_SIZE`, `TRANSCRIPT_WHAT_PREFIX`, the `transcript_list`,
-  `transcript_list_result`, `transcript_tail` and `transcript_tail_result` types and builders, and
-  `PeriscopeHostOptions.transcriptsRoot`, which is ignored. `HostConfiguration.transcriptsRoot` is
+  `transcript_list_result`, `transcript_tail` and `transcript_tail_result` types and builders;
+  `PeriscopeHostOptions.transcriptsRoot`, and the `transcriptsRoot` member a reconfigure seam may
+  return (`HostReconfigured`, kept as optional), both ignored. `HostConfiguration.transcriptsRoot` is
   always null. The names the transcript reader exported through the host module (`listTranscripts`,
   `tailTranscript`, `resolveTranscriptPath`, `claudeTranscriptResolver`, `isMatchingUserEntry`,
   `transcriptsRootUnder`, `claudeProjectsRoot` and their three types) are kept and inert: the readers

@@ -759,6 +759,12 @@ export interface HostLink extends FrameSink {
  */
 export interface HostReconfigured {
   readonly workspaces: WorkspaceProvider | undefined;
+  /**
+   * Ignored: this host keeps no transcripts root, so a reconfigure has none to swap in.
+   *
+   * @deprecated Kept so a seam that returns it still compiles; it goes at the next major version.
+   */
+  readonly transcriptsRoot?: string;
   readonly bulk: BulkResolver | undefined;
   readonly linkCapabilities: readonly string[];
   readonly configuration: HostConfiguration;
