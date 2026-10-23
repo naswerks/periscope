@@ -85,6 +85,14 @@ test('regression: the escaped reading keeps a `#` after an escaped blank inside 
   assert.equal(parsed.invocations.length, 1, 'the split reading still takes the # for a comment');
 });
 
+test('regression: the escaped reading reads a command word after quote removal, and the split reading keeps it as written', () => {
+  const parsed = parseCommand("g''it push origin main");
+  assert.equal(parsed.escapedReading?.invocations[0]?.program, 'git');
+  assert.equal(parsed.invocations[0]?.program, "g''it");
+  assert.equal(parseCommand('"g"it push').escapedReading?.invocations[0]?.program, 'git');
+  assert.equal(parseCommand(String.raw`g\it push`).escapedReading?.invocations[0]?.program, 'git');
+});
+
 // ---------------------------------------------------------------------------
 // Defect 2 — global flags before the subcommand defeat the verb finder.
 // ---------------------------------------------------------------------------

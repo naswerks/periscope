@@ -13,11 +13,15 @@
  * report. Each command is parsed and classified under the POSIX, PowerShell and `cmd` readings, as the
  * local gate reads them. The report counts what changed, prints every refusal that now flows, and groups
  * the new refusals and the changed reasons by the rule that answers after the change, with samples. The
- * named controls (`UNMOVED`) must answer as they did before in the readings each names, and every one
- * that moved is printed. `--json` writes every change, for a reviewer to read in full.
+ * named controls are answers the later build must give whatever the earlier one gave: `MUST_FLOW` in the
+ * readings each names, and `MUST_REFUSE` with the reason or rule each names. Every control that does not
+ * hold is printed, and the script exits 1 when any does. `--json` writes every change, for a reviewer to
+ * read in full.
  *
  * A change to `src/gate/` states what it lets an agent reach and what it stops; this is the measurement
- * of that sentence. A move nobody predicted is a finding about the change.
+ * of that sentence. A move nobody predicted is a finding about the change. It is run by hand: nothing in
+ * `package.json` or CI runs it, and it reads `parseCommand` and `classifyShellCommand` only, not the local
+ * gate's protected-path check.
  */
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -187,6 +191,74 @@ const NAMED = [
   'git branch -ud topic',
   'git branch --with -d topic',
   'git branch --sort -D',
+  // Quote removal in the command word, as a POSIX shell reads the name it runs.
+  "g''it push origin main",
+  '"g"it push origin main',
+  String.raw`g\it push origin main`,
+  String.raw`gi\t push origin main`,
+  String.raw`g\it send-pack origin main`,
+  String.raw`g\it status`,
+  'b\'\'ash -c "git send-pack origin main"',
+  String.raw`C:\Git\bin\git.exe push origin main`,
+  String.raw`C:\Git\bin\git.exe status`,
+  // A backslash inside a double-quoted span escapes a quote, so the span does not close at it.
+  String.raw`echo "a \" # " ; git push origin main`,
+  String.raw`echo "a \" # " ; git send-pack origin main`,
+  String.raw`echo "a \\" # " ; git push origin main`,
+  String.raw`echo "a \" ; git send-pack origin main`,
+  String.raw`echo 'a \' # ; git push origin main`,
+  String.raw`bash -c "echo \" # \" ; git push origin main"`,
+  String.raw`git commit -m "say \"push\""`,
+  // Heredoc bodies and commit messages: data to a data sink or a message flag, commands to a shell.
+  'cat <<EOF\ngit push origin main\nEOF',
+  'cat.cmd <<EOF\ngit push origin main\nEOF',
+  'tee.bat out.txt <<EOF\ngit push origin main\nEOF',
+  "cat <<'EOF'\ngit push origin main\nEOF",
+  'bash <<EOF\ngit push origin main\nEOF',
+  'python <<EOF\nimport os  # git push origin main\nEOF',
+  'git commit -F - <<EOF\ngit push origin main\nEOF',
+  'git.cmd commit -F - <<EOF\ngit push origin main\nEOF',
+  'git commit -m "git push origin main"',
+  'git.cmd commit -m "git push origin main"',
+  'git.bat commit -m "gh pr merge 5"',
+  'gh pr create --title "x" --body "git push origin main"',
+  'gh.cmd pr create --title "x" --body "git push origin main"',
+  'git commit -m "$(git push origin main)"',
+  // A redirection's word is a file, and a keyword opens a command only as a command's first word.
+  'G=git; echo hi > $G',
+  'G=git; cat < $G',
+  'G=git; echo then $G push',
+  '> out $(echo git) push origin main',
+  'G=git; $G push origin main 2> /dev/null',
+  'G=git; if true; then $G push origin main; fi',
+  // Shapes docs/gate.md lists as flowing, so a change that reads them shows here.
+  '$(echo git -C .) push origin main',
+  '$(echo git --no-pager) push origin main',
+  '$(echo git -c x=y) push origin main',
+  'G="git push"; $G origin main',
+  'G="git -C ."; $G push origin main',
+  "G=git bash -c '$G push origin main'",
+  "env G=git bash -c '$G push origin main'",
+  String.raw`bash -c "G=git; \$G push origin main"`,
+  '${X:-git} push origin main',
+  'G=gi; G+=t; $G push origin main',
+  'export G=git PATH; $G push origin main',
+  'printf -v G git; $G push origin main',
+  'G=git; if $G push origin main; then :; fi',
+  'G=git; while $G push origin main; do :; done',
+  'G=git; until $G push origin main; do :; done',
+  'FOO=1 git send-pack origin main',
+  '! git send-pack origin main',
+  'if git send-pack origin main; then :; fi',
+  'gh pr "merge" 5',
+  'gh "pr" merge 5',
+  'env -u gh git send-pack origin main',
+  'sudo -u az git send-pack origin main',
+  'python -m azure.cli repos pr update --id 5 --status completed',
+  'for G in git; do $G push origin main; done',
+  'G=git; eval $G push origin main',
+  '& (Get-Command git) push origin main',
+  "$G = 'git'; & $G push origin main",
   // git's -c key=value inside another program's words: -c takes the pair, and the verb follows.
   'git -c a=b push origin main',
   'ssh h "git -c user.name=x push origin main"',
@@ -200,12 +272,12 @@ const NAMED = [
 for (const command of NAMED) corpus.add(command);
 
 /**
- * Controls that must answer as they did before, each in the readings it names: commands whose program
- * the line does not name, which no change to how an expansion is read may stop, and the readings that
- * never run an expansion as a command word.
+ * Commands the later build must let through, each in the readings it names: programs the line does not
+ * name, which no change to how an expansion is read may stop; the readings that never run an expansion
+ * as a command word; and the words a redirection or an argument holds.
  */
 const ALL = ['posix', 'powershell', 'cmd'];
-const UNMOVED = [
+const MUST_FLOW = [
   ...[
     '$DOCKER push registry/image:tag',
     '$(which docker) push img',
@@ -237,14 +309,31 @@ const UNMOVED = [
     '$CARGO publish',
     '$GO run . push',
     '$(git config core.editor) notes.md',
-    '$(git var GIT_EDITOR) notes.md',
+    '$(git rev-parse --show-toplevel)/scripts/build.sh',
     'G=git cmd; $G push origin main',
+    'G=git; echo hi > $G',
+    'G=git; cat < $G',
+    'G=git; echo then $G push',
+    String.raw`C:\Git\bin\git.exe status`,
+    String.raw`g\it status`,
   ].map((command) => [command, ALL]),
   ...['$(echo git) push origin x', '`echo git` push origin x', 'G=git; $G push origin main'].map(
     (command) => [command, ['powershell', 'cmd']],
   ),
 ];
-for (const [command] of UNMOVED) corpus.add(command);
+
+/** Commands the later build must refuse, in every reading, with the reason or the rule each names. */
+const MUST_REFUSE = [
+  ['git push origin main', 'shell-boundary-command: git-push'],
+  ['gh pr merge 5', 'shell-boundary-command: gh-pr-merge'],
+  ['az repos pr update --id 5 --status completed', 'shell-boundary-command: az-repos-pr-complete'],
+  ['git branch -D x', 'shell-boundary-command: git-branch-delete'],
+  ['git reset --hard', 'shell-boundary-command: git-reset-hard'],
+  ['git remote add o u', 'shell-boundary-command: git-remote-surgery'],
+  ['git send-pack origin main', 'shell-verb-unrecognised'],
+  ['ssh build-host "git push origin main"', 'shell-boundary-command: git-push'],
+].map(([command, answer]) => [command, ALL, answer]);
+for (const [command] of [...MUST_FLOW, ...MUST_REFUSE]) corpus.add(command);
 
 let seed = 7;
 const random = () => {
@@ -428,9 +517,26 @@ for (const [key, list] of grouped(moved, (change) => `${keyOf(change.before)} ->
   console.log(`${key}: ${list.length}`);
   for (const change of list.slice(0, sampleCount)) console.log(show(change));
 }
-const controlsMoved = UNMOVED.flatMap(([command, dialects]) =>
-  changes.filter((change) => change.command === command && dialects.includes(change.dialect)),
+const failed = [
+  ...MUST_FLOW.flatMap(([command, dialects]) =>
+    dialects
+      .map((dialect) => ({ command, dialect, want: 'flows', got: answerOf(B, command, dialect) }))
+      .filter((control) => control.got !== 'flows'),
+  ),
+  ...MUST_REFUSE.flatMap(([command, dialects, want]) =>
+    dialects
+      .map((dialect) => ({ command, dialect, want, got: answerOf(B, command, dialect) }))
+      .filter((control) => !control.got.startsWith(want)),
+  ),
+];
+const controls = MUST_FLOW.length + MUST_REFUSE.length;
+console.log(
+  `\nnamed controls: ${MUST_FLOW.length} must flow, ${MUST_REFUSE.length} must refuse; not held: ${failed.length}`,
 );
-console.log(`\nnamed controls that moved (${UNMOVED.length} controls, want 0): ${controlsMoved.length}`);
-for (const change of controlsMoved) console.log(show(change));
+for (const control of failed) {
+  console.log(
+    `  ${control.dialect}: ${JSON.stringify(control.command)}\n      want ${control.want}\n      got  ${control.got.slice(0, 100)}`,
+  );
+}
+if (controls === 0 || failed.length > 0) process.exitCode = 1;
 if (jsonPath !== null) writeFileSync(jsonPath, `${JSON.stringify(changes, null, 2)}\n`);

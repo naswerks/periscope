@@ -267,12 +267,17 @@ export function stripComments(command: string): string {
   return stripPosixComments(command, false);
 }
 
+/** The characters a backslash escapes inside a POSIX double-quoted span. */
+const DOUBLE_QUOTE_ESCAPES: ReadonlySet<string> = new Set(['"', '\\', '$', '`']);
+
 /**
- * `stripComments`, with a POSIX shell's escaped blank read when `escapes` is set: outside a quote, a blank
+ * `stripComments`, with a POSIX shell's escapes read when `escapes` is set. Outside a quote, a blank
  * after an unpaired backslash is part of the word before it, so it starts no word and a `#` after it is
- * mid-word, as bash reads `echo a\ # ; git push` (one word `a #`, then the push). Only the blank is read
- * as escaped: a backslash before a quote is not, so a quote after one still opens a span, the reading
- * that scans more. Not part of the gate's barrel.
+ * mid-word, as bash reads `echo a\ # ; git push` (one word `a #`, then the push); a backslash before a
+ * quote there is not read as an escape, so the quote still opens a span, the reading that scans more.
+ * Inside a double-quoted span a backslash escapes `"`, `\`, `$` and a backtick, so `\"` does not close
+ * the span: `echo "a \" # " ; git push` is one argument and then the push. A single-quoted span has no
+ * escapes. Not part of the gate's barrel.
  * @internal
  */
 export function stripPosixComments(command: string, escapes: boolean): string {
@@ -286,6 +291,11 @@ export function stripPosixComments(command: string, escapes: boolean): string {
 
     if (quote !== '') {
       result += character;
+      if (escapes && quote === '"' && character === '\\' && DOUBLE_QUOTE_ESCAPES.has(command[i + 1] ?? '')) {
+        result += command[i + 1] as string;
+        i += 1;
+        continue;
+      }
       if (character === quote) quote = '';
       continue;
     }
@@ -603,15 +613,34 @@ function expansionBodies(word: string): string[] {
   return bodies;
 }
 
-/** A command's tokens split into command positions, at the separators and opener keywords `positionsOf` splits at. */
+/** The characters a redirection operator is made of after its first `<` or `>`: `>>`, `>&`, `>|`, `<<`. */
+const REDIRECTION_TAIL: ReadonlySet<string> = new Set(['<', '>', '&', '|']);
+
+/**
+ * A command's tokens split into command positions as a POSIX shell starts a command: at a separator, and
+ * at `do`, `then`, `else` or `elif` when one is the first word of a position. A redirection (`> out`,
+ * `< in`, `2>&1`, `<<EOF`) belongs to the command it sits in, and the word after it names a file, not a
+ * command: `G=git; echo hi > $G` runs `echo`, and `> out $G push` runs `$G`. The expansion reading's
+ * alone: the split reading starts a command at every `<`, `>` and keyword, the reading that scans more.
+ */
 function commandPositions(tokens: readonly string[]): string[][] {
   const positions: string[][] = [];
   let position: string[] = [];
-  for (const token of tokens) {
-    if ((token.length === 1 && SEPARATORS.has(token)) || OPENER_KEYWORDS.has(token.toLowerCase())) {
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i] as string;
+    if (token === '<' || token === '>') {
+      let next = i + 1;
+      while (next < tokens.length && REDIRECTION_TAIL.has(tokens[next] as string)) next += 1;
+      const target = tokens[next];
+      // The target is skipped; a separator where one would be is left to end the position.
+      i = target !== undefined && !(target.length === 1 && SEPARATORS.has(target)) ? next : next - 1;
+      continue;
+    }
+    if (token.length === 1 && SEPARATORS.has(token)) {
       if (position.length > 0) positions.push(position);
       position = [];
-    } else position.push(token);
+    } else if (position.length === 0 && OPENER_KEYWORDS.has(token.toLowerCase())) continue;
+    else position.push(token);
   }
   if (position.length > 0) positions.push(position);
   return positions;
@@ -724,6 +753,16 @@ function splitWords(
       }
     } else if (quote !== '') {
       current += character;
+      if (
+        escapes &&
+        quote === '"' &&
+        character === '\\' &&
+        DOUBLE_QUOTE_ESCAPES.has(characters[i + 1] ?? '')
+      ) {
+        current += characters[i + 1] as string;
+        i += 1;
+        continue;
+      }
       if (character === quote) quote = '';
       continue;
     } else if (character === '"' || character === "'") {
@@ -1066,9 +1105,60 @@ interface WordsOfText {
  * cmd.exe have no heredoc: `<<` there is not a body to separate, so nothing is set aside as data.
  */
 function wordsOfText(text: string, heredocs: boolean, escapes: boolean): WordsOfText {
-  const hasInterpreter = tokenize(text).some((token) => INTERPRETER_NAMES.includes(programNameOf(token)));
+  const names = (token: string): string[] =>
+    escapes ? [programNameOf(token), programNameOf(removeQuotes(token))] : [programNameOf(token)];
+  const hasInterpreter = tokenize(text).some((token) =>
+    names(token).some((name) => INTERPRETER_NAMES.includes(name)),
+  );
   const body = heredocs ? separateHeredocBodies(text).text : text;
-  return { tokens: splitWords(body, hasInterpreter, escapes, false), hasInterpreter, body };
+  const tokens = splitWords(body, hasInterpreter, escapes, false);
+  return { tokens: escapes ? withCommandWordsUnquoted(tokens) : tokens, hasInterpreter, body };
+}
+
+/**
+ * A word as a POSIX shell hands it to the program it names: single quotes removed with what they hold
+ * kept as written, double quotes removed with `\"`, `\\`, `\$` and `\`` inside them resolved, and a
+ * backslash outside a quote dropped before the character it escapes. An expansion is left as written.
+ */
+function removeQuotes(word: string): string {
+  let result = '';
+  let quote = '';
+  for (let i = 0; i < word.length; i += 1) {
+    const character = word[i] as string;
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      else result += character;
+    } else if (quote === '"') {
+      if (character === '"') quote = '';
+      else if (character === '\\' && DOUBLE_QUOTE_ESCAPES.has(word[i + 1] ?? '')) {
+        result += word[i + 1] as string;
+        i += 1;
+      } else result += character;
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === '\\' && i + 1 < word.length) {
+      result += word[i + 1] as string;
+      i += 1;
+    } else result += character;
+  }
+  return result;
+}
+
+/**
+ * The words with each command word read after quote removal, as a POSIX shell reads the name of the
+ * program it runs: `g''it`, `"g"it` and `g\it` are all `git`. Only the escaped reading reads them so; the
+ * split reading keeps a backslash as a path separator, which is how `C:\Git\bin\git.exe` names git there.
+ */
+function withCommandWordsUnquoted(tokens: readonly string[]): string[] {
+  let atCommandPosition = true;
+  return tokens.map((token) => {
+    if ((token.length === 1 && SEPARATORS.has(token)) || OPENER_KEYWORDS.has(token.toLowerCase())) {
+      atCommandPosition = true;
+      return token;
+    }
+    const word = atCommandPosition ? removeQuotes(token) : token;
+    atCommandPosition = false;
+    return word;
+  });
 }
 
 /** A command's tokens read position by position: its invocations and the text a classifier may scan. */

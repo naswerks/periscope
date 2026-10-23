@@ -795,3 +795,73 @@ test('control: a refusal another rule makes stays that refusal beside a command 
     'the allowlist refusal stays local',
   );
 });
+
+// ---------------------------------------------------------------------------
+// Quotes and backslashes as a POSIX shell reads them.
+// ---------------------------------------------------------------------------
+
+test('regression: a command word is read after quote removal in the POSIX reading, so a quoted or escaped git is git', () => {
+  for (const command of [
+    "g''it push origin main",
+    '"g"it push origin main',
+    String.raw`g\it push origin main`,
+    String.raw`gi\t push origin main`,
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
+  }
+  assert.equal(refusalFor(String.raw`g\it send-pack origin main`)?.reason, 'shell-verb-unrecognised');
+  assert.equal(
+    refusalFor(`b''ash -c "git send-pack origin main"`)?.reason,
+    'shell-verb-unrecognised',
+    'an interpreter named through quotes inverts too',
+  );
+  assert.equal(refusalFor(String.raw`g\it status`), null, 'a read through the same word flows');
+});
+
+test('control: a backslash in a Windows path still names git in the split reading, and a read through it flows', () => {
+  assert.match(refusalFor(String.raw`C:\Git\bin\git.exe push origin main`)?.detail ?? '', /^git-push:/);
+  assert.equal(refusalFor(String.raw`C:\Git\bin\git.exe status`), null);
+});
+
+test('regression: inside a double-quoted span a backslash escapes the quote, so the span does not close at it', () => {
+  // bash reads `"a \" # "` as one argument; the push after the `;` runs.
+  assert.match(refusalFor(String.raw`echo "a \" # " ; git push origin main`)?.detail ?? '', /^git-push:/);
+  assert.equal(
+    refusalFor(String.raw`echo "a \" # " ; git send-pack origin main`)?.reason,
+    'shell-verb-unrecognised',
+  );
+  assert.match(
+    refusalFor(String.raw`bash -c "echo \" # \" ; git push origin main"`)?.detail ?? '',
+    /^git-push:/,
+    'inside an interpreter payload too',
+  );
+});
+
+test('control: an escaped backslash closes the span, a single-quoted span has no escapes, and an escaped quote in a message is prose', () => {
+  assert.equal(refusalFor(String.raw`echo "a \\" # " ; git push origin main`), null);
+  assert.equal(refusalFor(String.raw`echo 'a \' # ; git push origin main`), null);
+  assert.equal(refusalFor(String.raw`git commit -m "say \"push\""`), null);
+});
+
+test('regression: a word a redirection names is a file, and a keyword opens a command only as its first word, in the expansion reading', () => {
+  for (const command of ['G=git; echo hi > $G', 'G=git; cat < $G', 'G=git; echo then $G push']) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+  for (const command of [
+    '> out $(echo git) push origin main',
+    'G=git; $G push origin main 2> /dev/null',
+    'G=git; if true; then $G push origin main; fi',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
+  }
+});
+
+test('regression: a shim is its program to the heredoc and message separation, so a body or a message naming a push is data', () => {
+  assert.equal(refusalFor('cat.cmd <<EOF\ngit push origin main\nEOF'), null);
+  assert.equal(refusalFor('git.cmd commit -m "git push origin main"'), null);
+  assert.match(
+    refusalFor('bash <<EOF\ngit push origin main\nEOF')?.detail ?? '',
+    /^git-push:/,
+    'a body a shell runs stays a command',
+  );
+});
