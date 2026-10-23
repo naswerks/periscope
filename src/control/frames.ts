@@ -1939,8 +1939,9 @@ export const MAX_REPOSITORY_READ_BYTES = 48 * 1024;
 /**
  * The most of a file the repository read pages through (protocol 18). The head of any file is
  * served at offset 0, whatever its size; pages after it continue while they end before this bound
- * and the end of the file, so the link stays a command lane rather than a file transfer. An offset
- * past this bound is refused by name.
+ * and the end of the file (the last may end at most three bytes past it, to carry a character that
+ * straddles it whole), so the link stays a command lane rather than a file transfer. An offset past
+ * this bound is refused by name.
  */
 export const MAX_REPOSITORY_FILE_BYTES = 512 * 1024;
 

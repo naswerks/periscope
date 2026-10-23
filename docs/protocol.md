@@ -890,8 +890,9 @@ carries the page as text, cut on a character boundary, the file's whole size, `t
 bytes of the file remain past the page) and, from v18, `nextOffset`: where the next page starts, null
 when the page reached the end of the file or `MAX_REPOSITORY_FILE_BYTES`. Offset 0 is the head of a
 file of any size, the read v17 made, with the cut on a character boundary where 1.8.2's could split
-one; the pages after it reach no further than
-`MAX_REPOSITORY_FILE_BYTES`, so a longer file is read to that bound and its answers say `truncated`.
+one; the pages after it reach `MAX_REPOSITORY_FILE_BYTES`, or at most three bytes past it when the
+last page carries a character that straddles it, so a longer file is read to that bound and its
+answers say `truncated`.
 A page that would end inside its first character carries that character whole, so every page moves
 forward. An offset past the end of the file, past `MAX_REPOSITORY_FILE_BYTES` or inside a character,
 a binary file, and a path that is not a file each refuse `repository-read-failed` by name. A byte is

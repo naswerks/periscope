@@ -30,7 +30,8 @@
  * Bounded twice: a listing carries at most `MAX_REPOSITORY_ENTRIES` names and says when it stopped;
  * a read carries one page, at most `maxBytes` (itself capped at `MAX_REPOSITORY_READ_BYTES`), cut on
  * a UTF-8 boundary, and says the file's whole size. Offset 0 is the head of a file of any size; the
- * pages after it reach no further than `MAX_REPOSITORY_FILE_BYTES`. Both doors read a page the same
+ * pages after it end at `MAX_REPOSITORY_FILE_BYTES`, or at most three bytes past it when a page
+ * starting within three bytes of it carries its first character whole. Both doors read a page the same
  * way (`readTextPage`). A file with a NUL byte in its first `BINARY_PROBE_BYTES` is refused as
  * binary: the answer is a string and a string cannot carry it.
  */
@@ -318,8 +319,9 @@ export async function listRepositoryDirectory(
  * Read one page of a text file under the root: from byte `offset`, at most `maxBytes` (capped at the
  * wire's bound), cut back to a character boundary. Offset 0 is the head of a file of any size, the
  * read a controller one release behind makes. A page after it starts no further than
- * `MAX_REPOSITORY_FILE_BYTES` and ends there, or at the end of the file, whichever is first:
- * `nextOffset` is null at either. Binary is refused by the NUL probe; a directory, an absent path,
+ * `MAX_REPOSITORY_FILE_BYTES` and ends there, or at the end of the file, whichever is first; a page
+ * starting within three bytes of the bound on a longer character carries it whole, so it may end at
+ * most three bytes past. `nextOffset` is null at either end. Binary is refused by the NUL probe; a directory, an absent path,
  * and an offset past the end, past that bound or inside a character are refused by name.
  */
 export async function readRepositoryFile(

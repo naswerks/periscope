@@ -62,8 +62,9 @@ local-only gate, or one linked to a controller that does not, let them run.
   null is 0) starts a page and `repository_read_result.nextOffset` (optional) says where the next one
   starts, null at the end of the file or at the new `MAX_REPOSITORY_FILE_BYTES` (512 KiB, beside
   `MAX_REPOSITORY_READ_BYTES`). Offset 0 is the head of a file of any size, the read version 17 made,
-  with the cut on a character boundary where 1.8.2's could split one; the pages after it reach no
-  further than the bound, and `truncated` stays "bytes remain". An offset
+  with the cut on a character boundary where 1.8.2's could split one; the pages after it reach the
+  bound, or at most three bytes past it when the last page carries a character that straddles it,
+  and `truncated` stays "bytes remain". An offset
   past the end, past the bound or inside a character is refused `repository-read-failed`, naming why.
   The host honours an `offset` at either version; `nextOffset` is composed only for a link negotiated
   at 18 or above, so on a link at 17 the answer has the same members; the cut lands on a character
