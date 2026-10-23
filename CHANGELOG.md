@@ -14,8 +14,9 @@ Protocol 18; the window is `[17, 18]`, so a version-17 controller is still spoke
 paging to `repository_read` (an optional `offset` on the ask, an optional `nextOffset` on the answer)
 and one refusal reason, `transcripts-not-served`, and no payload kind. A version-17 controller reads
 the reason on kinds it already reads (`transcript_failed`, `bulk_failed`) as a reason it does not know;
-`nextOffset` is never composed for a link negotiated below 18, so the answer it reads is the head
-read version 17 made. Every frame it sends decodes unchanged. The shell backstop reads more publish and
+`nextOffset` is never composed for a link negotiated below 18, so the answer it reads has the members
+version 17's had; the cut lands on a character boundary where 1.8.2's could split one. Every frame it
+sends decodes unchanged. The shell backstop reads more publish and
 merge shapes: a runner whose controller classifies shell calls itself was already held on them; a
 local-only gate, or one linked to a controller that does not, let them run.
 
@@ -49,17 +50,19 @@ local-only gate, or one linked to a controller that does not, let them run.
 - Added: `repository_read` pages, like `workspace_read`. `repository_read.offset` (optional; absent or
   null is 0) starts a page and `repository_read_result.nextOffset` (optional) says where the next one
   starts, null at the end of the file or at the new `MAX_REPOSITORY_FILE_BYTES` (512 KiB, beside
-  `MAX_REPOSITORY_READ_BYTES`). Offset 0 is the head of a file of any size, the read version 17 made;
-  the pages after it reach no further than the bound, and `truncated` stays "bytes remain". An offset
+  `MAX_REPOSITORY_READ_BYTES`). Offset 0 is the head of a file of any size, the read version 17 made,
+  with the cut on a character boundary where 1.8.2's could split one; the pages after it reach no
+  further than the bound, and `truncated` stays "bytes remain". An offset
   past the end, past the bound or inside a character is refused `repository-read-failed`, naming why.
   The host honours an `offset` at either version; `nextOffset` is composed only for a link negotiated
-  at 18 or above, so on a link at 17 the answer is unchanged. `repositoryRead` takes an optional `offset` and `repositoryReadResult` an optional
-  `nextOffset`; `readRepositoryFile` takes an optional trailing `offset`, and `RepositoryText` gains
-  `nextOffset`.
+  at 18 or above, so on a link at 17 the answer has the same members; the cut lands on a character
+  boundary where 1.8.2's could split one. `repositoryRead` takes an optional `offset` and
+  `repositoryReadResult` an optional `nextOffset`; `readRepositoryFile` takes an optional trailing
+  `offset`, and `RepositoryText` gains `nextOffset`.
 - Changed: the repository read and the workspace read cut a page through one reader. A byte is inside a
   character only when a UTF-8 lead byte at most three bytes before it claims it, so offset 0 is never
-  refused, and a file in another encoding is served as the head read served it and walked by its
-  `nextOffset` to the end. For the workspace read that changes only such a file: one whose first byte
+  refused, and a file in another encoding is served from offset 0 and walked by its `nextOffset` to
+  the end. For the workspace read that changes only such a file: one whose first byte
   continues no character was refused at offset 0, and one with more continuation bytes than its lead
   byte claims could be refused at the `nextOffset` its previous page gave; UTF-8 text reads as before.
   A repository head read asked for fewer bytes than its first character now carries that character
@@ -76,6 +79,11 @@ local-only gate, or one linked to a controller that does not, let them run.
   session's gate keeps the set it opened with.
 - Changed: `defaultAgentHome` is defined in the host's paths module; its export and behaviour are
   unchanged.
+- Fixed: a repository read with `maxBytes` of 8 KiB or more could end inside a multibyte character,
+  whose bytes before the cut decoded as a replacement character: the cut was stepped back only over
+  bytes read past it, and at that size none were. The cut now lands on a character boundary, as the
+  workspace read's always did, so such a page carries up to three bytes fewer and no replacement
+  character; the default `maxBytes` (48 KiB) is in that range.
 - Fixed: a `#` after a backslash-escaped blank is part of the word, as a POSIX shell reads it, so the
   command after it is classified. `echo a\ # ; git push origin main` refuses as `git-push`, inside
   `bash -c "…"` too, where the comment stripper took the `#` for a comment and the push flowed. The

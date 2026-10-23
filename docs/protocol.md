@@ -98,7 +98,8 @@ the open `capabilities` list needs no version bump; a new hello member does. The
 
 It adds no payload kind. A version-17 controller reads what this build sends: the reason rides kinds
 it already reads, and a reason it does not know is read as such; `nextOffset` is never composed for
-a link negotiated below 18, so the answer it reads is the head read version 17 made. Every frame a
+a link negotiated below 18, so the answer it reads has the members version 17's had (the cut lands
+on a character boundary where 1.8.2's could split one). Every frame a
 version-17 controller sends decodes here unchanged, the retired asks included, so such an ask is
 answered by name and the channel it rode keeps its sequence; a `repository_read` with no `offset` is
 the head read. Version 14 narrowed `session_new.request.env` (below), and the
@@ -888,7 +889,8 @@ v18, `offset` (absent or null is 0; otherwise the `nextOffset` of the answer bef
 carries the page as text, cut on a character boundary, the file's whole size, `truncated` (true while
 bytes of the file remain past the page) and, from v18, `nextOffset`: where the next page starts, null
 when the page reached the end of the file or `MAX_REPOSITORY_FILE_BYTES`. Offset 0 is the head of a
-file of any size, the read v17 made; the pages after it reach no further than
+file of any size, the read v17 made, with the cut on a character boundary where 1.8.2's could split
+one; the pages after it reach no further than
 `MAX_REPOSITORY_FILE_BYTES`, so a longer file is read to that bound and its answers say `truncated`.
 A page that would end inside its first character carries that character whole, so every page moves
 forward. An offset past the end of the file, past `MAX_REPOSITORY_FILE_BYTES` or inside a character,
@@ -899,7 +901,8 @@ end.
 
 `nextOffset` is composed only for a link negotiated at 18 or above (and before the first
 handshake): an answer composed for a link at 17 carries no `nextOffset`, and an ask with no `offset`
-is answered exactly as v17 answered it. The host honours an `offset` whatever the version; only the
+is answered with the members v17's answer had; the cut lands on a character boundary where 1.8.2's
+could split one. The host honours an `offset` whatever the version; only the
 member that names the next page is shaped by it. The shape is fixed when the answer is composed. A
 frame retained for replay and replayed on a link renegotiated at another version keeps it: one
 composed at 18 and replayed at 17 carries `nextOffset`, which a version-17 decoder carries as an

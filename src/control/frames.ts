@@ -49,7 +49,8 @@ export const PROTOCOL_VERSION = 18;
  * Version 18 adds paging to the repository read: `repository_read.offset`, where a page starts, and
  * `repository_read_result.nextOffset`, where the next one does, null at the end of the file or at
  * `MAX_REPOSITORY_FILE_BYTES`. Both are optional: an ask with no offset is the head read version 17
- * made, and `nextOffset` is never composed for a link negotiated below 18. It adds one refusal reason,
+ * made, with the same members (its cut lands on a character boundary, where 1.8.2's could split one),
+ * and `nextOffset` is never composed for a link negotiated below 18. It adds one refusal reason,
  * `transcripts-not-served`: a host of this build does not look for, read or keep the agent's
  * transcript files, and gives that answer to every `transcript_list` and `transcript_tail` (on
  * `transcript_failed`) and to every `bulk_request` whose locator names the `claude-transcript:`

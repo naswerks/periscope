@@ -132,6 +132,61 @@ test('the read carries the head of a text file, cut at maxBytes on a character b
   }
 });
 
+/**
+ * The head read 1.8.2 made, kept here as the control: a probe of `max(wanted, BINARY_PROBE_BYTES)`
+ * bytes, and a step back only over bytes read past the cut, of which there are none once `wanted`
+ * reaches the probe's size.
+ */
+function headAsReleased(bytes: Buffer, wanted: number): string {
+  const head = bytes.subarray(0, Math.max(wanted, BINARY_PROBE_BYTES));
+  let cut = Math.min(head.length, wanted);
+  while (cut > 0 && cut < head.length && (head[cut]! & 0xc0) === 0x80) cut -= 1;
+  return head.subarray(0, cut).toString('utf8');
+}
+
+test('regression: a head read at the default maxBytes ends on a character boundary when a character straddles the cut', async () => {
+  const root = await tempDir('repository');
+  try {
+    // '漢' is three bytes and starts at byte 49151, so the default cut (49152) falls inside it.
+    const bytes = Buffer.concat([
+      Buffer.alloc(MAX_REPOSITORY_READ_BYTES - 1, 0x61),
+      Buffer.from('漢', 'utf8'),
+      Buffer.alloc(16, 0x62),
+    ]);
+    await writeFile(join(root, 'brief.md'), bytes);
+
+    const head = await readRepositoryFile(root, 'brief.md');
+    assert.ok(head.ok);
+    assert.equal(
+      head.value.text,
+      'a'.repeat(MAX_REPOSITORY_READ_BYTES - 1),
+      'the page ends before the character',
+    );
+    assert.deepEqual(
+      [head.value.truncated, head.value.nextOffset],
+      [true, MAX_REPOSITORY_READ_BYTES - 1],
+      'the next page starts on the character',
+    );
+    const next = await readRepositoryFile(root, 'brief.md', 1024, [], MAX_REPOSITORY_READ_BYTES - 1);
+    assert.ok(next.ok);
+    assert.equal(next.value.text, `漢${'b'.repeat(16)}`);
+
+    // control: 1.8.2's loop split the character here, ending the page on a replacement character; below
+    // the probe's size the two reads agree.
+    assert.equal(
+      headAsReleased(bytes, MAX_REPOSITORY_READ_BYTES),
+      `${'a'.repeat(MAX_REPOSITORY_READ_BYTES - 1)}\uFFFD`,
+    );
+    const small = Buffer.concat([Buffer.alloc(99, 0x61), Buffer.from('漢', 'utf8')]);
+    await writeFile(join(root, 'small.md'), small);
+    const smallHead = await readRepositoryFile(root, 'small.md', 100);
+    assert.ok(smallHead.ok);
+    assert.equal(smallHead.value.text, headAsReleased(small, 100));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('maxBytes is clamped to the wire bound, so an over-large ask reads exactly the cap', async () => {
   const root = await plantRepository();
   try {
