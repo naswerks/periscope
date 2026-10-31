@@ -8,6 +8,20 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-10-31
+
+A security patch: no wire, API or behaviour change. Protocol 18; the window is `[17, 18]`, as in 1.9.0.
+
+### Security
+
+- The runtime dependencies' minimums rise so no install can resolve a version with a known advisory:
+  `@modelcontextprotocol/sdk` `^1.32.2` (was `^1.30.0`) and `zod` `^4.6.7` (was `^4.4.3`).
+- The lockfile moves the transitive runtime packages to their patched releases: `proxy-addr` (critical),
+  `body-parser` (high), `fast-uri`, `ip-address` and `qs`. `npm audit --omit=dev` reports none.
+- CI's gates job fails on any High or Critical advisory in the runtime dependencies
+  (`npm audit --omit=dev --audit-level=high`). The dev toolchain's advisories are Dependabot's, which now opens
+  their security updates on its own.
+
 ## [1.9.0] - 2026-10-22
 
 Protocol 18; the window is `[17, 18]`, so a version-17 controller is still spoken to. Version 18 adds
