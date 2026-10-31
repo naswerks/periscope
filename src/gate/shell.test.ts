@@ -591,7 +591,33 @@ test('regression: a `#` after an escaped blank is part of the word, so the comma
 test('control: a backslash pair escapes nothing, so the blank after it starts a word and the `#` a comment', () => {
   assert.equal(refusalFor(String.raw`echo a\\ # ; git push origin main`), null);
   assert.equal(refusalFor('echo a # ; git push origin main'), null);
-  assert.equal(refusalFor(String.raw`bash -c "echo a\\ # ; git push origin main"`), null);
+  // The pair in the script the interpreter receives: single quotes hand it on as written, and four
+  // backslashes inside double quotes reach it as two.
+  assert.equal(refusalFor(String.raw`bash -c 'echo a\\ # ; git push origin main'`), null);
+  assert.equal(refusalFor(String.raw`bash -c "echo a\\\\ # ; git push origin main"`), null);
+});
+
+test('regression: a double-quoted script is read as the shell hands it to the interpreter, where `\\\\` is one backslash', () => {
+  // Inside double quotes a POSIX shell turns `\\` into one backslash, so the -c script is
+  // `echo a\ # ; git push origin main`: an escaped blank, a `#` inside its word, and then the push runs.
+  for (const command of [
+    String.raw`bash -c "echo a\\ # ; git push origin main"`,
+    String.raw`sh -c "echo a\\ # ; git push origin main"`,
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
+  }
+  const merge = String.raw`bash -c "echo a\\ # ; az repos pr update --id 5 --status completed"`;
+  assert.match(refusalFor(merge)?.detail ?? '', /^az-repos-pr-complete:/, `${merge} flowed`);
+  // The shapes that already held still hold.
+  for (const command of [
+    String.raw`bash -c 'echo a\ # ; git push origin main'`,
+    String.raw`echo a \# ; git push origin main`,
+    'echo a#b ; git push origin main',
+    'echo "a #" ; git push origin main',
+    'G=git; $G push origin main',
+  ]) {
+    assert.match(refusalFor(command)?.detail ?? '', /^git-push:/, `${command} flowed`);
+  }
 });
 
 test('deliberate: a backslash before a quote is not read as an escape, so the quote opens a span and what follows it stays in the scan', () => {

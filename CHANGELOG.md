@@ -8,6 +8,22 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-10-31
+
+A security patch to the shell backstop: no wire or API change. Protocol 18; the window is `[17, 18]`, as in 1.9.1.
+
+### Security
+
+- The shell backstop reads an interpreter's double-quoted script as the shell hands it to the interpreter. Inside
+  double quotes a POSIX shell turns `\\` into one backslash, so `bash -c "echo a\\ # ; git push origin main"` gives
+  bash the script `echo a\ # ; git push origin main`: an escaped blank, a `#` inside its word, and then the push,
+  which runs. 1.9.1 read the `#` as a comment and let it through; it is now refused as `git-push`, and the same shape
+  is refused for `sh -c` and for an `az repos pr update … --status completed` merge. A runner whose controller
+  classifies shell calls itself was already held on it; a local-only gate let it run.
+- Unchanged: a real comment still hides what follows it, as the shell reads it. `bash -c 'echo a\\ # ; git push'` and
+  `bash -c "echo a\\\\ # ; git push"` hand the interpreter a backslash pair, so the `#` opens a comment and nothing
+  after it runs; both still flow.
+
 ## [1.9.1] - 2026-10-31
 
 A security patch: no wire, API or behaviour change. Protocol 18; the window is `[17, 18]`, as in 1.9.0.

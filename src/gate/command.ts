@@ -65,7 +65,8 @@ export interface ParsedCommand {
   readonly hasInterpreter: boolean;
   /**
    * The POSIX reading with each escaped blank joined into its word (`C:/Program\ Files/…` one path, and
-   * `a\ #` one word whose `#` opens no comment), when that changes the words. The classifier refuses when
+   * `a\ #` one word whose `#` opens no comment), and an interpreter's double-quoted script read as the
+   * shell hands it on (`\\` there is one backslash), when that changes the words. The classifier refuses when
    * either reading refuses, so the second reading can only add a refusal: a word that begins with an
    * escaped blank is read both ways.
    * @internal
@@ -1102,7 +1103,9 @@ interface WordsOfText {
 /**
  * A command's text, its comments already removed, split into words: whether an interpreter is named, the
  * heredoc bodies a data sink receives set aside when `heredocs` is set, and the split. PowerShell and
- * cmd.exe have no heredoc: `<<` there is not a body to separate, so nothing is set aside as data.
+ * cmd.exe have no heredoc: `<<` there is not a body to separate, so nothing is set aside as data. With
+ * `escapes` set and an interpreter named, each double-quoted span is read as the shell hands it to the
+ * interpreter (`withDoubleQuotedSpansResolved`).
  */
 function wordsOfText(text: string, heredocs: boolean, escapes: boolean): WordsOfText {
   const names = (token: string): string[] =>
@@ -1110,9 +1113,43 @@ function wordsOfText(text: string, heredocs: boolean, escapes: boolean): WordsOf
   const hasInterpreter = tokenize(text).some((token) =>
     names(token).some((name) => INTERPRETER_NAMES.includes(name)),
   );
-  const body = heredocs ? separateHeredocBodies(text).text : text;
+  const separated = heredocs ? separateHeredocBodies(text).text : text;
+  const body = escapes && hasInterpreter ? withDoubleQuotedSpansResolved(separated) : separated;
   const tokens = splitWords(body, hasInterpreter, escapes, false);
   return { tokens: escapes ? withCommandWordsUnquoted(tokens) : tokens, hasInterpreter, body };
+}
+
+/**
+ * The text with each double-quoted span as a POSIX shell hands it on: inside one, `\\`, `\$` and `` \` ``
+ * become the character they escape and a backslash before a newline goes with the newline, so
+ * `bash -c "echo a\\ # ; git push"` gives bash the script `echo a\ # ; git push`, an escaped blank and
+ * then the push. `\"` is kept as written, so no span ends anywhere it did not, and any other backslash is
+ * an ordinary character. A single-quoted span is kept as written, and a backslash outside a quote is not
+ * read: a quote after one still opens a span, the reading that scans more.
+ */
+function withDoubleQuotedSpansResolved(text: string): string {
+  let result = '';
+  let quote = '';
+  for (let i = 0; i < text.length; i += 1) {
+    const character = text[i] as string;
+    if (quote === '"' && character === '\\') {
+      const next = text[i + 1] ?? '';
+      if (next === '\n') {
+        i += 1;
+        continue;
+      }
+      if (DOUBLE_QUOTE_ESCAPES.has(next)) {
+        result += next === '"' ? '\\"' : next;
+        i += 1;
+        continue;
+      }
+    }
+    result += character;
+    if (quote !== '') {
+      if (character === quote) quote = '';
+    } else if (character === '"' || character === "'") quote = character;
+  }
+  return result;
 }
 
 /**
