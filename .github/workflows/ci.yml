@@ -113,6 +113,11 @@ jobs:
       - name: install
         run: npm ci
 
+      # The dependency gate. What this package installs for its users, its runtime dependencies, must carry no High or
+      # Critical advisory: one fails the run. The dev toolchain is Dependabot's (its alerts and its pull requests).
+      - name: audit (runtime dependencies)
+        run: npm audit --omit=dev --audit-level=high
+
       # The drift detector. The SDK is 0.3.x: every SessionStore member is @alpha, there is a method
       # named usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET, and the message union grows
       # between patch releases. A bump that changes the surface cannot land without someone
