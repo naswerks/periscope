@@ -2,7 +2,8 @@
  * The path jail, and the credential denial.
  *
  * The jail bounds where an agent can write at all. It is self-contained: a call whose target
- * resolves outside the declared workspace root is refused without asking anything, so it holds
+ * resolves outside every declared root (the workspace root and any further root the embedder names)
+ * is refused without asking anything, so it holds
  * with the controller unreachable, unresponsive, or wrong. Reads are not jailed: an agent reads
  * whatever its OS user can read, its own tool output and installed packages included, except
  * credential material.
@@ -42,8 +43,17 @@ import { isContainedBy, isContainedByIgnoringCase, isAbsolutePath, normalizePath
 export type PathResolver = (candidate: string) => string;
 
 export interface JailOptions {
-  /** The absolute root every path-taking call must resolve inside. */
+  /**
+   * The session's own directory: a write may land inside it, a search with no `path` reads under it,
+   * and a relative path is placed against it.
+   */
   readonly workspaceRoot: string | null;
+  /**
+   * Further absolute roots a write may land inside, beside `workspaceRoot`: the session's temp folder,
+   * its own worktree of another repository. They widen where a write may land and nothing else; the
+   * protected set is still checked first. A root that cannot be resolved admits nothing.
+   */
+  readonly writeRoots?: readonly string[];
   readonly resolve: PathResolver;
   /**
    * Absolute paths the agent may not read, write, search or name in a shell command.
@@ -164,24 +174,43 @@ export function checkPath(candidate: string | null, options: JailOptions): Refus
   const credential = credentialRefusal(resolved, options.protectedPaths);
   if (credential !== null) return credential;
 
-  if (options.workspaceRoot === null || options.workspaceRoot.trim() === '') {
+  const declared = options.workspaceRoot !== null && options.workspaceRoot.trim() !== '';
+  const further = furtherRoots(options);
+  if (!declared && further.length === 0) {
     return refusal(
       'path-escapes-root',
       'no workspace root is declared, so no path can be shown to be inside one — a jail with no walls is not a jail',
     );
   }
 
-  const rootOutcome = resolveOrRefuse(options.workspaceRoot, options.resolve);
-  if ('refusal' in rootOutcome) return rootOutcome.refusal;
-
-  if (!isContainedBy(resolved, rootOutcome.resolved)) {
-    return refusal(
-      'path-escapes-root',
-      `${resolved} is outside the declared workspace root ${rootOutcome.resolved}`,
-    );
+  const roots: string[] = [];
+  if (declared) {
+    const rootOutcome = resolveOrRefuse(options.workspaceRoot, options.resolve);
+    if ('refusal' in rootOutcome) return rootOutcome.refusal;
+    roots.push(rootOutcome.resolved);
   }
+  roots.push(...further);
 
-  return null;
+  if (roots.some((root) => isContainedBy(resolved, root))) return null;
+  // One root keeps the sentence a reader has always been given; several are each named, so an agent that
+  // reached for the wrong tree reads where it may write.
+  return refusal(
+    'path-escapes-root',
+    declared && roots.length === 1
+      ? `${resolved} is outside the declared workspace root ${roots[0] as string}`
+      : `${resolved} is outside every root a write may land in: ${roots.join(', ')}`,
+  );
+}
+
+/** The further roots, resolved. One that is blank or cannot be resolved is no root and admits nothing. */
+function furtherRoots(options: JailOptions): string[] {
+  const resolved: string[] = [];
+  for (const root of options.writeRoots ?? []) {
+    if (root.trim() === '') continue;
+    const outcome = resolveOrRefuse(root, options.resolve);
+    if ('resolved' in outcome) resolved.push(outcome.resolved);
+  }
+  return resolved;
 }
 
 /**

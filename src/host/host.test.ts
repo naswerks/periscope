@@ -686,6 +686,46 @@ test('regression: toolFamilies reaches the local gate, so an embedder-named MCP 
   );
 });
 
+/** A temp folder in this platform's spelling, which no test machine's own temp folder is. */
+const SESSION_TEMP =
+  process.platform === 'win32' ? 'C:\\Users\\agent\\AppData\\Local\\Temp' : '/var/agent-temp';
+
+/** One `Write` through the session's own gate, answered by the cause the host records for it. */
+async function writeThroughGate(request: AgentProcessRequest, filePath: string): Promise<void> {
+  await callHooks(request, preToolUse('Write', { file_path: filePath }));
+  await settle();
+}
+
+test('a write under the temp folder the session environment names flows, and one outside every root refuses', async () => {
+  const { link, processes } = hostOver({ controllerEnvKeys: ['TEMP', 'TMPDIR'] });
+  link.deliver('handle-1', settingEnv({ TEMP: SESSION_TEMP, TMPDIR: SESSION_TEMP }));
+  await settle();
+  const request = processes.started[0]?.request;
+  assert.ok(request !== undefined, 'the session did not start');
+
+  await writeThroughGate(request, `${SESSION_TEMP}/probe.py`);
+  assert.ok(
+    !link.causes().includes('refusal/path-escapes-root'),
+    `a write under the session's temp folder was refused: ${link.causes().join(', ')}`,
+  );
+  await writeThroughGate(request, 'C:/elsewhere/a.txt');
+  assert.ok(link.causes().includes('refusal/path-escapes-root'), 'a write outside every root flowed');
+});
+
+test('control: with no temp folder named in the session environment, the same write refuses', async () => {
+  const { link, processes } = hostOver({ controllerEnvKeys: ['TEMP', 'TMPDIR'] });
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await settle();
+  const request = processes.started[0]?.request;
+  assert.ok(request !== undefined, 'the session did not start');
+
+  await writeThroughGate(request, `${SESSION_TEMP}/probe.py`);
+  assert.ok(
+    link.causes().includes('refusal/path-escapes-root'),
+    `the temp folder admitted a write it was never named for: ${link.causes().join(', ')}`,
+  );
+});
+
 test('regression: session_new starts a session', async () => {
   const { host, link, processes } = hostOver();
   link.deliver('handle-1', sessionNew('C:/work'));

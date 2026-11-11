@@ -87,6 +87,10 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     return this.#repositoryRoot;
   }
   readonly #workspaceRoot: string;
+  /** Where this provider makes its worktrees — see `WorkspaceProvider.workspaceRoot`. */
+  get workspaceRoot(): string {
+    return this.#workspaceRoot;
+  }
   readonly #branchFor: (sessionId: string) => string;
   readonly #baseRef: string;
   readonly #effects: WorkspaceEffects;

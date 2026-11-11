@@ -393,6 +393,7 @@ const ALLOWED_GIT_VERBS: ReadonlySet<string> = new Set([
   // `merge-tree` writes the merged tree's objects to the object store and moves no ref, so it publishes
   // nothing, as `hash-object` below does not.
   'merge-tree',
+  'show-ref',
   // read-only terminal flags, surfaced as the verb when nothing else is: git prints and exits.
   '--version',
   '--help',
@@ -420,10 +421,15 @@ const ALLOWED_GIT_VERBS: ReadonlySet<string> = new Set([
   // verb-level, so admitting the verb admits `-w`. It qualifies on the same ground `init` does: an
   // unreferenced loose object cannot publish anything.
   'hash-object',
-  // download-only network — cannot publish.
+  // `read-tree` and `checkout-index` build a tree into an index and a folder of the caller's choosing: the
+  // baseline an agent diffs or tests against. Both are local writes; neither moves a ref or reaches a remote.
+  'read-tree',
+  'checkout-index',
+  // download-only network — cannot publish. `clone` writes a new repository and sends nothing.
   'fetch',
   'pull',
   'ls-remote',
+  'clone',
 ]);
 
 /** `git config` flags that only read. Exact tokens, never prefixes. */
@@ -491,16 +497,32 @@ function isReadOnlyRemote(args: readonly string[]): boolean {
   return true;
 }
 
-/** `git worktree` only lists: `add`, `remove`, `prune`, `move`, `lock` and the rest change the repository. */
-function isReadOnlyWorktree(args: readonly string[]): boolean {
-  return positional(args)[0] === 'list';
+/**
+ * `git worktree list`, and `add`, which builds a new tree beside the others (the baseline an agent diffs or
+ * tests against). `remove`, `prune`, `move`, `lock` and the rest change or delete a tree another session may
+ * be using, and a bare `git worktree` names nothing, so they refuse.
+ */
+function isAdmittedWorktree(args: readonly string[]): boolean {
+  const subcommand = positional(args)[0];
+  return subcommand === 'list' || subcommand === 'add';
+}
+
+/**
+ * `git archive` of a local tree. `--remote` asks another repository's server for its archive and `--exec`
+ * names the program that server runs, so either refuses, in any abbreviation git's parser accepts.
+ */
+function isLocalArchive(args: readonly string[]): boolean {
+  return !args.some(
+    (argument) => isLongOption(argument, '--remote', 3) || isLongOption(argument, '--exec', 3),
+  );
 }
 
 function isAllowedGitInvocation(verb: string, args: readonly string[]): boolean {
   if (ALLOWED_GIT_VERBS.has(verb)) return true;
   if (verb === 'config') return isReadOnlyConfig(args);
   if (verb === 'remote') return isReadOnlyRemote(args);
-  if (verb === 'worktree') return isReadOnlyWorktree(args);
+  if (verb === 'worktree') return isAdmittedWorktree(args);
+  if (verb === 'archive') return isLocalArchive(args);
   return false;
 }
 
@@ -543,7 +565,18 @@ function classifyReading(parsed: ParsedCommand): Refusal | null {
     const rule = BOUNDARY_RULES.find((candidate) => candidate.fires(invocation));
     if (rule !== undefined) return refusal('shell-boundary-command', `${rule.name}: ${rule.detail}`);
   }
-  const residual = residualRefusal(parsed.invocations);
+  // A heredoc body fed to a program that is neither a shell nor a data sink is read whole as well, Layer 1
+  // only: `os.system("git push origin main")` keeps its quoted string as one word, which nothing reads as a
+  // command, while the whole body breaks at the quote and holds the push in order. A string naming no
+  // boundary operation still flows, and the allowlist never reads a git word there.
+  const bodies = (parsed.foreignHeredocBodies ?? []).map((body): Invocation => ({
+    program: '',
+    globalFlags: [],
+    verb: null,
+    args: [body],
+    dataPayloads: [],
+  }));
+  const residual = residualRefusal([...parsed.invocations, ...bodies]);
   if (residual !== null) return refusal('shell-boundary-command', `${residual.name}: ${residual.detail}`);
 
   // Layer 2 — the git verb allowlist. Non-git invocations are not this layer's business; shell

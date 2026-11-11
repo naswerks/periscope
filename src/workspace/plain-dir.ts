@@ -31,6 +31,10 @@ export interface PlainDirProviderOptions {
 
 export class PlainDirProvider implements WorkspaceProvider {
   readonly #root: string;
+  /** Where this provider makes its directories — see `WorkspaceProvider.workspaceRoot`. */
+  get workspaceRoot(): string {
+    return this.#root;
+  }
   readonly #effects: WorkspaceEffects;
 
   constructor(options: PlainDirProviderOptions) {

@@ -79,6 +79,14 @@ export interface ParsedCommand {
    * @internal
    */
   readonly expandedCommands?: readonly ExpandedCommand[];
+  /**
+   * The body of each heredoc fed to a program that is neither a shell nor a data receiver (`python -`,
+   * `node`, an unknown executor), whole, with each line's `#` comments blanked. Such a program may run a
+   * string in it as a command (`os.system("git push origin main")`), and only the body read whole shows
+   * that string's words in order. A POSIX reading's only; absent when there is none.
+   * @internal
+   */
+  readonly foreignHeredocBodies?: readonly string[];
 }
 
 /**
@@ -156,6 +164,9 @@ const OPENER_KEYWORDS = new Set(['do', 'then', 'else', 'elif']);
 
 /** Receivers whose heredoc body is file content, never command text. */
 const DATA_RECEIVERS = new Set(['cat', 'tee']);
+
+/** Receivers whose heredoc body is a script of commands, read line by line as commands are. */
+const HEREDOC_SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell']);
 
 /**
  * Programs whose message flags carry prose. The `gh` entries are keyed on `pr create`/`pr edit`, the `az`
@@ -866,6 +877,21 @@ function findHeredocIntro(line: string): HeredocIntro | null {
  * unknown-means-scan is the only direction that cannot open a door.
  */
 function heredocReceiverIsDataSink(line: string, upTo: number): boolean {
+  const tokens = heredocReceivingTokens(line, upTo);
+  if (tokens.length === 0) return false;
+  const program = programNameOf(tokens[0] as string);
+  if (DATA_RECEIVERS.has(program)) return true;
+  if (program === 'git') return tokens.some((token) => token === 'commit');
+  if (program === 'gh') {
+    const words = tokens.slice(1).filter((token) => !token.startsWith('-'));
+    return words[0] === 'pr' && (words[1] === 'create' || words[1] === 'edit');
+  }
+  if (program === 'az') return isAzurePullRequestWrite(tokens.slice(1));
+  return false;
+}
+
+/** The words of the segment that receives this line's heredoc, up to its `<<`. */
+function heredocReceivingTokens(line: string, upTo: number): string[] {
   let segmentStart = 0;
   let quote = '';
   for (let i = 0; i < upTo; i += 1) {
@@ -880,28 +906,51 @@ function heredocReceiverIsDataSink(line: string, upTo: number): boolean {
     }
     if (SEGMENT_SEPARATORS.has(character)) segmentStart = i + 1;
   }
-  const receiving = line.slice(segmentStart, upTo).trim();
-  const tokens = tokenize(receiving);
-  if (tokens.length === 0) return false;
-  const program = programNameOf(tokens[0] as string);
-  if (DATA_RECEIVERS.has(program)) return true;
-  if (program === 'git') return tokens.some((token) => token === 'commit');
-  if (program === 'gh') {
-    const words = tokens.slice(1).filter((token) => !token.startsWith('-'));
-    return words[0] === 'pr' && (words[1] === 'create' || words[1] === 'edit');
-  }
-  if (program === 'az') return isAzurePullRequestWrite(tokens.slice(1));
-  return false;
+  return tokenize(line.slice(segmentStart, upTo).trim());
 }
 
 /**
- * Blank the bodies of heredocs whose receiver only ever treats them as data.
- *
- * An unterminated heredoc leaves everything in place — the over-refusal direction.
+ * Is a shell receiving this line's heredoc, so its body is a script read line by line? Any word of the
+ * receiving segment naming one counts, behind a launcher too (`sudo bash <<EOF`): reading a shell's body
+ * only as lines is what was done before, and a receiver that is no shell is read further, never less.
  */
-function separateHeredocBodies(command: string): { text: string; payloads: string[] } {
+function heredocReceiverIsShell(line: string, upTo: number): boolean {
+  return heredocReceivingTokens(line, upTo).some((token) => HEREDOC_SHELLS.has(programNameOf(token)));
+}
+
+/**
+ * One line of a heredoc body with its `#` comment blanked: a `#` that begins a word, outside a quote that
+ * opened on this line. A string a script runs keeps its `#`, and a note after one is not read.
+ */
+function withoutHashComment(line: string): string {
+  let quote = '';
+  for (let i = 0; i < line.length; i += 1) {
+    const character = line[i] as string;
+    if (quote !== '') {
+      if (character === quote) quote = '';
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === '#' && (i === 0 || /\s/.test(line[i - 1] as string))) return line.slice(0, i);
+  }
+  return line;
+}
+
+/**
+ * Blank the bodies of heredocs whose receiver only ever treats them as data, and set aside, whole, the
+ * bodies of heredocs whose receiver is neither a data sink nor a shell.
+ *
+ * Such a body stays where it is, read line by line as before; set aside it is also read in one piece,
+ * because a program like `python -` runs a string in it as a command, and only the whole body holds that
+ * string's words in order. An unterminated heredoc leaves everything in place — the over-refusal direction.
+ */
+function separateHeredocBodies(command: string): { text: string; payloads: string[]; foreign: string[] } {
   const lines = command.split('\n');
   const payloads: string[] = [];
+  const foreign: string[] = [];
 
   for (let i = 0; i < lines.length; i += 1) {
     const intro = findHeredocIntro(lines[i] as string);
@@ -910,18 +959,25 @@ function separateHeredocBodies(command: string): { text: string; payloads: strin
     let terminator = i + 1;
     while (terminator < lines.length && (lines[terminator] as string).trim() !== intro.delimiter)
       terminator += 1;
-    if (terminator >= lines.length) return { text: command, payloads: [] };
+    if (terminator >= lines.length) return { text: command, payloads: [], foreign: [] };
 
     if (heredocReceiverIsDataSink(lines[i] as string, intro.index)) {
       for (let body = i + 1; body < terminator; body += 1) {
         payloads.push(lines[body] as string);
         lines[body] = '';
       }
+    } else if (!heredocReceiverIsShell(lines[i] as string, intro.index)) {
+      foreign.push(
+        lines
+          .slice(i + 1, terminator)
+          .map(withoutHashComment)
+          .join('\n'),
+      );
     }
     i = terminator;
   }
 
-  return { text: lines.join('\n'), payloads };
+  return { text: lines.join('\n'), payloads, foreign };
 }
 
 // ---------------------------------------------------------------------------
@@ -1083,13 +1139,18 @@ export function parseCommand(command: string, dialect: ShellDialect = 'posix'): 
   return { ...parsed, escapedReading: readingOf(escaped, true, true) };
 }
 
-/** One reading of a command: its invocations, its scannable text, and the commands an expansion names. */
-function readingOf(words: WordsOfText, escapes: boolean, expansions: boolean): ParsedCommand {
-  const expanded = expansions ? expansionCommands(words.body, words.hasInterpreter, escapes) : [];
+/**
+ * One reading of a command: its invocations, its scannable text, and the commands an expansion names. A
+ * POSIX reading (`posix`) also reads the command after its leading assignments and the words an expansion
+ * supplies; PowerShell and cmd.exe have neither.
+ */
+function readingOf(words: WordsOfText, escapes: boolean, posix: boolean): ParsedCommand {
+  const expanded = posix ? expansionCommands(words.body, words.hasInterpreter, escapes) : [];
   return {
-    ...positionsOf(words.tokens),
+    ...positionsOf(words.tokens, posix),
     hasInterpreter: words.hasInterpreter,
     ...(expanded.length > 0 ? { expandedCommands: expanded } : {}),
+    ...(words.foreign.length > 0 ? { foreignHeredocBodies: words.foreign } : {}),
   };
 }
 
@@ -1098,6 +1159,8 @@ interface WordsOfText {
   readonly hasInterpreter: boolean;
   /** The text the tokens were split from, heredoc bodies a data sink receives already set aside. */
   readonly body: string;
+  /** The bodies of heredocs fed to a program that is neither a shell nor a data sink, each whole. */
+  readonly foreign: readonly string[];
 }
 
 /**
@@ -1113,10 +1176,16 @@ function wordsOfText(text: string, heredocs: boolean, escapes: boolean): WordsOf
   const hasInterpreter = tokenize(text).some((token) =>
     names(token).some((name) => INTERPRETER_NAMES.includes(name)),
   );
-  const separated = heredocs ? separateHeredocBodies(text).text : text;
+  const heredoc = heredocs ? separateHeredocBodies(text) : { text, foreign: [] };
+  const separated = heredoc.text;
   const body = escapes && hasInterpreter ? withDoubleQuotedSpansResolved(separated) : separated;
   const tokens = splitWords(body, hasInterpreter, escapes, false);
-  return { tokens: escapes ? withCommandWordsUnquoted(tokens) : tokens, hasInterpreter, body };
+  return {
+    tokens: escapes ? withCommandWordsUnquoted(tokens) : tokens,
+    hasInterpreter,
+    body,
+    foreign: heredoc.foreign,
+  };
 }
 
 /**
@@ -1198,8 +1267,21 @@ function withCommandWordsUnquoted(tokens: readonly string[]): string[] {
   });
 }
 
-/** A command's tokens read position by position: its invocations and the text a classifier may scan. */
-function positionsOf(tokens: readonly string[]): { invocations: Invocation[]; scannable: string } {
+/** A word a POSIX shell reads as an assignment when it leads a command: `NAME=value` or `NAME+=value`. */
+const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
+
+/**
+ * A command's tokens read position by position: its invocations and the text a classifier may scan.
+ *
+ * With `assignments` set, a position that opens with assignment words is read a second time from the
+ * first word that is not one, which is the program a POSIX shell runs (`GIT_INDEX_FILE=x git read-tree`
+ * runs git). The first reading is kept beside it, so the second can only add a refusal: a verb refused at
+ * a command position is refused behind an assignment too, and nothing that refused before can flow.
+ */
+function positionsOf(
+  tokens: readonly string[],
+  assignments: boolean,
+): { invocations: Invocation[]; scannable: string } {
   const invocations: Invocation[] = [];
   const scannableTokens: string[] = [];
 
@@ -1213,6 +1295,10 @@ function positionsOf(tokens: readonly string[]): { invocations: Invocation[]; sc
       const read = readInvocation(position);
       invocations.push(read.invocation);
       scannableTokens.push(...read.scannable);
+      if (assignments) {
+        const program = position.findIndex((token) => !ASSIGNMENT_WORD.test(token));
+        if (program > 0) invocations.push(readInvocation(position.slice(program)).invocation);
+      }
     }
     position = [];
   };

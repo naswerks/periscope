@@ -127,6 +127,11 @@ export interface WorkspaceProvider {
    * name and get, provider or not: the operator's own checkout has no isolation to protect.
    */
   readonly repositoryRoot?: string;
+  /**
+   * The directory this provider makes its workspaces under, when it has one. The host reads it so that
+   * no other place a session may write can cover another session's workspace.
+   */
+  readonly workspaceRoot?: string;
 }
 
 /**

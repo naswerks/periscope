@@ -251,6 +251,47 @@ test('a commit whose message mentions a boundary word flows', () => {
   assert.ok(flows('git commit -m "do not push this yet"'));
 });
 
+/** A script fed to an interpreter on its standard input, as an agent writes one. */
+const heredocInto = (program: string, ...lines: string[]): string =>
+  [`${program} - <<'EOF'`, ...lines, 'EOF'].join('\n');
+
+test('regression: a push an interpreter runs from a string in its heredoc escalates as a push', () => {
+  for (const command of [
+    heredocInto('python', 'import os', 'os.system("git push origin main")'),
+    heredocInto('python', 'import subprocess', 'subprocess.run("git push origin main", shell=True)'),
+    heredocInto('python', 'import subprocess', 'subprocess.run(["git", "push", "origin", "main"])'),
+    heredocInto('python3', 'cmd = ["git",', '       "push", "origin", "main"]', 'subprocess.run(cmd)'),
+    heredocInto('node', 'require("child_process").execSync("git push origin main")'),
+  ]) {
+    const found = refusalFor(command);
+    assert.equal(found?.reason, 'shell-boundary-command', command);
+    assert.match(found?.detail ?? '', /^git-push:/, command);
+  }
+});
+
+test('control: an interpreter heredoc naming no boundary operation flows, and its comments are not read', () => {
+  for (const command of [
+    heredocInto('python', 'import subprocess', 'subprocess.run(["ls", "-la"])'),
+    heredocInto('python', 'import os', 'os.system("echo push origin main")'),
+    heredocInto('python', 'print("git status")'),
+    heredocInto('python', 'import os  # never git push origin main from here', 'print(1)'),
+    heredocInto('python', 'x = 1 # a note: git push origin main'),
+  ]) {
+    assert.equal(refusalFor(command), null, command);
+  }
+});
+
+test('control: a data sink keeps its body data, and the allowlist never reads a git word in an interpreter string', () => {
+  assert.equal(refusalFor(heredocInto('cat', 'os.system("git push origin main")')), null);
+  // `send-pack` is the allowlist's, and the allowlist reads no git word inside another program's text.
+  assert.equal(refusalFor(heredocInto('python', 'os.system("git send-pack origin main")')), null);
+});
+
+test('regression: a string holding a `#` keeps it; the push after it is still read', () => {
+  const found = refusalFor(heredocInto('python', 'import os', 'os.system("echo #1; git push origin main")'));
+  assert.equal(found?.reason, 'shell-boundary-command');
+});
+
 test('regression: an interpolating message does not flow — a payload that expands is not data', () => {
   assert.notEqual(
     classifyShellCommand('git commit -m "$(git push origin main)"'),
@@ -335,11 +376,11 @@ test('regression: `git for-each-ref` and `git merge-tree` are reads, and flow', 
   }
 });
 
-test('regression: `git worktree list` flows, and every other worktree subcommand still refuses', () => {
+test('regression: `git worktree list` and `git worktree add` flow, and every other worktree subcommand still refuses', () => {
   assert.equal(refusalFor('git worktree list'), null);
   assert.equal(refusalFor('git worktree list --porcelain'), null);
+  assert.equal(refusalFor('git worktree add ../other topic'), null);
   for (const command of [
-    'git worktree add ../other topic',
     'git worktree remove ../other',
     'git worktree prune',
     'git worktree move ../other ../moved',
@@ -348,6 +389,114 @@ test('regression: `git worktree list` flows, and every other worktree subcommand
   ]) {
     assert.equal(refusalFor(command)?.reason, 'shell-verb-unrecognised', `${command} flowed`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// The local git an agent reaches for: each admitted shape beside a twin that still refuses.
+// ---------------------------------------------------------------------------
+
+test('the local git that publishes nothing flows: read-tree, checkout-index, show-ref, clone, archive, worktree add', () => {
+  for (const command of [
+    'git read-tree HEAD',
+    'git read-tree --prefix=base/ HEAD',
+    'git checkout-index -a --prefix=/tmp/base/',
+    'git show-ref',
+    'git show-ref --heads',
+    'git clone ../other /tmp/copy',
+    'git clone --depth 1 https://example.com/r.git /tmp/r',
+    'git archive HEAD',
+    'git archive --format=tar --output=/tmp/base.tar HEAD',
+    'git worktree add --detach /tmp/base HEAD',
+    'git -C /some/repo worktree add /tmp/base HEAD',
+  ]) {
+    assert.equal(refusalFor(command), null, `${command} was refused`);
+  }
+});
+
+test('regression: `git archive` that asks another repository refuses, in every abbreviation git accepts', () => {
+  for (const command of [
+    'git archive --remote=origin HEAD',
+    'git archive --remote origin HEAD',
+    'git archive --rem=origin HEAD',
+    'git archive --r=origin HEAD',
+    'git archive --exec=/bin/sh --remote=x HEAD',
+    'git archive --exe=x HEAD',
+  ]) {
+    assert.equal(refusalFor(command)?.reason, 'shell-verb-unrecognised', `${command} flowed`);
+  }
+});
+
+test('control: a word that only begins like an option of archive is not one', () => {
+  // `--r` is the shortest abbreviation git reads as `--remote`; a lone `--` or `-r` is no such option.
+  assert.equal(refusalFor('git archive -v HEAD'), null);
+  assert.equal(refusalFor('git archive --prefix=r/ HEAD'), null);
+});
+
+test('regression: the twins of the admitted git still refuse: a worktree removed, a config written, a pack sent', () => {
+  for (const command of [
+    'git worktree prune',
+    'git worktree remove /tmp/base',
+    'git config core.hooksPath x',
+    'git config --global core.sshCommand x',
+    'git send-pack origin main',
+  ]) {
+    assert.equal(refusalFor(command)?.reason, 'shell-verb-unrecognised', `${command} flowed`);
+  }
+  assert.equal(refusalFor('git config --get core.hooksPath'), null, 'a config read was refused');
+});
+
+// ---------------------------------------------------------------------------
+// Git behind a leading assignment: the program a POSIX shell runs is the word after the assignments.
+// ---------------------------------------------------------------------------
+
+test('regression: behind a leading assignment git is read as git by the allowlist, as at a command position', () => {
+  assert.equal(refusalFor('GIT_INDEX_FILE=/tmp/x git read-tree HEAD'), null, 'the baseline read was refused');
+  assert.equal(refusalFor('X=1 git worktree prune')?.reason, 'shell-verb-unrecognised');
+  assert.equal(refusalFor('FOO=1 git send-pack origin main')?.reason, 'shell-verb-unrecognised');
+  assert.equal(refusalFor('A=1 B+=2 git send-pack origin main')?.reason, 'shell-verb-unrecognised');
+  const push = refusalFor('X=1 git push origin main');
+  assert.equal(push?.reason, 'shell-boundary-command');
+  assert.match(push?.detail ?? '', /^git-push:/);
+});
+
+test('control: each assigned shape reads as its plain twin does', () => {
+  for (const shape of [
+    'git read-tree HEAD',
+    'git worktree prune',
+    'git send-pack origin main',
+    'git status',
+    'git branch -D topic',
+  ]) {
+    assert.equal(
+      refusalFor(`GIT_DIR=.git ${shape}`)?.reason ?? null,
+      refusalFor(shape)?.reason ?? null,
+      shape,
+    );
+  }
+});
+
+test('control: only the program after the assignments is read; a git word in another program stays an argument', () => {
+  assert.equal(refusalFor('FOO=1 rg git src'), null);
+  assert.equal(refusalFor('FOO=1 echo git send-pack'), null);
+  assert.equal(refusalFor('FOO=1'), null, 'an assignment alone runs nothing');
+});
+
+test('regression: the reading behind an assignment adds refusals and keeps every one the first reading made', () => {
+  // The plain commit's message is data to the commit. Behind an assignment the first reading still reads the
+  // line as the words of a program it does not know, and its escalation stands.
+  assert.equal(refusalFor('git commit -m "git push origin main"'), null);
+  assert.equal(refusalFor('FOO=1 git commit -m "git push origin main"')?.reason, 'shell-boundary-command');
+});
+
+test('the PowerShell reading has no assignment grammar and adds no second reading; the POSIX reading beside it refuses', () => {
+  assert.equal(
+    classifyShellCommand(
+      'X=1 git send-pack origin main',
+      parseCommand('X=1 git send-pack origin main', 'powershell'),
+    ),
+    null,
+    'the PowerShell reading read an assignment PowerShell has no such grammar for',
+  );
 });
 
 test('regression: a bare `git config section.key` read flows, as do `git config get` and `git config list`', () => {

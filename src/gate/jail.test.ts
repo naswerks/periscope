@@ -127,6 +127,78 @@ test('a relative path is resolved before it is judged, and lands inside when it 
 });
 
 // ---------------------------------------------------------------------------
+// The further roots a write may land in
+// ---------------------------------------------------------------------------
+
+const TEMP = 'C:/Users/agent/AppData/Local/Temp';
+const FURTHER = 'C:/ws/.repositories/tools/k1';
+const rooted = (overrides: Partial<JailOptions> = {}): JailOptions =>
+  jail({ writeRoots: [TEMP, FURTHER], ...overrides });
+
+test('a write under a further root flows, and under the workspace still flows beside it', () => {
+  assert.equal(reasonOf(`${TEMP}/probe.py`, rooted()), null);
+  assert.equal(reasonOf(`${FURTHER}/src/a.ts`, rooted()), null);
+  assert.equal(reasonOf('C:/repo/src/a.ts', rooted()), null);
+});
+
+test('control: the further root is what admits; the same writes with none refuse', () => {
+  assert.equal(reasonOf(`${TEMP}/probe.py`), 'path-escapes-root');
+  assert.equal(reasonOf(`${FURTHER}/src/a.ts`), 'path-escapes-root');
+});
+
+test('a write outside every root refuses, and the refusal names each root', () => {
+  const found = checkPath('C:/ws/k2/src/a.ts', rooted());
+  assert.equal(found?.reason, 'path-escapes-root');
+  assert.equal(
+    found?.detail,
+    `C:/ws/k2/src/a.ts is outside every root a write may land in: C:/repo, ${TEMP}, ${FURTHER}`,
+  );
+});
+
+test('regression: with the workspace root alone the refusal is the sentence it always was', () => {
+  assert.equal(
+    checkPath('C:/elsewhere/a.ts', jail())?.detail,
+    'C:/elsewhere/a.ts is outside the declared workspace root C:/repo',
+  );
+  assert.equal(
+    checkPath('C:/elsewhere/a.ts', jail({ writeRoots: [] }))?.detail,
+    'C:/elsewhere/a.ts is outside the declared workspace root C:/repo',
+  );
+});
+
+test('regression: a protected path under a further root is a credential denial', () => {
+  const options = rooted({ protectedPaths: [`${TEMP}/agent-home/.credentials.json`, `${FURTHER}/.env`] });
+  assert.equal(reasonOf(`${TEMP}/agent-home/.credentials.json`, options), 'credential-path-denied');
+  assert.equal(reasonOf(`${FURTHER}/.env`, options), 'credential-path-denied');
+});
+
+test('a further root that cannot be resolved admits nothing and refuses nothing on its own', () => {
+  const options = rooted({
+    resolve: (candidate) => {
+      if (candidate === TEMP) throw new Error('the root vanished');
+      return fakeResolve(candidate);
+    },
+  });
+  assert.equal(reasonOf(`${TEMP}/probe.py`, options), 'path-escapes-root');
+  assert.equal(reasonOf('C:/repo/src/a.ts', options), null);
+  assert.equal(reasonOf(`${FURTHER}/src/a.ts`, options), null);
+});
+
+test('a blank further root is no root', () => {
+  assert.equal(reasonOf('C:/x/a.ts', jail({ writeRoots: ['  ', ''] })), 'path-escapes-root');
+});
+
+test('the sibling-prefix guard holds for a further root too', () => {
+  assert.equal(reasonOf(`${TEMP}-other/x.txt`, rooted()), 'path-escapes-root');
+});
+
+test('further roots with no workspace root admit inside themselves only', () => {
+  const options = jail({ workspaceRoot: null, writeRoots: [TEMP] });
+  assert.equal(reasonOf(`${TEMP}/a`, options), null);
+  assert.equal(reasonOf('C:/repo/src/a.ts', options), 'path-escapes-root');
+});
+
+// ---------------------------------------------------------------------------
 // The credential denial. The gate is the only control here.
 // ---------------------------------------------------------------------------
 

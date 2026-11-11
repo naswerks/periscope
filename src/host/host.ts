@@ -170,6 +170,7 @@ import {
   readWorkspaceFile,
 } from './repository-read.js';
 import { agentTranscriptPaths, homeDirectory, nodePathResolver } from './paths.js';
+import { sessionTempRoots } from './write-roots.js';
 import {
   QWEN_MODE_MAP,
   isBypassMode,
@@ -1981,6 +1982,18 @@ export class PeriscopeHost {
       spawnEnv = { ...spawnEnv, ...env };
     };
 
+    // Where else a write may land: the temp folder the session's environment names, read once now. It is
+    // no root when it would cover the home directory, a protected path, a workspace or a checkout, or sit
+    // inside a workspace or a checkout; the fence is what keeps a planted setting out of the next session.
+    const home = this.#options.home === undefined ? homeDirectory() : this.#options.home;
+    const enclosing = [provider?.workspaceRoot, provider?.repositoryRoot].filter(
+      (path): path is string => path !== undefined,
+    );
+    const writeRoots = sessionTempRoots(spawnEnv, {
+      notAbove: [...(home === null ? [] : [home]), ...this.#options.protectedPaths, ...enclosing, cwd],
+      notBeneath: enclosing,
+    });
+
     const composed = composeSession({
       registry: this.#registry,
       sessionKey,
@@ -1996,9 +2009,10 @@ export class PeriscopeHost {
       // local gate is opt-in is a host most embedders run without one.
       localGate: localGate({
         workspaceRoot: cwd,
+        ...(writeRoots.length === 0 ? {} : { writeRoots }),
         resolve: nodePathResolver,
         protectedPaths: this.#options.protectedPaths,
-        home: this.#options.home === undefined ? homeDirectory() : this.#options.home,
+        home,
         spawnEnv: () => spawnEnv,
         // A Codex session's tools are Codex's: its own names, its shell read in the grammar it runs
         // in, and its paths relative to where the call runs.
