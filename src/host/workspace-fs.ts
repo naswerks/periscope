@@ -13,7 +13,7 @@
  * for and nothing to escape.
  */
 import { execFile } from 'node:child_process';
-import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, realpath, rm, stat } from 'node:fs/promises';
 
 import type { CommandEffects, WorkspaceEffects } from '../workspace/provider.js';
 
@@ -48,6 +48,9 @@ export const nodeWorkspaceEffects: WorkspaceEffects = {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;
     }
+  },
+  realPath(path: string): Promise<string> {
+    return realpath(path);
   },
 };
 

@@ -2235,6 +2235,44 @@ test('a session naming a further repository gets its own worktree of it at its k
   assert.deepEqual(spawning?.where.repositories, [{ repository: 'tools', worktree: TOOLS_K1, branch: null }]);
 });
 
+test('regression: a further worktree reports the path the host made, never a checkout around it, and its branch only when it is a worktree itself', async () => {
+  // A checkout around the layout, on a branch of its own: the git facts are read up from a path, so a
+  // further worktree with no `.git` of its own would find this one.
+  const around = (await tempDir('further-where')).replace(/\\/g, '/');
+  try {
+    await mkdir(join(around, '.git'), { recursive: true });
+    await writeFile(join(around, '.git', 'HEAD'), 'ref: refs/heads/operator\n', 'utf8');
+    const under = `${around}/.repositories/tools`;
+    await mkdir(`${under}/bare`, { recursive: true });
+    await mkdir(join(`${under}/own`, '.git'), { recursive: true });
+    await writeFile(join(`${under}/own`, '.git', 'HEAD'), 'ref: refs/heads/tools/own\n', 'utf8');
+    const home = servedProvider('C:/checkouts/home', 'C:/ws', 'main');
+    const tools = servedProvider(`${around}/tools`, under, 'trunk');
+    const { link } = hostOver({
+      workspaces: home.provider,
+      repositories: new Map([['tools', tools.provider]]),
+    });
+
+    for (const [handle, key, branch] of [
+      ['handle-1', 'bare', null],
+      ['handle-2', 'own', 'tools/own'],
+    ] as const) {
+      link.deliver(handle, sessionNew(null, { workspaceKey: key, additionalRepositories: ['tools'] }));
+      await settle();
+      const spawning = link
+        .transitions()
+        .find((transition) => transition.to === 'spawning' && transition.where.cwd === `C:/ws/${key}`);
+      assert.deepEqual(
+        spawning?.where.repositories,
+        [{ repository: 'tools', worktree: `${under}/${key}`, branch }],
+        `the where for ${key}`,
+      );
+    }
+  } finally {
+    await rm(around, { recursive: true, force: true });
+  }
+});
+
 test("a write in the session's further worktree flows; its operator's checkout and another key's worktree refuse", async () => {
   const { link, processes } = servingTwo();
   link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));

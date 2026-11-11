@@ -2036,9 +2036,13 @@ export class PeriscopeHost {
           ? own
           : {
               ...own,
+              // The path the host provisioned, always: the git facts are read up from a path, so a worktree
+              // whose own `.git` is gone would otherwise report whatever checkout encloses it. The branch
+              // is read only when the path is itself that worktree.
               repositories: furtherWorktrees.map(({ repository, path }): TransitionWhereRepository => {
                 const read = readWhere(path);
-                return { repository, worktree: read.worktree ?? path, branch: read.branch };
+                const itself = read.worktree !== null && normalizePath(read.worktree) === normalizePath(path);
+                return { repository, worktree: path, branch: itself ? read.branch : null };
               }),
             };
     } catch (error) {

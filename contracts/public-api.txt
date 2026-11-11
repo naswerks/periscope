@@ -723,7 +723,7 @@ index: interface UserTextItem { readonly itemId: string; readonly kind: "user_te
 index: interface WireRefusal { readonly detail: string; readonly reason: string }
 index: interface WireRefusalUpdate { readonly expected: number; readonly received: number; readonly refusal: WireRefusal; readonly update: "wire_refusal" }
 index: interface Workspace { readonly meta: Readonly<Record<string, string>>; readonly path: string }
-index: interface WorkspaceEffects { exists: (path: string) => Promise<boolean>; listDirectories?: (path: string) => Promise<string[]>; makeDirectory: (path: string) => Promise<void>; removeDirectory: (path: string) => Promise<void> }
+index: interface WorkspaceEffects { exists: (path: string) => Promise<boolean>; listDirectories?: (path: string) => Promise<string[]>; makeDirectory: (path: string) => Promise<void>; realPath?: (path: string) => Promise<string>; removeDirectory: (path: string) => Promise<void> }
 index: interface WorkspaceEntry { readonly aheadCount: number; readonly branch: string; readonly detached: boolean; readonly head: string; readonly key: string; readonly lastCommitAt: string; readonly locked: boolean; readonly merged: boolean; readonly path: string; readonly prunable: boolean }
 index: interface WorkspaceInventory { readonly defaultBranch: string; readonly entries: readonly WorkspaceEntry[] }
 index: interface WorkspaceList { readonly fromIndex: number; readonly kind: "workspace_list"; readonly requestId: string }
@@ -1264,7 +1264,7 @@ workspace: interface PorcelainWorktree { readonly bare: boolean; readonly branch
 workspace: interface ReleaseOptions { readonly deleteBranch?: boolean; readonly force?: boolean; readonly remove?: boolean }
 workspace: interface ReleaseReceipt { readonly branchDeleted: boolean; readonly directoryRemoved: boolean; readonly path: string; readonly refusal: Refusal }
 workspace: interface Workspace { readonly meta: Readonly<Record<string, string>>; readonly path: string }
-workspace: interface WorkspaceEffects { exists: (path: string) => Promise<boolean>; listDirectories?: (path: string) => Promise<string[]>; makeDirectory: (path: string) => Promise<void>; removeDirectory: (path: string) => Promise<void> }
+workspace: interface WorkspaceEffects { exists: (path: string) => Promise<boolean>; listDirectories?: (path: string) => Promise<string[]>; makeDirectory: (path: string) => Promise<void>; realPath?: (path: string) => Promise<string>; removeDirectory: (path: string) => Promise<void> }
 workspace: interface WorkspaceEntry { readonly aheadCount: number; readonly branch: string; readonly detached: boolean; readonly head: string; readonly key: string; readonly lastCommitAt: string; readonly locked: boolean; readonly merged: boolean; readonly path: string; readonly prunable: boolean }
 workspace: interface WorkspaceInventory { readonly defaultBranch: string; readonly entries: readonly WorkspaceEntry[] }
 workspace: interface WorkspaceProvider { defaultBranch?: () => Promise<string | null>; inventory?: () => Promise<Result<WorkspaceInventory>>; keyForPath?: (path: string) => string | null; pathFor?: (key: string) => string; provision: (sessionId: string) => Promise<Result<Workspace>>; readonly repositoryRoot?: string; readonly workspaceRoot?: string; release: (sessionId: string, options?: ReleaseOptions) => Promise<Result<ReleaseReceipt | undefined>> }

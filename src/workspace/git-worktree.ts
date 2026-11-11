@@ -252,8 +252,27 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       ['worktree', 'list', '--porcelain'],
       this.#repositoryRoot,
     );
-    const entry = parseWorktreePorcelain(porcelain).find((worktree) => normalizePath(worktree.path) === path);
+    const spellings = await this.#spellingsOf(path);
+    const entry = parseWorktreePorcelain(porcelain).find((worktree) =>
+      spellings.includes(normalizePath(worktree.path)),
+    );
     return entry?.branch ?? null;
+  }
+
+  /**
+   * Every spelling of `path` git may list it under: as given, and as the filesystem names it when that
+   * differs. git records a worktree under its real path, so a root given in a Windows short form
+   * (`C:/Users/RUNNER~1/…`) would otherwise contain nothing git lists.
+   */
+  async #spellingsOf(path: string): Promise<readonly string[]> {
+    if (this.#effects.realPath === undefined) return [path];
+    try {
+      const real = normalizePath(await this.#effects.realPath(path));
+      return real === path ? [path] : [path, real];
+    } catch {
+      // A path that cannot be read has only the spelling it was given.
+      return [path];
+    }
   }
 
   /** Why `branch` may not be deleted without force, or null when it is merged into the default branch. */
@@ -289,14 +308,14 @@ export class GitWorktreeProvider implements WorkspaceProvider {
         ['worktree', 'list', '--porcelain'],
         this.#repositoryRoot,
       );
-      const provisioned = parseWorktreePorcelain(porcelain)
-        .map((worktree) => ({ ...worktree, path: normalizePath(worktree.path) }))
-        .filter(
-          (worktree) =>
-            !worktree.bare &&
-            worktree.path !== this.#workspaceRoot &&
-            isContainedBy(worktree.path, this.#workspaceRoot),
-        );
+      const roots = await this.#spellingsOf(this.#workspaceRoot);
+      const provisioned = parseWorktreePorcelain(porcelain).flatMap((worktree) => {
+        const path = normalizePath(worktree.path);
+        const root = roots.find((spelling) => path !== spelling && isContainedBy(path, spelling));
+        if (worktree.bare || root === undefined) return [];
+        // Reported in this provider's own spelling, the one `pathFor` and `keyForPath` speak.
+        return [{ ...worktree, path: `${this.#workspaceRoot}${path.slice(root.length)}` }];
+      });
       const defaultBranch = await this.#defaultBranch();
       const merged =
         defaultBranch === null

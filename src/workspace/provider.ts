@@ -160,6 +160,11 @@ export interface WorkspaceEffects {
   removeDirectory(path: string): Promise<void>;
   /** The names of the directories directly under `path`, or an empty list when it does not exist. Optional. */
   listDirectories?(path: string): Promise<string[]>;
+  /**
+   * `path` as the filesystem names it: a Windows short name expanded, a link followed. Rejects when the
+   * path cannot be read. Optional; without it a path has only the spelling it was given.
+   */
+  realPath?(path: string): Promise<string>;
 }
 
 /** Running a command. Separate from the filesystem effects because only one provider needs it. */
