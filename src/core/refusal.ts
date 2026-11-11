@@ -279,9 +279,14 @@ export const REFUSAL_REASONS = [
   //                               per cwd, so a resume moved into a provisioned workspace finds
   //                               nothing and becomes a fresh session that says nothing; refused by
   //                               name instead, on the wire.
+  //   repository-unknown          a `session_new` or a release named a repository this host does not
+  //                               serve beside its home one (or named the home one, which is the
+  //                               session's own). Refused before anything is claimed, so a session is
+  //                               never opened without a place to write it was promised.
   'workspace-provision-failed',
   'workspace-release-failed',
   'resume-cwd-not-honoured',
+  'repository-unknown',
 
   // Tool descriptors the controller hands over, and the schemas they carry.
   //

@@ -84,8 +84,8 @@ property: with the controller unreachable a locally refused call is refused imme
 after `DEFAULT_DECISION_TIMEOUT_MS` reported as an outage. It is synchronous and total by contract;
 an asynchronous local policy would be a second place a decision can hang.
 
-What refuses locally, and only locally: a write that escapes the session's workspace
-(`path-escapes-root`), a read, a write or a search that reaches the protected set
+What refuses locally, and only locally: a write that lands outside every root the session may write in
+(`path-escapes-root`, naming the roots; below), a read, a write or a search that reaches the protected set
 (`credential-path-denied`), and a git invocation whose verb is not on the allow-list. Reads are not
 jailed: a read goes anywhere the host's OS user can read except the protected set. A search (`Grep`,
 `Glob`) is refused when its root (`path`, else the workspace) is at or beneath a protected path and
@@ -122,11 +122,14 @@ cluster is made of `git branch`'s own short options), and `az`'s `--description`
 that starts with `-` and holds no space once its quotes are removed (`--description "- fixed it"` is
 prose). The git verb allow-list reads git where git is a command position's first word (the line's
 start, after a separator, or after `do`, `then`, `else` or `elif`), behind a launcher, as a dashed
-binary, through a shim and as a command word the line names, and nowhere else: behind an assignment,
-`!`, `if`, `while` or `until`, git is another word of that command, and there and inside another
-program's words only the boundary rules read it, because the allow-list there would refuse
-`rg git src` for naming git (what flows for that is listed under What is deliberately not covered,
-below). A raw REST call that
+binary, through a shim, as a command word the line names, and behind leading assignments, and nowhere
+else. A command that opens with `NAME=value` words is read twice, as written and from the program after
+the assignments, which is what a POSIX shell runs, so `X=1 git worktree prune` refuses as
+`git worktree prune` does and `GIT_INDEX_FILE=x git read-tree HEAD` flows; the first reading is kept, so
+nothing that refused before can flow. Behind `!`, `if`, `while` or `until`, git is another word of that
+command, and there and inside another program's words only the boundary rules read it, because the
+allow-list there would refuse `rg git src` for naming git (what flows for that is listed under What is
+deliberately not covered, below). A raw REST call that
 merges (`gh api`, `az rest`) is not parsed. Such a shape is classified locally and
 then escalated like any other call, because a controller may hold it for a person to answer; refusing
 it in-process would make that answer impossible to give. With the controller unreachable it refuses at
@@ -138,8 +141,35 @@ the decision deadline.
 - A throwing local gate refuses; it must not fall through (`askLocalGate` in `src/gate/call-decision.ts`).
 - The vocabulary is owned locally, never received. The wire carries no policy in either direction;
   the embedder chooses tool families and protected paths at construction.
+- **Where a session may write.** A file-writing call is admitted inside any of the session's roots, and
+  the protected set is checked first, so a credential under a root still refuses. The roots are its own
+  directory (`LocalGateOptions.workspaceRoot`) and the further roots the host hands the gate
+  (`writeRoots`): the temp folder this host's environment names (`TEMP`, then `TMP`, on Windows; `TMPDIR`,
+  else `/tmp`, elsewhere), read once at the open, with its real path beside when it is spelled otherwise
+  (a short name, a link); and its own worktree of each further repository it named
+  (`session_new.additionalRepositories`). A temp folder a controller places in the session's environment
+  is never a root: the session runs with it, and a write there refuses unless another root covers it.
+  Claude is handed no further root as a directory of its own (see `SECURITY.md`); Codex's sandbox is
+  handed each further worktree, and on Windows the temp folder, because its `workspace-write` admits a
+  temp folder only through `TMPDIR`. On Windows with neither variable named there is no temp root:
+  the system's fallback is the user's profile. A temp folder is no root when it would cover the home
+  directory, a protected path, a workspace or a served repository's checkout, or sit inside a workspace or
+  a checkout (`src/host/write-roots.ts`), because a planted hook or setting there runs code in the owner's
+  next session. Never a root: the operator's checkout of any served repository, another key's worktree, a
+  home configuration. The temp folder is shared by every session on the machine; the protected set is what
+  keeps credentials out of it. A refusal with one root reads as it always did; with more it names each.
+  Reads, searches and a relative path's placement still use the session's directory alone.
+- **The local git the allow-list admits, and where the line sits.** Reads, local-only writes and
+  download-only network, organised around publishing: `read-tree` and `checkout-index` (a baseline tree
+  built into an index and a folder of the caller's choosing), `show-ref`, `clone` (a new repository, sending
+  nothing), `archive` of a local tree, and `worktree add` beside `worktree list`. Still refused: `archive`
+  with `--remote` or `--exec` in any abbreviation git accepts (it asks another repository's server, and
+  names what that server runs), every other `worktree` subcommand (`prune`, `remove`, `move` and `lock`
+  change or delete a tree another session may be using), every `config` write (it lands in the shared
+  `.git/config`, where `core.hooksPath` or `core.sshCommand` runs code in every worktree), and `send-pack`
+  with the rest of the publishing plumbing.
 - Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
-  workspace, with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome, piHome })` as the protected set and the home directory
+  roots (above), with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome, piHome })` as the protected set and the home directory
   the shell scan expands from `homeDirectory(env)`, and the session's spawn environment its path
   variables are read from. That set, stated once (`src/host/paths.ts`): the
   host's own config directory (`PERISCOPE_CONFIG_DIR` or `~/.periscope`, which holds the token
@@ -177,7 +207,13 @@ the decision deadline.
   readings that scan more. A POSIX command is read once more with each `$( … )`, `${ … }` and backtick
   kept inside its word, in order, for the command words an expansion supplies whose program the line
   names; in that reading the word a redirection names is a file (`G=git; echo hi > $G` runs `echo`),
-  and `do`, `then`, `else` and `elif` open a command only as a command's first word. The classifier
+  and `do`, `then`, `else` and `elif` open a command only as a command's first word. A heredoc fed to a
+  program that is neither a shell nor a data receiver (`python -`, `node`, an unknown executor) is also
+  read whole by the residual check, Layer 1 only, with each line's `#` comments blanked (a `#` that begins
+  a word outside a quote): such a program may run a string in it as a command, and only the whole body
+  holds that string's words in order, so `os.system("git push origin main")`,
+  `subprocess.run("git push origin main", shell=True)` and `subprocess.run(["git", "push", "origin", "main"])`
+  each escalate as a push, and a string naming no boundary operation still flows. The classifier
   refuses when any reading refuses. `src/gate/shell.property.test.ts` holds totality, determinism and
   monotone refusal under quoting and composition, and `scripts/classifier-diff.mjs` measures a change
   to the classifier: it classifies one corpus with two builds, prints every answer that moved, and
@@ -480,7 +516,8 @@ opens at `intercepted-with-residual`.
   could open the door is made unrepresentable rather than handled.
 - Shell shapes the classifier lets through, each a known gap rather than a choice:
   - git's plumbing publish where only the boundary rules read: inside another program's words
-    (`ssh build-host git send-pack origin main`), and after a backslash before a quote
+    (`ssh build-host git send-pack origin main`), in a string an interpreter's heredoc runs
+    (`os.system("git send-pack origin main")`), and after a backslash before a quote
     (`echo \" ; git send-pack origin main`), where the quote is read as opening a span, so the rest of
     the line is one word of `echo`'s. The same shapes with `git push` refuse as `git-push`.
   - a command word an expansion supplies whose program the line does not name, which is not guessed:
@@ -508,9 +545,9 @@ opens at `intercepted-with-residual`.
     `printf -v G git; $G push origin main`).
   - a named command word behind `if`, `while` or `until` (`G=git; if $G push origin main; then :; fi`,
     `G=git; while $G push origin main; do :; done`).
-  - git's plumbing publish behind an assignment or a keyword, where only the boundary rules read it
-    (`FOO=1 git send-pack origin main`, `! git send-pack origin main`,
-    `if git send-pack origin main; then :; fi`); the same shapes with `git push` refuse as `git-push`.
+  - git's plumbing publish behind a keyword, where only the boundary rules read it
+    (`! git send-pack origin main`, `if git send-pack origin main; then :; fi`); the same shapes with
+    `git push` refuse as `git-push`.
   - a quoted option or subcommand (`git reset "--hard"`, `git branch "-d" topic`, `gh pr "merge" 5`,
     `gh "pr" merge 5`), which the program reads as the option and the rules read as a word.
   - a ruled program's name as a launcher option's value, which takes the place of the command the

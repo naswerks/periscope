@@ -57,6 +57,7 @@ interface Started {
 function started(
   overrides: Partial<AgentProcessRequest> = {},
   options: Partial<FakeCodexOptions> = {},
+  writeRoots: readonly string[] = [],
 ): Started {
   const fake = fakeCodex({ codexHome: HOME, ...options });
   const degrades: string[] = [];
@@ -71,6 +72,9 @@ function started(
       closeGraceMs: 30,
     },
     (detail) => degrades.push(detail),
+    null,
+    null,
+    writeRoots,
   );
   const messages: CodexMessage[] = [];
   const ended = (async (): Promise<Error | null> => {
@@ -386,6 +390,46 @@ test('setModel applies at the next turn; null returns to the model the thread op
     'a model rode a turn nobody changed',
   );
   assert.equal((await nextTurn(session, () => session.process.setModel(null)))['model'], 'gpt-6-luna');
+  session.process.close();
+});
+
+const FURTHER_ROOTS = ['C:/ws/.repositories/tools/k1', 'C:/Users/agent/AppData/Local/Temp'];
+
+test("a session with further roots hands them to Codex's sandbox at start, in the thread's config and on every mode switch", async () => {
+  const session = started({}, {}, FURTHER_ROOTS);
+  await opened(session);
+  assert.ok(
+    session.fake.child.spawned?.args.includes(
+      `sandbox_workspace_write.writable_roots=${JSON.stringify(FURTHER_ROOTS)}`,
+    ),
+    `the app-server was not started with the roots: ${session.fake.child.spawned?.args.join(' ') ?? ''}`,
+  );
+  const thread = params(session.fake.server.requestsOf('thread/start')[0]);
+  assert.deepEqual(
+    (thread['config'] as Record<string, unknown>)['sandbox_workspace_write.writable_roots'],
+    FURTHER_ROOTS,
+  );
+  const switched = await nextTurn(session, () => session.process.setPermissionMode('dontAsk'));
+  assert.deepEqual(switched['sandboxPolicy'], { type: 'workspaceWrite', writableRoots: FURTHER_ROOTS });
+  const bypass = await nextTurn(session, () => session.process.setPermissionMode('bypassPermissions'));
+  assert.deepEqual(
+    bypass['sandboxPolicy'],
+    { type: 'dangerFullAccess' },
+    'a root rode a policy with no sandbox',
+  );
+  session.process.close();
+});
+
+test('regression: a session with no further roots starts Codex with the flags it always had', async () => {
+  const session = started();
+  await opened(session);
+  assert.equal(
+    session.fake.child.spawned?.args.some((arg) => arg.startsWith('sandbox_workspace_write')),
+    false,
+    'a session with no roots was given a writable-roots flag',
+  );
+  const switched = await nextTurn(session, () => session.process.setPermissionMode('dontAsk'));
+  assert.deepEqual(switched['sandboxPolicy'], { type: 'workspaceWrite' });
   session.process.close();
 });
 

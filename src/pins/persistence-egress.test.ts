@@ -25,12 +25,14 @@ import type { SessionFrame, SessionNew } from '../control/frames.js';
 import { SESSION_NEW_KEYS, SESSION_NEW_REQUEST_KEYS, sessionNew } from '../control/frames.js';
 import { decode, encode } from '../control/codec.js';
 
+// Every member stated, the one added inside the window as null: the builder omits that one when it is
+// not asked for, so a frame that leaves it out is the one the version before sent.
 const startSession = (): SessionFrame => ({
   frame: 'session',
   sessionId: 's-1',
   seq: 1,
   at: '2026-08-04T12:00:00Z',
-  payload: sessionNew('/workspace') satisfies SessionNew,
+  payload: sessionNew('/workspace', { additionalRepositories: null }) satisfies SessionNew,
 });
 
 const framesSource = (): string => {

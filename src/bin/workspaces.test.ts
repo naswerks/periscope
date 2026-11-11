@@ -17,7 +17,9 @@ import {
   type WorkspaceConfig,
   branchNameProblem,
   branchRenderer,
+  furtherWorkspacesFor,
   hostConfigurationOf,
+  repositoryRootsProblem,
   workspaceCapabilitiesOf,
   workspacePostureProblem,
   workspacesFor,
@@ -386,4 +388,102 @@ test('control: the reported values and the mode marker agree for every posture',
       }
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// The repositories served beside the home one, and a relative root
+// ---------------------------------------------------------------------------
+
+const HOME_POSTURE: {
+  readonly workspaceRoot: string | null;
+  readonly repositoryRoot: string | null;
+  readonly branchScheme: string | null;
+  readonly workspaceKey: string | null;
+} = {
+  workspaceRoot: '/srv/ws',
+  repositoryRoot: '/srv/home',
+  branchScheme: null,
+  workspaceKey: null,
+};
+
+test('regression: a relative workspace or repository root refuses the start by name', () => {
+  assert.match(
+    workspacePostureProblem({ ...HOME_POSTURE, workspaceRoot: 'ws' }) ?? '',
+    /^PERISCOPE_WORKSPACE_ROOT must be an absolute path/,
+  );
+  assert.match(
+    workspacePostureProblem({ ...HOME_POSTURE, repositoryRoot: 'checkouts/home' }) ?? '',
+    /^PERISCOPE_REPOSITORY_ROOT must be an absolute path/,
+  );
+  // The control: the same posture with absolute roots passes.
+  assert.equal(workspacePostureProblem(HOME_POSTURE), null);
+});
+
+test('a list of further repositories passes when each is absolute, named once and not the home one', () => {
+  assert.equal(
+    workspacePostureProblem({ ...HOME_POSTURE, repositoryRoots: ['/srv/tools', '/srv/docs'] }),
+    null,
+  );
+  assert.equal(repositoryRootsProblem(HOME_POSTURE, []), null);
+});
+
+test('regression: the further repositories refuse the start by name, each rule on its own', () => {
+  const refusals: Array<[readonly string[], RegExp, Partial<typeof HOME_POSTURE>?]> = [
+    [
+      ['/srv/tools'],
+      /needs both PERISCOPE_WORKSPACE_ROOT and PERISCOPE_REPOSITORY_ROOT/,
+      { repositoryRoot: null },
+    ],
+    [['/srv/tools'], /needs both/, { workspaceRoot: null }],
+    [Array.from({ length: 9 }, (_, index) => `/srv/r${index}`), /names 9 repositories; at most 8/],
+    [['tools'], /must name absolute paths/],
+    [['/srv/home'], /which is the home repository/],
+    [['/srv/HOME'], /which is the home repository/],
+    [['/srv/.hidden'], /begins with '.'/],
+    [['/srv/a b'], /contains ' '/],
+    [['/srv/x/tools', '/srv/y/tools'], /both would be PERISCOPE_WORKTREE_TOOLS/],
+    [['/srv/x/Tools', '/srv/y/tools'], /both would be PERISCOPE_WORKTREE_TOOLS/],
+    [['/srv/my-tools', '/srv/my_tools'], /both would be PERISCOPE_WORKTREE_MY_TOOLS/],
+    [['/srv/elsewhere/home'], /'home' beside 'home'/],
+    [[`/srv/${'n'.repeat(201)}`], /cannot name a repository/],
+  ];
+  for (const [roots, expected, change] of refusals) {
+    const problem = repositoryRootsProblem({ ...HOME_POSTURE, ...change }, roots);
+    assert.match(problem ?? '', expected, roots.join(';'));
+    assert.match(problem ?? '', /^PERISCOPE_REPOSITORY_ROOTS/, 'the refusal does not name the key');
+  }
+});
+
+test('regression: a list whose names and roots are past the hello budget refuses the start', () => {
+  const long = Array.from({ length: 8 }, (_, index) => `/srv/${'d'.repeat(600)}/r${index}`);
+  assert.match(repositoryRootsProblem(HOME_POSTURE, long) ?? '', /past the hello's 4096/);
+});
+
+test('one provider per further repository, its worktrees beneath .repositories, its branch named for it', () => {
+  const providers = furtherWorkspacesFor({
+    workspaceRoot: '/srv/ws',
+    repositoryRoot: '/srv/home',
+    branchScheme: null,
+    repositoryRoots: ['/srv/tools'],
+  });
+  assert.deepEqual([...providers.keys()], ['tools']);
+  const tools = providers.get('tools');
+  assert.ok(tools instanceof GitWorktreeProvider);
+  assert.equal(tools.repositoryRoot, '/srv/tools');
+  assert.equal(tools.workspaceRoot, '/srv/ws/.repositories/tools');
+  assert.equal(tools.pathFor('k1'), '/srv/ws/.repositories/tools/k1');
+  // The home provider is untouched beside it: its worktrees stay directly under the workspace root.
+  const home = workspacesFor({ workspaceRoot: '/srv/ws', repositoryRoot: '/srv/home', branchScheme: null });
+  assert.equal(home?.pathFor?.('k1'), '/srv/ws/k1');
+});
+
+test('no further providers without a list, or where sessions get no git worktrees', () => {
+  assert.equal(
+    furtherWorkspacesFor(config({ workspaceRoot: '/srv/ws', repositoryRoot: '/srv/home' })).size,
+    0,
+  );
+  assert.equal(
+    furtherWorkspacesFor(config({ workspaceRoot: '/srv/ws', repositoryRoots: ['/srv/tools'] })).size,
+    0,
+  );
 });

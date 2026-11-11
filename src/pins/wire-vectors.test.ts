@@ -793,6 +793,38 @@ const AUTHORED = {
         ),
       ),
     },
+    // Protocol 19: a further repository this host does not serve, refused before anything is claimed.
+    {
+      name: 'session_update.open-refused-repository-unknown',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused(
+            'repository-unknown',
+            'session_new.additionalRepositories names docs, which this host does not serve; beside its home one it serves tools',
+          ),
+        ),
+      ),
+    },
+    // Protocol 19: a session with its own worktree of a further repository reports it where it reports
+    // its own.
+    {
+      name: 'session_update.state-transition-repositories',
+      frame: session(
+        stateTransitionUpdate({
+          ...TRANSITION_READY,
+          where: {
+            ...TRANSITION_READY.where,
+            repositories: [
+              {
+                repository: 'tools',
+                worktree: '/work/.repositories/tools/effort-1',
+                branch: 'tools/effort-1',
+              },
+            ],
+          },
+        }),
+      ),
+    },
     {
       name: 'session_update.open-refused-endpoint-incompatible',
       frame: session(
@@ -1062,6 +1094,12 @@ const AUTHORED = {
       ),
     },
     { name: 'session_new.minimal', frame: session(sessionNew(null)) },
+    // Protocol 19: a session's own worktree of a further repository, at its workspace key. The twin
+    // above names none, and its bytes are version 18's.
+    {
+      name: 'session_new.additional-repositories',
+      frame: session(sessionNew(null, { workspaceKey: 'effort-1', additionalRepositories: ['tools'] })),
+    },
     {
       name: 'session_new.runtime',
       frame: session(sessionNew('/work/repo', { request: sessionNewRequest({ runtime: 'claude' }) })),
@@ -1287,6 +1325,11 @@ const AUTHORED = {
   ],
   workspace_release: [
     { name: 'workspace_release.request', frame: session(workspaceRelease('request-5', 'workspace-1')) },
+    // Protocol 19: the worktree is of a further repository; the twin above names none, and is version 18's.
+    {
+      name: 'workspace_release.repository',
+      frame: session(workspaceRelease('request-5', 'effort-1', { repository: 'tools' })),
+    },
     {
       name: 'workspace_release.by-path-delete-branch',
       frame: session(
@@ -1455,6 +1498,44 @@ const AUTHORED = {
             },
           ],
           { totalCount: 27, nextIndex: 25, defaultBranch: 'main' },
+        ),
+      ),
+    },
+    // Protocol 19: a host serving a further repository names each entry's repository, null for the home one.
+    {
+      name: 'workspace_list_result.repositories',
+      frame: session(
+        workspaceListResult(
+          'request-7',
+          [
+            {
+              key: 'effort-1',
+              path: '/srv/repo-workspaces/effort-1',
+              branch: 'repo/effort-1',
+              head: '2222222222222222222222222222222222222222',
+              detached: false,
+              locked: false,
+              prunable: false,
+              merged: false,
+              aheadCount: 2,
+              lastCommitAt: '2026-09-09T08:30:00+00:00',
+              repository: null,
+            },
+            {
+              key: 'effort-1',
+              path: '/srv/repo-workspaces/.repositories/tools/effort-1',
+              branch: 'tools/effort-1',
+              head: '3333333333333333333333333333333333333333',
+              detached: false,
+              locked: false,
+              prunable: false,
+              merged: false,
+              aheadCount: 1,
+              lastCommitAt: '2026-09-09T08:00:00+00:00',
+              repository: 'tools',
+            },
+          ],
+          { totalCount: 2, defaultBranch: 'main' },
         ),
       ),
     },
@@ -1656,6 +1737,29 @@ const AUTHORED = {
         capabilities: [],
         cursors: [],
         configuration: { ...unsetHostConfiguration(), endpoints: [ENDPOINT] },
+        pendingRestart: [],
+        protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+      }),
+    },
+    // Protocol 19: the repositories a host serves, its home one first.
+    {
+      name: 'link_hello.repositories',
+      frame: control({
+        kind: 'link_hello',
+        protocolVersion: PROTOCOL_VERSION,
+        hostId: 'host-1',
+        capabilities: ['workspace:git-worktree'],
+        cursors: [],
+        configuration: {
+          ...unsetHostConfiguration(),
+          repositoryRoot: '/srv/home',
+          workspaceRoot: '/srv/ws',
+          branchScheme: '{repo}/{key}',
+          repositories: [
+            { name: 'home', root: '/srv/home', defaultBranch: 'main' },
+            { name: 'tools', root: '/srv/tools', defaultBranch: null },
+          ],
+        },
         pendingRestart: [],
         protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
       }),
@@ -2098,6 +2202,20 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
     name: 'refused.over-limit',
     wire: `{"padding":"${'x'.repeat(MAX_FRAME_BYTES)}"}`,
     expect: refused('frame-too-large'),
+  },
+  // The well-formed twin is `session_new.additional-repositories`; here one repository is named twice.
+  {
+    name: 'refused.session-new-repository-twice',
+    wire: sessionWire({
+      kind: 'session_new',
+      cwd: null,
+      workspaceKey: null,
+      correlationId: null,
+      request: null,
+      gate: null,
+      additionalRepositories: ['tools', 'tools'],
+    }),
+    expect: refused('frame-malformed'),
   },
   // The well-formed twin is `repository_read.paged`; only the offset differs: an offset is whole bytes.
   {

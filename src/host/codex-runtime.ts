@@ -351,6 +351,7 @@ export function codexNativeRuntime(config: CodexRuntimeConfig): NativeRuntime<Co
         degrade,
         route.endpoint,
         isCodexSessionGate(route.gate) ? route.gate : null,
+        route.writeRoots ?? [],
       );
     },
     readInit(message) {

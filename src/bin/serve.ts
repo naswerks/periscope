@@ -67,11 +67,13 @@ import {
   reconfigureHost,
 } from './reconfigure.js';
 import {
+  furtherWorkspacesFor,
   hostConfigurationOf,
   workspaceCapabilitiesOf,
   workspacePostureProblem,
   workspacesFor,
 } from './workspaces.js';
+import { parseRepositoryRoots, repositoryWorkTreeProblem } from '../host/repository-roots.js';
 
 /**
  * How long the fatal-credential path holds the event loop open before exiting explicitly.
@@ -146,6 +148,8 @@ interface Config {
    * get a linked git worktree on their own branch instead of a plain directory; see `workspacesFor`.
    */
   readonly repositoryRoot: string | null;
+  /** The repositories served beside the home one (`PERISCOPE_REPOSITORY_ROOTS`, parsed). Empty = none. */
+  readonly repositoryRoots: readonly string[];
   /** The branch template worktree branches render from. Null = the provider's fallback. */
   readonly branchScheme: string | null;
   /** The key an unkeyed session provisions at. Null = the session key. */
@@ -276,6 +280,7 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     decisionUrl,
     workspaceRoot: env['PERISCOPE_WORKSPACE_ROOT'] ?? null,
     repositoryRoot: env['PERISCOPE_REPOSITORY_ROOT'] ?? null,
+    repositoryRoots: parseRepositoryRoots(env['PERISCOPE_REPOSITORY_ROOTS']),
     branchScheme: env['PERISCOPE_BRANCH_SCHEME'] ?? null,
     workspaceKey: env['PERISCOPE_WORKSPACE_KEY'] ?? null,
     agentHome: env['PERISCOPE_AGENT_HOME'] ?? null,
@@ -446,8 +451,13 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     repositoryRoot: config.repositoryRoot,
     branchScheme: config.branchScheme,
     workspaceKey: config.workspaceKey,
+    repositoryRoots: config.repositoryRoots,
   });
   if (workspaceMisconfiguration !== null) return refuse(workspaceMisconfiguration);
+  // Each repository served beside the home one is a git work tree, read from the disk now: one that is
+  // not would refuse every session that named it.
+  const notAWorkTree = repositoryWorkTreeProblem(config.repositoryRoots);
+  if (notAWorkTree !== null) return refuse(notAWorkTree);
   // The agent home names credential files the gate protects; a relative one means "relative to a cwd
   // nobody chose", so it is refused at start-up like every other posture problem.
   if (config.agentHome !== null && config.agentHome !== '' && !isAbsolutePath(config.agentHome)) {
@@ -552,6 +562,7 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
   }
 
   const workspaces = workspacesFor(config);
+  const repositories = furtherWorkspacesFor(config);
   const agentHome =
     config.agentHome === null || config.agentHome === '' ? defaultAgentHome(raw) : config.agentHome;
   const homeDir = raw['USERPROFILE'] ?? raw['HOME'] ?? '';
@@ -774,6 +785,8 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     // agent's transcripts, and serves no bulk content of its own. A transcript ask is answered
     // `transcripts-not-served`, and any other `bulk_request` `bulk-target-invalid`.
     ...(workspaces === null ? {} : { workspaces }),
+    // The repositories served beside the home one, each its own provider; the hello lists them.
+    ...(repositories.size === 0 ? {} : { repositories }),
     // The workspace mode rides the hello as capability markers, derived from the same config the
     // selector above consumed: the read half of what `periscope config` writes, and what lets a
     // controller verify a host is set up rather than trusting its operator's memory.

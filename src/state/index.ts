@@ -20,6 +20,7 @@ export type {
   TimeoutEventName,
   TransitionCause,
   TransitionWhere,
+  TransitionWhereRepository,
 } from './model.js';
 export {
   ACTIVITY_KINDS,

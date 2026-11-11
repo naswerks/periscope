@@ -496,6 +496,67 @@ test('inventory lists only the worktrees under the workspace root, with the merg
   assert.deepEqual(calls[4], ['git', 'rev-list', '--count', 'main..periscope/session-150']);
 });
 
+/** A workspace root in a Windows short form, and the long form git records its worktrees under. */
+const SHORT_ROOT = 'C:/Users/RUNNER~1/work';
+const LONG_ROOT = 'C:/Users/runneradmin/work';
+
+function shortRootProvider(withRealPath: boolean): { provider: GitWorktreeProvider; calls: string[][] } {
+  const { calls, commands } = commandsAnswering({
+    worktree: [
+      'worktree C:/repo',
+      'HEAD 1111111111111111111111111111111111111111',
+      'branch refs/heads/main',
+      '',
+      `worktree ${LONG_ROOT}/session-150`,
+      'HEAD 2222222222222222222222222222222222222222',
+      'branch refs/heads/moved-by-the-agent',
+      '',
+    ].join('\n'),
+    'symbolic-ref': 'origin/main',
+    branch: '',
+    'for-each-ref': '',
+    'rev-list': '0',
+  });
+  const effects = recorder([`${SHORT_ROOT}/session-150`]).effects;
+  const provider = new GitWorktreeProvider({
+    repositoryRoot: 'C:/repo',
+    workspaceRoot: SHORT_ROOT,
+    effects: withRealPath
+      ? { ...effects, realPath: async (path: string) => path.replace(SHORT_ROOT, LONG_ROOT) }
+      : effects,
+    commands,
+  });
+  return { provider, calls };
+}
+
+test('regression: a workspace root given in a short form lists, guards and cleans the worktrees git records under its long form', async () => {
+  const { provider, calls } = shortRootProvider(true);
+  const result = await provider.inventory();
+  assert.ok(result.ok, result.ok ? '' : result.refusal.detail);
+  assert.deepEqual(
+    result.value.entries.map((entry) => [entry.key, entry.path]),
+    [['session-150', `${SHORT_ROOT}/session-150`]],
+    'listed in the spelling the provider makes and reads its paths in',
+  );
+  assert.equal(provider.keyForPath(result.value.entries[0]?.path ?? ''), 'session-150');
+
+  const released = await provider.release('session-150', { remove: true, deleteBranch: true, force: true });
+  assert.ok(released.ok);
+  assert.ok(
+    calls.some((call) => call.join(' ') === 'git branch -D moved-by-the-agent'),
+    'the release deleted a branch other than the one its worktree is on',
+  );
+});
+
+test('control: without the filesystem spelling, the same short root lists nothing and its release names the wrong branch', async () => {
+  const { provider, calls } = shortRootProvider(false);
+  const result = await provider.inventory();
+  assert.ok(result.ok);
+  assert.deepEqual(result.value.entries, []);
+  await provider.release('session-150', { remove: true, deleteBranch: true, force: true });
+  assert.ok(calls.some((call) => call.join(' ') === 'git branch -D periscope/session-150'));
+});
+
 test('control: a branch NOT in the merged set reads merged false, so the flag discriminates', async () => {
   const { commands } = commandsAnswering({
     worktree: PORCELAIN,

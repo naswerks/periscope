@@ -127,6 +127,16 @@ export interface WorkspaceProvider {
    * name and get, provider or not: the operator's own checkout has no isolation to protect.
    */
   readonly repositoryRoot?: string;
+  /**
+   * The directory this provider makes its workspaces under, when it has one. The host reads it so that
+   * no other place a session may write can cover another session's workspace.
+   */
+  readonly workspaceRoot?: string;
+  /**
+   * The branch this provider's repository measures merged work against, read now: null when none can be
+   * named. Optional: a provider with no repository has none.
+   */
+  defaultBranch?(): Promise<string | null>;
 }
 
 /**
@@ -150,6 +160,11 @@ export interface WorkspaceEffects {
   removeDirectory(path: string): Promise<void>;
   /** The names of the directories directly under `path`, or an empty list when it does not exist. Optional. */
   listDirectories?(path: string): Promise<string[]>;
+  /**
+   * `path` as the filesystem names it: a Windows short name expanded, a link followed. Rejects when the
+   * path cannot be read. Optional; without it a path has only the spelling it was given.
+   */
+  realPath?(path: string): Promise<string>;
 }
 
 /** Running a command. Separate from the filesystem effects because only one provider needs it. */

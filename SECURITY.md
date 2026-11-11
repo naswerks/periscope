@@ -54,9 +54,25 @@ types.
 ### The gate has a local half, and that is what makes it provable offline
 
 Before anything is asked of your controller, a local rule runs. It only ever _adds_ refusals; it
-can never turn a "no" into a "yes". It refuses, locally and immediately: a path that escapes the
-session's workspace, a read of the credential set, and a git invocation whose verb is not on the
-allow-list, by parsing the command rather than by matching strings. A boundary-crossing shape (a
+can never turn a "no" into a "yes". It refuses, locally and immediately: a write outside every place
+the session may write (its own workspace, the temp folder this host's environment names, and its own
+worktree of each further repository it named), a read of the credential set, and a git invocation whose
+verb is not on the allow-list, by parsing the command rather than by matching strings. A temp folder a
+controller places in a session's environment is never one of those places.
+
+Claude is not given a further worktree as a working directory, because the Claude CLI reads plugin and
+marketplace settings from any directory it is given. Its writes there are allowed by the gate, and the
+path is in the session's environment (`PERISCOPE_WORKTREE_<NAME>`).
+
+Two of those places are shared with something else, and that is stated rather than hidden. The temp
+folder is shared by every session on the machine, so a session can read another's scratch files; the
+protected set is what keeps credentials out of it, and a temp folder that would cover the home
+directory, a protected path, a workspace or a repository checkout is no place to write at all. A
+further worktree shares its repository's one `.git`, so a session holding one can read every branch
+of that repository; that is why every `config` write stays refused (`core.hooksPath` or
+`core.sshCommand` in the shared `.git/config` would run code in every worktree), and why the
+operator's checkout of every served repository, and every other session's worktree, is never a place
+a session may write. A boundary-crossing shape (a
 push, a force, a remote change, a branch deletion, a merge on GitHub or the completion of an Azure
 DevOps pull request) is recognised locally, from the parsed command, but escalated to
 the controller like any other call, so a person can answer it; with the controller unreachable it
@@ -575,9 +591,13 @@ over the link and without a further credential:
   endpoint you did not mark as Anthropic's own route, a Claude model id, or an alias the endpoint does
   not map, is refused (`model-endpoint-mismatch`), at the open and on a later switch, so a provider
   that maps Claude ids to its own model never answers as Claude.
-- **Remove directories.** `workspace_release` deletes a worktree under the workspace root, and the
-  controller can set that root through `host_configure` (a root change is refused only while a
-  session is live or opening).
+- **Remove directories.** `workspace_release` deletes a worktree under the workspace root, of the home
+  repository or of any further repository the host serves, and the controller can set that root
+  through `host_configure` (a root change is refused only while a session is live or opening).
+- **Place a session's writes in every repository the host serves.** A `session_new` naming a further
+  repository gets its own worktree of it, where the session's tools may write and commit; and the
+  controller can set the list of repositories through `host_configure` (`PERISCOPE_REPOSITORY_ROOTS`,
+  refused while a session is live or opening). The operator's checkout of each is never written.
 - **Read files.** Any directory listing under the repository root, and any text file there: its
   head, whatever its size, and its first 512 KiB a page at a time (`repository_list` /
   `repository_read`, read-only and bounded), a root the controller can re-point through
@@ -597,8 +617,9 @@ over the link and without a further credential:
 - **Change a running session's model, thinking and effort.** Through `session_configure`. The effort
   reaches the SDK's flag settings with the one key `effortLevel` and nothing beside it, so none of
   that call's permission keys can ride along (`pins/permission-config.test.ts`).
-- **Reconfigure the host.** The workspace root, the repository root, the branch scheme, the agent
-  home, the plugin directories and the two controller URLs through `host_configure`, written to the
+- **Reconfigure the host.** The workspace root, the repository root, the repositories served beside
+  it, the branch scheme, the agent home, the plugin directories and the two controller URLs through
+  `host_configure`, written to the
   config file; the URLs and the agent home apply at the next start (the hello names them in
   `pendingRestart` until then), so the protected set always covers the agent home the host runs with.
 - **Start a Codex session, where you configured Codex.** Its tool calls go through the gate by

@@ -36,7 +36,7 @@ import type { ControlTier, SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -46,22 +46,19 @@ export const PROTOCOL_VERSION = 18;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 18 adds paging to the repository read: `repository_read.offset`, where a page starts, and
- * `repository_read_result.nextOffset`, where the next one does, null at the end of the file or at
- * `MAX_REPOSITORY_FILE_BYTES`. Both are optional: an ask with no offset is the head read version 17
- * made, with the same members (its cut lands on a character boundary, where 1.8.2's could split one),
- * and `nextOffset` is never composed for a link negotiated below 18. It adds one refusal reason,
- * `transcripts-not-served`: a host of this build does not look for, read or keep the agent's
- * transcript files, and gives that answer to every `transcript_list` and `transcript_tail` (on
- * `transcript_failed`) and to every `bulk_request` whose locator names the `claude-transcript:`
- * namespace (on `bulk_failed`). Every transcript kind still decodes, and both answers are kinds a
- * version-17 controller already reads, its reason read tolerantly, so a version-17 controller is
- * still spoken to: what it sends decodes here unchanged, and what it receives decodes on its side.
+ * Version 19 adds the repositories a host serves beside its home one, and a session's own worktree of
+ * each: `configuration.repositories` in the hello (absent on a host that serves only its home
+ * repository), `session_new.additionalRepositories`, `where.repositories` on a session's transitions,
+ * `repository` on an inventory entry and on a release ask. Every one is optional: a `session_new`
+ * without the member is the session version 18 opened, byte for byte, and a host serving no further
+ * repository sends none of them. It adds one refusal reason, `repository-unknown`, answered to a
+ * `session_new` or a release naming a repository this host does not serve. A version-18 controller
+ * is still spoken to: what it sends decodes here unchanged, and what it receives decodes on its side.
  * The narrowing of `session_new.request.env` that version 14 made (a key a controller places in the
  * spawn environment must be one this host's operator declared, above the floor) holds at every
  * version this host negotiates.
  */
-export const PROTOCOL_VERSION_MIN = 17;
+export const PROTOCOL_VERSION_MIN = 18;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {
@@ -956,6 +953,20 @@ export interface SessionNew {
   readonly request: SessionNewRequest | null;
   /** Per-session gate timings. Null means the host's own defaults. */
   readonly gate: SessionNewGate | null;
+  /**
+   * The further repositories this session also writes in, each by the name the hello's
+   * `configuration.repositories` lists, never the home repository's. For each, the host provisions (or
+   * attaches to) the session's own worktree of that repository at the session's workspace key, on the
+   * branch the scheme renders for it, and sets its path in the session's environment as
+   * `PERISCOPE_WORKTREE_<NAME>` (the name upper-cased, every character outside `A-Z0-9` an underscore).
+   * The session's transitions report each path in `where.repositories`, and its writes are admitted
+   * there as in its own directory. A name this host does not serve refuses the open
+   * `repository-unknown` before anything is claimed. A resumed session names its repositories again.
+   *
+   * Added inside the window: absent, null or empty means none, and a frame without it is the one
+   * version 18 sent. At most `MAX_REPOSITORIES`, no name twice.
+   */
+  readonly additionalRepositories?: readonly string[] | null;
 }
 
 /**
@@ -1126,6 +1137,11 @@ export function sessionNew(
     correlationId: asked.correlationId ?? null,
     request: asked.request ?? null,
     gate: asked.gate ?? null,
+    // Added inside the window, so stated only when asked: a frame that names none is the one
+    // version 18 sent, byte for byte.
+    ...(asked.additionalRepositories === undefined
+      ? {}
+      : { additionalRepositories: asked.additionalRepositories }),
   };
 }
 
@@ -1198,6 +1214,7 @@ export const SESSION_NEW_KEYS = {
   correlationId: true,
   request: true,
   gate: true,
+  additionalRepositories: true,
 } as const satisfies Record<keyof SessionNew, true>;
 
 /** A plugin the session should load. Mirrors the SDK's shape; the host narrows it. */
@@ -1528,6 +1545,12 @@ export interface WorkspaceRelease {
   readonly deleteBranch: boolean;
   /** Delete the branch even when it is not merged into the repository's default branch. */
   readonly force: boolean;
+  /**
+   * The repository the worktree is of (protocol 19), by its name; null or absent is the home one. A
+   * name this host does not serve refuses `repository-unknown`. A worktree addressed by `path` with no
+   * repository named is resolved through each repository this host serves.
+   */
+  readonly repository?: string | null;
 }
 
 /**
@@ -1570,6 +1593,8 @@ export interface WorkspaceReleaseEntry {
   readonly path: string | null;
   readonly deleteBranch: boolean;
   readonly force: boolean;
+  /** As `WorkspaceRelease.repository` (protocol 19). */
+  readonly repository?: string | null;
 }
 
 /**
@@ -1600,6 +1625,8 @@ export interface WorkspaceReleaseBulkResult {
 export interface WorkspaceReleaseFlags {
   readonly deleteBranch?: boolean;
   readonly force?: boolean;
+  /** The repository the worktree is of; stated only when given, so an ask without it is version 18's. */
+  readonly repository?: string | null;
 }
 
 /** Build a `workspace_release`. A string target is a key; `{ path }` addresses by path. */
@@ -1615,6 +1642,7 @@ export function workspaceRelease(
     path: typeof target === 'string' ? null : target.path,
     deleteBranch: flags.deleteBranch ?? false,
     force: flags.force ?? false,
+    ...(flags.repository === undefined ? {} : { repository: flags.repository }),
   };
 }
 
@@ -1755,6 +1783,13 @@ export interface WorkspaceListEntry {
    */
   readonly aheadCount: number | null;
   readonly lastCommitAt: string | null;
+  /**
+   * The repository the worktree is of (protocol 19): a name the hello's `configuration.repositories`
+   * lists, null for the home repository. On a host serving further repositories every entry carries
+   * it; a host serving its home repository alone omits it, and every entry is the home one's. `merged`
+   * and `aheadCount` are measured against that repository's own default branch.
+   */
+  readonly repository?: string | null;
 }
 
 /**
@@ -2257,6 +2292,34 @@ export interface HostPlugin {
   readonly path: string;
 }
 
+/**
+ * The most repositories a host serves beside its home one, and so the most a `session_new` names in
+ * `additionalRepositories`. The hello's list carries the home repository too.
+ */
+export const MAX_REPOSITORIES = 8;
+
+/** The longest name a repository goes by: its root's last path segment, which a branch and a directory carry. */
+export const MAX_REPOSITORY_NAME_LENGTH = 200;
+
+/**
+ * The most bytes the hello's `configuration.repositories` may take, as JSON. Each member is bounded on
+ * its own, and the whole list is bounded too, so a hello with every other list at its own bound still
+ * fits one frame: the host refuses at start a list whose names and roots are past it, and a list its
+ * default branches carry past it rides as `repositories: null`, named on the host's trace.
+ */
+export const MAX_REPOSITORY_CATALOG_BYTES = 4 * 1024;
+
+/**
+ * One repository this host serves: the name a `session_new` names it by (its root's last path segment,
+ * which the branch scheme's `{repo}` renders), the root the host makes its worktrees from, and the branch
+ * its inventory measures merged work against, null when none could be named.
+ */
+export interface HostRepository {
+  readonly name: string;
+  readonly root: string;
+  readonly defaultBranch: string | null;
+}
+
 /** The most models a catalog lists. The agent offers a handful; a hello is not a registry. */
 export const MAX_AGENT_MODELS = 32;
 
@@ -2458,6 +2521,15 @@ export interface HostConfiguration {
    * null, absent when it is absent and from a host one release behind. Never settable.
    */
   readonly agentSkills?: readonly HostAgentSkills[] | null;
+  /**
+   * The repositories this host serves (protocol 19), its home repository first (the one
+   * `repositoryRoot` names) and then each its operator configured beside it, at most
+   * `MAX_REPOSITORIES + 1`, held to `MAX_REPOSITORY_CATALOG_BYTES` as JSON. A `session_new` names the
+   * others in `additionalRepositories` by `name`. Absent when the host serves its home repository alone,
+   * and from a host one release behind; null when the list could not ride within its bound. Settable
+   * over the link through `PERISCOPE_REPOSITORY_ROOTS`, while no session is live or opening.
+   */
+  readonly repositories?: readonly HostRepository[] | null;
 }
 
 /** A `HostConfiguration` with nothing set: what a host composed without one reports. */

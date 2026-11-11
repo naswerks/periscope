@@ -165,9 +165,10 @@ const allow = async (): Promise<unknown> => ({ behavior: 'allow' });
 const registryOver = (
   start: (request: AgentProcessRequest) => AgentProcess,
   startTimeoutMs?: number,
+  baseEnv: Readonly<Record<string, string>> = { PATH: 'p' },
 ): SessionRegistry =>
   new SessionRegistry({
-    baseEnv: { PATH: 'p' },
+    baseEnv,
     homeDir: 'C:/nonexistent-home-for-tests',
     clock: fixedClock(AT),
     startProcess: start,
@@ -573,6 +574,8 @@ function hostOver(
   options: {
     processes?: FakeAgents;
     workspaces?: WorkspaceProvider;
+    /** The repositories served beside the home one, by name. Absent means none. */
+    repositories?: ReadonlyMap<string, WorkspaceProvider>;
     events?: HostEvent[];
     bulk?: (what: string) => Result<string>;
     /** The deprecated option, which the host ignores. */
@@ -595,6 +598,8 @@ function hostOver(
     controllerEnvKeys?: readonly string[];
     /** The registry's start window. Absent means its default. */
     startTimeoutMs?: number;
+    /** The environment the registry hands every session. Absent means a bare `PATH`. */
+    baseEnv?: Readonly<Record<string, string>>;
     /** The configuration the embedder composed. Absent means every value unset. */
     configuration?: HostConfiguration;
     /** The protected set. Absent means none. */
@@ -611,12 +616,13 @@ function hostOver(
     decide: allow,
     protectedPaths: options.protectedPaths ?? [],
     ...(options.transcriptPaths === undefined ? {} : { transcriptPaths: options.transcriptPaths }),
-    registry: registryOver(processes.start, options.startTimeoutMs),
+    registry: registryOver(processes.start, options.startTimeoutMs, options.baseEnv),
     link: (handlers) => {
       link.handlers = handlers;
       return link;
     },
     ...(options.workspaces === undefined ? {} : { workspaces: options.workspaces }),
+    ...(options.repositories === undefined ? {} : { repositories: options.repositories }),
     ...(options.bulk === undefined ? {} : { bulk: options.bulk }),
     ...(options.transcriptsRoot === undefined ? {} : { transcriptsRoot: options.transcriptsRoot }),
     ...(options.events === undefined ? {} : { report: (event) => options.events?.push(event) }),
@@ -683,6 +689,66 @@ test('regression: toolFamilies reaches the local gate, so an embedder-named MCP 
   assert.ok(
     link.causes().includes('refusal/path-escapes-root'),
     `the named MCP tool was not jailed locally: ${link.causes().join(', ')}`,
+  );
+});
+
+/** A temp folder in this platform's spelling, which no test machine's own temp folder is. */
+const SESSION_TEMP =
+  process.platform === 'win32' ? 'C:\\Users\\agent\\AppData\\Local\\Temp' : '/var/agent-temp';
+
+/** One `Write` through the session's own gate, answered by the cause the host records for it. */
+async function writeThroughGate(request: AgentProcessRequest, filePath: string): Promise<void> {
+  await callHooks(request, preToolUse('Write', { file_path: filePath }));
+  await settle();
+}
+
+/** This host's own environment, naming the temp folder in this platform's variables. */
+const HOST_TEMP_ENV = { PATH: 'p', TEMP: SESSION_TEMP, TMPDIR: SESSION_TEMP };
+
+test("a write under the temp folder this host's environment names flows, and one outside every root refuses", async () => {
+  const { link, processes } = hostOver({ baseEnv: HOST_TEMP_ENV });
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await settle();
+  const request = processes.started[0]?.request;
+  assert.ok(request !== undefined, 'the session did not start');
+
+  await writeThroughGate(request, `${SESSION_TEMP}/probe.py`);
+  assert.ok(
+    !link.causes().includes('refusal/path-escapes-root'),
+    `a write under the session's temp folder was refused: ${link.causes().join(', ')}`,
+  );
+  await writeThroughGate(request, 'C:/elsewhere/a.txt');
+  assert.ok(link.causes().includes('refusal/path-escapes-root'), 'a write outside every root flowed');
+});
+
+test('control: with no temp folder named in the environment, the same write refuses', async () => {
+  const { link, processes } = hostOver();
+  link.deliver('handle-1', sessionNew('C:/work'));
+  await settle();
+  const request = processes.started[0]?.request;
+  assert.ok(request !== undefined, 'the session did not start');
+
+  await writeThroughGate(request, `${SESSION_TEMP}/probe.py`);
+  assert.ok(
+    link.causes().includes('refusal/path-escapes-root'),
+    `the temp folder admitted a write it was never named for: ${link.causes().join(', ')}`,
+  );
+});
+
+test("regression: a temp folder a controller names in a session's environment is no root a write may land in", async () => {
+  // The controller may place `TEMP` in the spawn, and the session runs with it; the gate's roots are
+  // still read from what this host hands the session, so the folder the controller named stays shut.
+  const { link, processes } = hostOver({ controllerEnvKeys: ['TEMP', 'TMPDIR'] });
+  link.deliver('handle-1', settingEnv({ TEMP: SESSION_TEMP, TMPDIR: SESSION_TEMP }));
+  await settle();
+  const request = processes.started[0]?.request;
+  assert.ok(request !== undefined, 'the session did not start');
+  assert.equal(request.env['TEMP'], SESSION_TEMP, 'the controller could not place TEMP at all');
+
+  await writeThroughGate(request, `${SESSION_TEMP}/probe.py`);
+  assert.ok(
+    link.causes().includes('refusal/path-escapes-root'),
+    `a controller-named temp folder admitted a write: ${link.causes().join(', ')}`,
   );
 });
 
@@ -2111,6 +2177,376 @@ test('two sessions naming one workspaceKey resolve to the same workspace path', 
     processes.started[0]?.request.cwd,
     'one key, two sessions, two different directories; the shared topology did not happen',
   );
+});
+
+// ---------------------------------------------------------------------------
+// The repositories a host serves beside its home one, and a session's own worktree of each
+// ---------------------------------------------------------------------------
+
+/** A provider of one repository, recording what it was asked; its worktrees live under `under`. */
+function servedProvider(
+  repositoryRoot: string,
+  under: string,
+  defaultBranch: string | null,
+): { provider: WorkspaceProvider; provisions: string[]; releases: string[] } {
+  const provisions: string[] = [];
+  const releases: string[] = [];
+  return {
+    provisions,
+    releases,
+    provider: {
+      repositoryRoot,
+      workspaceRoot: under,
+      provision: async (id) => {
+        provisions.push(id);
+        return ok({ path: `${under}/${id}`, meta: {} });
+      },
+      release: async (id) => {
+        releases.push(id);
+        return ok(undefined);
+      },
+      defaultBranch: async () => defaultBranch,
+      keyForPath: (path) => {
+        const key = path.startsWith(`${under}/`) ? path.slice(under.length + 1) : '';
+        return key === '' || key.includes('/') ? null : key;
+      },
+      inventory: async () =>
+        ok({
+          defaultBranch,
+          entries: provisions.map((key, index) => ({
+            key,
+            path: `${under}/${key}`,
+            branch: `${repositoryRoot.split('/').pop() ?? ''}/${key}`,
+            head: null,
+            detached: false,
+            locked: false,
+            prunable: false,
+            merged: false,
+            aheadCount: 0,
+            lastCommitAt: `2026-01-0${index + 1}T00:00:00.000Z`,
+          })),
+        }),
+    },
+  };
+}
+
+/** A host serving `home` and, beside it, `tools`, with fakes for both. */
+function servingTwo(extra: Parameters<typeof hostOver>[0] = {}) {
+  const home = servedProvider('C:/checkouts/home', 'C:/ws', 'main');
+  const tools = servedProvider('C:/checkouts/tools', 'C:/ws/.repositories/tools', 'trunk');
+  const host = hostOver({
+    workspaces: home.provider,
+    repositories: new Map([['tools', tools.provider]]),
+    ...extra,
+  });
+  return { ...host, home, tools };
+}
+
+const TOOLS_K1 = 'C:/ws/.repositories/tools/k1';
+
+test('a session naming a further repository gets its own worktree of it at its key, in its environment and its where', async () => {
+  const { link, processes, home, tools } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+
+  assert.deepEqual(home.provisions, ['k1']);
+  assert.deepEqual(tools.provisions, ['k1'], 'the further worktree was not provisioned at the session key');
+  const request = processes.started[0]?.request;
+  assert.ok(request !== undefined, 'the session did not start');
+  assert.equal(request.env['PERISCOPE_WORKTREE_TOOLS'], TOOLS_K1);
+  const spawning = link.transitions().find((transition) => transition.to === 'spawning');
+  assert.deepEqual(spawning?.where.repositories, [{ repository: 'tools', worktree: TOOLS_K1, branch: null }]);
+});
+
+test('regression: a Claude session naming a further repository is handed no directory beyond its own; its env carries the path', async () => {
+  // The CLI reads plugin and marketplace settings from any directory it is given, so a further worktree
+  // reaches Claude as a variable, and its writes there are the gate's to allow.
+  const { link, processes } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  link.deliver('handle-2', sessionNew(null, { workspaceKey: 'k2' }));
+  await settle();
+  // The session naming none can start first: the other provisions a second worktree before it spawns.
+  const at = (cwd: string): AgentProcessRequest | undefined =>
+    processes.started.find((started) => started.request.cwd === cwd)?.request;
+  const [further, none] = [at('C:/ws/k1'), at('C:/ws/k2')];
+  assert.ok(further !== undefined && none !== undefined, 'the two sessions did not start');
+  assert.deepEqual(Object.keys(further).sort(), Object.keys(none).sort(), 'the request gained a member');
+  assert.equal('additionalDirectories' in further, false);
+  assert.equal(further.env['PERISCOPE_WORKTREE_TOOLS'], TOOLS_K1);
+});
+
+test('regression: a further worktree reports the path the host made, never a checkout around it, and its branch only when it is a worktree itself', async () => {
+  // A checkout around the layout, on a branch of its own: the git facts are read up from a path, so a
+  // further worktree with no `.git` of its own would find this one.
+  const around = (await tempDir('further-where')).replace(/\\/g, '/');
+  try {
+    await mkdir(join(around, '.git'), { recursive: true });
+    await writeFile(join(around, '.git', 'HEAD'), 'ref: refs/heads/operator\n', 'utf8');
+    const under = `${around}/.repositories/tools`;
+    await mkdir(`${under}/bare`, { recursive: true });
+    await mkdir(join(`${under}/own`, '.git'), { recursive: true });
+    await writeFile(join(`${under}/own`, '.git', 'HEAD'), 'ref: refs/heads/tools/own\n', 'utf8');
+    const home = servedProvider('C:/checkouts/home', 'C:/ws', 'main');
+    const tools = servedProvider(`${around}/tools`, under, 'trunk');
+    const { link } = hostOver({
+      workspaces: home.provider,
+      repositories: new Map([['tools', tools.provider]]),
+    });
+
+    for (const [handle, key, branch] of [
+      ['handle-1', 'bare', null],
+      ['handle-2', 'own', 'tools/own'],
+    ] as const) {
+      link.deliver(handle, sessionNew(null, { workspaceKey: key, additionalRepositories: ['tools'] }));
+      await settle();
+      const spawning = link
+        .transitions()
+        .find((transition) => transition.to === 'spawning' && transition.where.cwd === `C:/ws/${key}`);
+      assert.deepEqual(
+        spawning?.where.repositories,
+        [{ repository: 'tools', worktree: `${under}/${key}`, branch }],
+        `the where for ${key}`,
+      );
+    }
+  } finally {
+    await rm(around, { recursive: true, force: true });
+  }
+});
+
+test("a write in the session's further worktree flows; its operator's checkout and another key's worktree refuse", async () => {
+  const { link, processes } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+  const request = processes.started[0]?.request;
+  assert.ok(request !== undefined, 'the session did not start');
+
+  await writeThroughGate(request, `${TOOLS_K1}/src/a.ts`);
+  assert.ok(
+    !link.causes().includes('refusal/path-escapes-root'),
+    `a write in the session's own further worktree was refused: ${link.causes().join(', ')}`,
+  );
+  for (const elsewhere of ['C:/checkouts/tools/src/a.ts', 'C:/ws/.repositories/tools/k2/src/a.ts']) {
+    const before = link.causes().filter((cause) => cause === 'refusal/path-escapes-root').length;
+    await writeThroughGate(request, elsewhere);
+    const after = link.causes().filter((cause) => cause === 'refusal/path-escapes-root').length;
+    assert.equal(after, before + 1, `${elsewhere} was not refused`);
+  }
+});
+
+test('control: a session that names no further repository cannot write in one', async () => {
+  const { link, processes, tools } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1' }));
+  await settle();
+  const request = processes.started[0]?.request;
+  assert.ok(request !== undefined, 'the session did not start');
+  assert.deepEqual(tools.provisions, [], 'a worktree was provisioned nobody asked for');
+  assert.equal(request.env['PERISCOPE_WORKTREE_TOOLS'], undefined);
+
+  await writeThroughGate(request, `${TOOLS_K1}/src/a.ts`);
+  assert.ok(link.causes().includes('refusal/path-escapes-root'), 'a worktree nobody named was writable');
+});
+
+test('a second session holding the same key attaches to the same further worktree', async () => {
+  const { link, processes, tools } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+  link.deliver('handle-2', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+
+  assert.deepEqual(tools.provisions, ['k1', 'k1']);
+  assert.equal(processes.started.length, 2);
+  assert.equal(processes.started[1]?.request.env['PERISCOPE_WORKTREE_TOOLS'], TOOLS_K1);
+});
+
+test('regression: a resumed session names its further repositories again, and the open attaches to the worktree already there', async () => {
+  const { link, processes, tools } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+  link.deliver(
+    'handle-2',
+    sessionNew(null, {
+      workspaceKey: 'k1',
+      additionalRepositories: ['tools'],
+      request: sessionNewRequest({ resume: 'a-session-to-continue' }),
+    }),
+  );
+  await settle();
+
+  assert.deepEqual(tools.provisions, ['k1', 'k1'], 'the resume did not ask for the worktree at its key');
+  assert.equal(processes.started[1]?.request.env['PERISCOPE_WORKTREE_TOOLS'], TOOLS_K1);
+});
+
+test('regression: a repository the host does not serve refuses repository-unknown before any workspace is claimed', async () => {
+  for (const [asked, detail] of [
+    ['nope', /does not serve; beside its home one it serves tools/],
+    ['home', /the home repository, which is the session's own/],
+  ] as const) {
+    const { link, processes, home, tools } = servingTwo();
+    link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: [asked] }));
+    await settle();
+    assert.deepEqual(home.provisions, [], `${asked}: the session's own workspace was claimed first`);
+    assert.deepEqual(tools.provisions, [], `${asked}: a further worktree was claimed first`);
+    assert.equal(processes.started.length, 0);
+    const ended = link.transitions().find((transition) => transition.to === 'ended');
+    assert.equal(ended?.cause.event, 'repository-unknown', asked);
+    assert.match(ended?.cause.detail ?? '', detail);
+  }
+});
+
+test('regression: a host serving its home repository alone refuses any further repository by name', async () => {
+  const keyed = keyedProvider();
+  const { link, processes } = hostOver({ workspaces: keyed.provider });
+  link.deliver('handle-1', sessionNew(null, { additionalRepositories: ['tools'] }));
+  await settle();
+  assert.deepEqual(keyed.provisions, []);
+  assert.equal(processes.started.length, 0);
+  const ended = link.transitions().find((transition) => transition.to === 'ended');
+  assert.equal(ended?.cause.event, 'repository-unknown');
+  assert.match(ended?.cause.detail ?? '', /serves no repository beside its home one/);
+});
+
+test('regression: a no-ask session carries no repositories key on any transition, on a host serving several', async () => {
+  const { link } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1' }));
+  await settle();
+  const transitions = link.transitions();
+  assert.ok(transitions.length > 0, 'the session reported nothing');
+  for (const transition of transitions) {
+    assert.equal('repositories' in transition.where, false, `${transition.to} carried a repositories key`);
+  }
+});
+
+test("regression: a controller's environment lane cannot set a session's worktree variable", async () => {
+  const { link, processes } = servingTwo({ controllerEnvKeys: ['PERISCOPE_WORKTREE_TOOLS'] });
+  link.deliver(
+    'handle-1',
+    sessionNew(null, {
+      workspaceKey: 'k1',
+      request: sessionNewRequest({
+        env: {
+          extraAllowedKeys: null,
+          extraDeniedKeys: null,
+          extraEnv: { PERISCOPE_WORKTREE_TOOLS: 'C:/elsewhere' },
+        },
+      }),
+    }),
+  );
+  await settle();
+  assert.equal(processes.started.length, 0, 'a controller placed a worktree variable');
+  const ended = link.transitions().find((transition) => transition.to === 'ended');
+  assert.equal(ended?.cause.event, 'env-key-refused');
+  assert.match(ended?.cause.detail ?? '', /PERISCOPE_WORKTREE_TOOLS: beneath this host's floor/);
+});
+
+test('a session closing releases its further worktree at the key it claimed it at', async () => {
+  const { link, processes, tools } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+  processes.started[0]?.finish();
+  await settle();
+  assert.deepEqual(tools.releases, ['k1']);
+});
+
+test('the hello lists the repositories a host serves, the home one first, each with its default branch', async () => {
+  const { host, link } = servingTwo();
+  host.start();
+  await settle();
+  assert.ok(link.started, 'the link never started');
+  assert.deepEqual(link.announced?.configuration.repositories, [
+    { name: 'home', root: 'C:/checkouts/home', defaultBranch: 'main' },
+    { name: 'tools', root: 'C:/checkouts/tools', defaultBranch: 'trunk' },
+  ]);
+});
+
+test('regression: a host serving its home repository alone announces no repositories list', async () => {
+  const keyed = keyedProvider();
+  const { host, link } = hostOver({ workspaces: keyed.provider });
+  host.start();
+  await settle();
+  assert.ok(link.started);
+  assert.equal(link.announced, null, 'a host with nothing new to say re-announced');
+});
+
+/** The entries the inventory answered with, from the last `workspace_list_result`. */
+function listedEntries(link: FakeLink): Record<string, unknown>[] {
+  const answers = link.sent.filter((entry) => entry.payload.kind === 'workspace_list_result');
+  const last = answers[answers.length - 1]?.payload as unknown as { entries: Record<string, unknown>[] };
+  return last?.entries ?? [];
+}
+
+test("the inventory lists every repository's worktrees, each naming its repository, newest tip first", async () => {
+  const { link } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+  link.deliver('discovery-1', workspaceList('list-1'));
+  await settle();
+  assert.deepEqual(
+    listedEntries(link).map((entry) => [entry['repository'], entry['key'], entry['path']]),
+    [
+      [null, 'k1', 'C:/ws/k1'],
+      ['tools', 'k1', TOOLS_K1],
+    ],
+  );
+  assert.ok(
+    listedEntries(link).every((entry) => 'repository' in entry),
+    'an entry did not name its repository',
+  );
+});
+
+test('regression: a host serving its home repository alone lists no repository on any entry', async () => {
+  const home = servedProvider('C:/checkouts/home', 'C:/ws', 'main');
+  const { link } = hostOver({ workspaces: home.provider });
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1' }));
+  await settle();
+  link.deliver('discovery-1', workspaceList('list-1'));
+  await settle();
+  assert.equal(listedEntries(link).length, 1);
+  assert.equal('repository' in (listedEntries(link)[0] ?? {}), false, 'a no-list host named a repository');
+});
+
+test('a cleanup naming a further repository releases its worktree; an unknown one refuses repository-unknown', async () => {
+  const { link, tools } = servingTwo();
+  link.deliver('discovery-1', workspaceRelease('release-1', 'k9', { repository: 'tools' }));
+  await settle();
+  assert.deepEqual(tools.releases, ['k9']);
+  link.deliver('discovery-1', workspaceRelease('release-2', 'k9', { repository: 'docs' }), 2);
+  await settle();
+  const refused = releaseResults(link).find((one) => one.requestId === 'release-2')?.refusal;
+  assert.equal(refused?.reason, 'repository-unknown');
+});
+
+test('a cleanup by path finds the further repository the path is in', async () => {
+  const { link, home, tools } = servingTwo();
+  link.deliver('discovery-1', workspaceRelease('release-1', { path: 'C:/ws/.repositories/tools/k7' }));
+  await settle();
+  assert.deepEqual(tools.releases, ['k7']);
+  assert.deepEqual(home.releases, [], 'the home repository released a worktree it does not hold');
+});
+
+test('regression: a further worktree stays in use while a second session holds its key, and a cleanup refuses it until the last closes', async () => {
+  const { link, processes } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+  link.deliver('handle-2', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+  processes.started[0]?.finish();
+  await settle();
+
+  link.deliver('discovery-1', workspaceRelease('release-1', 'k1', { repository: 'tools' }));
+  await settle();
+  const first = releaseResults(link).find((one) => one.requestId === 'release-1')?.refusal;
+  assert.equal(
+    first?.reason,
+    'workspace-release-failed',
+    'a further worktree a live session holds was released',
+  );
+  assert.match(first?.detail ?? '', /still backs a live or opening session/);
+
+  processes.started[1]?.finish();
+  await settle();
+  link.deliver('discovery-1', workspaceRelease('release-2', 'k1', { repository: 'tools' }), 2);
+  await settle();
+  assert.equal(releaseResults(link).find((one) => one.requestId === 'release-2')?.refusal, null);
 });
 
 test('regression: an illegal workspaceKey refuses before any workspace is claimed, naming the field', async () => {

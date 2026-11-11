@@ -72,7 +72,8 @@ export interface ToolFamilies {
  *
  * Reads go anywhere except credential material: reading source, packages or the agent's own output is
  * benign, reading the host's token cache is not, and the two arrive through the same tool, so the
- * protected set names what is off-limits wherever it sits. Writes are jailed to the workspace.
+ * protected set names what is off-limits wherever it sits. Writes are jailed to the workspace and the
+ * further roots the embedder names.
  */
 export const DEFAULT_TOOL_FAMILIES: ToolFamilies = {
   write: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'],
@@ -121,8 +122,13 @@ export const PI_TOOL_FAMILIES: ToolFamilies = {
 };
 
 export interface LocalGateOptions {
-  /** The absolute root every path-taking call must resolve inside. */
+  /** The session's own directory: writes may land inside it, and a relative path is placed against it. */
   readonly workspaceRoot: string | null;
+  /**
+   * Further absolute roots a write may land inside: the session's temp folder, its own worktree of another
+   * repository. Reads, searches and relative paths are unchanged by them. Absent: the workspace root alone.
+   */
+  readonly writeRoots?: readonly string[];
   /** The real resolver. `host/paths.ts` holds the one built on `node:path`. */
   readonly resolve: PathResolver;
   /** Absolute paths holding credential material. `host/paths.ts` computes the default set. */
@@ -178,6 +184,7 @@ export function localGate(options: LocalGateOptions): LocalGate {
   const families = options.toolFamilies ?? DEFAULT_TOOL_FAMILIES;
   const jail: JailOptions = {
     workspaceRoot: options.workspaceRoot,
+    ...(options.writeRoots === undefined ? {} : { writeRoots: options.writeRoots }),
     resolve: options.resolve,
     protectedPaths: options.protectedPaths,
     home: options.home ?? null,

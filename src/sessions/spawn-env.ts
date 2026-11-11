@@ -109,6 +109,9 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'PERISCOPE_HOOK_CHANNEL',
   'PERISCOPE_HOOK_TOKEN',
   'PERISCOPE_HOOK_DEADLINE_MS',
+  // Where a session's own worktree of each further repository is: this host sets it per session, and a
+  // controller that could place it could point a session's writes at another tree.
+  'PERISCOPE_WORKTREE_*',
   // Qwen Code's own variables: its home and runtime directory, the settings files it reads, whether it
   // restarts itself, whether it drops every permission rule, its sign-in, its model and its prompt files.
   'QWEN_*',

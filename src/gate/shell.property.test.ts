@@ -45,6 +45,7 @@ const ALLOWED_GIT_VERBS = [
   'check-attr',
   'for-each-ref',
   'merge-tree',
+  'show-ref',
   '--version',
   '--help',
   'add',
@@ -66,9 +67,12 @@ const ALLOWED_GIT_VERBS = [
   'clean',
   'apply',
   'hash-object',
+  'read-tree',
+  'checkout-index',
   'fetch',
   'pull',
   'ls-remote',
+  'clone',
 ];
 
 /** The words the denylist keys on. A path or a note carrying one is scanned as command text. */

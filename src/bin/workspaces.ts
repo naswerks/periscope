@@ -8,6 +8,12 @@
  */
 import type { HostConfiguration, HostPlugin } from '../control/frames.js';
 import {
+  MAX_REPOSITORIES,
+  MAX_REPOSITORY_CATALOG_BYTES,
+  MAX_REPOSITORY_NAME_LENGTH,
+} from '../control/frames.js';
+import { isAbsolutePath, normalizePath } from '../core/paths.js';
+import {
   GitWorktreeProvider,
   keyPreview,
   refnameOrPathIllegality,
@@ -15,6 +21,7 @@ import {
 } from '../workspace/git-worktree.js';
 import { PlainDirProvider } from '../workspace/plain-dir.js';
 import type { WorkspaceProvider } from '../workspace/provider.js';
+import { furtherWorkspaceRoot, repositoryNameOf, worktreeVariableOf } from '../workspace/repositories.js';
 import { nodeCommandEffects, nodeWorkspaceEffects } from '../host/workspace-fs.js';
 
 /** The environment answers the selector reads. A subset of the binary's `Config`, by structure. */
@@ -29,6 +36,11 @@ export interface WorkspaceConfig {
    * (`periscope/{sessionId}`).
    */
   readonly branchScheme: string | null;
+  /**
+   * The repositories served beside the home one (`PERISCOPE_REPOSITORY_ROOTS`, parsed), each a root a
+   * session may be given its own worktree of. Absent or empty: the home repository alone.
+   */
+  readonly repositoryRoots?: readonly string[];
 }
 
 /** The two placeholder names a branch scheme may use. Anything else refuses at startup by name. */
@@ -79,9 +91,24 @@ export function workspacePostureProblem(posture: {
   readonly repositoryRoot: string | null;
   readonly branchScheme: string | null;
   readonly workspaceKey: string | null;
+  readonly repositoryRoots?: readonly string[];
 }): string | null {
   const hasProvider = posture.workspaceRoot !== null && posture.workspaceRoot !== '';
   const hasRepository = posture.repositoryRoot !== null && posture.repositoryRoot !== '';
+
+  // A relative root means "relative to a directory nobody chose": the worktrees would land wherever
+  // the process happened to start, so it refuses the start by name, as the agent home does.
+  for (const [key, value] of [
+    ['PERISCOPE_WORKSPACE_ROOT', posture.workspaceRoot],
+    ['PERISCOPE_REPOSITORY_ROOT', posture.repositoryRoot],
+  ] as const) {
+    if (value !== null && value !== '' && !isAbsolutePath(value)) {
+      return `${key} must be an absolute path — got '${value}'`;
+    }
+  }
+
+  const furtherProblem = repositoryRootsProblem(posture, posture.repositoryRoots ?? []);
+  if (furtherProblem !== null) return furtherProblem;
 
   if (posture.workspaceKey !== null && posture.workspaceKey !== '') {
     if (!hasProvider) {
@@ -139,10 +166,78 @@ export function workspacePostureProblem(posture: {
   return null;
 }
 
+/**
+ * What is wrong with the repositories served beside the home one, or null. Each refusal names
+ * `PERISCOPE_REPOSITORY_ROOTS` and the entry, so the one person who can fix it reads which:
+ *   - the list with no git worktrees here (it needs both roots), or past `MAX_REPOSITORIES`;
+ *   - an entry that is not absolute, that is the home repository itself, or whose name (its last path
+ *     segment) cannot name a branch or a directory;
+ *   - two names whose variables (`PERISCOPE_WORKTREE_<NAME>`) are one variable, the home repository's
+ *     name included: one would hide the other in a session's environment;
+ *   - a list whose names and roots alone are past `MAX_REPOSITORY_CATALOG_BYTES`, which the hello
+ *     could never carry.
+ * Whether each root is a git work tree is read from the disk, at start, by the composition root.
+ */
+export function repositoryRootsProblem(
+  home: { readonly workspaceRoot: string | null; readonly repositoryRoot: string | null },
+  roots: readonly string[],
+): string | null {
+  if (roots.length === 0) return null;
+  const key = 'PERISCOPE_REPOSITORY_ROOTS';
+  if (
+    home.workspaceRoot === null ||
+    home.workspaceRoot === '' ||
+    home.repositoryRoot === null ||
+    home.repositoryRoot === ''
+  ) {
+    return (
+      `${key} is set but sessions get no git worktrees here (it needs both PERISCOPE_WORKSPACE_ROOT and ` +
+      'PERISCOPE_REPOSITORY_ROOT) — the setting would be silently ignored'
+    );
+  }
+  if (roots.length > MAX_REPOSITORIES) {
+    return `${key} names ${roots.length} repositories; at most ${MAX_REPOSITORIES}`;
+  }
+  const homeName = repositoryNameOf(home.repositoryRoot);
+  const variables = new Map<string, string>([[worktreeVariableOf(homeName), homeName]]);
+  for (const root of roots) {
+    if (!isAbsolutePath(root)) return `${key} must name absolute paths — got '${root}'`;
+    if (normalizePath(root).toLowerCase() === normalizePath(home.repositoryRoot).toLowerCase()) {
+      return `${key} names ${root}, which is the home repository (PERISCOPE_REPOSITORY_ROOT) — list only the others`;
+    }
+    const name = repositoryNameOf(root);
+    if (name === '' || name.length > MAX_REPOSITORY_NAME_LENGTH || name.includes('..')) {
+      return `${key} names ${root}, whose last path segment cannot name a repository`;
+    }
+    const illegality = refnameOrPathIllegality(name);
+    if (illegality !== null) {
+      return `${key} names ${root}, whose name '${name}' ${illegality}, so it cannot name a branch or a directory — rename the folder`;
+    }
+    const variable = worktreeVariableOf(name);
+    const taken = variables.get(variable);
+    if (taken !== undefined) {
+      return (
+        `${key} names '${name}' beside '${taken}', and both would be ${variable} in a session's environment — ` +
+        'rename one folder'
+      );
+    }
+    variables.set(variable, name);
+  }
+  const catalog = [home.repositoryRoot, ...roots].map((root) => ({
+    name: repositoryNameOf(root),
+    root,
+    defaultBranch: null,
+  }));
+  const bytes = new TextEncoder().encode(JSON.stringify(catalog)).length;
+  if (bytes > MAX_REPOSITORY_CATALOG_BYTES) {
+    return `${key}: the repositories' names and roots take ${bytes} bytes, past the hello's ${MAX_REPOSITORY_CATALOG_BYTES}`;
+  }
+  return null;
+}
+
 /** The last path segment of a repository root — what `{repo}` renders as. */
 function repositoryName(repositoryRoot: string): string {
-  const segments = repositoryRoot.split(/[\\/]+/).filter((segment) => segment !== '');
-  return segments[segments.length - 1] ?? '';
+  return repositoryNameOf(repositoryRoot);
 }
 
 /**
@@ -219,6 +314,32 @@ export function workspacesFor(config: WorkspaceConfig): WorkspaceProvider | null
   }
 
   return new PlainDirProvider({ root: config.workspaceRoot, effects: nodeWorkspaceEffects });
+}
+
+/**
+ * One git-worktree provider per repository served beside the home one, kept by name. Each makes its
+ * worktrees under `<workspace root>/.repositories/<name>`, on the branch the scheme renders with `{repo}`
+ * set to that repository's name, so a key is unique per repository and the home repository's paths are
+ * untouched. Empty with no list, or where sessions get no git worktrees at all.
+ */
+export function furtherWorkspacesFor(config: WorkspaceConfig): ReadonlyMap<string, GitWorktreeProvider> {
+  const providers = new Map<string, GitWorktreeProvider>();
+  if (config.workspaceRoot === null || config.workspaceRoot === '') return providers;
+  if (config.repositoryRoot === null || config.repositoryRoot === '') return providers;
+  for (const root of config.repositoryRoots ?? []) {
+    const name = repositoryNameOf(root);
+    providers.set(
+      name,
+      new GitWorktreeProvider({
+        repositoryRoot: root,
+        workspaceRoot: furtherWorkspaceRoot(config.workspaceRoot, name),
+        effects: nodeWorkspaceEffects,
+        commands: nodeCommandEffects(),
+        branchFor: branchRenderer(effectiveScheme(config.branchScheme), root),
+      }),
+    );
+  }
+  return providers;
 }
 
 /**
