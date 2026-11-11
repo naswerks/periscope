@@ -14,6 +14,7 @@ import type {
   HostConfiguration,
   HostEndpoint,
   HostModel,
+  HostRepository,
 } from './frames.js';
 import {
   MAX_AGENT_CATALOG_BYTES,
@@ -26,6 +27,8 @@ import {
   MAX_ENDPOINTS,
   MAX_FRAME_BYTES,
   MAX_PLUGIN_DIRS,
+  MAX_REPOSITORIES,
+  MAX_REPOSITORY_CATALOG_BYTES,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_MIN,
   sessionNew,
@@ -246,6 +249,92 @@ test('a hello with every bound filled encodes under MAX_FRAME_BYTES, so no list 
   };
   // The three members the codec leaves unbounded are taken at what this host ships: a handful of
   // capability markers, a host id, and one cursor per session up to the default session bound.
+  const frame: Frame = {
+    frame: 'control',
+    at: AT,
+    payload: {
+      kind: 'link_hello',
+      protocolVersion: PROTOCOL_VERSION,
+      hostId: 'h'.repeat(64),
+      capabilities: ['bulk-post', 'workspace:git-worktree', 'workspace:branch-scheme'],
+      cursors: Array.from({ length: DEFAULT_MAX_SESSIONS }, (_, index) => ({
+        sessionId: `${index}`.padEnd(36, 'f'),
+        seq: Number.MAX_SAFE_INTEGER,
+      })),
+      configuration,
+      pendingRestart: Array.from({ length: MAX_CONFIGURE_ENTRIES }, () => 'k'.repeat(64)),
+      protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    },
+  };
+  const encoded = encode(frame);
+  assert.ok(encoded.ok, encoded.ok ? '' : encoded.refusal.detail);
+  const bytes = new TextEncoder().encode(encoded.value).length;
+  assert.ok(bytes <= MAX_FRAME_BYTES, `the filled hello is ${bytes} bytes, over ${MAX_FRAME_BYTES}`);
+});
+
+test('a hello with every bound filled and the repositories at their own budget still encodes under MAX_FRAME_BYTES', () => {
+  const value = 'p'.repeat(MAX_CONFIGURATION_VALUE_LENGTH);
+  const agent = fill<HostAgent>(MAX_AGENT_CATALOG_BYTES, MAX_CONFIGURATION_VALUE_LENGTH, (n) => ({
+    claudeCodeVersion: 'c'.repeat(64),
+    sdkVersion: 's'.repeat(64),
+    models: Array.from({ length: MAX_AGENT_MODELS }, (_, index) => model(n, index)),
+  }));
+  const agents = fill<HostAgentEntry[]>(MAX_AGENT_CATALOG_BYTES, MAX_CONFIGURATION_VALUE_LENGTH, (n) =>
+    Array.from({ length: MAX_AGENT_ENTRIES }, (_, index) => ({
+      runtime: `runtime-${index}`,
+      version: 'v'.repeat(64),
+      sdkVersion: 's'.repeat(64),
+      models: [model(n, index)],
+      vocabularies: {
+        permissionModes: Array.from({ length: 16 }, (_, i) => `mode-${i}-${'p'.repeat(20)}`),
+        efforts: Array.from({ length: 16 }, (_, i) => `effort-${i}-${'e'.repeat(20)}`),
+        thinking: true,
+      },
+      controlTier: { level: 'intercepted', degrades: [] },
+      available: false,
+      unavailableReason: 'u'.repeat(200),
+    })),
+  );
+  const endpoints = fill<HostEndpoint[]>(MAX_ENDPOINT_CATALOG_BYTES, 190, (n) =>
+    Array.from({ length: MAX_ENDPOINTS }, (_, index) => ({
+      name: `endpoint-${index}-${'n'.repeat(40)}`,
+      wireApi: 'anthropic-messages',
+      runtimes: ['claude'],
+      models: Array.from({ length: MAX_ENDPOINT_MODELS }, (_, i) => `${i}-${'m'.repeat(n)}`),
+    })),
+  );
+  const repositories = fill<HostRepository[]>(
+    MAX_REPOSITORY_CATALOG_BYTES,
+    MAX_CONFIGURATION_VALUE_LENGTH,
+    (n) =>
+      Array.from({ length: MAX_REPOSITORIES + 1 }, (_, index) => ({
+        name: `repository-${index}`,
+        root: 'q'.repeat(n),
+        defaultBranch: 'main',
+      })),
+  );
+  assert.ok(
+    MAX_REPOSITORY_CATALOG_BYTES - utf8Length(repositories) < 100,
+    `the repositories are ${utf8Length(repositories)} bytes, far under their ${MAX_REPOSITORY_CATALOG_BYTES}`,
+  );
+  const configuration: HostConfiguration = {
+    repositoryRoot: value,
+    workspaceRoot: value,
+    branchScheme: value,
+    transcriptsRoot: value,
+    controllerUrl: value,
+    decisionUrl: value,
+    agentHome: value,
+    plugins: Array.from({ length: MAX_PLUGIN_DIRS }, () => ({
+      name: 'n'.repeat(200),
+      version: 'v'.repeat(64),
+      path: value,
+    })),
+    agent,
+    agents,
+    endpoints,
+    repositories,
+  };
   const frame: Frame = {
     frame: 'control',
     at: AT,

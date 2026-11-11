@@ -350,6 +350,11 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * `main`, else `master`, else null. Probed, never assumed, and a probe that fails reads as
    * "not this one" because every arm's failure is the absence it tests for.
    */
+  /** The repository's default branch, read now — see `WorkspaceProvider.defaultBranch`. */
+  defaultBranch(): Promise<string | null> {
+    return this.#defaultBranch();
+  }
+
   async #defaultBranch(): Promise<string | null> {
     try {
       const remoteHead = await this.#commands.run(

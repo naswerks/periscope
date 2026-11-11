@@ -6,6 +6,8 @@ import {
   MAX_BULK_RELEASES,
   MAX_CONFIGURATION_VALUE_LENGTH,
   MAX_FRAME_BYTES,
+  MAX_REPOSITORIES,
+  MAX_REPOSITORY_NAME_LENGTH,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_MIN,
   bulkDelivered,
@@ -539,4 +541,86 @@ test('a hello without pendingRestart is refused, and one naming a pending key de
   delete withoutMember.payload['pendingRestart'];
   const refused = decode(JSON.stringify(withoutMember));
   assert.equal(refused.ok, false, 'a v7-shaped hello must refuse, which is what the v8 bump announces');
+});
+
+// ---------------------------------------------------------------------------
+// Protocol 19: the further repositories a session names, and the repositories a host serves
+// ---------------------------------------------------------------------------
+
+const sessionNewNaming = (additionalRepositories: unknown): string =>
+  JSON.stringify({
+    frame: 'session',
+    sessionId: 's-1',
+    seq: 1,
+    at: '2026-08-03T00:00:00.000Z',
+    payload: {
+      kind: 'session_new',
+      cwd: null,
+      workspaceKey: null,
+      correlationId: null,
+      request: null,
+      gate: null,
+      additionalRepositories,
+    },
+  });
+
+test('a session_new naming further repositories decodes with them; null and empty name none', () => {
+  for (const named of [['tools'], ['tools', 'docs'], [], null]) {
+    const decoded = decode(sessionNewNaming(named));
+    assert.ok(decoded.ok, `${JSON.stringify(named)} did not decode`);
+    if (decoded.ok && decoded.value.frame === 'session' && decoded.value.payload.kind === 'session_new') {
+      assert.deepEqual(decoded.value.payload.additionalRepositories, named);
+    }
+  }
+});
+
+test('regression: a session_new naming one repository twice, or past the bound, refuses whole', () => {
+  for (const named of [
+    ['tools', 'tools'],
+    Array.from({ length: MAX_REPOSITORIES + 1 }, (_, index) => `r${index}`),
+    [''],
+    ['x'.repeat(MAX_REPOSITORY_NAME_LENGTH + 1)],
+  ]) {
+    const refused = decode(sessionNewNaming(named));
+    assert.equal(refused.ok, false, `${named.length} names decoded`);
+    if (!refused.ok) assert.equal(refused.refusal.reason, 'frame-malformed');
+  }
+  // The control: the bound itself, each name once, decodes.
+  const atBound = Array.from({ length: MAX_REPOSITORIES }, (_, index) => `r${index}`);
+  assert.ok(decode(sessionNewNaming(atBound)).ok, 'a list at its own bound was refused');
+});
+
+/** A hello carrying `configuration`, as the host sends it first. */
+const helloWith = (configuration: HostConfiguration): ControlFrame => ({
+  frame: 'control',
+  at: '2026-08-03T00:00:00.000Z',
+  payload: {
+    kind: 'link_hello',
+    protocolVersion: PROTOCOL_VERSION,
+    protocolRange: { min: PROTOCOL_VERSION_MIN, max: PROTOCOL_VERSION },
+    hostId: 'h',
+    capabilities: [],
+    cursors: [],
+    configuration,
+    pendingRestart: [],
+  },
+});
+
+test('the hello carries the repositories a host serves, and a hello without them still decodes', () => {
+  const configuration: HostConfiguration = {
+    ...unsetHostConfiguration(),
+    repositories: [
+      { name: 'home', root: '/srv/home', defaultBranch: 'main' },
+      { name: 'tools', root: '/srv/tools', defaultBranch: null },
+    ],
+  };
+  const encoded = encode(helloWith(configuration));
+  assert.ok(encoded.ok, encoded.ok ? '' : encoded.refusal.detail);
+  const decoded = decode(encoded.value);
+  assert.ok(decoded.ok);
+  if (decoded.ok && decoded.value.payload.kind === 'link_hello') {
+    assert.deepEqual(decoded.value.payload.configuration.repositories, configuration.repositories);
+  }
+  const without = encode(helloWith(unsetHostConfiguration()));
+  assert.ok(without.ok && decode(without.value).ok, 'a hello without the list did not round-trip');
 });

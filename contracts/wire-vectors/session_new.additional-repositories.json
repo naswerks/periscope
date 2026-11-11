@@ -1,0 +1,25 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_new",
+      "cwd": null,
+      "workspaceKey": "effort-1",
+      "correlationId": null,
+      "request": null,
+      "gate": null,
+      "additionalRepositories": [
+        "tools"
+      ]
+    }
+  },
+  "name": "session_new.additional-repositories",
+  "protocolVersion": 19,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_new\",\"cwd\":null,\"workspaceKey\":\"effort-1\",\"correlationId\":null,\"request\":null,\"gate\":null,\"additionalRepositories\":[\"tools\"]}}"
+}

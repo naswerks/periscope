@@ -132,6 +132,11 @@ export interface WorkspaceProvider {
    * no other place a session may write can cover another session's workspace.
    */
   readonly workspaceRoot?: string;
+  /**
+   * The branch this provider's repository measures merged work against, read now: null when none can be
+   * named. Optional: a provider with no repository has none.
+   */
+  defaultBranch?(): Promise<string | null>;
 }
 
 /**

@@ -33,16 +33,20 @@ import {
 } from '../host/config-file.js';
 import type { HostReconfigured } from '../host/host.js';
 import {
+  furtherWorkspacesFor,
   hostConfigurationOf,
   workspaceCapabilitiesOf,
   workspacePostureProblem,
   workspacesFor,
 } from './workspaces.js';
+import { parseRepositoryRoots, repositoryWorkTreeProblem } from '../host/repository-roots.js';
 
 /** The effective posture a merged environment describes, with absence as null. */
 interface EffectivePosture {
   readonly workspaceRoot: string | null;
   readonly repositoryRoot: string | null;
+  /** The repositories served beside the home one, parsed; absent or empty when none. */
+  readonly repositoryRoots?: readonly string[];
   readonly branchScheme: string | null;
   readonly workspaceKey: string | null;
   readonly agentHome: string | null;
@@ -73,6 +77,7 @@ function postureOf(merged: NodeJS.ProcessEnv): EffectivePosture {
   return {
     workspaceRoot: setOrNull(merged['PERISCOPE_WORKSPACE_ROOT']),
     repositoryRoot: setOrNull(merged['PERISCOPE_REPOSITORY_ROOT']),
+    repositoryRoots: parseRepositoryRoots(merged['PERISCOPE_REPOSITORY_ROOTS']),
     branchScheme: setOrNull(merged['PERISCOPE_BRANCH_SCHEME']),
     workspaceKey: setOrNull(merged['PERISCOPE_WORKSPACE_KEY']),
     agentHome: setOrNull(merged['PERISCOPE_AGENT_HOME']),
@@ -222,12 +227,20 @@ export function candidateProblem(posture: EffectivePosture): string | null {
   if (controller !== null) return controller;
   const decision = addressProblem('PERISCOPE_DECISION_URL', posture.decisionUrl, ['http:', 'https:']);
   if (decision !== null) return decision;
-  return workspacePostureProblem({
-    workspaceRoot: posture.workspaceRoot,
-    repositoryRoot: posture.repositoryRoot,
-    branchScheme: posture.branchScheme,
-    workspaceKey: posture.workspaceKey,
-  });
+  return (
+    workspacePostureProblem({
+      workspaceRoot: posture.workspaceRoot,
+      repositoryRoot: posture.repositoryRoot,
+      branchScheme: posture.branchScheme,
+      workspaceKey: posture.workspaceKey,
+      repositoryRoots: posture.repositoryRoots ?? [],
+    }) ?? repositoryWorkTreeProblem(posture.repositoryRoots ?? [])
+  );
+}
+
+/** Two lists of repository roots name the same repositories, in the same order. */
+function sameRoots(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((root, index) => sameRoot(root, b[index] ?? null));
 }
 
 /**
@@ -290,7 +303,8 @@ export function reconfigureHost(
 
   const rootsChange =
     !sameRoot(before.workspaceRoot, after.workspaceRoot) ||
-    !sameRoot(before.repositoryRoot, after.repositoryRoot);
+    !sameRoot(before.repositoryRoot, after.repositoryRoot) ||
+    !sameRoots(before.repositoryRoots ?? [], after.repositoryRoots ?? []);
   if (rootsChange && hostBusy) {
     return refuse(
       'config-host-busy',
@@ -305,6 +319,7 @@ export function reconfigureHost(
     workspaceRoot: after.workspaceRoot,
     repositoryRoot: after.repositoryRoot,
     branchScheme: after.branchScheme,
+    repositoryRoots: after.repositoryRoots ?? [],
   };
   const agentHome = after.agentHome ?? defaultAgentHome(raw);
   const pluginDirs = parsePluginDirs(after.pluginDirs);
@@ -323,6 +338,7 @@ export function reconfigureHost(
   const pendingRestart = RESTART_KEYS.filter((key) => asked[key] !== inEffect[key]);
   return ok({
     workspaces: workspacesFor(workspaceConfig) ?? undefined,
+    repositories: furtherWorkspacesFor(workspaceConfig),
     // The binary composes no bulk resolver, and an agent-home change rebuilds none.
     bulk: undefined,
     linkCapabilities: workspaceCapabilitiesOf(workspaceConfig),

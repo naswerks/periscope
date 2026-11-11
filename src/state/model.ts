@@ -415,6 +415,21 @@ export interface TransitionWhere {
   readonly worktree: string | null;
   readonly branch: string | null;
   readonly unknownReason: string | null;
+  /**
+   * The session's own worktree of each further repository it named (protocol 19), in the order it named
+   * them. Absent for a session that named none, so its transitions are the ones version 18 carried.
+   */
+  readonly repositories?: readonly TransitionWhereRepository[];
+}
+
+/** A further repository's worktree, as a session's `where` reports it. */
+export interface TransitionWhereRepository {
+  /** The repository's name, as the hello's `configuration.repositories` lists it. */
+  readonly repository: string;
+  /** The worktree's absolute path: the value of `PERISCOPE_WORKTREE_<NAME>` in the session's environment. */
+  readonly worktree: string;
+  /** The branch the worktree is on, null when it could not be read. */
+  readonly branch: string | null;
 }
 
 // ---------------------------------------------------------------------------

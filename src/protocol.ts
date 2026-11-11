@@ -43,6 +43,7 @@ export type {
   HostEndpoint,
   HostModel,
   HostPlugin,
+  HostRepository,
   HostConfigure,
   HostConfigureEntry,
   HostConfigureResult,
@@ -150,6 +151,7 @@ export type {
   SessionTransition,
   TransitionCause,
   TransitionWhere,
+  TransitionWhereRepository,
 } from './state/model.js';
 export {
   ACTIVITY_KINDS,
@@ -191,8 +193,11 @@ export {
   MAX_BULK_RELEASES,
   MAX_CONFIGURE_ENTRIES,
   MAX_FRAME_BYTES,
+  MAX_REPOSITORIES,
+  MAX_REPOSITORY_CATALOG_BYTES,
   MAX_REPOSITORY_ENTRIES,
   MAX_REPOSITORY_FILE_BYTES,
+  MAX_REPOSITORY_NAME_LENGTH,
   MAX_REPOSITORY_READ_BYTES,
   MAX_WORKSPACE_FILE_BYTES,
   MAX_WORKSPACE_READ_BYTES,

@@ -1,0 +1,48 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "control",
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "link_hello",
+      "protocolVersion": 19,
+      "hostId": "host-1",
+      "capabilities": [
+        "workspace:git-worktree"
+      ],
+      "cursors": [],
+      "configuration": {
+        "repositoryRoot": "/srv/home",
+        "workspaceRoot": "/srv/ws",
+        "branchScheme": "{repo}/{key}",
+        "transcriptsRoot": null,
+        "controllerUrl": null,
+        "decisionUrl": null,
+        "agentHome": null,
+        "plugins": [],
+        "repositories": [
+          {
+            "name": "home",
+            "root": "/srv/home",
+            "defaultBranch": "main"
+          },
+          {
+            "name": "tools",
+            "root": "/srv/tools",
+            "defaultBranch": null
+          }
+        ]
+      },
+      "pendingRestart": [],
+      "protocolRange": {
+        "min": 18,
+        "max": 19
+      }
+    }
+  },
+  "name": "link_hello.repositories",
+  "protocolVersion": 19,
+  "wire": "{\"frame\":\"control\",\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"link_hello\",\"protocolVersion\":19,\"hostId\":\"host-1\",\"capabilities\":[\"workspace:git-worktree\"],\"cursors\":[],\"configuration\":{\"repositoryRoot\":\"/srv/home\",\"workspaceRoot\":\"/srv/ws\",\"branchScheme\":\"{repo}/{key}\",\"transcriptsRoot\":null,\"controllerUrl\":null,\"decisionUrl\":null,\"agentHome\":null,\"plugins\":[],\"repositories\":[{\"name\":\"home\",\"root\":\"/srv/home\",\"defaultBranch\":\"main\"},{\"name\":\"tools\",\"root\":\"/srv/tools\",\"defaultBranch\":null}]},\"pendingRestart\":[],\"protocolRange\":{\"min\":18,\"max\":19}}}"
+}

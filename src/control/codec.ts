@@ -47,7 +47,9 @@ import {
   MAX_FACT_WORD_LENGTH,
   MAX_FRAME_BYTES,
   MAX_PLUGIN_DIRS,
+  MAX_REPOSITORIES,
   MAX_REPOSITORY_ENTRIES,
+  MAX_REPOSITORY_NAME_LENGTH,
   MAX_REPOSITORY_READ_BYTES,
   MAX_WORKSPACE_FILE_BYTES,
   MAX_WORKSPACE_READ_BYTES,
@@ -203,6 +205,16 @@ const hostAgentSkillsSchema = z.looseObject({
 
 const hostAgentSkillsListSchema = z.array(hostAgentSkillsSchema).max(MAX_AGENT_ENTRIES);
 
+// One repository the host serves (protocol 19). The entry is new, so its own members are required; the
+// list that carries it is the optional member. A branch is bounded as the inventory bounds one.
+const hostRepositorySchema = z.looseObject({
+  name: z.string().min(1).max(MAX_REPOSITORY_NAME_LENGTH),
+  root: z.string().min(1).max(MAX_CONFIGURATION_VALUE_LENGTH),
+  defaultBranch: z.string().min(1).max(400).nullable(),
+});
+
+const hostRepositoriesSchema = z.array(hostRepositorySchema).max(MAX_REPOSITORIES + 1);
+
 const hostConfigurationSchema = z.looseObject({
   repositoryRoot: configurationValueSchema,
   workspaceRoot: configurationValueSchema,
@@ -219,6 +231,8 @@ const hostConfigurationSchema = z.looseObject({
   endpoints: hostEndpointsSchema.nullable().optional(),
   // Protocol 16, optional for the same reason.
   agentSkills: hostAgentSkillsListSchema.nullable().optional(),
+  // Protocol 19, optional for the same reason.
+  repositories: hostRepositoriesSchema.nullable().optional(),
 });
 
 /** The key names a hello or a configure result lists as pending: config keys, so short and few. */
@@ -643,6 +657,17 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
         endpoint: z.string().min(1).max(MAX_FACT_WORD_LENGTH).nullable().optional(),
       })
       .nullable(),
+    // Protocol 19, and optional: a controller one release behind omits it. Each is a repository's
+    // name; whether this host serves it is the host's question, answered `repository-unknown`. A
+    // name given twice would ask for one worktree twice, so the list is refused whole.
+    additionalRepositories: z
+      .array(z.string().min(1).max(MAX_REPOSITORY_NAME_LENGTH))
+      .max(MAX_REPOSITORIES)
+      .refine((names) => new Set(names).size === names.length, {
+        message: 'additionalRepositories names a repository twice',
+      })
+      .nullable()
+      .optional(),
   }),
   z.looseObject({ kind: z.literal('session_prompt'), text: z.string() }),
   z.looseObject({ kind: z.literal('session_cancel') }),

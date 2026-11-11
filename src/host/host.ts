@@ -47,6 +47,7 @@ import type {
   HostConfigure,
   HostConfigureEntry,
   HostEndpoint,
+  HostRepository,
   SessionFrame,
   SessionList,
   SessionNew,
@@ -82,6 +83,7 @@ import {
   workspaceReadResult,
   DEFAULT_RUNTIME,
   MAX_AGENT_CATALOG_BYTES,
+  MAX_REPOSITORY_CATALOG_BYTES,
   TRANSCRIPT_WHAT_PREFIX,
 } from '../control/frames.js';
 import type { FrameSink } from '../control/stream.js';
@@ -152,10 +154,11 @@ import {
 } from '../sessions/runtimes.js';
 import type { HostedSession, SessionDegrade, Unsubscribe } from '../sessions/session.js';
 import { SessionStateMachine } from '../state/machine.js';
-import type { SessionTransition, TransitionWhere } from '../state/model.js';
+import type { SessionTransition, TransitionWhere, TransitionWhereRepository } from '../state/model.js';
 import { SessionObserver } from '../state/observer.js';
 import type { WorkspaceEntry, WorkspaceInventory, WorkspaceProvider } from '../workspace/provider.js';
 import { keyPreview, unusableKeyProblem } from '../workspace/git-worktree.js';
+import { repositoryNameOf, worktreeVariableOf } from '../workspace/repositories.js';
 import type { AgentCatalog, McpServerConfig } from './agent-process.js';
 import type { BulkPostReceipt } from './bulk-post.js';
 import { bulkOriginFor, postBulk } from './bulk-post.js';
@@ -185,6 +188,26 @@ import type { ModelEndpoint } from './model-endpoints.js';
 import { endpointModelProblem, endpointSpawnEnv, hostEndpointsOf } from './model-endpoints.js';
 import { isDroppable } from '../control/frames.js';
 import { hostAgentEntries } from './claude-runtime.js';
+
+/** A session's own worktree of a further repository: which repository, and the key it was provisioned at. */
+interface FurtherClaim {
+  readonly repository: string;
+  readonly key: string;
+}
+
+/** A provider's default branch, read now; null when it has none or the read fails. */
+async function settledDefaultBranch(provider: WorkspaceProvider): Promise<string | null> {
+  try {
+    return (await provider.defaultBranch?.()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** How many bytes a value takes as JSON, as the hello carries it. */
+function jsonBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
+}
 
 // ---------------------------------------------------------------------------
 // The per-session assembly.
@@ -760,6 +783,8 @@ export interface HostLink extends FrameSink {
  */
 export interface HostReconfigured {
   readonly workspaces: WorkspaceProvider | undefined;
+  /** The repositories served beside the home one, rebuilt by name. Absent or empty: none. */
+  readonly repositories?: ReadonlyMap<string, WorkspaceProvider>;
   /**
    * Ignored: this host keeps no transcripts root, so a reconfigure has none to swap in.
    *
@@ -877,6 +902,13 @@ export interface PeriscopeHostOptions {
    * controller learns where its session is rather than assuming.
    */
   readonly workspaces?: WorkspaceProvider;
+  /**
+   * The repositories served beside the home one (`workspaces`' repository), each by its name with its
+   * own provider (`furtherWorkspacesFor` builds them). A `session_new` naming one in
+   * `additionalRepositories` gets its own worktree of it at its workspace key, and the hello lists them
+   * (protocol 19). Absent or empty: the home repository alone, and a hello without the list.
+   */
+  readonly repositories?: ReadonlyMap<string, WorkspaceProvider>;
   /**
    * The key an unkeyed `session_new` provisions at, when it should not be the session key
    * (protocol v5).
@@ -1214,10 +1246,23 @@ export class PeriscopeHost {
    */
   readonly #workspaceTurns = new KeyedTurns();
   /**
+   * Each session's own worktrees of further repositories, as `{ repository, key }`, written before the
+   * first provision await and cleared where `#workspaceKeyFor` is: the in-use guard and the close-time
+   * release read it as they read that map, so a further worktree another live session holds is never
+   * reaped under it.
+   */
+  readonly #furtherFor = new Map<string, readonly FurtherClaim[]>();
+  /**
    * The pieces a `host_configure` may replace, held apart from the frozen options so a reconfigure
    * swaps them in one place and every handler reads the current one. Initialised from the options.
    */
   #workspaces: WorkspaceProvider | undefined;
+  #repositories: ReadonlyMap<string, WorkspaceProvider>;
+  /**
+   * The hello's `repositories`: absent (undefined) with none served beside the home one, the list once
+   * the providers' default branches are read, null when even its names and roots are past its bound.
+   */
+  #repositoryList: readonly HostRepository[] | null | undefined = undefined;
   #bulk: BulkResolver | undefined;
   #linkCapabilities: readonly string[];
   #configuration: HostConfiguration;
@@ -1259,6 +1304,7 @@ export class PeriscopeHost {
   constructor(options: PeriscopeHostOptions) {
     this.#options = options;
     this.#workspaces = options.workspaces;
+    this.#repositories = options.repositories ?? new Map();
     this.#bulk = options.bulk;
     this.#linkCapabilities = options.linkCapabilities ?? [];
     this.#hostEndpoints = options.endpoints === undefined ? null : hostEndpointsOf(options.endpoints);
@@ -1392,11 +1438,13 @@ export class PeriscopeHost {
     const readCodex = this.#options.codex?.read;
     const readQwen = this.#options.qwen?.read;
     const readPi = this.#options.pi?.read;
+    const servesHomeAlone = this.#repositories.size === 0;
     if (
       readCatalog === undefined &&
       readCodex === undefined &&
       readQwen === undefined &&
-      readPi === undefined
+      readPi === undefined &&
+      servesHomeAlone
     ) {
       this.#link.start();
       return;
@@ -1408,9 +1456,15 @@ export class PeriscopeHost {
       readCodex === undefined ? Promise.resolve(undefined) : settledCodexRead(readCodex),
       readQwen === undefined ? Promise.resolve(undefined) : settledQwenRead(readQwen),
       readPi === undefined ? Promise.resolve(undefined) : settledPiRead(readPi),
-    ]).then(([catalog, codex, qwen, pi]) => {
+      this.#readRepositoryList(),
+    ]).then(([catalog, codex, qwen, pi, repositories]) => {
       if (this.#pendingStart !== pending) return;
       this.#pendingStart = null;
+      if (repositories !== undefined) {
+        this.#repositoryList = repositories;
+        this.#configuration = this.#withAgent(this.#configuration);
+        this.#link.announce?.(this.#linkCapabilities, this.#configuration, this.#pendingRestart);
+      }
       if (codex !== undefined) {
         this.#codexEntry = codex.entry;
         this.#report({
@@ -1761,7 +1815,10 @@ export class PeriscopeHost {
       // An open that produced no session holds no workspace claim, so its key entry goes too: in
       // `finally` for the same reason as the queue, and guarded so a successful open keeps the
       // entry the release sites and the in-use guard read for the session's whole life.
-      if (!this.#sessions.has(sessionKey)) this.#workspaceKeyFor.delete(sessionKey);
+      if (!this.#sessions.has(sessionKey)) {
+        this.#workspaceKeyFor.delete(sessionKey);
+        this.#furtherFor.delete(sessionKey);
+      }
     }
   }
 
@@ -1837,6 +1894,15 @@ export class PeriscopeHost {
     }
     const workspaceKey = askedKey ?? sessionKey;
 
+    // The further repositories, screened before anything is claimed, as the key is: a name this host does
+    // not serve refuses the open while it still owns nothing, so no session is opened without a place to
+    // write it was promised.
+    const furtherNames = opening.additionalRepositories ?? [];
+    for (const name of furtherNames) {
+      const unknown = this.#unknownRepositoryProblem(name);
+      if (unknown !== null) return this.#refuseOpen(sessionKey, null, refusal('repository-unknown', unknown));
+    }
+
     let cwd = opening.cwd;
     // The provider decides, except for the repository it clones from. A named cwd is advisory
     // under a provider, with one exception: the provider's own repository root, the operator's
@@ -1897,14 +1963,45 @@ export class PeriscopeHost {
     // below. The provider's default is to leave the directory alone, so this is a release of the
     // claim rather than a deletion, but a host that never releases makes `provision` and `release`
     // unbalanced, and a provider counting sessions would leak one per refused start.
+    const furtherClaimed: Array<FurtherClaim & { readonly provider: WorkspaceProvider }> = [];
     const giveBack = async (refused: Refusal): Promise<void> => {
       this.#refuseOpen(sessionKey, cwd, refused);
+      // A further worktree this open claimed is handed back the way its own is.
+      for (const claim of furtherClaimed) {
+        const released = await claim.provider.release(claim.key);
+        if (!released.ok) this.#refuse(sessionKey, released.refusal);
+      }
       if (!claimed || provider === undefined) return;
       // The claim was taken at the workspace key, so it is handed back at the workspace key;
       // releasing the session key here would release nothing the moment keys alias.
       const released = await provider.release(workspaceKey);
       if (!released.ok) this.#refuse(sessionKey, released.refusal);
     };
+
+    // The session's own worktree of each further repository it named, now that its own is settled: at its
+    // workspace key (its session key in the operator's checkout, which claims no key of its own), each in
+    // that key's turn as its own was, so a reap of the key waits. Claimed in the guard's map before the
+    // first await, as its own key is.
+    const furtherKey = claimed ? workspaceKey : sessionKey;
+    const furtherWorktrees: Array<{ readonly repository: string; readonly path: string }> = [];
+    if (furtherNames.length > 0) {
+      this.#furtherFor.set(
+        sessionKey,
+        furtherNames.map((repository) => ({ repository, key: furtherKey })),
+      );
+    }
+    for (const repository of furtherNames) {
+      const further = this.#repositories.get(repository);
+      if (further === undefined) {
+        return giveBack(
+          refusal('repository-unknown', `${repository} is no longer a repository this host serves`),
+        );
+      }
+      const provisioned = await this.#workspaceTurns.run(furtherKey, () => further.provision(furtherKey));
+      if (!provisioned.ok) return giveBack(provisioned.refusal);
+      furtherClaimed.push({ repository, key: furtherKey, provider: further });
+      furtherWorktrees.push({ repository, path: provisioned.value.path });
+    }
 
     // The repository's own settings tiers, read now that the session's directory is known. The agent
     // CLI applies a settings file's `env` to itself after every screen this host runs, so a key beneath
@@ -1931,7 +2028,19 @@ export class PeriscopeHost {
     // different answer.
     let where: TransitionWhere;
     try {
-      where = readWhere(cwd);
+      const own = readWhere(cwd);
+      // Each further worktree beside the session's own, so a controller learns every place it writes from
+      // its transitions; a session that named none carries what it always carried.
+      where =
+        furtherWorktrees.length === 0
+          ? own
+          : {
+              ...own,
+              repositories: furtherWorktrees.map(({ repository, path }): TransitionWhereRepository => {
+                const read = readWhere(path);
+                return { repository, worktree: read.worktree ?? path, branch: read.branch };
+              }),
+            };
     } catch (error) {
       return giveBack(
         refusal(
@@ -1974,25 +2083,44 @@ export class PeriscopeHost {
     // Seeded now with what is known before anything spawns, so a call decided before the runtime starts
     // reads that rather than nothing; every later report is merged in and none replaces what is known:
     // the environment the registry composes, then the variables a runtime's process adds as it starts.
+    // Each further worktree's path, in the variable the session finds it in, set in this host's own lane:
+    // above the controller's, so no controller can point it elsewhere (`PERISCOPE_WORKTREE_*` is beneath
+    // the floor), and known to the shell scan as every host-set path is.
+    const sessionHostEnv =
+      furtherWorktrees.length === 0
+        ? hostEnv
+        : {
+            ...(hostEnv ?? {}),
+            ...Object.fromEntries(
+              furtherWorktrees.map(({ repository, path }) => [worktreeVariableOf(repository), path]),
+            ),
+          };
+
     let spawnEnv: Readonly<Record<string, string | undefined>> = this.#knownSpawnEnv(
       requested.value,
-      hostEnv,
+      sessionHostEnv,
     );
     const spawnedWith = (env: Readonly<Record<string, string | undefined>>): void => {
       spawnEnv = { ...spawnEnv, ...env };
     };
 
-    // Where else a write may land: the temp folder the session's environment names, read once now. It is
-    // no root when it would cover the home directory, a protected path, a workspace or a checkout, or sit
-    // inside a workspace or a checkout; the fence is what keeps a planted setting out of the next session.
+    // Where else a write may land: the temp folder the session's environment names, read once now, and
+    // each further worktree the open provisioned. The temp folder is no root when it would cover the home
+    // directory, a protected path, a workspace or a checkout, or sit inside a workspace or a checkout; the
+    // fence is what keeps a planted setting out of the next session.
     const home = this.#options.home === undefined ? homeDirectory() : this.#options.home;
-    const enclosing = [provider?.workspaceRoot, provider?.repositoryRoot].filter(
-      (path): path is string => path !== undefined,
-    );
-    const writeRoots = sessionTempRoots(spawnEnv, {
-      notAbove: [...(home === null ? [] : [home]), ...this.#options.protectedPaths, ...enclosing, cwd],
-      notBeneath: enclosing,
-    });
+    const enclosing = [
+      provider?.workspaceRoot,
+      provider?.repositoryRoot,
+      ...[...this.#repositories.values()].map((further) => further.repositoryRoot),
+    ].filter((path): path is string => path !== undefined);
+    const writeRoots = [
+      ...sessionTempRoots(spawnEnv, {
+        notAbove: [...(home === null ? [] : [home]), ...this.#options.protectedPaths, ...enclosing, cwd],
+        notBeneath: enclosing,
+      }),
+      ...furtherWorktrees.map(({ path }) => path),
+    ];
 
     const composed = composeSession({
       registry: this.#registry,
@@ -2072,7 +2200,7 @@ export class PeriscopeHost {
         ...requested.value,
         ...(servers.value === null ? {} : { mcpServers: servers.value }),
         ...(plugins === undefined ? {} : { plugins }),
-        ...(hostEnv === undefined ? {} : { hostEnv }),
+        ...(sessionHostEnv === undefined ? {} : { hostEnv: sessionHostEnv }),
       },
       ...(this.#options.clock === undefined ? {} : { clock: this.#options.clock }),
       ...(this.#options.ticker === undefined ? {} : { ticker: this.#options.ticker }),
@@ -2120,6 +2248,22 @@ export class PeriscopeHost {
     // the in-use guard stops counting this session the moment it is gone.
     const workspaceKey = this.#workspaceKeyFor.get(sessionKey) ?? sessionKey;
     this.#workspaceKeyFor.delete(sessionKey);
+    // Each further worktree is released as the session's own is, at the key it was claimed at, in that
+    // key's turn; out of the guard's map first, so a reap arriving now sees it free.
+    const further = this.#furtherFor.get(sessionKey) ?? [];
+    this.#furtherFor.delete(sessionKey);
+    for (const claim of further) {
+      const furtherProvider = this.#repositories.get(claim.repository);
+      if (furtherProvider === undefined) continue;
+      void this.#workspaceTurns
+        .run(claim.key, () => furtherProvider.release(claim.key))
+        .then(
+          (released) => {
+            if (!released.ok) this.#refuse(sessionKey, released.refusal);
+          },
+          (error: unknown) => this.#refuse(sessionKey, refusal('workspace-release-failed', describe(error))),
+        );
+    }
     const provider = this.#workspaces;
     // The release rides the key's turn: the map entry above is gone synchronously, so a reap
     // arriving now already sees the key as free; serializing the release behind the same turn is
@@ -2602,17 +2746,30 @@ export class PeriscopeHost {
 
     const rebuilt = outcome.value;
     this.#workspaces = rebuilt.workspaces;
+    this.#repositories = rebuilt.repositories ?? new Map();
     this.#bulk = rebuilt.bulk;
     this.#linkCapabilities = rebuilt.linkCapabilities;
-    // Rebuilt from the file, which holds no catalog: the one read at start is carried over.
-    this.#configuration = this.#withAgent(rebuilt.configuration);
     this.#pluginDirs = rebuilt.pluginDirs;
     this.#overriddenByEnvironment = rebuilt.overriddenByEnvironment;
     // The control-plane addresses are never applied to the live link: the host keeps dialling what it
     // dialled, names the keys as pending, and the next start reads the file.
     this.#pendingRestart = rebuilt.pendingRestart;
-    this.#link.announce?.(this.#linkCapabilities, this.#configuration, this.#pendingRestart);
-    return answer();
+    const apply = (): void => {
+      // Rebuilt from the file, which holds no catalog: the one read at start is carried over.
+      this.#configuration = this.#withAgent(rebuilt.configuration);
+      this.#link.announce?.(this.#linkCapabilities, this.#configuration, this.#pendingRestart);
+      answer();
+    };
+    if (this.#repositories.size === 0) {
+      this.#repositoryList = undefined;
+      return apply();
+    }
+    // The repositories' default branches are read from their providers before the answer, so the
+    // configuration it carries is the one the next hello does.
+    void this.#readRepositoryList().then((repositories) => {
+      this.#repositoryList = repositories;
+      apply();
+    });
   }
 
   /**
@@ -2694,9 +2851,63 @@ export class PeriscopeHost {
     ];
   }
 
+  /**
+   * Why `name` cannot be a further repository of a session on this host, or null when it can: the home
+   * repository is the session's own, and any other name must be one this host serves beside it.
+   */
+  #unknownRepositoryProblem(name: string): string | null {
+    const home = this.#workspaces?.repositoryRoot;
+    if (home !== undefined && name === repositoryNameOf(home)) {
+      return `session_new.additionalRepositories names ${name}, the home repository, which is the session's own: name only the repositories it also writes in`;
+    }
+    if (this.#repositories.has(name)) return null;
+    const served = [...this.#repositories.keys()];
+    return served.length === 0
+      ? `session_new.additionalRepositories names ${name}, and this host serves no repository beside its home one`
+      : `session_new.additionalRepositories names ${name}, which this host does not serve; beside its home one it serves ${served.join(', ')}`;
+  }
+
+  /**
+   * The hello's `repositories`: the home repository first, then each served beside it, with the default
+   * branch each provider reads now. Undefined when none is served beside the home one, so the hello carries
+   * no list. A list its default branches would carry past `MAX_REPOSITORY_CATALOG_BYTES` rides with every
+   * branch null, which the start-up screen holds inside the bound; one past it even so (a list an embedder
+   * composed by hand) rides null.
+   */
+  async #readRepositoryList(): Promise<readonly HostRepository[] | null | undefined> {
+    const home = this.#workspaces?.repositoryRoot;
+    if (this.#repositories.size === 0 || home === undefined || this.#workspaces === undefined)
+      return undefined;
+    const served: Array<readonly [string, WorkspaceProvider]> = [
+      [repositoryNameOf(home), this.#workspaces],
+      ...this.#repositories,
+    ];
+    const list = await Promise.all(
+      served.flatMap(([name, provider]) => {
+        const root = provider.repositoryRoot;
+        if (root === undefined) return [];
+        return [
+          settledDefaultBranch(provider).then((defaultBranch): HostRepository => ({
+            name,
+            root,
+            defaultBranch,
+          })),
+        ];
+      }),
+    );
+    if (jsonBytes(list) <= MAX_REPOSITORY_CATALOG_BYTES) return list;
+    const unbranched = list.map((entry): HostRepository => ({ ...entry, defaultBranch: null }));
+    return jsonBytes(unbranched) <= MAX_REPOSITORY_CATALOG_BYTES ? unbranched : null;
+  }
+
   #withAgent(composed: HostConfiguration): HostConfiguration {
     // Null whatever an embedder composed: this host keeps no transcripts root, and the hello says so.
-    const configuration = { ...composed, transcriptsRoot: null };
+    const configuration = {
+      ...composed,
+      transcriptsRoot: null,
+      // The repositories this host serves, read from its providers; absent when it serves its home alone.
+      ...(this.#repositoryList === undefined ? {} : { repositories: this.#repositoryList }),
+    };
     const endpoints = this.#hostEndpoints === null ? {} : { endpoints: this.#hostEndpoints };
     if (this.#agent === undefined) return { ...configuration, ...endpoints };
     const agents = this.#agent === null ? null : [...hostAgentEntries(this.#agent), ...this.#otherEntries];

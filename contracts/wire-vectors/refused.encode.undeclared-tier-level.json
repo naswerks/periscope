@@ -41,6 +41,6 @@
     }
   },
   "name": "refused.encode.undeclared-tier-level",
-  "protocolVersion": 18,
+  "protocolVersion": 19,
   "wire": null
 }
