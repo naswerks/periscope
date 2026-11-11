@@ -181,6 +181,12 @@ export interface SessionRequest {
    */
   readonly nativeGate?: unknown;
   /**
+   * The roots beyond the session's directory a runtime driven by a process of its own admits writes in
+   * by its own sandbox, as its host computed them; never reaches the agent process otherwise.
+   * @internal
+   */
+  readonly nativeWriteRoots?: readonly string[];
+  /**
    * Told the environment this registry composed for the session, before its process starts: the
    * session's local gate reads its path variables. A runtime that adds variables of its own when its
    * process starts tells its gate those as well.
@@ -246,7 +252,11 @@ export interface NativeRuntime<M = unknown> {
   start(
     request: AgentProcessRequest,
     degrade: (detail: string) => void,
-    route: { readonly endpoint: string | null; readonly gate?: unknown },
+    route: {
+      readonly endpoint: string | null;
+      readonly gate?: unknown;
+      readonly writeRoots?: readonly string[];
+    },
   ): AgentProcess<M>;
   readInit(message: M): AgentInitFacts | null;
 }
@@ -393,6 +403,7 @@ export class SessionRegistry {
         : native.start(processRequest, (detail) => session.degrade('runtime_degraded', detail), {
             endpoint: request.endpoint ?? null,
             gate: request.nativeGate ?? null,
+            ...(request.nativeWriteRoots === undefined ? {} : { writeRoots: request.nativeWriteRoots }),
           }),
       this.#clock,
       cwd.value,

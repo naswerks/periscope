@@ -88,30 +88,38 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[17, 18]`. Version 18 adds:
+`[18, 19]`. Version 19 adds the repositories a host serves beside its home one, and a session's own
+worktree of each, every member optional:
 
-- paging to `repository_read`: an optional `offset` on the ask and an optional `nextOffset` on the
-  answer, with `MAX_REPOSITORY_FILE_BYTES` the most of a file the pages reach
-  ([Host-scoped asks](#host-scoped-asks));
-- the refusal reason `transcripts-not-served`, the answer to the asks the host no longer serves
-  ([Host-scoped asks](#host-scoped-asks), [The bulk lane](#the-bulk-lane)).
+- `configuration.repositories` in the hello and the configure answer (below);
+- `session_new.additionalRepositories`, the further repositories a session also writes in
+  ([Commands to a session](#commands-to-a-session));
+- `where.repositories` on a session's transitions: each further worktree, beside the session's own;
+- `repository` on an inventory entry and on a release ask ([Host-scoped asks](#host-scoped-asks));
+- the refusal reason `repository-unknown`, answered to a `session_new` or a release naming a
+  repository the host does not serve.
 
-It adds no payload kind. A version-17 controller reads what this build sends: the reason rides kinds
-it already reads, and a reason it does not know is read as such; `nextOffset` is never composed for
-a link negotiated below 18, so the answer it reads has the members version 17's had (the cut lands
-on a character boundary where 1.8.2's could split one). Every frame a
-version-17 controller sends decodes here unchanged, the retired asks included, so such an ask is
-answered by name and the channel it rode keeps its sequence; a `repository_read` with no `offset` is
-the head read. Version 14 narrowed `session_new.request.env` (below), and the
-narrowing holds at every version the host negotiates. `src/host/protocol-window.test.ts` holds both
-directions over a real link: every frame this host sends, a Claude session's, a Codex session's, a
-Qwen Code session's and a pi session's on one link, and its answers to the retired asks and to a
-`repository_read`, decodes
-with the protocol-17 decoder v1.8.2 shipped, and every decision request it posts reads as that
-release's `DecisionRequest`; each answer vector version 18 adds (the four `repository_read_result`
-vectors and the two `transcripts-not-served` ones) decodes with that decoder, while the paged ask and
-the two `refused.*` vectors are not a version-17 controller's to read; and a version-17 controller's
-`session_new` and `session_configure` decode here and apply.
+It adds no payload kind. A version-18 controller reads what this build sends: each new member rides a
+kind it already reads and is carried as an unknown key, and a controller at 18 names no further
+repository, so the transition and inventory members reach it only on a host it asked nothing of. Every
+frame a version-18 controller sends decodes here unchanged. Version 14 narrowed `session_new.request.env`
+(below), and the narrowing holds at every version the host negotiates. `src/host/protocol-window.test.ts`
+holds both directions over a real link: every frame this host sends, a Claude session's, a Codex
+session's, a Qwen Code session's and a pi session's on one link, its answers to the retired asks and to a
+`repository_read`, and the hello of a host serving several repositories, decodes with the protocol-18
+decoder v1.9.2 shipped, and every decision request it posts reads as that release's `DecisionRequest`;
+each vector version 19 adds that a host sends decodes with that decoder; and a version-18 controller's
+`session_new` and `session_configure` decode here and apply. A controller must check the version, or the
+hello's `repositories`, before it names a further repository: a host at 18 carries the unknown member and
+opens the session with no second place to write.
+
+From v19, `configuration.repositories` lists the repositories the host serves, one `HostRepository` each
+(`name`, `root`, `defaultBranch`), the home one (the repository `repositoryRoot` names) first, at most
+`MAX_REPOSITORIES + 1`, held to `MAX_REPOSITORY_CATALOG_BYTES` as JSON. A repository's `name` is its
+root's last path segment, the `{repo}` the branch scheme renders, and the word a `session_new` names it
+by; the default branch is the one each provider's inventory measures merged work against, null when none
+can be named. It is absent on a host serving its home repository alone; a list its default branches
+would carry past its bound rides with each branch null, and one past it even so rides null.
 
 Two close reasons carry meaning. A close with code 1002 whose reason starts with `seq gap` is a
 replay request: the controller names the position it holds, and the host's next dial replays from
@@ -651,7 +659,7 @@ Its level and each degrade are at most `MAX_FACT_WORD_LENGTH` characters, with a
 
 | kind                | meaning                                                                                                                                                                                                                                                                                                                                        |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `session_new`       | open a session: `cwd` (nullable; the workspace provider decides when null), `workspaceKey` (nullable; the key sessions share a tree under), `correlationId` (opaque, echoed, never interpreted), `gate` (per-session deadlines or null), `request` (the JSON-expressible subset of a session request or null). Every member of `request` is `T | null`. |
+| `session_new`       | open a session: `cwd` (nullable; the workspace provider decides when null), `workspaceKey` (nullable; the key sessions share a tree under), `correlationId` (opaque, echoed, never interpreted), `gate` (per-session deadlines or null), `request` (the JSON-expressible subset of a session request or null). Every member of `request` is `T | null`. From v19, `additionalRepositories`(optional): further repositories by the hello's names; for each the host provisions or attaches the session's own worktree at its workspace key, sets its path as`PERISCOPE_WORKTREE_<NAME>`in the session's environment, admits the session's writes there and reports it in`where.repositories`; a name it does not serve, or the home one's, refuses `repository-unknown` before anything is claimed. A resumed session names its further repositories again, and the open attaches to the worktree already there. |
 | `session_prompt`    | queue a turn; a session already holding every turn it can queue refuses `prompt-queue-full` and is otherwise untouched                                                                                                                                                                                                                         |
 | `session_cancel`    | interrupt the current turn; never ends the session                                                                                                                                                                                                                                                                                             |
 | `session_end`       | end the session: the agent's process exits, the end is reported as the transition to `ended` with cause `stop_requested`, and the workspace it held is free. One that arrives while the session is opening ends it as it opens; on a handle this host does not hold it is refused like any session command                                     |
@@ -821,7 +829,7 @@ A `session_new` the host will not honour answers on the wire as a `session_updat
 transition `spawning` to `ended` with cause kind `refusal` and the reason as its event, `seq: 1`,
 `sessionId: null` in the body and the controller's handle on the frame. Every refusal on the open
 path rides it (`permission-grant-shadows-settings`, `workspace-provision-failed`,
-`resume-cwd-not-honoured`, `runtime-unavailable`, the three endpoint reasons, `settings-route-refused`, an unusable key); the consumer's job is to end its record of the session and
+`resume-cwd-not-honoured`, `repository-unknown`, `runtime-unavailable`, the three endpoint reasons, `settings-route-refused`, an unusable key); the consumer's job is to end its record of the session and
 show the cause. A `session_prompt` that arrives while its session is still opening is held, then delivered,
 refused or withdrawn; it is never dropped.
 
@@ -923,9 +931,15 @@ sessions have all ended can still be read.
 
 `workspace_release` names exactly one of `workspaceKey` or `path`, with `deleteBranch` and `force`;
 the receipt states `directoryRemoved` and `branchDeleted` separately, and released or already
-absent is the same answer. `host_configure` accepts the keys in `WIRE_CONFIGURABLE_KEYS`, exactly
-these seven: `PERISCOPE_WORKSPACE_ROOT`, `PERISCOPE_REPOSITORY_ROOT`, `PERISCOPE_BRANCH_SCHEME`,
-`PERISCOPE_AGENT_HOME`, `PERISCOPE_PLUGIN_DIRS`, `PERISCOPE_CONTROLLER_URL`,
+absent is the same answer. From v19 it may name the `repository` the worktree is of (null or absent is
+the home one; a name the host does not serve refuses `repository-unknown`), and a `path` with no
+repository named is looked for in each repository the host serves; a further worktree a live or opening
+session holds refuses as the session's own does. From v19 an inventory entry names its `repository` on a
+host serving further repositories (null for the home one), each measured against its own repository's
+default branch, newest tip first across them all; a host serving its home repository alone omits the
+member. `host_configure` accepts the keys in `WIRE_CONFIGURABLE_KEYS`, exactly
+these eight: `PERISCOPE_WORKSPACE_ROOT`, `PERISCOPE_REPOSITORY_ROOT`, `PERISCOPE_REPOSITORY_ROOTS`,
+`PERISCOPE_BRANCH_SCHEME`, `PERISCOPE_AGENT_HOME`, `PERISCOPE_PLUGIN_DIRS`, `PERISCOPE_CONTROLLER_URL`,
 `PERISCOPE_DECISION_URL`. It writes them to the host's config file, rebuilds the workspace
 provider, and answers with the effective values, the keys the environment shadows
 (`overriddenByEnvironment`), and the keys that apply only at the next start.
@@ -1040,6 +1054,7 @@ The reasons a controller meets most, and what each is not:
 | `transcripts-not-served`                                                                                                                                                                                                                                                               | the answer to a `transcript_list`, a `transcript_tail` and a `claude-transcript:` locator, and to a repository or workspace read, or a resolver's bulk file, at or beneath an agent's session records (`agentTranscriptPaths`), whatever the root: the host does not serve them. Not `bulk-target-invalid`, which names a locator no resolver serves, and not `credential-path-denied`, which names the protected set |
 | `bulk-target-not-controller`, `bulk-target-invalid`                                                                                                                                                                                                                                    | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                                                                                                                                                                                                                                                       |
 | `resume-cwd-not-honoured`                                                                                                                                                                                                                                                              | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                                                                                                                                                                                                                                                      |
+| `repository-unknown`                                                                                                                                                                                                                                                                   | a `session_new` or a release named a repository the host does not serve beside its home one, or named the home one in `additionalRepositories`; refused before anything is claimed                                                                                                                                                                                                                                    |
 | `runtime-unavailable`                                                                                                                                                                                                                                                                  | a `session_new` naming a runtime the host cannot spawn: unknown, or listed `available: false`; the detail names it and what the host offers                                                                                                                                                                                                                                                                           |
 | `codex-hook-not-active`                                                                                                                                                                                                                                                                | a Codex open whose periscope hook is not trusted and enabled, whose hook channel could not listen, or whose hook command fails its probe; the detail says what to fix. Without the hook nothing enforces the protected set on Codex                                                                                                                                                                                   |
 | `gate-hook-timed-out`, `gate-hook-unspawnable`, `gate-hook-output-rejected`, `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call`, `gate-approval-unanswered`, `gate-approval-auto-reviewed`, `gate-approval-ambiguous`, `gate-project-config-active`, `gate-sandbox-absent` | degrades on a Codex session's state lane: a call went on undecided, or the session lost a guarantee ([The control tier](#the-control-tier)). Never a stop                                                                                                                                                                                                                                                             |

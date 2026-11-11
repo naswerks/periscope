@@ -2183,6 +2183,26 @@ function servedProvider(
         return ok(undefined);
       },
       defaultBranch: async () => defaultBranch,
+      keyForPath: (path) => {
+        const key = path.startsWith(`${under}/`) ? path.slice(under.length + 1) : '';
+        return key === '' || key.includes('/') ? null : key;
+      },
+      inventory: async () =>
+        ok({
+          defaultBranch,
+          entries: provisions.map((key, index) => ({
+            key,
+            path: `${under}/${key}`,
+            branch: `${repositoryRoot.split('/').pop() ?? ''}/${key}`,
+            head: null,
+            detached: false,
+            locked: false,
+            prunable: false,
+            merged: false,
+            aheadCount: 0,
+            lastCommitAt: `2026-01-0${index + 1}T00:00:00.000Z`,
+          })),
+        }),
     },
   };
 }
@@ -2367,6 +2387,88 @@ test('regression: a host serving its home repository alone announces no reposito
   await settle();
   assert.ok(link.started);
   assert.equal(link.announced, null, 'a host with nothing new to say re-announced');
+});
+
+/** The entries the inventory answered with, from the last `workspace_list_result`. */
+function listedEntries(link: FakeLink): Record<string, unknown>[] {
+  const answers = link.sent.filter((entry) => entry.payload.kind === 'workspace_list_result');
+  const last = answers[answers.length - 1]?.payload as unknown as { entries: Record<string, unknown>[] };
+  return last?.entries ?? [];
+}
+
+test("the inventory lists every repository's worktrees, each naming its repository, newest tip first", async () => {
+  const { link } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+  link.deliver('discovery-1', workspaceList('list-1'));
+  await settle();
+  assert.deepEqual(
+    listedEntries(link).map((entry) => [entry['repository'], entry['key'], entry['path']]),
+    [
+      [null, 'k1', 'C:/ws/k1'],
+      ['tools', 'k1', TOOLS_K1],
+    ],
+  );
+  assert.ok(
+    listedEntries(link).every((entry) => 'repository' in entry),
+    'an entry did not name its repository',
+  );
+});
+
+test('regression: a host serving its home repository alone lists no repository on any entry', async () => {
+  const home = servedProvider('C:/checkouts/home', 'C:/ws', 'main');
+  const { link } = hostOver({ workspaces: home.provider });
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1' }));
+  await settle();
+  link.deliver('discovery-1', workspaceList('list-1'));
+  await settle();
+  assert.equal(listedEntries(link).length, 1);
+  assert.equal('repository' in (listedEntries(link)[0] ?? {}), false, 'a no-list host named a repository');
+});
+
+test('a cleanup naming a further repository releases its worktree; an unknown one refuses repository-unknown', async () => {
+  const { link, tools } = servingTwo();
+  link.deliver('discovery-1', workspaceRelease('release-1', 'k9', { repository: 'tools' }));
+  await settle();
+  assert.deepEqual(tools.releases, ['k9']);
+  link.deliver('discovery-1', workspaceRelease('release-2', 'k9', { repository: 'docs' }), 2);
+  await settle();
+  const refused = releaseResults(link).find((one) => one.requestId === 'release-2')?.refusal;
+  assert.equal(refused?.reason, 'repository-unknown');
+});
+
+test('a cleanup by path finds the further repository the path is in', async () => {
+  const { link, home, tools } = servingTwo();
+  link.deliver('discovery-1', workspaceRelease('release-1', { path: 'C:/ws/.repositories/tools/k7' }));
+  await settle();
+  assert.deepEqual(tools.releases, ['k7']);
+  assert.deepEqual(home.releases, [], 'the home repository released a worktree it does not hold');
+});
+
+test('regression: a further worktree stays in use while a second session holds its key, and a cleanup refuses it until the last closes', async () => {
+  const { link, processes } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+  link.deliver('handle-2', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  await settle();
+  processes.started[0]?.finish();
+  await settle();
+
+  link.deliver('discovery-1', workspaceRelease('release-1', 'k1', { repository: 'tools' }));
+  await settle();
+  const first = releaseResults(link).find((one) => one.requestId === 'release-1')?.refusal;
+  assert.equal(
+    first?.reason,
+    'workspace-release-failed',
+    'a further worktree a live session holds was released',
+  );
+  assert.match(first?.detail ?? '', /still backs a live or opening session/);
+
+  processes.started[1]?.finish();
+  await settle();
+  link.deliver('discovery-1', workspaceRelease('release-2', 'k1', { repository: 'tools' }), 2);
+  await settle();
+  assert.equal(releaseResults(link).find((one) => one.requestId === 'release-2')?.refusal, null);
 });
 
 test('regression: an illegal workspaceKey refuses before any workspace is claimed, naming the field', async () => {

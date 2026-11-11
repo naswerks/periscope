@@ -444,6 +444,18 @@ cleanup schedule) belong to the embedder. Every result is a named refusal, never
 - `inventory()` lists the worktrees contained by the workspace root (never the operator's checkout),
   newest tip first, with branch, head, merged (git's answer: a squash merge reads unmerged),
   `aheadCount` and `lastCommitAt`.
+- One host, several repositories. `PERISCOPE_REPOSITORY_ROOTS` names the repositories served beside the
+  home one, and `furtherWorkspacesFor` (`src/bin/workspaces.ts`) builds one `GitWorktreeProvider` per
+  repository, kept by name (the root's last path segment), its worktrees under
+  `<workspace root>/.repositories/<name>`: a directory no workspace key can name, since a key cannot begin
+  with `.`, so the home repository's paths and inventory are untouched. A session naming one in
+  `session_new.additionalRepositories` gets its own worktree of it at its workspace key (its session key
+  in the operator's checkout), in that key's turn, claimed before the first await so the in-use guard
+  covers an open in flight (`#furtherFor`), handed back on any refusal and released at its close. Its path
+  is `PERISCOPE_WORKTREE_<NAME>` in the session's environment and a root its gate admits writes in, and
+  its transitions report it in `where.repositories`. The session itself runs in its home worktree. The
+  inventory merges every repository's worktrees, each entry naming its repository, and a release names
+  the repository it addresses.
 - `release(key, { remove, deleteBranch, force })`: `remove` alone leaves the branch; `deleteBranch`
   deletes a merged branch; an unmerged branch refuses `branch-not-merged` and removes nothing unless
   `force`. The receipt states `directoryRemoved` and `branchDeleted` separately. A session ending

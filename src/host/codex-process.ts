@@ -39,7 +39,7 @@ import { MAX_PENDING_PROMPTS, isRuntimeDefaultPrompt } from './agent-process.js'
 import { CODEX_PINNED_VERSION, codexCommand, codexVersionProblem, userAgentVersion } from './codex-binary.js';
 import type { CodexEndpointRoute } from './codex-endpoints.js';
 import { codexEndpointExcludes, codexProviderConfig } from './codex-endpoints.js';
-import { codexAppServerArgs, codexSessionFlags, samePath } from './codex-home.js';
+import { codexAppServerArgs, codexSandboxPolicy, codexSessionFlags, samePath } from './codex-home.js';
 import type { CodexSessionGate, SpawnDegrade } from './codex-gate.js';
 import type { CodexHookLines, CodexHookState } from './codex-hook.js';
 import { codexHookLines, hookTrustWrite, readHookListing, serializeHookTrust } from './codex-hook.js';
@@ -187,6 +187,7 @@ export function startCodexProcess(
   degrade: (detail: string) => void = () => undefined,
   endpoint: string | null = null,
   gate: CodexSessionGate | null = null,
+  writeRoots: readonly string[] = [],
 ): AgentProcess<CodexMessage> {
   const output = new AsyncQueue<CodexMessage>();
   let failure: Error | null = null;
@@ -244,7 +245,10 @@ export function startCodexProcess(
   const hookLines: CodexHookLines = runtime.hook?.lines ?? codexHookLines(runtime.home);
   /** How many times the session's mode has moved to one with no sandbox, for the degrade's key. */
   let unsandboxedMoves = 0;
-  const command = codexCommand(runtime.binary, codexAppServerArgs(codexSessionFlags(mode, excluded)));
+  const command = codexCommand(
+    runtime.binary,
+    codexAppServerArgs(codexSessionFlags(mode, excluded, writeRoots)),
+  );
 
   let peer: StdioRpcPeer | null = null;
   if (unrouted !== null) {
@@ -413,7 +417,7 @@ export function startCodexProcess(
       effort = 'none';
     }
     const flags = {
-      ...codexSessionFlags(mode, excluded),
+      ...codexSessionFlags(mode, excluded, writeRoots),
       ...(effort === null ? {} : { model_reasoning_effort: effort }),
       ...attached.value,
       ...(route === null ? {} : codexProviderConfig(route)),
@@ -656,7 +660,7 @@ export function startCodexProcess(
         ? {}
         : {
             approvalPolicy: CODEX_MODE_MAP[pending.mode].approvalPolicy,
-            sandboxPolicy: CODEX_MODE_MAP[pending.mode].sandboxPolicy,
+            sandboxPolicy: codexSandboxPolicy(pending.mode, writeRoots),
             approvalsReviewer: CODEX_APPROVALS_REVIEWER,
           }),
     };

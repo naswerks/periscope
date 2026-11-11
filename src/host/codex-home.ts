@@ -18,7 +18,7 @@
 import { mkdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import type { JsonValue } from '../control/frames.js';
+import type { JsonObject, JsonValue } from '../control/frames.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import type { CodexPermissionMode } from './wire-request.js';
@@ -55,10 +55,15 @@ export function ensureCodexHome(home: string): Result<string> {
  *   otherwise. Codex matches each entry as a glob, without regard to case, and a name holds no `*` or
  *   `?`, so each entry removes that one variable and nothing else. Its own default exclusions are off
  *   unless asked for, so nothing else removes them.
+ * - `sandbox_workspace_write.writable_roots` names the roots beyond the session's directory its sandbox
+ *   admits writes in (its own worktree of each further repository, and on Windows its temp folder, which
+ *   the sandbox otherwise admits only through `TMPDIR`); absent when there are none or the mode runs
+ *   without the sandbox.
  */
 export function codexSessionFlags(
   mode: CodexPermissionMode,
   credentialVariables: readonly string[] = [],
+  writableRoots: readonly string[] = [],
 ): Readonly<Record<string, JsonValue>> {
   const row = CODEX_MODE_MAP[mode];
   return {
@@ -68,7 +73,24 @@ export function codexSessionFlags(
     web_search: 'disabled',
     'features.hooks': true,
     'shell_environment_policy.exclude': [...credentialVariables],
+    ...(writableRoots.length === 0 || row.sandbox !== 'workspace-write'
+      ? {}
+      : { 'sandbox_workspace_write.writable_roots': [...writableRoots] }),
   };
+}
+
+/**
+ * The sandbox policy a turn names for one mode: the mode's own, with the session's further roots on a
+ * `workspaceWrite` policy, so a mode switch never drops a root the thread started with.
+ */
+export function codexSandboxPolicy(
+  mode: CodexPermissionMode,
+  writableRoots: readonly string[] = [],
+): JsonObject {
+  const policy = CODEX_MODE_MAP[mode].sandboxPolicy;
+  return writableRoots.length === 0 || policy['type'] !== 'workspaceWrite'
+    ? policy
+    : { ...policy, writableRoots: [...writableRoots] };
 }
 
 /** The flags as `-c key=value` overrides; each value is written as TOML, which these values share with JSON. */

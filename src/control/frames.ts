@@ -1545,6 +1545,12 @@ export interface WorkspaceRelease {
   readonly deleteBranch: boolean;
   /** Delete the branch even when it is not merged into the repository's default branch. */
   readonly force: boolean;
+  /**
+   * The repository the worktree is of (protocol 19), by its name; null or absent is the home one. A
+   * name this host does not serve refuses `repository-unknown`. A worktree addressed by `path` with no
+   * repository named is resolved through each repository this host serves.
+   */
+  readonly repository?: string | null;
 }
 
 /**
@@ -1587,6 +1593,8 @@ export interface WorkspaceReleaseEntry {
   readonly path: string | null;
   readonly deleteBranch: boolean;
   readonly force: boolean;
+  /** As `WorkspaceRelease.repository` (protocol 19). */
+  readonly repository?: string | null;
 }
 
 /**
@@ -1617,6 +1625,8 @@ export interface WorkspaceReleaseBulkResult {
 export interface WorkspaceReleaseFlags {
   readonly deleteBranch?: boolean;
   readonly force?: boolean;
+  /** The repository the worktree is of; stated only when given, so an ask without it is version 18's. */
+  readonly repository?: string | null;
 }
 
 /** Build a `workspace_release`. A string target is a key; `{ path }` addresses by path. */
@@ -1632,6 +1642,7 @@ export function workspaceRelease(
     path: typeof target === 'string' ? null : target.path,
     deleteBranch: flags.deleteBranch ?? false,
     force: flags.force ?? false,
+    ...(flags.repository === undefined ? {} : { repository: flags.repository }),
   };
 }
 
@@ -1772,6 +1783,13 @@ export interface WorkspaceListEntry {
    */
   readonly aheadCount: number | null;
   readonly lastCommitAt: string | null;
+  /**
+   * The repository the worktree is of (protocol 19): a name the hello's `configuration.repositories`
+   * lists, null for the home repository. On a host serving further repositories every entry carries
+   * it; a host serving its home repository alone omits it, and every entry is the home one's. `merged`
+   * and `aheadCount` are measured against that repository's own default branch.
+   */
+  readonly repository?: string | null;
 }
 
 /**

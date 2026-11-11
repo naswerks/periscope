@@ -49,7 +49,7 @@ import type { ModelEndpoint } from './model-endpoints.js';
 import { endpointModelProblem } from './model-endpoints.js';
 
 /** What a controller may ask for, minus the three the composer supplies itself. */
-export type ComposableRequest = Omit<SessionRequest, 'cwd' | 'hooks' | 'hostEnv'>;
+export type ComposableRequest = Omit<SessionRequest, 'cwd' | 'hooks' | 'hostEnv' | 'nativeWriteRoots'>;
 
 /**
  * The three tiers the SDK understands, as data.

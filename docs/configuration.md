@@ -68,6 +68,19 @@ Restart the host; `periscope status` reports `workspace git-worktree` and the br
 controller can set the same two keys over the link (`host_configure`) and the host rebuilds its
 workspace provider live, except while a session is open or opening.
 
+A host can serve further repositories beside its home one, for sessions that also write in them:
+
+```sh
+periscope config PERISCOPE_REPOSITORY_ROOTS "/srv/checkouts/tools:/srv/checkouts/docs"
+```
+
+Each is a git work tree, named by its folder (`tools`, `docs`). A `session_new` that names one in
+`additionalRepositories` gets its own worktree of it at its workspace key, at
+`<workspace root>/.repositories/<name>/<key>`, on the branch the scheme renders for that repository, and
+finds its path in `PERISCOPE_WORKTREE_<NAME>`; its writes are admitted there as in its own directory. The
+session still runs in its home worktree. The operator's checkout of each repository is never a place a
+session's tools may write.
+
 ## Environment
 
 | Variable                             | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -122,8 +135,8 @@ token and models files in `<user home>/.pi/agent`; the full set is listed in [th
 
 ## What a controller can set over the link
 
-`host_configure` accepts seven of the config-file keys: `PERISCOPE_WORKSPACE_ROOT`,
-`PERISCOPE_REPOSITORY_ROOT`, `PERISCOPE_BRANCH_SCHEME`, `PERISCOPE_AGENT_HOME`,
+`host_configure` accepts eight of the config-file keys: `PERISCOPE_WORKSPACE_ROOT`,
+`PERISCOPE_REPOSITORY_ROOT`, `PERISCOPE_REPOSITORY_ROOTS`, `PERISCOPE_BRANCH_SCHEME`, `PERISCOPE_AGENT_HOME`,
 `PERISCOPE_PLUGIN_DIRS`, `PERISCOPE_CONTROLLER_URL`, `PERISCOPE_DECISION_URL`. A written plugin
 directory is loaded by the next open; the answer's `configuration.plugins` says what each one names. The host screens the whole set before writing,
 refuses a change to a workspace root while any session is live or opening, and answers with the
@@ -618,6 +631,11 @@ With the reason on stderr and a non-zero exit, when:
   `PERISCOPE_BRANCH_SCHEME` without both roots, a scheme with an unknown placeholder or an unmatched
   brace, a scheme whose literal text renders an illegal branch name, a relative root or agent home,
   or a default key that fails the same screen a wire-supplied key must pass;
+- the repositories served beside the home one cannot be served: `PERISCOPE_REPOSITORY_ROOTS` without
+  both roots or past `MAX_REPOSITORIES`, an entry that is relative, is the home repository or is not a
+  git work tree, a name (its folder's) that cannot name a branch or a directory, two names whose
+  `PERISCOPE_WORKTREE_<NAME>` variables are one, or names and roots past the hello's
+  `MAX_REPOSITORY_CATALOG_BYTES`;
 - a paired-credential file exists but cannot be read;
 - the identity configuration is partial or wrong: one of the authority/client-id pair without the
   other, a non-https authority, one of the authorize/token endpoints without the other, a redirect

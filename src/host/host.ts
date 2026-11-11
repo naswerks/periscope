@@ -157,7 +157,7 @@ import { SessionStateMachine } from '../state/machine.js';
 import type { SessionTransition, TransitionWhere, TransitionWhereRepository } from '../state/model.js';
 import { SessionObserver } from '../state/observer.js';
 import type { WorkspaceEntry, WorkspaceInventory, WorkspaceProvider } from '../workspace/provider.js';
-import { keyPreview, unusableKeyProblem } from '../workspace/git-worktree.js';
+import { byNewestTip, keyPreview, unusableKeyProblem } from '../workspace/git-worktree.js';
 import { repositoryNameOf, worktreeVariableOf } from '../workspace/repositories.js';
 import type { AgentCatalog, McpServerConfig } from './agent-process.js';
 import type { BulkPostReceipt } from './bulk-post.js';
@@ -2114,12 +2114,17 @@ export class PeriscopeHost {
       provider?.repositoryRoot,
       ...[...this.#repositories.values()].map((further) => further.repositoryRoot),
     ].filter((path): path is string => path !== undefined);
-    const writeRoots = [
-      ...sessionTempRoots(spawnEnv, {
-        notAbove: [...(home === null ? [] : [home]), ...this.#options.protectedPaths, ...enclosing, cwd],
-        notBeneath: enclosing,
-      }),
+    const tempRoots = sessionTempRoots(spawnEnv, {
+      notAbove: [...(home === null ? [] : [home]), ...this.#options.protectedPaths, ...enclosing, cwd],
+      notBeneath: enclosing,
+    });
+    const writeRoots = [...tempRoots, ...furtherWorktrees.map(({ path }) => path)];
+    // Codex's own sandbox takes each further worktree, and on Windows the temp folder, which its
+    // `workspace-write` admits only through `TMPDIR`: without them it refuses, in a mode that asks
+    // nobody, a write this gate allowed.
+    const codexRoots = [
       ...furtherWorktrees.map(({ path }) => path),
+      ...(process.platform === 'win32' ? tempRoots : []),
     ];
 
     const composed = composeSession({
@@ -2201,6 +2206,9 @@ export class PeriscopeHost {
         ...(servers.value === null ? {} : { mcpServers: servers.value }),
         ...(plugins === undefined ? {} : { plugins }),
         ...(sessionHostEnv === undefined ? {} : { hostEnv: sessionHostEnv }),
+        ...(runtimeOf(requested.value) === CODEX_RUNTIME && codexRoots.length > 0
+          ? { nativeWriteRoots: codexRoots }
+          : {}),
       },
       ...(this.#options.clock === undefined ? {} : { clock: this.#options.clock }),
       ...(this.#options.ticker === undefined ? {} : { ticker: this.#options.ticker }),
@@ -2531,7 +2539,10 @@ export class PeriscopeHost {
     ask: WorkspaceReleaseEntry,
     duplicate: boolean,
   ): Promise<{ result: WorkspaceReleaseEntryResult; refused: Refusal | null }> {
-    const provider = this.#workspaces;
+    let provider = this.#workspaces;
+    // The repository the worktree is of: null for the home one, which is also what the home one's own name
+    // reads as, so an ask naming it is not refused for being exact.
+    let repository: string | null = null;
     const refused = (
       reason: RefusalReason,
       detail: string,
@@ -2547,6 +2558,20 @@ export class PeriscopeHost {
       };
     };
 
+    const named = ask.repository ?? null;
+    const homeName =
+      provider?.repositoryRoot === undefined ? null : repositoryNameOf(provider.repositoryRoot);
+    if (named !== null && named !== homeName) {
+      const further = this.#repositories.get(named);
+      if (further === undefined) {
+        return refused(
+          'repository-unknown',
+          `workspace_release.repository names ${named}, which this host does not serve`,
+        );
+      }
+      provider = further;
+      repository = named;
+    }
     if (provider === undefined) {
       return refused(
         'workspace-release-failed',
@@ -2568,7 +2593,18 @@ export class PeriscopeHost {
           { path: ask.path },
         );
       }
-      const resolved = provider.keyForPath(ask.path);
+      let resolved = provider.keyForPath(ask.path);
+      // A path naming no repository is looked for in each one this host serves beside its home one.
+      if (resolved === null && named === null) {
+        for (const [name, further] of this.#repositories) {
+          const key = further.keyForPath?.(ask.path) ?? null;
+          if (key === null) continue;
+          resolved = key;
+          provider = further;
+          repository = name;
+          break;
+        }
+      }
       if (resolved === null) {
         return refused(
           'workspace-release-failed',
@@ -2606,8 +2642,16 @@ export class PeriscopeHost {
     // could pass its own guard mid-removal and provision into a dying directory while this answer
     // reads released. Inside the turn the scan runs after any queued provision or close-release
     // settles, so it reads the map the other verbs have finished writing.
+    const target = provider;
+    const releasing = repository;
     return this.#workspaceTurns.run(workspaceKey, async () => {
-      const inUse = [...this.#workspaceKeyFor.values()].includes(workspaceKey);
+      // A further worktree is in use while any live or opening session holds it at this key.
+      const inUse =
+        releasing === null
+          ? [...this.#workspaceKeyFor.values()].includes(workspaceKey)
+          : [...this.#furtherFor.values()].some((claims) =>
+              claims.some((claim) => claim.repository === releasing && claim.key === workspaceKey),
+            );
       if (inUse) {
         return refused(
           'workspace-release-failed',
@@ -2616,7 +2660,7 @@ export class PeriscopeHost {
         );
       }
       try {
-        const released = await provider.release(workspaceKey, {
+        const released = await target.release(workspaceKey, {
           remove: true,
           deleteBranch: ask.deleteBranch,
           force: ask.force,
@@ -2690,7 +2734,31 @@ export class PeriscopeHost {
     }
     if (!inventory.ok) return answer(empty, inventory.refusal);
 
-    const all = inventory.value.entries;
+    // A host serving further repositories lists theirs beside its own, each entry naming its repository
+    // (null for the home one) and measured against that repository's own default branch, newest tip
+    // first across them all. A further inventory that cannot be read refuses the whole answer by name:
+    // a list missing a repository would read as one with nothing to clean.
+    let all: readonly (WorkspaceEntry & { readonly repository?: string | null })[] = inventory.value.entries;
+    if (this.#repositories.size > 0) {
+      const merged: (WorkspaceEntry & { readonly repository: string | null })[] = all.map((entry) => ({
+        ...entry,
+        repository: null,
+      }));
+      for (const [name, further] of this.#repositories) {
+        if (further.inventory === undefined) continue;
+        let read: Result<WorkspaceInventory>;
+        try {
+          read = await further.inventory();
+        } catch (error) {
+          return answer(empty, refusal('workspace-list-failed', `repository ${name}: ${describe(error)}`));
+        }
+        if (!read.ok) {
+          return answer(empty, refusal(read.refusal.reason, `repository ${name}: ${read.refusal.detail}`));
+        }
+        merged.push(...read.value.entries.map((entry) => ({ ...entry, repository: name })));
+      }
+      all = merged.sort(byNewestTip);
+    }
     const from = Math.max(0, asked.fromIndex);
     const end = Math.min(all.length, from + WORKSPACE_PAGE_SIZE);
     return answer({

@@ -1325,6 +1325,11 @@ const AUTHORED = {
   ],
   workspace_release: [
     { name: 'workspace_release.request', frame: session(workspaceRelease('request-5', 'workspace-1')) },
+    // Protocol 19: the worktree is of a further repository; the twin above names none, and is version 18's.
+    {
+      name: 'workspace_release.repository',
+      frame: session(workspaceRelease('request-5', 'effort-1', { repository: 'tools' })),
+    },
     {
       name: 'workspace_release.by-path-delete-branch',
       frame: session(
@@ -1493,6 +1498,44 @@ const AUTHORED = {
             },
           ],
           { totalCount: 27, nextIndex: 25, defaultBranch: 'main' },
+        ),
+      ),
+    },
+    // Protocol 19: a host serving a further repository names each entry's repository, null for the home one.
+    {
+      name: 'workspace_list_result.repositories',
+      frame: session(
+        workspaceListResult(
+          'request-7',
+          [
+            {
+              key: 'effort-1',
+              path: '/srv/repo-workspaces/effort-1',
+              branch: 'repo/effort-1',
+              head: '2222222222222222222222222222222222222222',
+              detached: false,
+              locked: false,
+              prunable: false,
+              merged: false,
+              aheadCount: 2,
+              lastCommitAt: '2026-09-09T08:30:00+00:00',
+              repository: null,
+            },
+            {
+              key: 'effort-1',
+              path: '/srv/repo-workspaces/.repositories/tools/effort-1',
+              branch: 'tools/effort-1',
+              head: '3333333333333333333333333333333333333333',
+              detached: false,
+              locked: false,
+              prunable: false,
+              merged: false,
+              aheadCount: 1,
+              lastCommitAt: '2026-09-09T08:00:00+00:00',
+              repository: 'tools',
+            },
+          ],
+          { totalCount: 2, defaultBranch: 'main' },
         ),
       ),
     },

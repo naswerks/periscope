@@ -108,8 +108,9 @@ replays exactly what was missed. [protocol](docs/protocol.md)
 
 **The gate fails closed.** There is no permission prompt: the host runs the agent headless, does not
 pass `--dangerously-skip-permissions`, and registers a `PreToolUse` hook on every session that is
-the only path to a yes. That is a stricter gate than the prompt, not a weaker one: path escapes,
-credential reads and unrecognised git verbs are refused locally before the controller is asked,
+the only path to a yes. That is a stricter gate than the prompt, not a weaker one: a write outside the
+places a session may write (its workspace, its temp folder, its own worktree of each further repository
+it named), credential reads and unrecognised git verbs are refused locally before the controller is asked,
 everything else is the controller's decision, and no answer is a refusal. The gate is the host's
 one control; the rest is the controller's trust: it chooses the permission mode (`bypassPermissions`
 included), it can run a command at session start, set the agent's environment, remove worktrees and
@@ -118,8 +119,10 @@ that reach exactly; read it before you install this.
 [gate](docs/gate.md)
 
 **Workspaces are the host's.** A session runs in the directory the controller names, or in a plain
-directory per workspace key, or in a linked git worktree of a repository on its own branch, and the
-controller can list and release them over the wire. [configuration](docs/configuration.md)
+directory per workspace key, or in a linked git worktree of a repository on its own branch. A host can
+serve further repositories beside its home one, and a session that names one also gets its own worktree
+of it to write in. The controller can list and release them over the wire.
+[configuration](docs/configuration.md)
 
 **Identity is paired or signed in.** A paired machine credential has no clock and dies only when the
 controller revokes it; a signed-in user's token goes through a generic OIDC client with no provider

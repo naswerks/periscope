@@ -1716,14 +1716,14 @@ test('control: the protocol-18 decoder refuses an answer a version-18 controller
   );
 });
 
-test('a controller on protocol 18 decodes every vector protocol 19 adds that a host sends: the repositories in the hello and in a transition, and repository-unknown', () => {
+test('a controller on protocol 18 decodes every vector protocol 19 adds that a host sends: the repositories in the hello, a transition and the inventory, and repository-unknown', () => {
   const corpus = fileURLToPath(new URL('../../contracts/wire-vectors/', import.meta.url));
   const added = readdirSync(corpus).filter((file) =>
-    /^(link_hello\.repositories|session_update\.(state-transition-repositories|open-refused-repository-unknown))\.json$/.test(
+    /^(link_hello\.repositories|workspace_list_result\.repositories|session_update\.(state-transition-repositories|open-refused-repository-unknown))\.json$/.test(
       file,
     ),
   );
-  assert.equal(added.length, 3, `the vectors this reads: ${added.join(', ')}`);
+  assert.equal(added.length, 4, `the vectors this reads: ${added.join(', ')}`);
   for (const file of added) {
     const wire = (JSON.parse(readFileSync(`${corpus}${file}`, 'utf8')) as { wire: string }).wire;
     const read = V18.safeParse(JSON.parse(wire));

@@ -564,6 +564,8 @@ const workspaceReleaseEntryShape = {
   path: z.string().min(1).max(MAX_CONFIGURATION_VALUE_LENGTH).nullable(),
   deleteBranch: z.boolean(),
   force: z.boolean(),
+  // Protocol 19, and optional: a controller one release behind omits it, and its ask is the home one's.
+  repository: z.string().min(1).max(MAX_REPOSITORY_NAME_LENGTH).nullable().optional(),
 };
 
 /** The members of one release receipt, shared by the single result and the bulk entries. */
@@ -840,6 +842,8 @@ const sessionPayloadSchema = z.discriminatedUnion('kind', [
         merged: z.boolean().nullable(),
         aheadCount: z.number().int().nonnegative().nullable(),
         lastCommitAt: z.string().nullable(),
+        // Protocol 19, optional: a host serving its home repository alone omits it.
+        repository: z.string().min(1).max(MAX_REPOSITORY_NAME_LENGTH).nullable().optional(),
       }),
     ),
     totalCount: z.number().int().nonnegative(),
