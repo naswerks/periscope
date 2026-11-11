@@ -109,6 +109,15 @@ runs on its own by name:
 npm run build && PERISCOPE_LIVE=1 node --test --test-name-pattern="model catalog" dist/host/agent-controls.live.test.js
 ```
 
+`src/host/further-writes.live.test.ts` holds that a Claude session's writes outside its own directory,
+under its temp folder and in its worktree of a further repository, land where the gate allows them.
+Claude is handed neither place as a directory, so only a real turn shows the gate's allow is enough;
+run it before tagging a release that moves where a session may write:
+
+```sh
+npm run build && PERISCOPE_LIVE=1 node --test dist/host/further-writes.live.test.js
+```
+
 ## Moving the agent SDK
 
 The SDK is pinned exactly, and a bump is a minor release. In order:

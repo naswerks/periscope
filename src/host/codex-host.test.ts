@@ -93,7 +93,10 @@ interface CodexHost {
   readonly events: HostEvent[];
 }
 
-async function codexHost(read: CodexRuntimeRead = { entry: AVAILABLE, detail: null }): Promise<CodexHost> {
+async function codexHost(
+  read: CodexRuntimeRead = { entry: AVAILABLE, detail: null },
+  baseEnv: Readonly<Record<string, string>> = { PATH: 'p' },
+): Promise<CodexHost> {
   const fake = fakeCodex({ codexHome: HOME });
   const link = new RecordingLink();
   const events: HostEvent[] = [];
@@ -102,7 +105,7 @@ async function codexHost(read: CodexRuntimeRead = { entry: AVAILABLE, detail: nu
     hostId: 'test-host',
     decide: async () => ({ behavior: 'allow' }),
     protectedPaths: [],
-    baseEnv: { PATH: 'p' },
+    baseEnv,
     homeDir: 'C:/nonexistent-home-for-tests',
     link: (handlers) => {
       link.handlers = handlers;
@@ -265,6 +268,63 @@ test('a Codex session on the wire: its handle and receipt before ready, ready at
   });
   void fake;
   host.stop();
+});
+
+/** A temp folder in this platform's spelling, which no test machine's own temp folder is. */
+const HOST_TEMP = process.platform === 'win32' ? 'C:\\Users\\agent\\AppData\\Local\\Temp' : '/var/agent-temp';
+
+/** What a session naming nothing beyond its own directory starts Codex with, on a host over `baseEnv`. */
+async function noAskStart(
+  baseEnv: Readonly<Record<string, string>>,
+): Promise<{ args: readonly string[]; config: unknown }> {
+  const { host, link, fake } = await codexHost(undefined, baseEnv);
+  link.deliver('handle-1', opening({}));
+  await until(
+    () => link.transitions().some((transition) => transition.to === 'ready'),
+    'the session to be ready',
+  );
+  const args = fake.child.spawned?.args ?? [];
+  const thread = fake.server.requestsOf('thread/start')[0] as { params?: { config?: unknown } } | undefined;
+  host.stop();
+  return { args, config: thread?.params?.config };
+}
+
+test("regression: a no-ask Codex session starts with the arguments it always had off Windows; on Windows they differ by its temp folder's root alone", async () => {
+  const without = await noAskStart({ PATH: 'p' });
+  const withTemp = await noAskStart({ PATH: 'p', TEMP: HOST_TEMP, TMPDIR: HOST_TEMP });
+  assert.equal(
+    without.args.some((arg) => arg.includes('writable_roots')),
+    false,
+    'a host naming no temp folder gave Codex a writable root',
+  );
+  if (process.platform !== 'win32') {
+    // Codex's `workspace-write` admits `TMPDIR` and `/tmp` itself, so nothing is added here.
+    assert.deepEqual(withTemp.args, without.args);
+    assert.deepEqual(withTemp.config, without.config);
+    return;
+  }
+  // On Windows the sandbox admits the temp folder only through `TMPDIR`, which Windows does not set: the
+  // one root is handed to it, and nothing else moves.
+  const roots = withTemp.args.filter((arg) => !without.args.includes(arg));
+  assert.equal(roots.length, 1, `more than the one root changed: ${roots.join(' ')}`);
+  const pair = roots[0] ?? '';
+  const at = withTemp.args.indexOf(pair);
+  assert.equal(withTemp.args[at - 1], '-c');
+  assert.deepEqual(
+    [...withTemp.args.slice(0, at - 1), ...withTemp.args.slice(at + 1)],
+    [...without.args],
+    'the arguments beside the root moved',
+  );
+  const named = pair.replace(/^sandbox_workspace_write\.writable_roots=/, '');
+  assert.notEqual(named, pair, `not the writable-roots key: ${pair}`);
+  assert.deepEqual(
+    (JSON.parse(named) as string[]).map((root) => root.replace(/\\/g, '/')),
+    [HOST_TEMP.replace(/\\/g, '/')],
+  );
+  assert.deepEqual(
+    (withTemp.config as Record<string, unknown>)['sandbox_workspace_write.writable_roots'],
+    JSON.parse(named),
+  );
 });
 
 test('a turn on the wire: working, a text fragment on the delta lane, a usage sample, the turn record, idle', async () => {

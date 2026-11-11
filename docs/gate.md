@@ -144,10 +144,14 @@ the decision deadline.
 - **Where a session may write.** A file-writing call is admitted inside any of the session's roots, and
   the protected set is checked first, so a credential under a root still refuses. The roots are its own
   directory (`LocalGateOptions.workspaceRoot`) and the further roots the host hands the gate
-  (`writeRoots`): the temp folder the session's environment names (`TEMP`, then `TMP`, on Windows; `TMPDIR`,
+  (`writeRoots`): the temp folder this host's environment names (`TEMP`, then `TMP`, on Windows; `TMPDIR`,
   else `/tmp`, elsewhere), read once at the open, with its real path beside when it is spelled otherwise
   (a short name, a link); and its own worktree of each further repository it named
-  (`session_new.additionalRepositories`). On Windows with neither variable named there is no temp root:
+  (`session_new.additionalRepositories`). A temp folder a controller places in the session's environment
+  is never a root: the session runs with it, and a write there refuses unless another root covers it.
+  Claude is handed no further root as a directory of its own (see `SECURITY.md`); Codex's sandbox is
+  handed each further worktree, and on Windows the temp folder, because its `workspace-write` admits a
+  temp folder only through `TMPDIR`. On Windows with neither variable named there is no temp root:
   the system's fallback is the user's profile. A temp folder is no root when it would cover the home
   directory, a protected path, a workspace or a served repository's checkout, or sit inside a workspace or
   a checkout (`src/host/write-roots.ts`), because a planted hook or setting there runs code in the owner's

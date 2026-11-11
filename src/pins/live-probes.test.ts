@@ -29,6 +29,7 @@ const CLAIMED_PROPERTIES = [
   'version receipt is per session',
   'workspace trust is explicit',
   'survives resume with its context',
+  'a write the gate allows outside its own directory lands',
 ];
 
 /** A workspace created under the OS temp directory, and a `mkdtempSync` that is not. */

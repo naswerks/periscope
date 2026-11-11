@@ -289,6 +289,16 @@ export class SessionRegistry {
     this.#maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
   }
 
+  /**
+   * The environment sessions are filtered from: what this host hands every session before any
+   * controller's lane.
+   *
+   * @internal
+   */
+  get baseEnv(): Readonly<Record<string, string | undefined>> {
+    return this.#baseEnv;
+  }
+
   /** Every live session. A copy — a caller iterating this cannot be surprised by one ending. */
   list(): HostedSession[] {
     return [...this.#live.values()].map(asHandle);

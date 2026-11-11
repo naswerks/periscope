@@ -55,9 +55,14 @@ types.
 
 Before anything is asked of your controller, a local rule runs. It only ever _adds_ refusals; it
 can never turn a "no" into a "yes". It refuses, locally and immediately: a write outside every place
-the session may write (its own workspace, the temp folder its environment names, and its own worktree
-of each further repository it named), a read of the credential set, and a git invocation whose verb is
-not on the allow-list, by parsing the command rather than by matching strings.
+the session may write (its own workspace, the temp folder this host's environment names, and its own
+worktree of each further repository it named), a read of the credential set, and a git invocation whose
+verb is not on the allow-list, by parsing the command rather than by matching strings. A temp folder a
+controller places in a session's environment is never one of those places.
+
+Claude is not given a further worktree as a working directory, because the Claude CLI reads plugin and
+marketplace settings from any directory it is given. Its writes there are allowed by the gate, and the
+path is in the session's environment (`PERISCOPE_WORKTREE_<NAME>`).
 
 Two of those places are shared with something else, and that is stated rather than hidden. The temp
 folder is shared by every session on the machine, so a session can read another's scratch files; the

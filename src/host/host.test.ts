@@ -165,9 +165,10 @@ const allow = async (): Promise<unknown> => ({ behavior: 'allow' });
 const registryOver = (
   start: (request: AgentProcessRequest) => AgentProcess,
   startTimeoutMs?: number,
+  baseEnv: Readonly<Record<string, string>> = { PATH: 'p' },
 ): SessionRegistry =>
   new SessionRegistry({
-    baseEnv: { PATH: 'p' },
+    baseEnv,
     homeDir: 'C:/nonexistent-home-for-tests',
     clock: fixedClock(AT),
     startProcess: start,
@@ -597,6 +598,8 @@ function hostOver(
     controllerEnvKeys?: readonly string[];
     /** The registry's start window. Absent means its default. */
     startTimeoutMs?: number;
+    /** The environment the registry hands every session. Absent means a bare `PATH`. */
+    baseEnv?: Readonly<Record<string, string>>;
     /** The configuration the embedder composed. Absent means every value unset. */
     configuration?: HostConfiguration;
     /** The protected set. Absent means none. */
@@ -613,7 +616,7 @@ function hostOver(
     decide: allow,
     protectedPaths: options.protectedPaths ?? [],
     ...(options.transcriptPaths === undefined ? {} : { transcriptPaths: options.transcriptPaths }),
-    registry: registryOver(processes.start, options.startTimeoutMs),
+    registry: registryOver(processes.start, options.startTimeoutMs, options.baseEnv),
     link: (handlers) => {
       link.handlers = handlers;
       return link;
@@ -699,9 +702,12 @@ async function writeThroughGate(request: AgentProcessRequest, filePath: string):
   await settle();
 }
 
-test('a write under the temp folder the session environment names flows, and one outside every root refuses', async () => {
-  const { link, processes } = hostOver({ controllerEnvKeys: ['TEMP', 'TMPDIR'] });
-  link.deliver('handle-1', settingEnv({ TEMP: SESSION_TEMP, TMPDIR: SESSION_TEMP }));
+/** This host's own environment, naming the temp folder in this platform's variables. */
+const HOST_TEMP_ENV = { PATH: 'p', TEMP: SESSION_TEMP, TMPDIR: SESSION_TEMP };
+
+test("a write under the temp folder this host's environment names flows, and one outside every root refuses", async () => {
+  const { link, processes } = hostOver({ baseEnv: HOST_TEMP_ENV });
+  link.deliver('handle-1', sessionNew('C:/work'));
   await settle();
   const request = processes.started[0]?.request;
   assert.ok(request !== undefined, 'the session did not start');
@@ -715,8 +721,8 @@ test('a write under the temp folder the session environment names flows, and one
   assert.ok(link.causes().includes('refusal/path-escapes-root'), 'a write outside every root flowed');
 });
 
-test('control: with no temp folder named in the session environment, the same write refuses', async () => {
-  const { link, processes } = hostOver({ controllerEnvKeys: ['TEMP', 'TMPDIR'] });
+test('control: with no temp folder named in the environment, the same write refuses', async () => {
+  const { link, processes } = hostOver();
   link.deliver('handle-1', sessionNew('C:/work'));
   await settle();
   const request = processes.started[0]?.request;
@@ -726,6 +732,23 @@ test('control: with no temp folder named in the session environment, the same wr
   assert.ok(
     link.causes().includes('refusal/path-escapes-root'),
     `the temp folder admitted a write it was never named for: ${link.causes().join(', ')}`,
+  );
+});
+
+test("regression: a temp folder a controller names in a session's environment is no root a write may land in", async () => {
+  // The controller may place `TEMP` in the spawn, and the session runs with it; the gate's roots are
+  // still read from what this host hands the session, so the folder the controller named stays shut.
+  const { link, processes } = hostOver({ controllerEnvKeys: ['TEMP', 'TMPDIR'] });
+  link.deliver('handle-1', settingEnv({ TEMP: SESSION_TEMP, TMPDIR: SESSION_TEMP }));
+  await settle();
+  const request = processes.started[0]?.request;
+  assert.ok(request !== undefined, 'the session did not start');
+  assert.equal(request.env['TEMP'], SESSION_TEMP, 'the controller could not place TEMP at all');
+
+  await writeThroughGate(request, `${SESSION_TEMP}/probe.py`);
+  assert.ok(
+    link.causes().includes('refusal/path-escapes-root'),
+    `a controller-named temp folder admitted a write: ${link.causes().join(', ')}`,
   );
 });
 
@@ -2233,6 +2256,23 @@ test('a session naming a further repository gets its own worktree of it at its k
   assert.equal(request.env['PERISCOPE_WORKTREE_TOOLS'], TOOLS_K1);
   const spawning = link.transitions().find((transition) => transition.to === 'spawning');
   assert.deepEqual(spawning?.where.repositories, [{ repository: 'tools', worktree: TOOLS_K1, branch: null }]);
+});
+
+test('regression: a Claude session naming a further repository is handed no directory beyond its own; its env carries the path', async () => {
+  // The CLI reads plugin and marketplace settings from any directory it is given, so a further worktree
+  // reaches Claude as a variable, and its writes there are the gate's to allow.
+  const { link, processes } = servingTwo();
+  link.deliver('handle-1', sessionNew(null, { workspaceKey: 'k1', additionalRepositories: ['tools'] }));
+  link.deliver('handle-2', sessionNew(null, { workspaceKey: 'k2' }));
+  await settle();
+  // The session naming none can start first: the other provisions a second worktree before it spawns.
+  const at = (cwd: string): AgentProcessRequest | undefined =>
+    processes.started.find((started) => started.request.cwd === cwd)?.request;
+  const [further, none] = [at('C:/ws/k1'), at('C:/ws/k2')];
+  assert.ok(further !== undefined && none !== undefined, 'the two sessions did not start');
+  assert.deepEqual(Object.keys(further).sort(), Object.keys(none).sort(), 'the request gained a member');
+  assert.equal('additionalDirectories' in further, false);
+  assert.equal(further.env['PERISCOPE_WORKTREE_TOOLS'], TOOLS_K1);
 });
 
 test('regression: a further worktree reports the path the host made, never a checkout around it, and its branch only when it is a worktree itself', async () => {

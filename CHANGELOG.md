@@ -8,6 +8,71 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-11
+
+Protocol 19; the window is `[18, 19]`, so a version-18 controller is still spoken to. Version 19 lets a
+host serve several repositories and gives a session its own worktree of each it names; every member it
+adds is optional and it adds no payload kind. A version-18 controller names no further repository, so
+the members reach it only as unknown keys on kinds it already reads, and every frame it sends decodes
+unchanged. A `session_new` that names no further repository is byte for byte the one 1.9.2 sent, and a
+host serving its home repository alone sends the hello and the inventory it sent.
+
+- Added: a session may write in more than its own directory. The local gate admits a write inside any
+  of the session's roots, the protected set checked first, as before: its own directory; the temp folder
+  this host's environment names (`TEMP`, then `TMP`, on Windows; `TMPDIR`, else `/tmp`, elsewhere), with
+  its real path beside when it is spelled otherwise; and its own worktree of each further repository it
+  named. A temp folder is no root when it would cover the home directory, a protected path, a workspace
+  or a served checkout, or sit inside a workspace or a checkout. A refusal with one root reads as it
+  always did; with more it names each. `JailOptions.writeRoots` and `LocalGateOptions.writeRoots`
+  (optional) carry the further roots.
+- Added: `PERISCOPE_REPOSITORY_ROOTS`, the repositories a host serves beside the one
+  `PERISCOPE_REPOSITORY_ROOT` names: a path list in the platform's delimiter, at most `MAX_REPOSITORIES`
+  (8), each an absolute git work tree named by its folder's name. A config-file key, settable over the
+  link while no session is live or opening. The start refuses, by name, a list without both roots, an
+  entry that is relative or no work tree, a name that cannot be a branch or a folder, two names whose
+  variables collide, and the home repository's name or root. `PeriscopeHostOptions.repositories` is the
+  embedder's form.
+- Added: `session_new.additionalRepositories`, the further repositories a session also writes in. Each
+  is provisioned, or attached to, at the session's workspace key under
+  `<workspace root>/.repositories/<name>`, in the same turn as its own worktree; the session finds each
+  path in `PERISCOPE_WORKTREE_<NAME>`, which this host sets and every controller is refused; each rides
+  the session's transitions as `where.repositories` (`TransitionWhereRepository`). A name the host does
+  not serve, the home repository's own name, or any name on a host serving no other is refused
+  `repository-unknown`, a new reason, before anything is claimed; a name given twice is refused at the
+  codec. A resumed session names its further repositories again and attaches to the worktrees there.
+- Added: the hello's and the configure answer's `configuration.repositories`, one `HostRepository`
+  (`name`, `root`, `defaultBranch`) per served repository, the home one first, held to
+  `MAX_REPOSITORY_CATALOG_BYTES`; absent on a host serving its home repository alone.
+  `MAX_REPOSITORY_NAME_LENGTH` bounds a name.
+- Added: on a host serving several repositories, `workspace_list_result` lists every repository's
+  worktrees, each entry naming its `repository` (null for the home one), and `workspace_release`, its
+  entries and `WorkspaceReleaseFlags` take an optional `repository`; a path resolves through whichever
+  repository's workspace holds it. A further worktree is in use while any session holding its key is
+  live.
+- Added: Codex's sandbox is handed each further worktree as a writable root, at start, in the thread's
+  configuration and on every `workspace-write` turn, and on Windows the temp folder too, which its
+  `workspace-write` otherwise admits only through `TMPDIR`. Off Windows a session naming nothing beyond
+  its own directory starts Codex with the arguments 1.9.2 gave it. Claude is handed no further
+  directory: the CLI reads plugin and marketplace settings from any directory it is given, so its
+  writes there are the gate's to allow.
+- Added: `WorkspaceProvider.workspaceRoot` and `WorkspaceProvider.defaultBranch` (optional, both
+  providers); `WorkspaceEffects.realPath` (optional, on the node effects).
+- Changed: the shell allow-list admits the local git that publishes nothing: `read-tree`,
+  `checkout-index`, `show-ref`, `clone`, `archive` of a local tree, and `worktree add` beside
+  `worktree list`. Still refused: `archive` with `--remote` or `--exec` in any abbreviation, every other
+  `worktree` subcommand, every `config` write, `send-pack` and the push family.
+- Changed: a command that opens with `NAME=value` words is also read with them stepped over, so
+  `GIT_INDEX_FILE=x git read-tree HEAD` flows and `X=1 git push origin main` escalates as a push. The
+  reading only adds refusals.
+- Security: a heredoc fed to something that is neither a shell nor a data sink is read whole by the
+  shell backstop, its `#` comments blanked, so a push written into an interpreter's script
+  (`python - <<EOF … git push … EOF`) is recognised.
+- Fixed: a relative `PERISCOPE_WORKSPACE_ROOT` or `PERISCOPE_REPOSITORY_ROOT` refuses the start by
+  name, as the configuration document said it did; the start did not check it.
+- Fixed: a workspace root given in a Windows short form (`C:/Users/RUNNER~1/…`) lists, guards and
+  cleans its worktrees. git records a worktree under its long path, so the inventory listed nothing and
+  a release deleted the branch the scheme names rather than the one the worktree is on.
+
 ## [1.9.2] - 2026-10-31
 
 A security patch to the shell backstop: no wire or API change. Protocol 18; the window is `[17, 18]`, as in 1.9.1.

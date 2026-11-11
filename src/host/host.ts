@@ -2108,7 +2108,7 @@ export class PeriscopeHost {
       spawnEnv = { ...spawnEnv, ...env };
     };
 
-    // Where else a write may land: the temp folder the session's environment names, read once now, and
+    // Where else a write may land: the temp folder this host's environment names, read once now, and
     // each further worktree the open provisioned. The temp folder is no root when it would cover the home
     // directory, a protected path, a workspace or a checkout, or sit inside a workspace or a checkout; the
     // fence is what keeps a planted setting out of the next session.
@@ -2118,7 +2118,10 @@ export class PeriscopeHost {
       provider?.repositoryRoot,
       ...[...this.#repositories.values()].map((further) => further.repositoryRoot),
     ].filter((path): path is string => path !== undefined);
-    const tempRoots = sessionTempRoots(spawnEnv, {
+    // Read from what this host hands the session, never from the controller's lane: a folder a controller
+    // names as `TEMP` would otherwise be a root a write may land in. A session whose controller moved its
+    // temp folder has none, and its scratch writes there refuse.
+    const tempRoots = sessionTempRoots(composeSpawnEnv(this.#registry.baseEnv, {}, sessionHostEnv ?? {}), {
       notAbove: [...(home === null ? [] : [home]), ...this.#options.protectedPaths, ...enclosing, cwd],
       notBeneath: enclosing,
     });
