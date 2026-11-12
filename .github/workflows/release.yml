@@ -65,10 +65,15 @@ jobs:
             exit 1
           fi
 
+      # Only a v* tag publishes. A run started by hand from a branch is the rehearsal: the gate, the pack,
+      # and nothing sent to the registry.
       - name: is the package publishable
         id: publishable
         run: |
-          if node -e "process.exit(require('./package.json').private === true ? 1 : 0)"; then
+          if [ "${GITHUB_REF#refs/tags/v}" = "${GITHUB_REF}" ]; then
+            echo "value=false" >> "$GITHUB_OUTPUT"
+            echo "${GITHUB_REF} is not a v* tag; this run performs a dry-run publish only"
+          elif node -e "process.exit(require('./package.json').private === true ? 1 : 0)"; then
             name="$(node -p "require('./package.json').name")"
             version="$(node -p "require('./package.json').version")"
             if npm view "${name}@${version}" version >/dev/null 2>&1; then
