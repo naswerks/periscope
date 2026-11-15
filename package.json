@@ -106,5 +106,10 @@
     "publint": "^0.3.24",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.70.0"
+  },
+  "overrides": {
+    "@opencode/core": {
+      "@anthropic-ai/claude-agent-sdk": "$@anthropic-ai/claude-agent-sdk"
+    }
   }
 }
