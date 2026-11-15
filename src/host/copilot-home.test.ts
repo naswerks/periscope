@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { COPILOT_EXCLUDED_TOOLS } from '../gate/tool-kind.js';
@@ -12,6 +12,7 @@ import {
   carryCopilotStateIn,
   carryCopilotStateOut,
   copilotPolicyHooks,
+  copilotCanonicalPath,
   copilotReadBackProblem,
   copilotRuntimeEnv,
   copilotTokenProvider,
@@ -113,6 +114,30 @@ test('control: the read-back refuses each condition broken once, by name', () =>
     assert.match(copilotReadBackProblem(read, held) ?? '', words, `${what} was not refused`);
   }
 });
+
+test('regression: a root handed over in another spelling of the place the runtime reports is the same root: a link, or a Windows short name', () =>
+  withTempDir('copilot-canonical', (dir) => {
+    const real = join(dir, 'real-work');
+    mkdirSync(real);
+    const link = join(dir, 'link-work');
+    symlinkSync(real, link, 'junction');
+    const resolved = realpathSync.native(real);
+    // The runtime reports the directories it allows resolved; the host was handed the link.
+    const read: CopilotPostureRead = {
+      ...clean,
+      paths: { directories: [resolved], sessionApprovedPaths: [] },
+    };
+    const held: CopilotPostureExpected = { ...expected, cwd: link, writeRoots: [], home: join(dir, 'home') };
+    assert.equal(copilotReadBackProblem(read, held), null);
+    // Control: a directory outside the link's target is still refused.
+    assert.match(
+      copilotReadBackProblem({ ...read, paths: { directories: [join(dir, 'elsewhere')] } }, held) ?? '',
+      /outside the session's roots/,
+    );
+    // A path not made yet keeps what follows its deepest existing ancestor.
+    assert.equal(copilotCanonicalPath(join(link, 'not-yet', 'made')), join(resolved, 'not-yet', 'made'));
+    return Promise.resolve();
+  }));
 
 test('the read-back and the session config share one list of turned-off tools (R3)', () => {
   for (const tool of COPILOT_EXCLUDED_TOOLS) {

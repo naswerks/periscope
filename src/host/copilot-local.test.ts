@@ -313,7 +313,7 @@ test(
     const real = await openReal(dirs, { servers: servers.value, skills: [dirs.skills] });
     try {
       const calls: [string, unknown][] = [
-        [SHELL, { command: 'echo hello', description: 'scratch' }],
+        [SHELL, { command: 'echo hello', description: 'scratch', initial_wait: 120 }],
         ['view', { path: join(dirs.work, 'readme.txt') }],
         ['create', { path: join(dirs.work, 'made.txt'), file_text: 'made\n' }],
         ['probe-srv-echo', { text: 'hi' }],
@@ -523,7 +523,8 @@ test(
     const real = await openReal(dirs);
     try {
       const command = WINDOWS ? 'Get-ChildItem env: | ForEach-Object { $_.Name }' : 'env | cut -d= -f1';
-      const done = await real.run(SHELL, { command, description: 'scratch' }, 'pin-env');
+      // A cold shell on a loaded host can take longer than the tool's own 30-second wait to answer.
+      const done = await real.run(SHELL, { command, description: 'scratch', initial_wait: 120 }, 'pin-env');
       assert.equal(done.resultType, 'success', done.text);
       const names = done.text
         .split(/\r?\n/)

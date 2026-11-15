@@ -18,8 +18,17 @@
  */
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 
 import { isContainedByIgnoringCase, normalizePath } from '../core/paths.js';
 import type { Result } from '../core/result.js';
@@ -293,9 +302,39 @@ export interface CopilotPostureExpected {
   readonly home: string;
 }
 
-/** Whether `inner` is `outer` or beneath it, by the same rule the jail uses. */
+/**
+ * `path` as the file system names it: its deepest existing ancestor resolved (a link followed, a Windows
+ * short name such as `RUNNER~1` spelled out), and the rest of the path after it as written. The runtime
+ * reports the directories it allows in their long, resolved form, which a root this host was handed in
+ * another spelling of the same place would never match lexically.
+ */
+export function copilotCanonicalPath(path: string): string {
+  const rest: string[] = [];
+  let current = path;
+  for (let depth = 0; depth < 64; depth += 1) {
+    try {
+      const resolved = realpathSync.native(current);
+      return rest.length === 0 ? resolved : join(resolved, ...rest.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return path;
+      rest.push(basename(current));
+      current = parent;
+    }
+  }
+  return path;
+}
+
+/**
+ * Whether `inner` is `outer` or beneath it, by the same rule the jail uses: as written, or else as the file
+ * system names both.
+ */
 function within(inner: string, outer: string): boolean {
-  return isContainedByIgnoringCase(normalizePath(inner), normalizePath(outer));
+  if (isContainedByIgnoringCase(normalizePath(inner), normalizePath(outer))) return true;
+  return isContainedByIgnoringCase(
+    normalizePath(copilotCanonicalPath(inner)),
+    normalizePath(copilotCanonicalPath(outer)),
+  );
 }
 
 /**
