@@ -1,5 +1,6 @@
 /**
- * Each runtime's tool names, read as tool kinds: Claude's, then Codex's, then Qwen Code's, then pi's.
+ * Each runtime's tool names, read as tool kinds: Claude's, then Codex's, then Qwen Code's, then pi's, then
+ * Copilot's.
  *
  * Claude's names are the agent SDK's own, as a `PreToolUse` input's `tool_name` carries them: the tools its
  * input schemas describe, and the gate's own families (`DEFAULT_TOOL_FAMILIES`). A tool the table does
@@ -200,6 +201,96 @@ export const PI_SHELL_DIALECTS: Readonly<Record<string, ShellDialect>> = {
 /** The dialect of the pi shell tool named `toolName`, or null for a tool that runs no command. */
 export function piShellDialect(toolName: string): ShellDialect | null {
   return Object.hasOwn(PI_SHELL_DIALECTS, toolName) ? (PI_SHELL_DIALECTS[toolName] ?? null) : null;
+}
+
+/**
+ * Copilot's built-in tool names, read as tool kinds: the names its pre-tool hook carries. `powershell` runs a
+ * command on Windows and `bash` elsewhere; `view` reads a path; `create` writes one; `edit`,
+ * `str_replace_editor` and `apply_patch` change one; `grep` and `glob` read under theirs; `web_fetch` fetches
+ * a URL. Every MCP tool reaches this host as `mcp__{server}__{tool}` (`copilot-gate.ts` spells it) and is
+ * `mcp` by that prefix. Every other built-in is `other`, and is named in `COPILOT_OTHER_TOOLS`.
+ */
+export const COPILOT_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
+  powershell: 'shell',
+  bash: 'shell',
+  view: 'file_read',
+  grep: 'file_read',
+  glob: 'file_read',
+  create: 'file_write',
+  edit: 'file_edit',
+  str_replace_editor: 'file_edit',
+  apply_patch: 'file_edit',
+  web_fetch: 'web',
+};
+
+/**
+ * The built-ins of the pinned Copilot runtime that are `other` by name: each one a tool the runtime offers
+ * that runs no command, reads or writes no path by itself and fetches no URL. Together with
+ * `COPILOT_TOOL_KINDS` and `COPILOT_EXCLUDED_TOOLS` it names every built-in the runtime lists on Windows and
+ * on a POSIX host (`copilot-local.test.ts` holds the three to the runtime's own list).
+ */
+export const COPILOT_OTHER_TOOLS: readonly string[] = [
+  'read_powershell',
+  'stop_powershell',
+  'list_powershell',
+  'read_bash',
+  'stop_bash',
+  'list_bash',
+  'task',
+  'skill',
+  'ask_user',
+  'task_complete',
+  'exit_plan_mode',
+  'update_todo',
+  'context_board',
+  'read_inbox',
+  'send_inbox',
+  'list_agents',
+  'read_agent',
+  'write_agent',
+  'sql',
+  'generic_tool_search',
+  'tool_search_tool',
+  'semantic_code_search',
+  'fetch_copilot_cli_documentation',
+  'dynamic_workflows_manage',
+  'run_dynamic_workflow',
+];
+
+/**
+ * The built-ins this host turns off in every Copilot session: each is left out of the session's tools and
+ * the open is refused if the runtime offers it anyway (`copilot-process.ts`).
+ *
+ * - `write_powershell` and `write_bash` type input into a shell already running, so a call carries text a
+ *   running program reads, never a command any reading of a command can see. A controller cannot govern a
+ *   command it cannot see as one.
+ * - `manage_schedule` schedules a prompt to run later, outside the queue a controller sends prompts into.
+ *
+ * Lifting one is a later release's change to this list, once a decision request can say what such a call
+ * runs.
+ */
+export const COPILOT_EXCLUDED_TOOLS: readonly string[] = [
+  'write_powershell',
+  'write_bash',
+  'manage_schedule',
+];
+
+/** The kind of the Copilot tool named `toolName`: its row in the table, `mcp` by prefix, else `other`. */
+export function copilotToolKind(toolName: string): ToolKind {
+  if (Object.hasOwn(COPILOT_TOOL_KINDS, toolName)) return COPILOT_TOOL_KINDS[toolName] ?? 'other';
+  if (toolName.startsWith(MCP_TOOL_PREFIX)) return 'mcp';
+  return 'other';
+}
+
+/** The grammar each Copilot shell tool runs its command in: `powershell` PowerShell, `bash` a POSIX shell. */
+export const COPILOT_SHELL_DIALECTS: Readonly<Record<string, ShellDialect>> = {
+  powershell: 'powershell',
+  bash: 'posix',
+};
+
+/** The dialect of the Copilot shell tool named `toolName`, or null for a tool that runs no command. */
+export function copilotShellDialect(toolName: string): ShellDialect | null {
+  return Object.hasOwn(COPILOT_SHELL_DIALECTS, toolName) ? (COPILOT_SHELL_DIALECTS[toolName] ?? null) : null;
 }
 
 /** A variable read as Windows reads it, without regard to the case of its name. */

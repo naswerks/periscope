@@ -228,9 +228,10 @@ export function checkReadPath(candidate: string | null, options: JailOptions): R
 const GLOB_MAGIC = /[*?[\]{}]/;
 
 /**
- * The directories a search reads under: its `path` (else the workspace root), and the literal head of
- * a `pattern` that names a place of its own (absolute, from the home directory, or climbing with `..`),
- * resolved against that root. A pattern with no such head names files, not a place, and adds nothing.
+ * The directories a search reads under: its `path` (else the workspace root), each entry of a `paths`
+ * list, and the literal head of a `pattern` that names a place of its own (absolute, from the home
+ * directory, or climbing with `..`), resolved against that root. A pattern with no such head names files,
+ * not a place, and adds nothing.
  */
 function searchRoots(toolInput: unknown, options: JailOptions): string[] | null {
   const record =
@@ -240,6 +241,14 @@ function searchRoots(toolInput: unknown, options: JailOptions): string[] | null 
   if (base === null || base.trim() === '') return null;
 
   const roots = [expandHome(base, options.home)];
+  // A search tool that names several roots (`paths`, a list: Copilot's `grep` and `glob`) reads under each
+  // of them, so each is a root beside `path`.
+  const listed = record['paths'];
+  if (Array.isArray(listed)) {
+    for (const entry of listed as unknown[]) {
+      if (typeof entry === 'string' && entry.trim() !== '') roots.push(expandHome(entry, options.home));
+    }
+  }
   const pattern = record['pattern'];
   if (typeof pattern === 'string') {
     const expanded = normalizePath(expandHome(pattern, options.home));

@@ -124,6 +124,21 @@ export const PI_TOOL_FAMILIES: ToolFamilies = {
   search: ['grep', 'find', 'ls'],
 };
 
+/**
+ * The names Copilot gives its built-in tools: `powershell` and `bash` run a command; `view` reads the path it
+ * names; `create`, `edit` and `str_replace_editor` write theirs (every command of the last, its `view`
+ * included, is held as a write: stricter, and the model has `view` for a read); `grep` and `glob` read under
+ * the paths they name (`paths`, a list); `apply_patch` writes every file its patch names. Every other Copilot
+ * tool has no local family and is asked about like any call this gate has no opinion on.
+ */
+export const COPILOT_TOOL_FAMILIES: ToolFamilies = {
+  write: ['create', 'edit', 'str_replace_editor'],
+  read: ['view'],
+  shell: ['powershell', 'bash'],
+  search: ['grep', 'glob'],
+  patch: ['apply_patch'],
+};
+
 export interface LocalGateOptions {
   /** The session's own directory: writes may land inside it, and a relative path is placed against it. */
   readonly workspaceRoot: string | null;
@@ -337,6 +352,9 @@ function checkPatch(request: DecisionRequest, jail: JailOptions): Refusal | null
 
 /** The files a patch call's input names, or null when it names none. */
 export function patchInputPaths(toolInput: unknown): string[] | null {
+  // A patch tool that takes its patch as the whole input (Copilot's `apply_patch`) names its files on the
+  // patch's own header lines, as a `command` does.
+  if (typeof toolInput === 'string') return patchPaths(toolInput);
   if (typeof toolInput !== 'object' || toolInput === null) return null;
   const record = toolInput as Record<string, unknown>;
   const command = record['command'];
@@ -363,8 +381,9 @@ export function shellDirectoryOf(toolInput: unknown): string | null {
 }
 
 /**
- * A search call's input with a relative `path` placed under where the call runs, as a runtime that
- * resolves it there reads it; an absolute path, a home-relative one or none is left as it is.
+ * A search call's input with a relative `path`, and each relative entry of a `paths` list, placed under
+ * where the call runs, as a runtime that resolves them there reads them; an absolute path, a home-relative
+ * one or none is left as it is.
  */
 function placedSearchInput(
   request: DecisionRequest,
@@ -372,10 +391,30 @@ function placedSearchInput(
 ): { readonly input: unknown } | { readonly refused: Refusal } {
   const input = request.toolInput;
   if (typeof input !== 'object' || input === null) return { input };
-  const path = (input as Record<string, unknown>)['path'];
-  if (typeof path !== 'string' || path.trim() === '' || path.startsWith('~') || isAbsolutePath(path)) {
-    return { input };
+  const record = input as Record<string, unknown>;
+  const place = (path: unknown): string | Refusal | null => {
+    if (typeof path !== 'string' || path.trim() === '' || path.startsWith('~') || isAbsolutePath(path)) {
+      return null;
+    }
+    return againstCallCwd(path, request.cwd, workspaceRoot);
+  };
+  let placedInput: Record<string, unknown> = record;
+  const path = place(record['path']);
+  if (path !== null) {
+    if (typeof path !== 'string') return { refused: path };
+    placedInput = { ...placedInput, path };
   }
-  const placed = againstCallCwd(path, request.cwd, workspaceRoot);
-  return typeof placed === 'string' ? { input: { ...input, path: placed } } : { refused: placed };
+  // A list of roots (`paths`) is placed entry by entry, as a single `path` is.
+  const listed = record['paths'];
+  if (Array.isArray(listed)) {
+    const entries: unknown[] = [];
+    for (const entry of listed as unknown[]) {
+      const placed = place(entry);
+      if (placed === null) entries.push(entry);
+      else if (typeof placed !== 'string') return { refused: placed };
+      else entries.push(placed);
+    }
+    placedInput = { ...placedInput, paths: entries };
+  }
+  return { input: placedInput };
 }
