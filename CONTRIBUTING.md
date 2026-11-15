@@ -149,9 +149,12 @@ npm run build && PERISCOPE_LIVE=1 PERISCOPE_OPENCODE_SDK=<sdk directory> PERISCO
 
 `src/host/mid-turn-delivery.live.test.ts` records what the agent does with a message pushed on its input
 while a turn runs: one plain, as this host sends every prompt, and two naming another session as their
-origin, under the session's refusal of other sessions' messages. It asserts what Claude Code 2.1.284 did
-(each lands inside its turn, the model reads it, the transcript keeps no other session as its origin), so
-a red is a change to record. Run it after every agent SDK bump:
+origin, under the session's refusal of other sessions' messages. It asserts that each was pushed while
+the turn's shell call was still running, that it lands inside that turn, that the model reads it and
+names no other session as its sender, and that the session's transcript, found and holding the pushed
+word, keeps no other session as its origin; a turn that never ran or a transcript that was not found is
+a red of its own. A red on what the agent did is a change to record. It needs a Claude sign-in outside
+an agent session. Run it with the release's live probes and after every agent SDK bump:
 
 ```sh
 npm run build && PERISCOPE_LIVE=1 node --test dist/host/mid-turn-delivery.live.test.js

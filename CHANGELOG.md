@@ -114,10 +114,13 @@ frame it sends decodes unchanged.
   `PERISCOPE_AGENT_PROGRESS_SUMMARIES=off` in the environment or the config file (a new config-file
   key; `on` is the default, any other word refuses start), or `agentProgressSummaries: false` on
   `PeriscopeHost` or `SessionRegistry`. No controller and no session can set it.
-- Security: every Claude session refuses a message another session on the machine sends it
+- Security: every Claude session is started refusing messages another session on the machine sends it
   (`crossSessionInbound: 'refuse'`). Unset, the CLI delivered one when the two sessions' modes matched,
   so a bypass-mode session elsewhere on the machine could reach a session this host runs in bypass.
-  This host's own prompts are not that lane.
+  This host's own prompts are not that lane. The live probe of what the CLI does with a message that
+  names another session (`mid-turn-delivery.live.test.ts`) now fails when the turn never ran, the
+  message was not pushed mid-turn or the transcript was not found; it runs with the release's live
+  probes.
 - Fixed: a Claude compaction that fails ends. The status message that says so
   (`compact_result: 'failed'`) closes the compaction entry, so the `compaction` fact reports `ended`
   and the next compaction reports `started`; the entry stayed open, no `ended` was sent and the next

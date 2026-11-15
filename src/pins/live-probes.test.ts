@@ -30,7 +30,7 @@ const CLAIMED_PROPERTIES = [
   'workspace trust is explicit',
   'survives resume with its context',
   'a write the gate allows outside its own directory lands',
-  'a message pushed mid-turn lands at the next tool round',
+  "a message pushed while a turn's shell call runs lands inside that turn",
   'every call of a copilot session asks this host',
   'every call of an opencode session asks this host',
 ];
