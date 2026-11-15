@@ -206,7 +206,8 @@ From v15, `configuration.endpoints` lists the model endpoints the host's operato
   `openai-responses`, `openai-chat`). A wire API a newer peer adds is read; the host sends only the
   ones it declares.
 - `runtimes`: the runtimes that can reach it. Each speaks the endpoint's wire API (Claude speaks
-  `anthropic-messages`, Codex `openai-responses`, Qwen Code and pi all three), and the host refuses
+  `anthropic-messages`, Codex `openai-responses`, Qwen Code and pi all three, opencode `openai-chat`), and
+  the host refuses
   at start
   an endpoint naming
   one that does not, and lists a runtime only where it routes it and it speaks the API, so a
@@ -238,8 +239,10 @@ Claude is `namespaced`, `per-session`: the agent CLI's plugin directories. Codex
 `per-process`: each directory is a skill root of the session's own app-server. Qwen Code is `bare`,
 `per-session`: each directory's `skills/` is a skill directory in the session's own settings, and the
 CLI lists its skills by name alone. pi is `bare`, `per-session`: each directory's `skills/` is handed
-to the session's pi as a skill directory on its command line, and pi lists its skills by name alone. A word a newer peer
-adds is read; the host sends only the words it declares.
+to the session's pi as a skill directory on its command line, and pi lists its skills by name alone.
+opencode is `bare`, `per-session`: each directory's `skills/` is a skill path in the session's own
+configuration, and opencode lists its skills by name alone. A word a newer peer adds is read; the host sends
+only the words it declares.
 
 ## The credential on the three transports
 
@@ -386,6 +389,16 @@ whose `errorType` is `query` and whose `message` is `Execution failed: InvalidAr
 token or Copilot HMAC key provided`, sent before the runtime takes the prompt: the session goes to
 `errored` with that detail, and no turn item is filled for the run.
 
+An opencode session's messages carry `runtime: "opencode"`, and each `message` is one event of the
+session's server as it sent it: `{ id, type, data, ... }`. The server's stream is the whole server's, so it
+carries the session's own events, those of the sessions its subagents start (each names its own
+`data.sessionID`), and the server's own. A streamed delta (`session.text.delta`, `session.reasoning.delta`,
+`session.tool.input.delta`, `session.compaction.delta`) rides the delta lane; everything else the update
+lane. Which events move the session is `OPENCODE_COVERAGE` ([state-machine.md](state-machine.md)); only the
+session's own move it. An endpoint that refuses the key fails the first run: the step and the run each end
+on an `error` whose `type` is `provider.auth` and whose `message` is the provider's own words (`status`
+401), with no retry, and the session goes to `errored` with that detail.
+
 A forwarded message's body, on either lane, carries `observedAt` (v12): the instant, ISO-8601 in
 UTC, this host took the message off the agent's stream. Date a message by it rather than by its
 arrival: a message replayed after a reconnect arrives late, and a clock started at arrival runs
@@ -497,6 +510,20 @@ call that spawned it (`taskId` and `toolUseId`), its type the agent's name, sett
 `stopped` (cancelled) or `failed` with the tokens, tool calls and time the runtime reports; `compaction`
 is each compaction the runtime reports, with the tokens before and after. A Copilot fact's `sourceId`
 is the event's own `id`.
+
+opencode's sources: `session_handle` is the session id the open names; `agent_receipt` is the runtime's
+own (`source: 'runtime'`) once the open is proven: the model the session runs on, its agent as
+`permissionMode` (`build` or `plan`), and the skills the host handed over; it is sent again when the model
+or the agent moves. `turn_record` is filed per model call: each `session.step.ended`, and each
+`session.step.failed` that reports tokens, is that call's figure (`turn`, `turnScope: 'step'`, `totals`
+null), the session's own or a subagent's, under the model the step started on. `inputTokens` is opencode's
+input as it reports it, which leaves its cache reads out. The cost is opencode's, in US dollars, and is
+`provider-reported` only when it is above zero: opencode prices a call from its own catalogue, which does
+not know an endpoint's models, so a zero is `cost` null and `costBasis` `unreported`. The model call a
+compaction makes is counted in the session's running total (`session.usage.updated`, which rides its
+native message alone) and in no step. `tasks` is each subagent's session, named by the call that started
+it, running from its run's start to its end; `compaction` is each compaction, with no token figures.
+An opencode fact's `sourceId` is the event's own `id`.
 
 Every fact carries `runtime`. `sourceId` is the id of the native message the fact was lifted from
 (Claude: the message's `uuid`, the same id its `agent_message` carries) and null for a fact lifted
@@ -690,7 +717,8 @@ every tool call meets, asks the gate about each before it runs; its opening `deg
 either lowers its level to `intercepted-with-residual`. A Copilot session is
 `intercepted-with-residual`: the runtime's pre-tool hook answers `ask` for every call and the gate
 decides the request that raises, and its opening `degrades` name `gate-hook-foreign` when a
-machine-wide policy hook is on the machine. The tier is stated, never negotiated, and the host decides
+machine-wide policy hook is on the machine. An opencode session is `intercepted-with-residual`: its rules
+ask for every action, and the gate decides every request they raise. The tier is stated, never negotiated, and the host decides
 nothing by it.
 
 **Degrades raised mid-session.** A degrade is a `RefusalReason` that names a path where a call ran
@@ -711,14 +739,21 @@ runtime reports as failed; a call that ran with no decision; once per call), `ga
 hook this host did not install answered a request; also known at the open, for a machine-wide policy
 hook), `gate-unhooked-call` (a tool the model's provider ran itself; once per kind) and
 `gate-mode-widened` (a permission mode other than `manual`, or an agent mode other than `interactive`
-and `plan`; once per mode). None of these is `permission-decision-unavailable`, which means the tool did not run.
+and `plan`; once per mode). opencode's are `gate-unhooked-call` (a tool the model's provider ran itself;
+once per call), `gate-hook-missing` (a call that ran with no request for it; once per call),
+`gate-mode-widened` (the rules of one of the session's sessions are no longer this host's, or an answer this
+host never gave approved a request) and `gate-foreign-extension` (a plugin that is not the runtime's own,
+loaded after the open). None of these is `permission-decision-unavailable`, which means the tool did not run;
+on opencode a request the runtime refused together with another this host refused is recorded so, with the
+runtime's words.
 A Codex open whose hook is not trusted and enabled is refused `codex-hook-not-active`, and a Qwen Code
 open whose settings could not be written, or do not read back asking about every built-in tool,
 denying the tools the host turns off, keeping code mode off, with every hook off, is refused `qwen-ask-rules-not-active`, and a pi open whose extension did not say
 hello in time, or that pi would not load, is refused `pi-extension-not-active`, and a Copilot open
 whose runtime does not read back in the posture the host started it in, or whose probe call did not
-reach the host through the hook and the request both, is refused `copilot-gate-not-active`: a refusal
-transition on this lane, then the session's end.
+reach the host through the hook and the request both, is refused `copilot-gate-not-active`, and an
+opencode open whose server does not read back in the posture the host created it in is refused
+`opencode-gate-not-active`: a refusal transition on this lane, then the session's end.
 
 A level outside `CONTROL_TIER_LEVELS` is read on the way in, so a newer peer's added level survives,
 and refused on the way out. The codec checks a transition's `controlTier` and nothing else in it.
@@ -890,6 +925,31 @@ On `copilot`, every other member is read as Copilot's own:
   `env` is set nowhere.
 - `gate.decisionTimeoutMs` above 240,000ms is refused `gate-deadlines-inverted`: the runtime holds a
   permission request with no timeout of its own, measured to 240 seconds and no further.
+
+On `opencode`, every other member is read as opencode's own:
+
+- `permissionMode` takes `default` (opencode's `build` agent) and `plan` (its `plan` agent); any other is
+  refused `request-key-unsupported`. Every call asks either way. `effort` is refused, since opencode sets
+  reasoning through a model's variants and this host's endpoints declare none; `thinking` other than
+  adaptive is refused, since opencode has no thinking switch. A model or a mode set mid-session applies
+  from the session's next model call.
+- A member that is Claude's alone is refused `request-key-unsupported`, naming it: `settingSources`,
+  `hooks`, `spawn`, a store, `strictMcpConfig: false`, and a `systemPrompt` that is a string or the
+  `claude_code` preset. The `runtime-default` preset's `append` is added to opencode's own instructions.
+- `model` names one of the endpoint's models; a model with no endpoint is refused, since an opencode
+  session reaches a model only through one.
+- `resume` names a session whose database the host kept when it closed; any other is refused
+  `request-key-unsupported`, naming `resume`. `fork` forks it into a new session.
+- `plugins` reach opencode as skill directories, each directory's `skills/`. A directory without one is
+  named among the receipt's `pluginErrors`.
+- `mcpServers` ride the session's configuration, which crosses into its host process over its stdin: an
+  HTTP server's `headers` beside its URL, with no OAuth flow offered, and a stdio server's command,
+  arguments and environment. opencode names a server's tool `<server>_<tool>`; the decision request names
+  it `mcp__<server>__<tool>` by the attached servers' names. A server opencode has no form for here (SSE,
+  an in-process server), a name outside letters, digits, `-` and `_`, and a name that with an `_` begins
+  another's are refused `mcp-descriptor-invalid`, naming it.
+- `endpoint` opens the session on that endpoint as its one provider, over `openai-chat`; its key rides the
+  session's configuration, never an environment, and the endpoint's own `env` is set nowhere.
 
 `endpoint` names the model endpoint the session's model traffic goes to, by a name the hello's
 `endpoints` lists. Null or absent is the runtime's own route. A controller names an endpoint and
@@ -1170,6 +1230,7 @@ The reasons a controller meets most, and what each is not:
 | `pi-extension-not-active`                                                                                                                                                                                                                                                              | a pi open whose extension did not say hello over the session's channel within `PI_HELLO_DEADLINE_MS`, or that pi would not load, or whose channel or configuration could not be made; no prompt was written. Without it every pi tool call would run undecided                                                                                                                                                                                                                         |
 | `gate-foreign-extension`                                                                                                                                                                                                                                                               | a degrade on a pi session's state lane, known at the open: a command, tool or MCP server from code this host did not load, which lowers the opening tier ([The control tier](#the-control-tier)). Never a stop                                                                                                                                                                                                                                                                         |
 | `copilot-gate-not-active`                                                                                                                                                                                                                                                              | a Copilot open whose runtime, read back before the first prompt, is not in the posture the host started it in (its permission mode, its agent mode, an approve-all grant, an approved path, a directory outside the session's roots, a plugin, a tool the host turns off), or whose probe call did not reach the host through the pre-tool hook and the permission request both; no prompt was sent. Without the joined route a call the runtime allows by default would run undecided |
+| `opencode-gate-not-active`                                                                                                                                                                                                                                                             | an opencode open whose server, read back before the first prompt, is not in the posture the host created it in (the session's rules, an agent's rules, a saved approval, a plugin not the runtime's own or one the host turns off, an MCP server, configuration outside the session's home, a model of another provider), or a session with no gate; no prompt was sent. Without this host's rules a call opencode allows by default would run undecided                               |
 | `request-key-unsupported`                                                                                                                                                                                                                                                              | a `session_new` member the named runtime does not honour, or a value of one its vocabularies lack; the detail names the key. Every member is Claude's own, so a session on Claude never meets it                                                                                                                                                                                                                                                                                       |
 | `plugins-undeliverable`                                                                                                                                                                                                                                                                | the runtime refused the call that hands it a session's plugin directories (Codex's `skills/extraRoots/set`); the open ends before `ready`, the detail carrying the runtime's answer. A directory that is not there is not this: it is named among the receipt's `pluginErrors`                                                                                                                                                                                                         |
 | `rpc-line-malformed`, `rpc-line-too-large`, `rpc-request-timed-out`, `rpc-request-failed`, `rpc-server-overloaded`                                                                                                                                                                     | a runtime's JSON-RPC peer: a line that is no JSON-RPC message, a line past what the host reads (dropped whole), a request with no answer by the host's deadline, an error answer, and the peer's own overload code. They reach a controller in a cause's detail, never as a wire refusal                                                                                                                                                                                               |

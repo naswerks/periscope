@@ -169,7 +169,7 @@ the decision deadline.
   `.git/config`, where `core.hooksPath` or `core.sshCommand` runs code in every worktree), and `send-pack`
   with the rest of the publishing plumbing.
 - Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
-  roots (above), with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome, piHome, copilotHome, copilotSdk, copilotTokenFile })` as the protected set and the home directory
+  roots (above), with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome, piHome, copilotHome, copilotSdk, copilotTokenFile, opencodeHome, opencodeSdk })` as the protected set and the home directory
   the shell scan expands from `homeDirectory(env)`, and the session's spawn environment its path
   variables are read from. That set, stated once (`src/host/paths.ts`): the
   host's own config directory (`PERISCOPE_CONFIG_DIR` or `~/.periscope`, which holds the token
@@ -192,8 +192,15 @@ the decision deadline.
   (`PERISCOPE_COPILOT_HOME`: each session's home, which is its `COPILOT_HOME` and holds the
   `LOCALAPPDATA` and `APPDATA` it starts with, and every session state kept for a resume), the
   operator's Copilot SDK install (`PERISCOPE_COPILOT_SDK`, the runtime every session starts from) and
-  the token file (`PERISCOPE_COPILOT_TOKEN_FILE`); and the operator's own `~/.copilot` and
-  `COPILOT_HOME`, whole. The rest of the CLI's home (its settings, skills and tool output) is the agent's to
+  the token file (`PERISCOPE_COPILOT_TOKEN_FILE`); the operator's own `~/.copilot` and
+  `COPILOT_HOME`, whole; the whole of opencode's runner base (`PERISCOPE_OPENCODE_HOME`: each session's
+  home, with its database and the configuration that holds an endpoint's key, and every database kept for
+  a resume) and the operator's opencode SDK install (`PERISCOPE_OPENCODE_SDK`, the server every session's
+  host process loads); the operator's own opencode directories (`~/.local/share/opencode`,
+  `~/.config/opencode`, `~/.local/state/opencode`, and each under `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and
+  `XDG_STATE_HOME` when set), whole; and opencode's machine-wide configuration directory
+  (`%ProgramData%\opencode`, `/Library/Application Support/opencode`, `/etc/opencode`), which every
+  opencode process reads and no setting turns off. The rest of the CLI's home (its settings, skills and tool output) is the agent's to
   read, and so is the rest of the operator's own `~/.codex` and the runner home's rollouts and state,
   and the Qwen Code base's shared `runtime` directory, where the chats a resume reads are kept.
   The host's own cache location derives from the same function, so the two cannot disagree about
@@ -591,6 +598,103 @@ the one this host decides.
 
 Copilot is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
 
+## The opencode gate
+
+opencode decides every call by its permission rules: an action and a resource, each a wildcard, and the
+effect of the last rule that matches, `allow`, `deny` or `ask`. A call whose rule asks raises a
+permission request on the server's stream (`permission.asked`) and waits on its answer with no timeout of
+its own. So the gate (`src/host/opencode-gate.ts`) writes the rules every session runs under, and answers
+every request they raise.
+
+- **Every action asks.** Every session is created with this host's rules (`opencodeRuleset`,
+  `src/host/opencode-home.ts`): `* * ask`, then a denial for each tool turned off below. The same rules are
+  the session's configuration's, which opencode places after each agent's own, so whatever an agent allows
+  by itself, the last rule a call matches asks. A subagent's session inherits the rules at its creation,
+  and a fork copies them. Shown on the pinned SDK driven by a stub model on a loopback port
+  (`opencode-local.test.ts`): a subagent's call and a forked session's call each ask.
+- **One decision per request.** A request names its own id, the session it asks for, its action, the
+  resources it names (a path, a command, a URL), and the call that raised it (`source.id`). The host reads it
+  as a `DecisionRequest`: the tool's name in this host's spelling (a built-in's action, an MCP tool as
+  below), the call's id, its input (an MCP request's `metadata.input`, else the input the stream announced
+  for the call, else the request's resources), the directory a shell call runs in, the subagent's session and
+  agent, `toolKind` and `shellDialect`, through the same call decision as a Claude call (the local gate,
+  then the decider, with the session's deadline and hold). The answer is `once`, or `reject` with the
+  outcome's words, which the model reads and goes on from; a reject never goes without words, since one
+  without would end the turn. Nothing broader is ever sent: no `always`. An allow that rewrites the input
+  is refused (`canRewriteInput: false`).
+- **One call can ask twice.** A path outside the session's location asks `external_directory` for its
+  directory first, then its own action; decisions are kept by the request's id, so each is decided once.
+- **A request refused with another.** When this host refuses one request, opencode refuses every other
+  request of the same session still waiting, with the same words. Each such decision still pending here is
+  ended, recorded as refused (`permission-decision-unavailable`, with the words the runtime refused it
+  with), and never answered twice.
+- **Proven before the first prompt** (`opencodeReadBackProblem`, and the open in
+  `src/host/opencode-process.ts`). Once the server's plugins are active, the server is read back: the
+  session's rules are exactly this host's; every agent's rules end with them; no approval is saved; every
+  plugin is the runtime's own and none turned off runs; the MCP servers are the session's; every
+  configuration place it read is inside the session's home; and no model but the endpoint provider's is
+  offered. Anything else refuses the open `opencode-gate-not-active`, naming what differed, and no prompt
+  is sent. A planted allow rule and a second provider are each refused on the pinned SDK.
+- **The tools turned off** (`OPENCODE_DENIED_TOOLS`, one list the rules, the read-back, the census of the
+  tools a model is offered and the gate all read). Each is denied by the rules, so the runtime never offers
+  it, and a request naming one is refused without asking anyone:
+  - `execute` (Code Mode) runs a program whose tool calls share its own call id. Denied, every tool is
+    offered directly and each call keeps its own id in the record.
+  - `question` waits on a form with no timeout; an agent asks through the controller's MCP server instead.
+  - `experimental_image_generate` writes its image under a name it chooses after the call was asked.
+  - `browser` is every browser tool's action; the browser's own plugin writes allow rules into the session
+    when a browser attaches.
+  - `opencode_session_rename`, `opencode_session_move`, `opencode_worktree_create`,
+    `opencode_worktree_list` and `opencode_models` run without asking at all.
+  - The artifact and schedule tools run without asking at all, and a schedule runs a prompt later, outside
+    the queue a controller sends prompts into.
+    Turning any of them back on needs a decision request that can say what it does. The built-in plugins
+    behind the browser and the image, schedule, artifact and MCP-event tools are turned off in the
+    configuration as well, so their code never runs.
+- **Forms are cancelled.** A web search's provider choice and an MCP server's request for input each wait on
+  a form with no timeout, which no interface of this host answers; each is cancelled as it is raised, and
+  what asked fails with words.
+- **The deadline.** opencode waits on a request with no timeout of its own, so the session's
+  `decisionTimeoutMs` is the only deadline: a decision nobody gives ends refused at it, and the call does
+  not run (shown on the pinned SDK).
+- **The MCP spelling.** opencode names a server's tool `<server>_<tool>`, and a server's name and a tool's
+  may each hold an underscore. The open refuses a server name opencode would rewrite, and one that with an
+  `_` begins another's, so the gate reads the server out of a tool's name by the attached servers' names:
+  exactly one that, with an `_`, begins the name maps it to `mcp__<server>__<tool>`. None keeps opencode's
+  spelling, so a controller holds the call as a stranger's. It never splits on an underscore.
+- **opencode's tools in the local gate** (`OPENCODE_TOOL_FAMILIES`): `edit` (the action the `write`,
+  `edit`, `patch` and `opencode_worktree_remove` tools ask) through the jail, each path the request names
+  checked one at a time, a relative one placed in the session's location; `read` and `external_directory`
+  (`<directory>/*` read as the directory) through the protected set; `shell` through the shell rules, in the
+  grammar of the shell this host names (`powershell` on Windows, `posix` elsewhere); `glob` and `grep`
+  through the protected set. The variables a command's paths are read with are the agent's shell's.
+- **What the reused names mean on opencode.** Each is raised once per call, request or session:
+  - `gate-unhooked-call`: a tool the model's provider ran itself (`session.tool.called` with
+    `executed: true`), which raises no request.
+  - `gate-hook-missing`: a call that ran with no request for it (`session.tool.success` for a call this
+    host decided nothing on), such as a shell line that names no command.
+  - `gate-mode-widened`: the rules of one of the session's sessions changed after the open and are no
+    longer this host's (`session.permissions`), or an answer this host never gave approved a request
+    (`permission.replied`).
+  - `gate-foreign-extension`: a plugin that is not the runtime's own loaded after the open
+    (`plugin.updated`, after which the plugins are read again).
+- **What it does not hold.**
+  - A `webfetch` the gate allows follows the redirects the site sends, up to opencode's limit: the decision
+    request names the URL asked for, and opencode holds each redirect only to the rules' denials, which
+    this host's rules never make of a URL, so a redirect is followed without a request of its own.
+  - A tool the model's provider runs itself raises no request, so it is named after the fact
+    (`gate-unhooked-call`), never decided.
+  - The workspace's `.opencode` and `.agents` folders are not protected: project configuration is off, so
+    the server never loads them, but a session may write there.
+  - opencode's process daemon, which runs the shell's commands, accepts its owner over a Unix socket or a
+    named pipe registered under the session's home, with a token; it opens no port. A command the agent's
+    shell runs could reach it, as the same user, and start a process through it, as the shell itself can.
+  - A command the agent detaches from its shell on purpose was not measured on opencode. A command the
+    session's shell still runs, in the foreground or the background, ends with the session (shown on the
+    pinned SDK).
+
+opencode is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
+
 ## What is deliberately not covered
 
 - `bypassPermissions` is composable, as the SDK's own `permissionMode` vocabulary. It travels wire
@@ -686,6 +790,9 @@ Copilot is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
 | `src/host/pi-gate.ts`                      | One pi session's gate: the channel, the hello, the check for code this host did not load                          |
 | `src/gate/pi-request.ts`                   | pi's `tool_call` event read as a decision request                                                                 |
 | `src/host/pi-home.ts`                      | The pi base: its agent home's files, a session's run directory, a resume resolved to its file                     |
+| `src/host/opencode-home.ts`                | An opencode session's home, its two environments, its rules and configuration, and the read-back                  |
+| `src/host/opencode-gate.ts`                | One opencode session's gate: each request, its answer, a request refused with another, the degrades               |
+| `src/host/opencode-host.ts`                | An opencode session's host process: the server in its own memory, its fixed calls, no listener                    |
 | `src/host/codex-gate-watch.ts`             | The residual, watched and named as it happens                                                                     |
 | `src/gate/outcome.ts`                      | `GateOutcome` (`holding`, `allow`, `deny`, `refused`, `expired`) to transitions, pure; `recordGateOutcome`        |
 | `src/gate/escalate.ts`                     | `escalatingDecider()`: status before body, `EscalationUnavailable`; the HTTP lane the link does not carry         |

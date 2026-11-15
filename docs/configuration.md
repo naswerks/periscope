@@ -107,6 +107,8 @@ session's tools may write.
 | `PERISCOPE_COPILOT_SDK`              | The directory the GitHub Copilot SDK is installed into, by absolute path: an `npm install --prefix` target of the operator's own, holding `@github/copilot-sdk` at the pinned version and its runtime for this platform. A session's runtime is started from it by path. Set with `PERISCOPE_COPILOT_HOME` or not at all; one without the other refuses start. Read at start ([Copilot](#copilot)). The whole directory joins the gate's protected set. Config-file key; never settable over the link.                                                                                                    |
 | `PERISCOPE_COPILOT_HOME`             | The base every Copilot session's home is made beneath, by absolute path: the runner's own, never the operator's `~/.copilot`. Created when absent. Each session runs from `<base>/sessions/<id>`, made at its open and removed at its close, and a closed session's state is kept in `<base>/state/<session id>` for a resume. The whole base joins the gate's protected set. Set with `PERISCOPE_COPILOT_SDK`. Config-file key; never settable over the link.                                                                                                                                            |
 | `PERISCOPE_COPILOT_TOKEN_FILE`       | A file holding the GitHub token Copilot sessions sign in with, by absolute path. Read when the runtime asks for a token, never at start, so a rotated token is taken without a restart; it reaches the runtime over the SDK's own pipe, never in its environment. Unset, a session not on a model endpoint opens and its first turn fails on the runtime's own words. Set only with the two keys above. The file joins the gate's protected set. Config-file key; never settable over the link.                                                                                                           |
+| `PERISCOPE_OPENCODE_SDK`             | The directory the opencode SDK is installed into, by absolute path: an `npm install --prefix` target of the operator's own, holding `@opencode/sdk` at the pinned version and the server, core and client of its release. Each session's host process loads it from there by path. Set with `PERISCOPE_OPENCODE_HOME` or not at all; one without the other refuses start. Read at start ([opencode](#opencode)). The whole directory joins the gate's protected set. Config-file key; never settable over the link.                                                                                       |
+| `PERISCOPE_OPENCODE_HOME`            | The base every opencode session's home is made beneath, by absolute path: the runner's own, never the operator's opencode directories. Created when absent. Each session runs from `<base>/sessions/<id>`, made at its open and removed at its close, and a closed session's database is kept in `<base>/state/<session id>` for a resume. The whole base joins the gate's protected set. Set with `PERISCOPE_OPENCODE_SDK`. Config-file key; never settable over the link.                                                                                                                               |
 | `PERISCOPE_CODEX_ENDPOINT_KEY`       | Never read from this host's own environment, and not a config-file key: the host sets it, in the app-server environment of a Codex session opened on a [model endpoint](#model-endpoints), to that endpoint's credential, and the session's provider reads its key from it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                        |
 | `PERISCOPE_HOOK_CHANNEL`             | Never read from this host's own environment, and not a config-file key: the host sets it, in a Codex session's app-server environment, to the address of that session's hook channel (a named pipe on Windows, a Unix socket elsewhere), and `periscope hook codex` reads it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                      |
 | `PERISCOPE_HOOK_TOKEN`               | Never read from this host's own environment, and not a config-file key: the host sets it, in a Codex session's app-server environment, to that session's random token for its hook channel, and `periscope hook codex` presents it and verifies the host's answer by it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                           |
@@ -136,7 +138,11 @@ in `PERISCOPE_CODEX_HOME` and in `<user home>/.codex`, and the session homes ben
 operator's own `QWEN_HOME`, `<user home>/.env`, the whole of `PERISCOPE_PI_HOME`, pi's sign-in, MCP
 token and models files in `<user home>/.pi/agent`, the whole of `PERISCOPE_COPILOT_HOME`,
 `PERISCOPE_COPILOT_SDK` and `PERISCOPE_COPILOT_TOKEN_FILE`, and the operator's own `<user home>/.copilot`
-and `COPILOT_HOME`; the full set is listed in [the gate](gate.md).
+and `COPILOT_HOME`, the whole of `PERISCOPE_OPENCODE_HOME` and `PERISCOPE_OPENCODE_SDK`, the operator's own
+opencode directories (`<user home>/.local/share/opencode`, `<user home>/.config/opencode`,
+`<user home>/.local/state/opencode`, and each under `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME`
+when set) and the machine-wide opencode directory every opencode process reads (`%ProgramData%\opencode`,
+`/Library/Application Support/opencode`, `/etc/opencode`); the full set is listed in [the gate](gate.md).
 
 ## What a controller can set over the link
 
@@ -158,11 +164,12 @@ home (`PERISCOPE_CODEX_BIN`, `PERISCOPE_CODEX_HOME`): a controller able to point
 choose what runs as a session, and whose sign-in it runs under; and the Qwen Code CLI and base
 (`PERISCOPE_QWEN_BIN`, `PERISCOPE_QWEN_HOME`), the pi CLI and home (`PERISCOPE_PI_BIN`,
 `PERISCOPE_PI_HOME`) and Copilot's SDK, home and token file (`PERISCOPE_COPILOT_SDK`,
-`PERISCOPE_COPILOT_HOME`, `PERISCOPE_COPILOT_TOKEN_FILE`), for the same reason. A controller can also list one directory or read one
+`PERISCOPE_COPILOT_HOME`, `PERISCOPE_COPILOT_TOKEN_FILE`) and opencode's SDK and home (`PERISCOPE_OPENCODE_SDK`,
+`PERISCOPE_OPENCODE_HOME`), for the same reason. A controller can also list one directory or read one
 text file under the repository root (`repository_list` / `repository_read`: the head of any file,
 and its first 512 KiB a page at a time), jailed to that root, to the protected set and away from the
 agents' session records (Claude Code's `projects`, Codex's rollouts and history, Qwen Code's `projects`
-and `tmp`, pi's `sessions`, Copilot's session states, under every home of each the host knows), bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
+and `tmp`, pi's `sessions`, Copilot's session states, opencode's session databases, under every home of each the host knows), bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
 a time, by the workspace's key (`workspace_read`), under the same jail and protected set. [The wire
 protocol](protocol.md) states the three doors.
 
@@ -659,6 +666,82 @@ token or Copilot HMAC key provided`).
   session's end its totals per model. Neither is priced: Copilot's cost is a multiplier and its credit
   totals a unit of its own, so the cost is stated as not reported.
 
+## opencode
+
+A host offers opencode beside Claude when `PERISCOPE_OPENCODE_SDK` and `PERISCOPE_OPENCODE_HOME` are both
+set. Then a `session_new` naming `runtime: "opencode"` runs one opencode server for the session, in a host
+process of its own, and the hello's `agents` lists opencode after the other runtimes ([the wire
+protocol](protocol.md)).
+
+- **opencode needs Node 24 or later.** The SDK's own tree uses explicit resource management (`await
+using`), which Node 22 cannot parse, so on Node 22 the SDK cannot load at all. The host tests the syntax
+  itself, never a version string, and on a Node that fails the test lists opencode unavailable, naming the
+  Node and why; everything else this package does still runs on Node 22.
+- **The SDK is the operator's install, at the pinned version.** This release runs `@opencode/sdk` 2.3.0
+  (`OPENCODE_SDK_PINNED_VERSION`). periscope never installs it and never depends on it. Install it into a
+  directory of the runner's own (`npm install --prefix <directory> @opencode/sdk@2.3.0`) and point
+  `PERISCOPE_OPENCODE_SDK` at that directory. At start the host reads the install's files, starting
+  nothing: an install that is absent, of another version, or whose release's server, core or client is of
+  another version is listed unavailable with what it found and what is pinned; the host still starts, and
+  a session naming `opencode` is refused `runtime-unavailable` with that reason. The hello lists no
+  models: an opencode session reaches a model only through an endpoint.
+- **One host process per session, with no listener.** The SDK hosts opencode's whole server in the process
+  that loads it, so each session's server runs in a process of its own: this package's
+  `dist/host/opencode-host.js`, started with this host's own Node, with no shell and no window, and spoken
+  to over its stdio. It opens no port. Its environment is written whole: the session's spawn environment
+  without any `OPENCODE_` variable, `NODE_OPTIONS` or variable of this host's but `PERISCOPE_WORKTREE_*`,
+  its home and data, configuration, cache and state directories inside the session's home, and the switches
+  that keep opencode from fetching its model catalogue, offering its own hosted models, reading a project's
+  configuration or a `.claude` folder, or looking for an update.
+- **The home is the runner's own.** Each session runs with a fresh home under `<base>/sessions`, so the
+  operator's own opencode directories (their sign-ins, their settings, their sessions) are never what a
+  session runs from. The home is removed when the session closes; its database moves to
+  `<base>/state/<session id>`, which a resume copies back.
+- **Endpoints.** An opencode session reaches a model only through an endpoint whose `runtimes` name
+  `opencode`, over `openai-chat`: the session's one provider, `endpoint-<name>`, and the only one its
+  configuration allows. The key is read when the session opens and crosses into the host process with the
+  session's configuration, over its stdin, so it is never in an environment, a file or a command line. An
+  endpoint's own `env` is set nowhere for an opencode session, and an endpoint only opencode reaches
+  reports it among its ignored members. A session naming no endpoint opens and can call no model.
+- **Nothing is discovered.** A session's server reads no configuration, instructions, plugins, MCP servers
+  or skills of a workspace's or the user's: project configuration and the `.claude` folder are off, its
+  skills are the plugin directories' alone and its servers the ones it attaches.
+- **The open.** Every session is created with this host's permission rules: every action asks, and each
+  tool this host turns off is denied. Once the server's plugins are active, before any prompt, the host
+  reads it back: the session's rules are exactly those; every agent's rules end with them; no approval is
+  saved; every plugin is the runtime's own and none this host turns off runs; the MCP servers are the
+  session's; no configuration but this host's is loaded; and no model but the endpoint's is offered.
+  Anything else refuses the open `opencode-gate-not-active`, naming what differed.
+- **Its control tier is `intercepted-with-residual`.** Every permission request the server raises, the
+  session's own or a subagent's, is decided by the session's gate, the same gate a Claude call meets. The
+  residual paths are named as they occur ([gate.md](gate.md), the opencode gate; [SECURITY.md](../SECURITY.md)).
+- **Modes, effort, thinking.** A session takes `default` (opencode's `build` agent) or `plan` (its
+  `plan` agent); either way every call asks this host. opencode sets reasoning through a model's variants
+  and this host's endpoints declare none, so an effort is refused, and so is a request to turn thinking
+  off. A model or a mode set mid-session applies from the session's next model call, mid-run included.
+- **Resume and fork.** A resume names a session whose database this host kept; any other is refused
+  `request-key-unsupported` naming `resume`. A fork forks it into a new session.
+- **The shell.** opencode's `shell` tool runs the shell this host names: Windows PowerShell at its fixed
+  path on Windows, else `cmd.exe`; `bash` elsewhere, else `sh`. The gate reads each in its own grammar.
+  A command runs with the session's spawn environment, the operator's own home among it, and with
+  `OPENCODE_SESSION_ID` and `OPENCODE_TERMINAL`, which opencode sets.
+- **Forms.** opencode waits on a form with no timeout: a web search asks which provider to use, and an MCP
+  server can ask for input. This host attaches no interface to answer one, so each form is cancelled as it
+  is raised; what asked fails with words, and the run goes on.
+- **Plugins.** The configured plugin directories and a session's own `plugins` reach opencode as skill
+  directories: each directory's `skills/`, its skills listed by their bare names. A directory without one
+  is named in the session's receipt.
+- **MCP servers.** A session's servers ride its configuration: an HTTP server's headers beside its URL,
+  with no OAuth flow offered, and a stdio server's command line. opencode names their tools
+  `<server>_<tool>`; the host names them `mcp__<server>__<tool>` by the names of the servers the session
+  attached, so a name opencode would rewrite, or one that with an `_` begins another's, is refused
+  `mcp-descriptor-invalid`, as is an SSE server.
+- **Spend.** opencode reports each model call's tokens, its input uncached, and its cost, filed as that
+  call's figure. A cost is the provider's only when it is above zero: opencode prices a call from its own
+  catalogue, which does not know an endpoint's models, so a zero is no cost reported. The model call a
+  compaction makes is counted in the session's running total, which rides its native message alone, and
+  is in no step's figure; the title opencode would name a session with is turned off, so it makes no call.
+
 ## What the host prints
 
 Every line of output is `<ISO timestamp> [channel] message`, with a detail after a dash when there
@@ -685,7 +768,9 @@ prints `[qwen-code] qwen-code 0.27.3, 0 model(s) in the hello, control tier inte
 or `[qwen-code] qwen-code is listed unavailable` with the reason. A host offering pi prints `[pi] pi
 1.5.2, 3 model(s) in the hello, control tier intercepted`, or `[pi] pi is listed unavailable` with the
 reason. A host offering Copilot prints `[copilot] copilot 1.0.112, 0 model(s) in the hello, control tier
-intercepted-with-residual`, or `[copilot] copilot is listed unavailable` with the reason.
+intercepted-with-residual`, or `[copilot] copilot is listed unavailable` with the reason. A host offering
+opencode prints `[opencode] opencode 2.3.0, 0 model(s) in the hello, control tier intercepted-with-residual`,
+or `[opencode] opencode is listed unavailable` with the reason.
 
 A paired host prints `[credential] paired as <hostId> - the paired credential is presented on every
 dial` instead; a host on a signed-in token prints its first `[credential]` line (`cache-hit`,
@@ -745,7 +830,10 @@ With the reason on stderr and a non-zero exit, when:
 - one of `PERISCOPE_COPILOT_SDK` and `PERISCOPE_COPILOT_HOME` is set without the other,
   `PERISCOPE_COPILOT_TOKEN_FILE` is set without them, or any of the three is not an absolute path. A
   Copilot that is set up but cannot run (no install, another version, no runtime for the platform, a
-  base that cannot be created) does not refuse start: it is listed unavailable.
+  base that cannot be created) does not refuse start: it is listed unavailable;
+- one of `PERISCOPE_OPENCODE_SDK` and `PERISCOPE_OPENCODE_HOME` is set without the other, or either is not
+  an absolute path. An opencode that is set up but cannot run (no install, another version, a Node older
+  than 24, a base that cannot be created) does not refuse start: it is listed unavailable.
 
 After start-up, one link event is fatal: `credential_rejected`. The controller or its identity
 provider has refused the host's material, so the process stops its sessions, prints the remedy

@@ -22,7 +22,8 @@ contribute the change under it. No contributor agreement is required, and a sign
 
 ## Requirements
 
-- Node 22 or newer (the CI matrix runs 22 and 24 on Linux and Windows).
+- Node 22 or newer (the CI matrix runs 22 and 24 on Linux and Windows). The opencode SDK needs Node 24 or
+  later: on Node 22, `src/host/opencode-local.test.ts` skips, saying why, and opencode is listed unavailable.
 - `git` on the path (the workspace tests run it against a temporary repository).
 - No Claude credentials are needed for the ordinary suite. The live probes are opt-in (below).
 
@@ -130,6 +131,20 @@ header:
 ```sh
 npm install --prefix <sdk directory> @github/copilot-sdk@1.0.34
 npm run build && PERISCOPE_LIVE=1 PERISCOPE_COPILOT_SDK=<sdk directory> PERISCOPE_COPILOT_TOKEN_FILE=<token file> PERISCOPE_COPILOT_MODEL=<model> node --test dist/host/copilot.live.test.js
+```
+
+`src/host/opencode.live.test.ts` holds opencode under the gate against the SDK an operator installed, on a
+real model behind an OpenAI-compatible endpoint, its key in a file: every call of an opencode session asks
+this host (a read, a refused write that does not run, an MCP call, a subagent's read), a key the endpoint
+refuses fails the run in the provider's words, silence holds to the decision deadline, an approved
+command's environment holds no copy of the key, and nothing the shell still runs outlives the close. It
+prints the receipts the facts are read from: the spend per model call, the first and last events of a run,
+whether the skill handed over was loaded. Run it on Node 24 or later before tagging any release that
+moves the opencode SDK; the variables it needs are in its header:
+
+```sh
+npm install --prefix <sdk directory> @opencode/sdk@2.3.0
+npm run build && PERISCOPE_LIVE=1 PERISCOPE_OPENCODE_SDK=<sdk directory> PERISCOPE_OPENCODE_BASE_URL=<base url> PERISCOPE_OPENCODE_KEY_FILE=<key file> PERISCOPE_OPENCODE_MODEL=<model> node --test dist/host/opencode.live.test.js
 ```
 
 `src/host/mid-turn-delivery.live.test.ts` records what the agent does with a message pushed on its input
@@ -261,6 +276,44 @@ release, in order:
    was measured.
 8. Move the versions in `README.md`'s and `SECURITY.md`'s tables, `docs/configuration.md`'s install line
    and `CHANGELOG.md`, then `npm run contracts:update` and the whole gate.
+9. Run the live probe (§ Live probes) with the new SDK installed into a directory of its own.
+
+## Moving the opencode SDK
+
+`@opencode/sdk` is the operator's install, never a dependency of this package: a development dependency at
+exactly the pinned version (`OPENCODE_SDK_PINNED_VERSION` in `src/host/opencode-sdk.ts`), for its types and
+the tests. Each release of it is one release of opencode: its server, core and client move with it, and an
+install of the SDK at the pin whose server, core or client is of another version is refused. A move is a minor
+release, in order:
+
+1. Pick the release: the newest that has been out a few days, and not deprecated (`npm view @opencode/sdk
+time --json`, `npm view @opencode/sdk@<version> deprecated`), and check that it still parses on the
+   Node this package's opencode tests run on: the SDK's tree needs Node 24 today.
+2. Run the derive script against the install you have first: `node scripts/derive-opencode-names.mjs .`
+   must write `contracts/opencode-names.json` byte for byte. If it does not, the script has drifted from the
+   SDK's declarations; fix it first.
+3. Move the development dependency (`npm install --save-dev --save-exact @opencode/sdk@<version>`) and the
+   constant, then run the derive script again and read the contract's diff: every event the release added,
+   renamed or dropped. That list is the work.
+4. `npm run build`, then `src/pins/opencode-sdk-shape.test.ts`, which compiles the seam's structural types
+   against the SDK's own in a program of its own: a member renamed, a parameter narrowed or an export
+   dropped fails there, by entry, and so does a type of the SDK's that stopped resolving. Fix the seam, never
+   the pin.
+5. Give every event the release added its row in `src/state/opencode-coverage.ts`, wired or declined with
+   its reason, and remove the row of every event it dropped; `pins/opencode-coverage.test.ts` names each one
+   missing or invented.
+6. Read the release's tools and plugins: a new tool that runs without asking, or that waits on a form, is
+   turned off (`OPENCODE_DENIED_TOOLS`) or given a kind; a new built-in plugin that can act outside a call
+   is turned off (`OPENCODE_OFF_PLUGINS`).
+7. Run `src/host/opencode-local.test.ts`. It runs the new SDK with a stub model on loopback and no
+   credential, and holds what the gate leans on: the open's read-back on the real server and its refusal of
+   a planted allow and a second provider; the census of the tools the model is offered against
+   `OPENCODE_TOOL_KINDS`, `OPENCODE_OTHER_TOOLS` and `OPENCODE_DENIED_TOOLS`; a refused write, a shell call's
+   dialect, a subagent's and a fork's calls, an MCP server's spelling, a write outside the roots and the
+   deadline; the environments a command and the host process run with; no port; and nothing alive after
+   close. A red here is a property the gate depends on that moved: stop and decide it before anything else.
+8. Move the versions in `README.md`'s and `SECURITY.md`'s tables, `docs/configuration.md`'s install line,
+   the live probe's install line and `CHANGELOG.md`, then `npm run contracts:update` and the whole gate.
 9. Run the live probe (§ Live probes) with the new SDK installed into a directory of its own.
 
 ## Boundaries the pins enforce

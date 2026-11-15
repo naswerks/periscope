@@ -96,7 +96,11 @@ two are not symmetric.
   per event or command row `PI_COVERAGE` wires. Copilot's are `copilot:` and the session event's type
   (`copilot:user.message`, which starts a run, and `copilot:session.idle`, which ends it), one per row
   `COPILOT_COVERAGE` wires; its first `ready` is named by the `session.start` or `session.resume` its
-  proven open followed. A hook event such a runtime reports in Claude's spelling keeps the kind `hook`.
+  proven open followed. opencode's are `opencode:` and the event's type
+  (`opencode:session.execution.started`, which starts a run, and `opencode:session.execution.succeeded`,
+  `failed` or `interrupted`, which end it), one per row `OPENCODE_COVERAGE` wires; its first `ready` is
+  named `opencode:session.created`, once its open is proven. A hook event such a runtime reports in
+  Claude's spelling keeps the kind `hook`.
 - `kind` and `event` are validated independently, never as a pair: `nameable()`
   (`src/state/machine.ts`) accepts `{ kind: 'hook', event: 'permission_denied' }` although it is
   incoherent. Coherence is the author's job, stated at `CONTROL_EVENTS`.
@@ -218,7 +222,14 @@ the pinned SDK declares, wired or declined with a reason. `pins/copilot-coverage
 to the wired rows, and drives every transition the arm makes through a real machine. Only the session's
 own thread moves its state: an event a sub-agent sent rides its native message alone.
 
-A Codex, Qwen Code, pi or Copilot session's gate records on the same machine. Its decisions take the five outcomes' causes, as a
+`src/state/opencode-coverage.ts` does the same for opencode: `OPENCODE_COVERAGE` lists every event the
+pinned SDK's stream declares, wired or declined with a reason. `pins/opencode-coverage.test.ts` holds it to
+`contracts/opencode-names.json` in both directions, holds the `opencode:*` entries of `AGENT_EVENTS` equal
+to the wired rows, and drives every transition the arm makes through a real machine. Only the session's own
+events move its state: an event of a subagent's session, or of the server itself, rides its native message
+alone.
+
+A Codex, Qwen Code, pi, Copilot or opencode session's gate records on the same machine. Its decisions take the five outcomes' causes, as a
 Claude call's do; a residual path it names (a degrade) is a same-state transition with cause
 `refusal/<degrade>`, recorded once per call (`observer.refused`, the lane a refused configure uses);
 and the degrades known when the session opens join the tier its first `ready` states

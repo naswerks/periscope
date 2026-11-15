@@ -171,6 +171,65 @@ frame it sends decodes unchanged.
   `apply_patch`) is held to the files the patch names.
 - Changed: an endpoint only Copilot reaches reports its `env` among its ignored members: Copilot reads
   its provider from the session, and the variables would reach the agent's shell.
+- Added: opencode as a sixth runtime. With `PERISCOPE_OPENCODE_SDK` (a directory the operator installed
+  `@opencode/sdk` 2.3.0 into) and `PERISCOPE_OPENCODE_HOME` (a base of the runner's own) set, the hello's
+  `agents` lists `opencode` after Copilot, at `intercepted-with-residual`, with its SDK version, the
+  permission modes `default` and `plan`, no efforts and no thinking switch; its pack row is `bare`,
+  `per-session`. A `session_new` naming `runtime: "opencode"` runs one opencode server for the session, in
+  a host process of its own and a fresh home under the base, and reaches a model only through an endpoint
+  whose `runtimes` name `opencode`, over `openai-chat`. The read at start reads the install's files and
+  starts nothing; an install that is absent, off the pin or whose release's server, core or client is of
+  another version is listed unavailable with the reason.
+- Added: opencode needs Node 24 or later. The SDK's own tree uses explicit resource management (`await
+using`), which Node 22 cannot parse, so the SDK cannot load there at all. The host tests the syntax, never
+  a version string, and on a Node that fails the test lists opencode unavailable, naming the Node and why.
+  Everything else this package does still runs on Node 22, which stays the floor; the opencode tests that
+  run the SDK skip on Node 22, saying why.
+- Added: the SDK is the operator's, never this package's. It is a development dependency at exactly 2.3.0,
+  for its types and the tests, and the published package neither carries nor resolves it: a session's host
+  process imports it from the operator's directory by path. `src/host/opencode-sdk.ts` is the one module
+  that names it; its structural types are held to the SDK's own by a pin that compiles a program of its
+  own, since the SDK's declarations import one another without extensions, which this package's resolution
+  does not follow, and reference a library that would change this package's own types.
+- Added: each session's server runs in a host process this package starts (`dist/host/opencode-host.js`),
+  with its own Node, no shell and no window, spoken to over its stdio; it opens no listener. Its environment
+  is written whole, its home and data directories inside the session's home, and the session's
+  configuration, an endpoint's key among it, crosses its stdin into its memory, never an environment, a
+  file or a command line.
+- Added: the opencode gate. Every session is created with rules that ask for every action and deny each
+  tool this host turns off; every permission request the server raises, the session's own or a subagent's,
+  is decided by the gate every runtime shares and answered once, `once` or `reject` with words. Before the
+  first prompt the server is read back (the session's rules, every agent's, no saved approval, only the
+  runtime's own plugins and none turned off, only the session's MCP servers, no configuration outside the
+  session's home, no model but the endpoint provider's); an open that does not hold is refused with the new
+  reason `opencode-gate-not-active`. Mid-session the gate names `gate-unhooked-call`, `gate-hook-missing`,
+  `gate-mode-widened` and `gate-foreign-extension` with opencode's meanings ([gate.md](docs/gate.md)).
+- Added: `execute` (Code Mode), `question`, `experimental_image_generate`, `browser`, the session, worktree
+  and model-catalogue tools that run without asking, and the artifact and schedule tools are denied in every
+  opencode session's rules, and refused at the gate; the browser, image, schedule, artifact and MCP-event
+  plugins are turned off. The title opencode names a session with is turned off, so no model call is made
+  outside a run, and every form the server raises (a web search's provider choice, an MCP server's request
+  for input) is cancelled as it is raised, since no interface of this host answers one.
+- Added: `PERISCOPE_OPENCODE_SDK` and `PERISCOPE_OPENCODE_HOME`, config-file keys never settable over the
+  link. The agent's shell runs with the session's spawn environment, none of the operator's `OPENCODE_`
+  variables, `NODE_OPTIONS` or this host's variables but `PERISCOPE_WORKTREE_*` among it.
+- Added: opencode's events are covered name by name. `contracts/opencode-names.json`, derived by
+  `scripts/derive-opencode-names.mjs` from an install of the release, lists the 100 events SDK 2.3.0's stream
+  declares; `OPENCODE_COVERAGE` wires or declines each, and `AGENT_EVENTS` gains the 31 `opencode:` names
+  its wired rows cause. An opencode session's events ride as `agent_message` with `runtime: "opencode"`; its
+  facts (`session_handle`, `agent_receipt`, a `turn_record` per model call, its input uncached and priced
+  only where opencode reports a cost above zero, `tasks` for its subagents, `compaction`) and its items are
+  lifted from them.
+- Changed: a decision its caller ends with words is refused `permission-decision-unavailable` with those
+  words; any other abort keeps the words it had. On opencode, a request the runtime refused together with
+  another this host refused is recorded so.
+- Changed: the protected set gains the whole of `PERISCOPE_OPENCODE_HOME` and `PERISCOPE_OPENCODE_SDK`, the
+  operator's own opencode data, configuration and state directories (under the home and under
+  `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME`), and opencode's machine-wide configuration
+  directory; the agents' records gain opencode's session databases. `credentialPaths` and
+  `agentTranscriptPaths` take the new options.
+- Changed: `EXTRA_ENV_FLOOR` gains `OPENCODE_*`.
+- Changed: an endpoint only Copilot or opencode reaches reports its `env` among its ignored members.
 
 ## [1.10.0] - 2026-11-11
 

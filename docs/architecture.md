@@ -86,9 +86,9 @@ everything as arguments, so it is checkable without a socket or a process, and r
   - Every configure answer and later hello keep the catalog, though the file they are rebuilt from
     has none.
   - With `codex`, the same wait covers Codex's read (`readCodexRuntime`), with `qwen`, Qwen
-    Code's (`readQwenRuntime`), with `pi`, pi's (`readPiRuntime`), and with `copilot`, Copilot's
-    (`readCopilotRuntime`); the runtimes list names Claude first, then Codex, then Qwen Code, then pi,
-    then Copilot. An entry that would push the list past its byte budget rides
+    Code's (`readQwenRuntime`), with `pi`, pi's (`readPiRuntime`), with `copilot`, Copilot's
+    (`readCopilotRuntime`), and with `opencode`, opencode's (`readOpencodeRuntime`); the runtimes list
+    names Claude first, then Codex, then Qwen Code, then pi, then Copilot, then opencode. An entry that would push the list past its byte budget rides
     with `models: []` and a `runtime-catalog` event, so one runtime's catalog never empties
     another's.
 - Each session's hooks are the observation hooks, the gate, then `modelSwitchHooks`, which answers
@@ -115,10 +115,12 @@ something is about the daemon; the other verbs are where interactive work lives.
   `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME` set, Codex's (bounded at 20 seconds, one
   `[codex]` line), with `PERISCOPE_QWEN_BIN` and `PERISCOPE_QWEN_HOME` set, Qwen Code's (one
   `[qwen-code]` line), with `PERISCOPE_PI_BIN` and `PERISCOPE_PI_HOME` set, pi's (one `[pi]`
-  line), and with `PERISCOPE_COPILOT_SDK` and `PERISCOPE_COPILOT_HOME` set, Copilot's (one `[copilot]`
-  line, read from the install's files alone), then dials, and writes the link's state to
-  `link-state.json` beside the credentials on every transition. One of the two keys of any of the four
-  without the other refuses start by name.
+  line), with `PERISCOPE_COPILOT_SDK` and `PERISCOPE_COPILOT_HOME` set, Copilot's (one `[copilot]`
+  line, read from the install's files alone), and with `PERISCOPE_OPENCODE_SDK` and
+  `PERISCOPE_OPENCODE_HOME` set, opencode's (one `[opencode]` line, read from the install's files and a test
+  of this Node's syntax alone), then dials, and writes the link's state to `link-state.json` beside the
+  credentials on every transition. One of the two keys of any of the five without the other refuses start
+  by name.
 - `login` runs the sign-in and writes the token cache. `pair <code>`, with `--controller <origin>`
   and `--label <name>`, redeems a controller-minted code for a paired credential and writes the
   controller's addresses to the config file. `config` shows or edits `config.json`. `status` prints
@@ -440,8 +442,8 @@ control tier is `intercepted-with-residual` ([gate.md](gate.md), the Copilot gat
 - A session's plugin directories reach Copilot as skill directories, each directory's `skills/`
   (`copilotSkillDirectories`, `src/host/copilot-pack.ts`). Its MCP servers ride the session's request
   (`copilotMcpServers`, `src/host/copilot-mcp.ts`). A named endpoint is the session's provider
-  (`src/host/copilot-endpoints.ts`). `ENDPOINT_ROUTED_RUNTIMES` is Claude, Codex, Qwen Code, pi and
-  Copilot.
+  (`src/host/copilot-endpoints.ts`). `ENDPOINT_ROUTED_RUNTIMES` is Claude, Codex, Qwen Code, pi,
+  Copilot and opencode.
 - Its messages ride as the runtime sent them (`COPILOT_MESSAGE_BINDING`): each session event is an
   `agent_message` with `runtime: "copilot"`, a streamed delta on the delta lane; the open and the
   probe's events are not forwarded. The observer arm (`src/state/copilot-observer.ts`) records the
@@ -455,6 +457,68 @@ control tier is `intercepted-with-residual` ([gate.md](gate.md), the Copilot gat
   (`pins/copilot-coverage.test.ts`). The built-in tools are held to the runtime's own list on each host
   that runs it (`host/copilot-local.test.ts`), with no model call.
 
+## opencode
+
+A session naming `runtime: "opencode"` runs one opencode server for the session, hosted in a process of its
+own by `@opencode/sdk`, which the operator installs into a directory of the runner's own; this package never
+depends on it. opencode is offered only when the operator sets `PERISCOPE_OPENCODE_SDK` and
+`PERISCOPE_OPENCODE_HOME` ([configuration.md](configuration.md)), on Node 24 or later. Its gate writes the
+rules every session runs under, which ask for every action, and decides every request they raise. Its
+control tier is `intercepted-with-residual` ([gate.md](gate.md), the opencode gate).
+
+- The seam (`src/host/opencode-sdk.ts`) is the one file that names the SDK. It checks the operator's install
+  against the pin (`OPENCODE_SDK_PINNED_VERSION`, and the server, core and client of that release, where the
+  SDK resolves them), tests this Node for the syntax the SDK's tree uses (`nodeCanRunOpencode`), and
+  declares the structural types the rest of the adapter uses, so no declaration this package ships names the
+  SDK. `pins/opencode-sdk-shape.test.ts` holds those types to the SDK's own at the pinned version, in a
+  program of its own that resolves the SDK's declarations as a bundler does, and
+  `pins/opencode-sdk-confinement.test.ts` holds the SDK to a development dependency nothing ships or
+  imports.
+- The host process (`src/host/opencode-host.ts`) is the program a session runs its server in: started by
+  the relay (`src/host/opencode-relay.ts`) with this host's own Node, no shell and no window, an
+  environment written whole, and spoken to over its stdio with the transport every runtime's process shares
+  (`stdio-rpc.ts`). Its `open` loads the SDK from the operator's install and creates the server with the
+  session's database, configuration directory and configuration, which arrives in the request, an endpoint's
+  key among it; each `call` is one of the server's calls from a fixed list; and every event of the server's
+  stream is sent as a notification. It opens no listener, and closes the server when its stdin ends.
+- The base is the runner's own (`src/host/opencode-home.ts`): `sessions/<id>` is one session's fresh home,
+  the host process's home and its data, configuration, cache and state directories, removed at close; a
+  closed session's database is moved to `state/<session id>`, and a resume copies it back first. The host
+  process's environment and the agent's shell's are composed there, and so are the session's rules and
+  configuration and the read-back. The read at start (`readOpencodeRuntime`, `src/host/opencode-runtime.ts`)
+  reads the install's files, tests the Node, and starts nothing.
+- The process (`startOpencodeProcess`, `src/host/opencode-process.ts`) is an `AgentProcess<OpencodeMessage>`.
+  The open runs in order: the Node tested and the install checked, the home made (and a kept database copied
+  in), the host process started and its server created, the plugins awaited (`model.list`), the session
+  created with this host's rules (or read, or forked), its shell's environment set, the posture read back
+  (`opencodeReadBackProblem`); only then is the session ready and the first prompt sent. A prompt is queued
+  behind any run, held until the open and bounded in the host. The model setter is the server's own call,
+  the permission mode is the agent, and an interrupt is the server's. Each subagent's session is given the
+  shell's environment as it is created, and each form the server raises is cancelled. Close interrupts the
+  run, ends the host process (its server closes, which ends what it runs) and its tree, keeps the database
+  and removes the home.
+- The gate (`createOpencodeSessionGate`, `src/host/opencode-gate.ts`) decides each `permission.asked`
+  request through the per-call decision every runtime shares (`createCallDecision`), with
+  `canRewriteInput: false`, checking each path a request names one at a time; it spells an MCP tool by the
+  attached servers' names, and reads the stream for the degrades it names and for the requests the runtime
+  refused together with one this host refused. A `shell` call is read in the dialect of the shell this host
+  names (`opencodeShellDialect`, `src/gate/tool-kind.ts`).
+- A session's plugin directories reach opencode as skill directories, each directory's `skills/`
+  (`opencodeSkillDirectories`, `src/host/opencode-pack.ts`). Its MCP servers ride its configuration
+  (`opencodeMcpServers`, `src/host/opencode-mcp.ts`). A named endpoint is the session's one provider
+  (`src/host/opencode-endpoints.ts`).
+- Its messages ride as the server sent them (`OPENCODE_MESSAGE_BINDING`): each event is an `agent_message`
+  with `runtime: "opencode"`, a streamed delta on the delta lane. The observer arm
+  (`src/state/opencode-observer.ts`) records the transitions the session's own events cause under
+  `agent-event` events (`AGENT_EVENTS`: `opencode:` and the event's type), `OpencodeFactLift`
+  (`src/host/opencode-facts.ts`) lifts the facts, and `OpencodeItemFill` (`src/host/opencode-items.ts`) fills
+  the conversation items, one turn per run of the session's own.
+- What the pinned release declares is pinned name by name. `contracts/opencode-names.json`, regenerated by
+  `scripts/derive-opencode-names.mjs` from an install of the release, holds every event of the server's
+  stream; `OPENCODE_COVERAGE` (`src/state/opencode-coverage.ts`) holds a row for each
+  (`pins/opencode-coverage.test.ts`). The tools a model is offered are held to this host's tables on each host
+  that runs the SDK (`host/opencode-local.test.ts`), with a stub model on loopback.
+
 ## The read-only door
 
 `src/host/repository-read.ts` is the door through which the binary serves a controller the text of
@@ -465,7 +529,7 @@ whatever the root is, on the lexical resolution and again on the real path: the 
 (`credentialPaths`, the files the gate keeps from the agent) refuses `credential-path-denied`, and the
 agents' session records (`agentTranscriptPaths`: Claude Code's `projects` under every agent home the
 protected set names; Codex's rollouts, prompt history and thread database; Qwen Code's `projects` and
-`tmp`; pi's `sessions`; Copilot's session states; under the operator's homes and the ones the runner
+`tmp`; pi's `sessions`; Copilot's session states; opencode's session databases; under the operator's homes and the ones the runner
 runs each runtime from)
 refuse `transcripts-not-served`, so a root pointed at an agent's home or the user's home reads
 neither. A listing of a directory that holds one names everything else and leaves it out; a protected file in a listed directory is still named, and refused when read. The bulk

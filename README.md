@@ -34,7 +34,11 @@ and a pi session that finds code it did not load names it. And it can offer GitH
 Copilot SDK its operator installs and a home of the runner's own
 ([configuration](docs/configuration.md#copilot)); Copilot's pre-tool hook asks for every call and the
 gate decides each request, at tier `intercepted-with-residual`, with the runtime read back and its route
-proven before the first prompt.
+proven before the first prompt. And it can offer opencode, through the opencode SDK its operator installs,
+hosting each session's server in a process of its own with no listener, and a home of the runner's own
+([configuration](docs/configuration.md#opencode)); every action a session takes asks and the gate decides
+each request, at tier `intercepted-with-residual`, with the server read back before the first prompt.
+opencode needs Node 24 or later.
 
 ## Run a host
 
@@ -145,16 +149,17 @@ weekly. Both operating systems are load-bearing: Windows is where `USERPROFILE`,
 env matching and path handling are observable, and Linux is the only place POSIX file modes mean
 anything. The figure for a release is in [`CHANGELOG.md`](CHANGELOG.md).
 
-|                                  |                                                             |
-| -------------------------------- | ----------------------------------------------------------- |
-| `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret                       |
-| Claude Code CLI                  | **2.1.325** (bundled with that SDK)                         |
-| Codex app-server                 | **0.169.0**, pinned, when configured                        |
-| Qwen Code CLI                    | **0.27.3**, pinned, when configured                         |
-| pi CLI                           | **1.5.2**, pinned, when configured                          |
-| `@github/copilot-sdk`            | **1.0.34**, the operator's install, pinned, when configured |
-| Copilot runtime                  | **1.0.112** (pinned by that SDK)                            |
-| Node                             | 22 or later; CI proves 22 and 24                            |
+|                                  |                                                                              |
+| -------------------------------- | ---------------------------------------------------------------------------- |
+| `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret                                        |
+| Claude Code CLI                  | **2.1.325** (bundled with that SDK)                                          |
+| Codex app-server                 | **0.169.0**, pinned, when configured                                         |
+| Qwen Code CLI                    | **0.27.3**, pinned, when configured                                          |
+| pi CLI                           | **1.5.2**, pinned, when configured                                           |
+| `@github/copilot-sdk`            | **1.0.34**, the operator's install, pinned, when configured                  |
+| Copilot runtime                  | **1.0.112** (pinned by that SDK)                                             |
+| `@opencode/sdk`                  | **2.3.0**, the operator's install, pinned, when configured; Node 24 or later |
+| Node                             | 22 or later; CI proves 22 and 24                                             |
 
 The SDK is pre-1.0, so the SHA-256 of its installed type definitions is kept in
 `contracts/sdk.sha256` and CI fails on any drift; a bump cannot land without someone reading what

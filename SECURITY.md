@@ -578,6 +578,56 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
 - **The runtime's route and identity are beneath the floor.** `COPILOT_*` is in `EXTRA_ENV_FLOOR`, so
   no controller can move a Copilot session's home, swap its runtime or hand it a credential.
 
+## opencode sessions
+
+opencode is offered only when you set `PERISCOPE_OPENCODE_SDK` and `PERISCOPE_OPENCODE_HOME`
+([configuration](docs/configuration.md#opencode)), and only on Node 24 or later. Each session's server runs
+in a host process of its own, from the opencode SDK you installed, and its gate writes the rules the
+session runs under: every action asks, and every request that raises asks the same gate as a Claude call
+(the local refusals above, then your controller). Its control tier is `intercepted-with-residual`, and the
+hello says so ([gate.md](docs/gate.md), the opencode gate). What holds, and what does not:
+
+- **The SDK is yours, not this package's.** periscope never installs `@opencode/sdk` and never depends on
+  it; you install the pinned version into a directory of the runner's own. The host checks the install's
+  versions and files at start, loads it by its path inside that install, and lists any other install
+  unavailable. The whole directory is in the protected set, so a session cannot replace the server the
+  next one runs.
+- **No port.** The SDK hosts opencode's server in the process that loads it, so each session's server runs
+  in a host process this package starts, spoken to over its stdio alone; it opens no listener. opencode's
+  process daemon, which runs the shell's commands, accepts its owner over a Unix socket or a named pipe
+  registered under the session's home, with a token, and opens no port either.
+- **No credential is in an environment.** An endpoint's key is read when the session opens and crosses
+  into the host process with the session's configuration, over its stdin, so it is never in an
+  environment, a file or a command line. The host process's environment is written whole, and so is the
+  agent's shell's: neither holds an `OPENCODE_` variable of yours, `NODE_OPTIONS`, or any variable of
+  this host's but the further worktrees' paths.
+- **Nothing of yours is what a session runs from.** Each session's server runs in a fresh home of its own
+  under `PERISCOPE_OPENCODE_HOME`, with project configuration and the `.claude` folder off, its model
+  catalogue never fetched and opencode's own hosted models never offered, so your opencode directories
+  (their sign-ins, their settings, their sessions) and a repository's own opencode configuration are
+  never read. Your opencode directories, opencode's machine-wide directory (which every opencode process
+  reads and no setting turns off), and the whole runner base are in the protected set.
+- **One provider.** A session's configuration allows no model provider but the endpoint it opened on, and
+  the open is refused if the server offers a model of any other.
+- **Proven before the first prompt.** The host reads the server back (the session's rules, every agent's,
+  no saved approval, only the runtime's own plugins and none it turns off, only the session's MCP servers,
+  no configuration but its own, no model but the endpoint's). A server that is not as the host created it
+  refuses the open `opencode-gate-not-active`.
+- **What runs undecided is named.** A tool the model's provider runs itself is named `gate-unhooked-call`;
+  a call that ran with no request for it, `gate-hook-missing`; rules that are no longer this host's, or an
+  approval it never gave, `gate-mode-widened`; a plugin that is not the runtime's own, loaded after the
+  open, `gate-foreign-extension`.
+- **Tools that cannot be decided are turned off.** Code Mode's `execute`, `question`, image generation,
+  the browser, and the session, worktree, model-catalogue, artifact and schedule tools that run without
+  asking are denied in every session's rules, never offered, and a request naming one is refused. A form
+  the server raises (a web search's provider choice, an MCP server's request for input) is cancelled.
+- **A `webfetch` follows redirects.** The decision is about the URL asked for; opencode follows each
+  redirect a site sends without asking again.
+- **A workspace's `.opencode` and `.agents` folders are not protected.** The server never loads them,
+  since project configuration is off, but a session may write there.
+- **The runtime's route is beneath the floor.** `OPENCODE_*` is in `EXTRA_ENV_FLOOR`, so no controller can
+  hand a session opencode's configuration, the program its terminals run through, or a credential.
+
 ## The outbound-only posture
 
 There is no inbound port anywhere in this package. Periscope dials out to your controller over a
@@ -716,16 +766,17 @@ stops being true.
 
 ## Versions this was tested against
 
-|                                  |                                                                   |
-| -------------------------------- | ----------------------------------------------------------------- |
-| `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret                             |
-| Bundled Claude Code CLI          | **2.1.325**                                                       |
-| Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows      |
-| Codex app-server                 | **0.169.0**, pinned; any other version is listed unavailable      |
-| Qwen Code CLI                    | **0.27.3**, pinned; any other version is listed unavailable       |
-| pi                               | **1.5.2**, pinned; any other version is listed unavailable        |
-| `@github/copilot-sdk`            | **1.0.34**, your install, pinned; any other is listed unavailable |
-| Copilot runtime                  | **1.0.112**, the one that SDK pins                                |
+|                                  |                                                                                    |
+| -------------------------------- | ---------------------------------------------------------------------------------- |
+| `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret                                              |
+| Bundled Claude Code CLI          | **2.1.325**                                                                        |
+| Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows                       |
+| Codex app-server                 | **0.169.0**, pinned; any other version is listed unavailable                       |
+| Qwen Code CLI                    | **0.27.3**, pinned; any other version is listed unavailable                        |
+| pi                               | **1.5.2**, pinned; any other version is listed unavailable                         |
+| `@github/copilot-sdk`            | **1.0.34**, your install, pinned; any other is listed unavailable                  |
+| Copilot runtime                  | **1.0.112**, the one that SDK pins                                                 |
+| `@opencode/sdk`                  | **2.3.0**, your install, pinned; any other is listed unavailable; Node 24 or later |
 
 The SDK is pre-1.0 and its surface moves without semver protection, so a SHA-256 of the installed
 type definitions is kept in `contracts/sdk.sha256` and a CI job fails on any drift between the installed
