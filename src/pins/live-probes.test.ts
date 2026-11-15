@@ -32,6 +32,7 @@ const CLAIMED_PROPERTIES = [
   'a write the gate allows outside its own directory lands',
   'a message pushed mid-turn lands at the next tool round',
   'every call of a copilot session asks this host',
+  'every call of an opencode session asks this host',
 ];
 
 /** A workspace created under the OS temp directory, and a `mkdtempSync` that is not. */

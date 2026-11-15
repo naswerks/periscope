@@ -125,6 +125,11 @@ export function defaultAgentHome(env: NodeJS.ProcessEnv = process.env): string |
  *   when set), and under the base this host runs Copilot from (`copilotHome`, else
  *   `PERISCOPE_COPILOT_HOME`): `sessions`, where each live session's home keeps its state, and `state`,
  *   where a closed session's state is kept for a resume. That base is in the protected set whole.
+ * - opencode: its data directory under the operator's own home (`<user home>/.local/share/opencode`, and
+ *   `<XDG_DATA_HOME>/opencode` when set), whose database holds every session, and under the base this host
+ *   runs opencode from (`opencodeHome`, else `PERISCOPE_OPENCODE_HOME`): `sessions`, where each live
+ *   session's home keeps its database, and `state`, where a closed session's database is kept for a resume.
+ *   That base is in the protected set whole.
  *
  * The read doors and the bulk lane refuse a path at or beneath one `transcripts-not-served` whatever
  * their root, so a root pointed at a home cannot serve an agent's records. The set is returned, not
@@ -137,6 +142,7 @@ export function agentTranscriptPaths(
     readonly codexHome?: string | null;
     readonly qwenHome?: string | null;
     readonly copilotHome?: string | null;
+    readonly opencodeHome?: string | null;
   } = {},
 ): string[] {
   const paths: string[] = [];
@@ -178,6 +184,12 @@ export function agentTranscriptPaths(
   under(home === null ? null : join(home, '.copilot'), 'session-state');
   under(named(env['COPILOT_HOME']), 'session-state');
   under(named(options.copilotHome ?? env['PERISCOPE_COPILOT_HOME']), 'sessions', 'state');
+
+  // opencode: the operator's own data directory, whose database holds every session, each live session's
+  // home and every kept database.
+  under(home === null ? null : join(home, '.local', 'share'), 'opencode');
+  under(named(env['XDG_DATA_HOME']), 'opencode');
+  under(named(options.opencodeHome ?? env['PERISCOPE_OPENCODE_HOME']), 'sessions', 'state');
   return paths;
 }
 
@@ -218,6 +230,8 @@ export function credentialPaths(
     readonly copilotHome?: string | null;
     readonly copilotSdk?: string | null;
     readonly copilotTokenFile?: string | null;
+    readonly opencodeHome?: string | null;
+    readonly opencodeSdk?: string | null;
   } = {},
 ): string[] {
   const home = homeDirectory(env);
@@ -284,10 +298,25 @@ export function credentialPaths(
     // The operator's own Copilot home, whether or not this host runs Copilot, whole: its settings hold
     // the signed-in user and, where no keyring is, the token itself, and its session state every session.
     add(join(home, '.copilot'));
+    // The operator's own opencode directories, whether or not this host runs opencode, whole: its data
+    // holds its sign-ins and every session's database, its configuration can load a plugin, and its state
+    // the service it would join.
+    add(join(home, '.local', 'share', 'opencode'));
+    add(join(home, '.config', 'opencode'));
+    add(join(home, '.local', 'state', 'opencode'));
     // The variables file in the home directory itself: many tools read it, Qwen Code loads it whatever
     // its own home is, and it is where keys are commonly kept.
     add(join(home, '.env'));
   }
+
+  // The operator's own opencode directories where its environment moves them, likewise.
+  for (const variable of ['XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME']) {
+    const moved = env[variable];
+    if (typeof moved === 'string' && moved.trim() !== '') add(join(moved.trim(), 'opencode'));
+  }
+  // opencode's machine-wide configuration directory, which every opencode process reads and no setting
+  // turns off: a plugin written there would load into the next session.
+  add(opencodeSystemDirectory(env));
 
   // An explicitly configured Copilot home of the operator's own, likewise.
   const ownCopilotHome = env['COPILOT_HOME'];
@@ -362,7 +391,35 @@ export function credentialPaths(
   const copilotTokenFile = options.copilotTokenFile ?? env['PERISCOPE_COPILOT_TOKEN_FILE'] ?? null;
   if (typeof copilotTokenFile === 'string' && copilotTokenFile.trim() !== '') add(copilotTokenFile.trim());
 
+  // The opencode base this host runs opencode sessions from, whole: each session's home (its database, its
+  // configuration with an endpoint's key, its caches) and every database kept for a resume.
+  const opencodeHome = options.opencodeHome ?? env['PERISCOPE_OPENCODE_HOME'] ?? null;
+  if (typeof opencodeHome === 'string' && opencodeHome.trim() !== '') add(opencodeHome.trim());
+  // The SDK install every opencode session's host process loads: a session that rewrote it would run a
+  // server of its own choosing in the next one.
+  const opencodeSdk = options.opencodeSdk ?? env['PERISCOPE_OPENCODE_SDK'] ?? null;
+  if (typeof opencodeSdk === 'string' && opencodeSdk.trim() !== '') add(opencodeSdk.trim());
+
   return paths;
+}
+
+/**
+ * opencode's machine-wide configuration directory, as the runtime finds it: under `%ProgramData%` on
+ * Windows, `/Library/Application Support` on macOS, `/etc` elsewhere.
+ */
+export function opencodeSystemDirectory(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === 'win32') {
+    const programData = env['ProgramData'] ?? env['PROGRAMDATA'];
+    return join(
+      typeof programData === 'string' && programData !== '' ? programData : 'C:\\ProgramData',
+      'opencode',
+    );
+  }
+  if (platform === 'darwin') return '/Library/Application Support/opencode';
+  return '/etc/opencode';
 }
 
 /**

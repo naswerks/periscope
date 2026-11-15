@@ -18,22 +18,13 @@
  */
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-} from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
-import { isContainedByIgnoringCase, normalizePath } from '../core/paths.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import { COPILOT_EXCLUDED_TOOLS } from '../gate/tool-kind.js';
+import { canonicalPath, withinCanonically } from './canonical-path.js';
 import { COPILOT_ADMITTED_AGENT_MODES, COPILOT_ADMITTED_PERMISSION_MODE } from './copilot-gate.js';
 import type { CopilotTokenAnswer, CopilotTokenRequest } from './copilot-sdk.js';
 
@@ -309,20 +300,7 @@ export interface CopilotPostureExpected {
  * another spelling of the same place would never match lexically.
  */
 export function copilotCanonicalPath(path: string): string {
-  const rest: string[] = [];
-  let current = path;
-  for (let depth = 0; depth < 64; depth += 1) {
-    try {
-      const resolved = realpathSync.native(current);
-      return rest.length === 0 ? resolved : join(resolved, ...rest.reverse());
-    } catch {
-      const parent = dirname(current);
-      if (parent === current) return path;
-      rest.push(basename(current));
-      current = parent;
-    }
-  }
-  return path;
+  return canonicalPath(path);
 }
 
 /**
@@ -330,11 +308,7 @@ export function copilotCanonicalPath(path: string): string {
  * system names both.
  */
 function within(inner: string, outer: string): boolean {
-  if (isContainedByIgnoringCase(normalizePath(inner), normalizePath(outer))) return true;
-  return isContainedByIgnoringCase(
-    normalizePath(copilotCanonicalPath(inner)),
-    normalizePath(copilotCanonicalPath(outer)),
-  );
+  return withinCanonically(inner, outer);
 }
 
 /**

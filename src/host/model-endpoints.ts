@@ -31,7 +31,12 @@ import {
 import { hostEndpointsProblem } from '../control/codec.js';
 import { isAbsolutePath } from '../core/paths.js';
 import { STRIPPED_HOST_SESSION_KEYS } from '../sessions/spawn-env.js';
-import { COPILOT_RUNTIME, ENDPOINT_ROUTED_RUNTIMES, wireApisFor } from '../sessions/runtimes.js';
+import {
+  COPILOT_RUNTIME,
+  ENDPOINT_ROUTED_RUNTIMES,
+  OPENCODE_RUNTIME,
+  wireApisFor,
+} from '../sessions/runtimes.js';
 
 /** The model tiers an endpoint may map to its own ids, each read by the agent CLI from one variable. */
 export const MODEL_ALIAS_TIERS = ['opus', 'sonnet', 'haiku', 'fable'] as const;
@@ -421,9 +426,11 @@ function declaredEndpoint(
     if (typeof extra[key] !== 'string')
       return `${the} sets ${key} in "env" to something that is not a string`;
   }
-  // Copilot reads its provider from the session alone, and a variable in its environment would reach the
-  // agent's shell: an endpoint only Copilot reaches has its variables set nowhere.
-  if (keys.length > 0 && runtimes.every((one) => one === COPILOT_RUNTIME)) ignored.push('env');
+  // Copilot and opencode read their provider from the session alone, and a variable in their environment
+  // would reach the agent's shell: an endpoint only they reach has its variables set nowhere.
+  if (keys.length > 0 && runtimes.every((one) => one === COPILOT_RUNTIME || one === OPENCODE_RUNTIME)) {
+    ignored.push('env');
+  }
 
   return {
     name,

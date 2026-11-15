@@ -258,6 +258,32 @@ jobs:
             console.log('copilot without its SDK: available false: ' + read.entry.unavailableReason);
           "
 
+      # The opencode SDK is the operator's own install too: in a project without it the package resolves
+      # nothing of it, the adapter still loads, and the read at start lists opencode unavailable with the
+      # reason. On a Node that cannot parse the SDK's tree (Node 22, this job's floor) the reason is the
+      # Node, read by the same test of the syntax the host makes; on a newer one it is the missing install.
+      - name: opencode without its SDK
+        shell: bash
+        run: |
+          cd "${RUNNER_TEMP}/consumer"
+          if [ -d node_modules/@opencode ]; then echo "the tarball installed @opencode packages: $(ls node_modules/@opencode)"; exit 1; fi
+          node --input-type=module -e "
+            const { pathToFileURL } = await import('node:url');
+            const { mkdtempSync } = await import('node:fs');
+            const { tmpdir } = await import('node:os');
+            const { join } = await import('node:path');
+            const host = join(process.cwd(), 'node_modules', '@naswerks', 'periscope', 'dist', 'host');
+            const { readOpencodeRuntime } = await import(pathToFileURL(join(host, 'opencode-runtime.js')).href);
+            const { nodeCanRunOpencode } = await import(pathToFileURL(join(host, 'opencode-sdk.js')).href);
+            const scratch = mkdtempSync(join(tmpdir(), 'periscope-opencode-'));
+            const read = await readOpencodeRuntime({ sdk: join(scratch, 'sdk'), base: join(scratch, 'home') });
+            if (read.entry.available !== false) throw new Error('opencode is listed available with no SDK installed');
+            const reason = read.entry.unavailableReason ?? '';
+            const expected = nodeCanRunOpencode() === null ? /no @opencode\/sdk is installed/ : /Node .*opencode needs Node 24 or later/;
+            if (!expected.test(reason)) throw new Error('the reason is not said: ' + reason);
+            console.log('opencode without its SDK, on Node ' + process.versions.node + ': available false: ' + reason);
+          "
+
   # ---------------------------------------------------------------------------------------------
   # Mutation testing. Runs on the schedule and on a manual dispatch only: it is minutes of compute
   # per file under mutation and its output is a score, not a pass. `thresholds.break` is null, so

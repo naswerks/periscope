@@ -338,6 +338,33 @@ const TRANSITION_COPILOT_HOOK_MISSING: SessionTransition = {
   },
 };
 
+/** opencode's first ready: its open proven, at its tier. */
+const TRANSITION_READY_OPENCODE: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'ses_opencode_a',
+  cause: {
+    kind: 'agent-event',
+    event: 'opencode:session.created',
+    detail: "the new session's rules, agents, plugins, servers, configuration and models were read back",
+  },
+  controlTier: { level: 'intercepted-with-residual', degrades: [] },
+};
+
+/** An opencode session's gate naming a call the model's provider ran itself, on the state lane. */
+const TRANSITION_OPENCODE_UNHOOKED: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'ses_opencode_a',
+  seq: 3,
+  from: 'working',
+  to: 'working',
+  cause: {
+    kind: 'refusal',
+    event: 'gate-unhooked-call',
+    detail:
+      "the model's provider ran websearch itself; no permission request is raised for a call the runtime does not run",
+  },
+};
+
 /** An open refused before any process existed, for one of the runtime and endpoint reasons. */
 const openRefused = (event: RefusalReason, detail: string): SessionTransition => ({
   ...TRANSITION_OPEN_REFUSED,
@@ -1107,6 +1134,38 @@ const AUTHORED = {
           },
           AT,
           'copilot',
+        ),
+      ),
+    },
+    // opencode: its first ready at its tier, a degrade its gate names, the open refused when the server is
+    // not in the posture this host created it in, and a native event.
+    {
+      name: 'session_update.state-transition-opencode-ready',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_OPENCODE)),
+    },
+    {
+      name: 'session_update.state-transition-opencode-unhooked-call',
+      frame: session(stateTransitionUpdate(TRANSITION_OPENCODE_UNHOOKED)),
+    },
+    {
+      name: 'session_update.open-refused-opencode-gate-not-active',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused('opencode-gate-not-active', 'the server holds saved approvals: shell git *'),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.agent-message-opencode',
+      frame: session(
+        agentMessageUpdate(
+          {
+            id: 'evt_1',
+            type: 'session.tool.called',
+            data: { sessionID: 'ses_opencode_a', id: 'call_1', input: { path: 'README.md' } },
+          },
+          AT,
+          'opencode',
         ),
       ),
     },

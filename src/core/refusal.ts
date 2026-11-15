@@ -602,6 +602,22 @@ export const REFUSAL_REASONS = [
   //                                both. Without the joined route a call the runtime allows by default
   //                                runs undecided. The detail says which.
   'copilot-gate-not-active',
+
+  // The gate over a runtime this host hosts in a child process of its own, whose sessions this host creates
+  // with permission rules that send every action to ask and whose permission requests this host decides
+  // (opencode): the first is a refusal. Its degrades are the names above: `gate-unhooked-call` (a tool the
+  // model's provider ran itself), `gate-hook-missing` (a call that ran with no request for it, such as a
+  // shell line naming no command), `gate-mode-widened` (the session's rules changed after it opened, or an
+  // answer this host never gave approved a call) and `gate-foreign-extension` (a plugin that is not one of
+  // the runtime's own appeared).
+  //
+  //   opencode-gate-not-active     Refused: the open ends because the runtime, read back before the first
+  //                                prompt, is not in the posture this host created it in (the session's
+  //                                rules, an agent's rules, a saved approval, a plugin, a server, a
+  //                                configuration this host did not write, a model provider other than the
+  //                                session's). Without the rules a call the runtime allows by default runs
+  //                                undecided. The detail says which.
+  'opencode-gate-not-active',
 ] as const;
 
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];

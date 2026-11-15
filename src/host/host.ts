@@ -134,12 +134,27 @@ import type { CopilotRuntimeConfig } from './copilot-process.js';
 import type { CopilotRuntimeRead } from './copilot-runtime.js';
 import { COPILOT_MESSAGE_BINDING, copilotNativeRuntime, unavailableCopilotEntry } from './copilot-runtime.js';
 import type { CopilotMessage } from './copilot-wire.js';
+import { opencodeEndpointEnv, opencodeEndpointRoutes } from './opencode-endpoints.js';
+import { OpencodeFactLift } from './opencode-facts.js';
+import { createOpencodeSessionGate } from './opencode-gate.js';
+import { OpencodeItemFill } from './opencode-items.js';
+import { opencodeMcpServers } from './opencode-mcp.js';
+import { opencodeSkillDirectories } from './opencode-pack.js';
+import type { OpencodeRuntimeConfig } from './opencode-process.js';
+import type { OpencodeRuntimeRead } from './opencode-runtime.js';
+import {
+  OPENCODE_MESSAGE_BINDING,
+  opencodeNativeRuntime,
+  unavailableOpencodeEntry,
+} from './opencode-runtime.js';
+import type { OpencodeMessage } from './opencode-wire.js';
 import type { Decider } from '../gate/decision.js';
 import type { LocalGate } from '../gate/local.js';
 import type { ToolFamilies } from '../gate/local.js';
 import {
   CODEX_TOOL_FAMILIES,
   COPILOT_TOOL_FAMILIES,
+  OPENCODE_TOOL_FAMILIES,
   PI_TOOL_FAMILIES,
   QWEN_TOOL_FAMILIES,
   localGate,
@@ -163,6 +178,7 @@ import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import {
   CODEX_RUNTIME,
   COPILOT_RUNTIME,
+  OPENCODE_RUNTIME,
   PI_RUNTIME,
   QWEN_RUNTIME,
   agentSkillsFor,
@@ -415,6 +431,9 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   }
   if (runtime === COPILOT_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
     return composeCopilotSession(options, machine, observer, clock);
+  }
+  if (runtime === OPENCODE_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
+    return composeOpencodeSession(options, machine, observer, clock);
   }
 
   // The conversation items: read from the session's messages, with the prompt its hook reports and the
@@ -835,6 +854,87 @@ function composeCopilotSession(
 }
 
 /**
+ * `composeSession` for a session on opencode: no SDK hooks, opencode's own forwarding, and the session's gate:
+ * every session is created with rules that send every action to ask, and each permission request the server
+ * raises asks the gate. The gate's decision is the one a Claude call gets: the same local gate, decider,
+ * deadlines and outcome record. opencode waits on a request with no timeout of its own, so this host's deadline
+ * is always the one that ends a wait.
+ */
+function composeOpencodeSession(
+  options: ComposeSessionOptions,
+  machine: SessionStateMachine,
+  observer: SessionObserver,
+  clock: Clock,
+): Result<ComposedSession> {
+  const decisionTimeoutMs = options.gate?.decisionTimeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS;
+
+  // The items name each tool as the gate spells it, so the gate is read once it exists.
+  let spell: (name: string) => string = (name) => name;
+  // A subagent's event fills items only on a link that carries an item's parent.
+  const items = new OpencodeItemFill(options.sessionKey, {
+    spawnedItems: () => itemParentsAtLinkVersion(options.linkVersion?.() ?? null),
+    toolName: (name) => spell(name),
+  });
+  const gate = createOpencodeSessionGate({
+    sessionKey: options.sessionKey,
+    cwd: options.cwd,
+    decide: options.decide,
+    ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+    decisionTimeoutMs,
+    holdAfterMs: options.gate?.holdAfterMs ?? DEFAULT_HOLD_AFTER_MS,
+    servers: Object.keys(options.request?.mcpServers ?? {}),
+    onOutcome: (outcome) => {
+      recordGateOutcome(machine, outcome);
+      if (outcome.kind === 'deny' || outcome.kind === 'refused' || outcome.kind === 'expired') {
+        items.gateBlocked(outcome.request.toolUseId);
+      }
+      options.onOutcome?.(outcome);
+    },
+    // A degrade is recorded on the session's own machine, so it rides the wire as the session's state,
+    // and reaches the host's log beside it.
+    onDegrade: (name, detail) => {
+      observer.refused({ kind: 'refusal', event: name, detail });
+      options.onRefusal?.(refusal(name, detail));
+    },
+    onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
+    ...spawnedWithOf(options),
+  });
+  spell = (name) => gate.toolName(name);
+
+  const created = options.registry.create({
+    ...(options.request ?? {}),
+    cwd: options.cwd,
+    nativeGate: gate,
+    ...spawnedWithOf(options),
+  });
+  if (!created.ok) return refuse<ComposedSession>(created.refusal.reason, created.refusal.detail);
+  // The registry started this session on opencode's own runtime, so its messages are opencode's.
+  const session = created.value as unknown as HostedSession<OpencodeMessage>;
+  // The session's plugin directories as the runtime takes them: their skills by name, and the directories
+  // it could not take, reported in the receipt.
+  const skills = opencodeSkillDirectories((options.request?.plugins ?? []).map((plugin) => plugin.path));
+  const lift = new OpencodeFactLift({
+    undeliveredPlugins: skills.problems,
+    handedOverSkills: qwenHandedOverSkills(skills.directories),
+  });
+  const detach = forwardNativeSession(
+    {
+      sessionKey: options.sessionKey,
+      session,
+      observer,
+      sink: options.sink,
+      clock,
+      ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
+      lift,
+      items,
+    },
+    OPENCODE_MESSAGE_BINDING,
+  );
+  observer.created(`a session was requested in ${options.cwd}`);
+  return ok({ sessionKey: options.sessionKey, session: created.value, machine, observer, detach });
+}
+
+/**
  * The `where` for a directory nobody has read git facts for.
  *
  * Stated rather than left null: a transition whose `where` is absent cannot be told apart from one
@@ -1149,6 +1249,16 @@ export interface PeriscopeHostOptions {
    * @internal
    */
   readonly copilot?: PeriscopeCopilotOptions;
+  /**
+   * opencode, offered beside Claude: how an opencode session's host process is started from the operator's
+   * SDK install, and the read at start that decides its entry in the hello (`readOpencodeRuntime`). The host
+   * builds its registry with opencode's own runtime when it builds one; an embedder passing its own
+   * `registry` gives it the runtime itself. Omitted, the hello does not list opencode and a session naming
+   * `opencode` is refused `runtime-unavailable`. The daemon composes it from its config keys.
+   *
+   * @internal
+   */
+  readonly opencode?: PeriscopeOpencodeOptions;
   readonly registry?: SessionRegistry;
   /** How the link is built. Defaults to the real `ControllerLink`. See `HostLink`. */
   readonly link?: (handlers: LinkHandlers) => HostLink;
@@ -1207,6 +1317,18 @@ export interface PeriscopeCopilotOptions {
   readonly runtime: CopilotRuntimeConfig;
   /** The read at start; the binary composes `readCopilotRuntime` over the same install and base home. */
   readonly read: () => Promise<CopilotRuntimeRead>;
+}
+
+/**
+ * opencode, as a host offers it.
+ *
+ * @internal
+ */
+export interface PeriscopeOpencodeOptions {
+  /** The SDK install, the base home and the seams a session's host process starts with. */
+  readonly runtime: OpencodeRuntimeConfig;
+  /** The read at start; the binary composes `readOpencodeRuntime` over the same install and base home. */
+  readonly read: () => Promise<OpencodeRuntimeRead>;
 }
 
 /** What a host reports. Data rather than log lines, so an embedder decides the format. */
@@ -1438,6 +1560,8 @@ export class PeriscopeHost {
   #piEntry: HostAgentEntry | undefined;
   /** Copilot's entry as its read at start left it; undefined on a host that does not offer Copilot. */
   #copilotEntry: HostAgentEntry | undefined;
+  /** opencode's entry as its read at start left it; undefined on a host that does not offer opencode. */
+  #opencodeEntry: HostAgentEntry | undefined;
   /**
    * The entries the hello lists after Claude's, fitted to the runtimes list's bound with Claude's
    * first: an entry that would push the list past it rides with no models, so one runtime's catalog
@@ -1490,7 +1614,8 @@ export class PeriscopeHost {
         ...(options.codex === undefined &&
         options.qwen === undefined &&
         options.pi === undefined &&
-        options.copilot === undefined
+        options.copilot === undefined &&
+        options.opencode === undefined
           ? {}
           : {
               runtimes: {
@@ -1524,6 +1649,14 @@ export class PeriscopeHost {
                       [COPILOT_RUNTIME]: copilotNativeRuntime({
                         ...options.copilot.runtime,
                         endpoints: copilotEndpointRoutes(options.endpoints ?? []),
+                      }),
+                    }),
+                ...(options.opencode === undefined
+                  ? {}
+                  : {
+                      [OPENCODE_RUNTIME]: opencodeNativeRuntime({
+                        ...options.opencode.runtime,
+                        endpoints: opencodeEndpointRoutes(options.endpoints ?? []),
                       }),
                     }),
               },
@@ -1594,6 +1727,7 @@ export class PeriscopeHost {
     const readQwen = this.#options.qwen?.read;
     const readPi = this.#options.pi?.read;
     const readCopilot = this.#options.copilot?.read;
+    const readOpencode = this.#options.opencode?.read;
     const servesHomeAlone = this.#repositories.size === 0;
     if (
       readCatalog === undefined &&
@@ -1601,6 +1735,7 @@ export class PeriscopeHost {
       readQwen === undefined &&
       readPi === undefined &&
       readCopilot === undefined &&
+      readOpencode === undefined &&
       servesHomeAlone
     ) {
       this.#link.start();
@@ -1614,8 +1749,9 @@ export class PeriscopeHost {
       readQwen === undefined ? Promise.resolve(undefined) : settledQwenRead(readQwen),
       readPi === undefined ? Promise.resolve(undefined) : settledPiRead(readPi),
       readCopilot === undefined ? Promise.resolve(undefined) : settledCopilotRead(readCopilot),
+      readOpencode === undefined ? Promise.resolve(undefined) : settledOpencodeRead(readOpencode),
       this.#readRepositoryList(),
-    ]).then(([catalog, codex, qwen, pi, copilot, repositories]) => {
+    ]).then(([catalog, codex, qwen, pi, copilot, opencode, repositories]) => {
       if (this.#pendingStart !== pending) return;
       this.#pendingStart = null;
       if (repositories !== undefined) {
@@ -1657,6 +1793,15 @@ export class PeriscopeHost {
           runtime: COPILOT_RUNTIME,
           entry: copilot.entry,
           detail: copilot.detail,
+        });
+      }
+      if (opencode !== undefined) {
+        this.#opencodeEntry = opencode.entry;
+        this.#report({
+          kind: 'runtime-catalog',
+          runtime: OPENCODE_RUNTIME,
+          entry: opencode.entry,
+          detail: opencode.detail,
         });
       }
       if (catalog !== undefined) this.#stampAgent(catalog);
@@ -2022,7 +2167,9 @@ export class PeriscopeHost {
               ? piEndpointEnv(endpoint)
               : requested.value.runtime === COPILOT_RUNTIME
                 ? copilotEndpointEnv()
-                : endpointSpawnEnv(endpoint);
+                : requested.value.runtime === OPENCODE_RUNTIME
+                  ? opencodeEndpointEnv()
+                  : endpointSpawnEnv(endpoint);
 
     const provider = this.#workspaces;
 
@@ -2245,6 +2392,11 @@ export class PeriscopeHost {
       const copilotServers = copilotMcpServers(servers.value);
       if (!copilotServers.ok) return giveBack(copilotServers.refusal);
     }
+    // An opencode session takes them in opencode's own form, the same way.
+    if (requested.value.runtime === OPENCODE_RUNTIME) {
+      const opencodeServers = opencodeMcpServers(servers.value);
+      if (!opencodeServers.ok) return giveBack(opencodeServers.refusal);
+    }
 
     // The host's plugin directories, checked now: one that vanished since it was configured refuses
     // this open by name. The agent would report it in its init message's `plugin_errors`, but only
@@ -2367,9 +2519,20 @@ export class PeriscopeHost {
                     resolvesAgainstCallCwd: true,
                     resolvesWritesAgainstCallCwd: true,
                   }
-                : this.#options.toolFamilies === undefined
-                  ? {}
-                  : { toolFamilies: this.#options.toolFamilies }),
+                : runtimeOf(requested.value) === OPENCODE_RUNTIME
+                  ? // An opencode session's actions are opencode's: each path a request names checked one at a
+                    // time, its shell read in the grammar it runs in, the directory a command runs in held to
+                    // the protected set, and its relative paths, read and written, placed where the call runs.
+                    {
+                      toolFamilies: OPENCODE_TOOL_FAMILIES,
+                      readsShellDialect: true,
+                      checksShellCwd: true,
+                      resolvesAgainstCallCwd: true,
+                      resolvesWritesAgainstCallCwd: true,
+                    }
+                  : this.#options.toolFamilies === undefined
+                    ? {}
+                    : { toolFamilies: this.#options.toolFamilies }),
       }),
       ...(this.#options.codex === undefined
         ? {}
@@ -3119,6 +3282,7 @@ export class PeriscopeHost {
       ...(this.#qwenEntry === undefined ? [] : [this.#qwenEntry]),
       ...(this.#piEntry === undefined ? [] : [this.#piEntry]),
       ...(this.#copilotEntry === undefined ? [] : [this.#copilotEntry]),
+      ...(this.#opencodeEntry === undefined ? [] : [this.#opencodeEntry]),
     ];
   }
 
@@ -3524,6 +3688,16 @@ async function settledCopilotRead(read: () => Promise<CopilotRuntimeRead>): Prom
   } catch (error) {
     const reason = `the Copilot runtime could not be read: ${describe(error)}`;
     return { entry: unavailableCopilotEntry(reason), detail: reason };
+  }
+}
+
+/** The opencode read, settled: a read that throws is reported as an unavailable runtime, never a failed start. */
+async function settledOpencodeRead(read: () => Promise<OpencodeRuntimeRead>): Promise<OpencodeRuntimeRead> {
+  try {
+    return await read();
+  } catch (error) {
+    const reason = `the opencode runtime could not be read: ${describe(error)}`;
+    return { entry: unavailableOpencodeEntry(reason), detail: reason };
   }
 }
 

@@ -174,6 +174,10 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   // Copilot's own variables: its home, the runtime it would start in place of the pinned one, its
   // sign-in, its model route and the rest of its process settings.
   'COPILOT_*',
+  // opencode's own variables: its configuration and where it is read from, its database, its feature flags
+  // (which turn on tools that never ask), the program its terminals run through, its keys and the rest of
+  // its process settings. This host sets the ones it means for each session.
+  'OPENCODE_*',
 ];
 
 /**

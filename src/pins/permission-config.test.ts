@@ -111,6 +111,12 @@ const MODE_MODULES = [
   'host/copilot-home.ts',
   // The Copilot fact lift states, inside the receipt, the agent mode the runtime reports. It sets nothing.
   'host/copilot-facts.ts',
+  // The opencode process maps the requested mode onto opencode's agent (`default` is `build`, `plan` is
+  // `plan`) and refuses any other by name; the rules every session is created with stay this host's, so
+  // every call asks whatever the agent.
+  'host/opencode-process.ts',
+  // The opencode fact lift states, inside the receipt, the agent the session runs as. It sets nothing.
+  'host/opencode-facts.ts',
   'host/wire-request.ts',
   'sessions/registry.ts',
   'sessions/session.ts',
@@ -129,12 +135,23 @@ const MODE_MODULES = [
  *   host only reads (the mode, the approve-all grants, the allowed paths); it sets `manual` once, through
  *   the session's configuration at create. A later setter called through that namespace is a new carrier,
  *   and comes back to this pin.
+ * - The rules this host writes for an opencode session, in its configuration and at its create, are carried
+ *   under `permissions`, and they are `* * ask` followed by denials alone: each sends a call to this host's
+ *   gate or refuses a tool this host turns off, so none can answer one with an allow. The seam's structural
+ *   interface declares the same key, and the process reads it back. An allow rule written there is a new
+ *   lane, and comes back to this pin.
+ * - An opencode session's model provider carries its base URL and its key under `settings`: the provider's
+ *   connection, opencode's word, with no permission in it.
  */
 const NOT_OPTIONS: readonly { readonly file: string; readonly option: string }[] = [
   { file: 'host/codex-answers.ts', option: 'permissions' },
   { file: 'host/qwen-home.ts', option: 'permissions' },
   { file: 'host/qwen-process.ts', option: 'canUseTool' },
   { file: 'host/copilot-sdk.ts', option: 'permissions' },
+  { file: 'host/opencode-home.ts', option: 'permissions' },
+  { file: 'host/opencode-process.ts', option: 'permissions' },
+  { file: 'host/opencode-sdk.ts', option: 'permissions' },
+  { file: 'host/opencode-endpoints.ts', option: 'settings' },
 ];
 
 /**

@@ -1,0 +1,700 @@
+/**
+ * An opencode session's process: one host process per session (`opencode-host.ts`), started and driven over
+ * its stdio (`opencode-relay.ts`), presented to the session as an `AgentProcess` whose messages are
+ * `OpencodeMessage`s.
+ *
+ * One host process per session, so its home, its database, its configuration and its servers are its own, and
+ * ending the process ends exactly one session. What it holds to:
+ *
+ * - **The SDK is the operator's.** The host process loads it from the directory the operator installed it
+ *   into at the pinned version (`opencode-sdk.ts`), with this host's own Node, which must parse the SDK.
+ * - **Nothing the server reads is discovered.** The host process runs with its home and its data,
+ *   configuration, cache and state directories inside the session's fresh home under the runner's base
+ *   (`opencode-home.ts`), with no project configuration, no `.claude` folder, no catalogue fetched and none
+ *   of opencode's own hosted models; plugins other than the runtime's own never load, and the built-ins that
+ *   could act outside a call are off.
+ * - **No credential in an environment.** The configuration, an endpoint's key among it, crosses into the host
+ *   process in its `open` request. The host process's environment holds none, and the agent's shell is given
+ *   the session's spawn environment as its own (`opencodeShellEnv`), so a command finds the operator's own
+ *   home as with every runtime.
+ * - **The open, proven before any prompt.** The session is created with this host's rules
+ *   (`opencodeRuleset`): every action asks, the tools this host turns off are denied. Once the server's
+ *   plugins are active (`model.list` waits for them), the server is read back (`opencodeReadBackProblem`):
+ *   the session's and every agent's rules, saved approvals, plugins, servers, configuration and models. Any
+ *   difference refuses the open (`opencode-gate-not-active`) and no prompt is ever sent.
+ * - **Queue semantics.** A prompt is sent as it comes, queued behind any run (`delivery: 'queue'`), up to
+ *   `MAX_PENDING_PROMPTS` the server has not yet delivered. Prompts that arrive before the open is proven are
+ *   held, in order, and sent after.
+ * - **Setters apply now.** The model is the server's own call, and only a model the endpoint lists. The
+ *   permission mode is the agent: `default` is `build` and `plan` is `plan`; the rules stay this host's.
+ *   opencode sets reasoning through a model's variants and this host's endpoints declare none, so an effort
+ *   is refused by name, and a request to turn thinking off too.
+ * - **No form waits.** A form the server raises (the web search's provider choice, an MCP server's request for
+ *   input) waits on an answer with no timeout, and this host attaches no interface to give one, so each is
+ *   cancelled as it is raised: what asked fails with words, and the run goes on.
+ * - **Close.** The session's run is interrupted, the host process's stdin ended (it closes the server, which
+ *   ends what the server still runs, its terminals included), its process tree ended after a grace, the
+ *   database kept for a later resume, and the home removed.
+ */
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import type { JsonObject, JsonValue } from '../control/frames.js';
+import { AsyncQueue } from '../core/async-queue.js';
+import type { RefusalReason } from '../core/refusal.js';
+import type { Result } from '../core/result.js';
+import type { AgentInitFacts, AgentProcess, AgentProcessRequest, ThinkingConfig } from './agent-process.js';
+import { MAX_PENDING_PROMPTS, isRuntimeDefaultPrompt } from './agent-process.js';
+import type { OpencodeEndpointRoute } from './opencode-endpoints.js';
+import { opencodeProvider, opencodeProviderId } from './opencode-endpoints.js';
+import type { OpencodeSessionGate } from './opencode-gate.js';
+import { opencodeAskedOf } from './opencode-gate.js';
+import type { OpencodePostureRead, OpencodeSessionHome } from './opencode-home.js';
+import {
+  carryOpencodeStateIn,
+  carryOpencodeStateOut,
+  createOpencodeSessionHome,
+  opencodeConfig,
+  opencodeHostEnv,
+  opencodeReadBackProblem,
+  opencodeRuleset,
+  opencodeShellEnv,
+} from './opencode-home.js';
+import { opencodeMcpServers } from './opencode-mcp.js';
+import { opencodeSkillDirectories } from './opencode-pack.js';
+import type { ConnectOpencode, OpencodeConnection } from './opencode-relay.js';
+import { connectOpencodeHost } from './opencode-relay.js';
+import type { OpencodeEvent, OpencodeInstall, OpencodeRule } from './opencode-sdk.js';
+import { OPENCODE_SDK_PINNED_VERSION, nodeCanRunOpencode, readOpencodeInstall } from './opencode-sdk.js';
+import type { OpencodeMessage } from './opencode-wire.js';
+import { opencodeData, opencodeModelName, opencodeRecord, opencodeWord } from './opencode-wire.js';
+import type { ChildExit } from './stdio-rpc.js';
+import { describeExit } from './stdio-rpc.js';
+
+/** The permission modes an opencode session takes: `default` is the agent `build`, `plan` is `plan`. */
+export const OPENCODE_PERMISSION_MODES = ['default', 'plan'] as const;
+
+/** The agent each permission mode runs as. */
+export const OPENCODE_AGENTS: Readonly<Record<(typeof OPENCODE_PERMISSION_MODES)[number], string>> = {
+  default: 'build',
+  plan: 'plan',
+};
+
+/** How long the open may take, from the host process's start to the read-back's last answer. */
+export const OPENCODE_OPEN_DEADLINE_MS = 90_000;
+/** How long a setter, an interrupt, a reply or a read may take to be answered. */
+export const OPENCODE_CALL_DEADLINE_MS = 30_000;
+/** How long each step of the close may take before the next one runs. */
+export const OPENCODE_CLOSE_GRACE_MS = 10_000;
+
+/** What an opencode runtime is configured with, beside each session's own request. */
+export interface OpencodeRuntimeConfig {
+  /** `PERISCOPE_OPENCODE_SDK`: the directory the operator installed the SDK into. */
+  readonly sdk: string;
+  /** `PERISCOPE_OPENCODE_HOME`: the runner-owned base the sessions' homes and kept databases live under. */
+  readonly base: string;
+  /** The operator's model endpoints an opencode session may open on (`opencodeEndpointRoutes`). */
+  readonly endpoints?: readonly OpencodeEndpointRoute[];
+  /** How the install is checked; the default reads the operator's directory (`readOpencodeInstall`). */
+  readonly readInstall?: (directory: string) => Result<OpencodeInstall>;
+  /** Whether this Node can load the SDK; the default tests the syntax (`nodeCanRunOpencode`). */
+  readonly nodeProblem?: () => string | null;
+  /** How the host process is opened; the default starts this package's own program. */
+  readonly connect?: ConnectOpencode;
+  /** The shell the `shell` tool runs, by path; the default is the platform's (`opencodeShellPath`). */
+  readonly shell?: string;
+  readonly killTree?: (pid: number) => Promise<void>;
+  readonly closeGraceMs?: number;
+  readonly openDeadlineMs?: number;
+}
+
+/**
+ * The shell this host names for the `shell` tool: Windows PowerShell at its fixed path on Windows, else
+ * `cmd.exe`; `bash` elsewhere, else `sh`. Named rather than left to the runtime's own search, so each shell
+ * decision's dialect says what runs.
+ */
+export function opencodeShellPath(
+  platform: string = process.platform,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  exists: (path: string) => boolean = existsSync,
+): string {
+  if (platform === 'win32') {
+    const root = env['SystemRoot'] ?? env['SYSTEMROOT'] ?? 'C:\\Windows';
+    const powershell = join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    if (exists(powershell)) return powershell;
+    return join(root, 'System32', 'cmd.exe');
+  }
+  return exists('/bin/bash') ? '/bin/bash' : '/bin/sh';
+}
+
+/** The init facts an opencode session goes live on: the open, proven. */
+export function opencodeInitFacts(message: OpencodeMessage): AgentInitFacts | null {
+  if (message.kind !== 'opened') return null;
+  return {
+    sessionId: message.sessionId,
+    cliVersion: OPENCODE_SDK_PINNED_VERSION,
+    cwd: '',
+    model: message.model ?? '',
+    permissionMode: message.agent,
+    apiKeySource: 'none',
+    tools: [],
+    skills: [],
+    plugins: [],
+    capabilities: [],
+    mcpServers: [],
+  };
+}
+
+/** Why `request` cannot run on opencode, or null. Members with no opencode meaning are refused, never dropped. */
+export function opencodeRequestProblem(request: AgentProcessRequest): string | null {
+  if (request.hooks !== null) {
+    return "hooks: in-process Claude hook callbacks have no opencode meaning; opencode's gate is its permission requests";
+  }
+  if (request.sessionStore !== null) return 'sessionStore: opencode keeps its own session database';
+  if (request.sessionStoreFlush !== null) return 'sessionStoreFlush: opencode keeps its own session database';
+  if (request.spawn !== null) {
+    return "spawn: the agent SDK's spawner has no opencode meaning; this host starts opencode's host process itself";
+  }
+  if (request.settingSources.length > 0) {
+    return "settingSources: Claude's settings tiers; an opencode session reads no settings of a workspace's or a user's";
+  }
+  if (request.strictMcpConfig === false) {
+    return "strictMcpConfig: an opencode session attaches the session's servers alone; project configuration stays off";
+  }
+  if (request.fork && request.resume === null) return 'fork: a fork names the session it forks in resume';
+  const mode = request.permissionMode;
+  if (mode !== null && !(OPENCODE_PERMISSION_MODES as readonly string[]).includes(mode)) {
+    return `permissionMode ${mode}: opencode takes ${OPENCODE_PERMISSION_MODES.join(', ')}`;
+  }
+  if (request.thinking !== null && request.thinking.type !== 'adaptive') {
+    return 'thinking: opencode has no thinking switch; its reasoning is set by a model variant';
+  }
+  if (request.effort !== null) {
+    return `effort ${request.effort}: opencode sets reasoning through a model's variants, and this host's endpoints declare none`;
+  }
+  const prompt = request.systemPrompt;
+  if (prompt !== null && !isRuntimeDefaultPrompt(prompt)) {
+    return "systemPrompt: opencode takes the runtime-default preset's append; replacing its base prompt removes the runtime's own guardrails";
+  }
+  return null;
+}
+
+/** `promise`, or a rejection naming `what` once `ms` have passed. */
+function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} took longer than ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
+/** `error`'s words. */
+function wordsOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** A record of `value`, or a refusal-like error naming `what`. */
+function recordOf(value: JsonValue, what: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${what} answered with no record`);
+  }
+  return value;
+}
+
+/** A list of records under `data`, or under the value itself when it is the list. */
+function listOf(value: JsonValue): Record<string, unknown>[] {
+  const list = Array.isArray(value) ? value : opencodeRecord(value)['data'];
+  return Array.isArray(list) ? list.map((one) => opencodeRecord(one) as Record<string, unknown>) : [];
+}
+
+/** Rules read loosely. */
+function rulesOf(value: unknown): OpencodeRule[] {
+  return (Array.isArray(value) ? value : []).map((rule) => {
+    const one = opencodeRecord(rule);
+    return {
+      action: String(one['action']),
+      resource: String(one['resource']),
+      effect: one['effect'] as OpencodeRule['effect'],
+    };
+  });
+}
+
+/**
+ * Start one opencode session's host process. Never throws: what cannot run ends the session by name.
+ * `writeRoots` are the session's further write roots, which reach the gate through the local gate.
+ */
+export function startOpencodeProcess(
+  request: AgentProcessRequest,
+  runtime: OpencodeRuntimeConfig,
+  degrade: (detail: string) => void = () => undefined,
+  endpoint: string | null = null,
+  gate: OpencodeSessionGate | null = null,
+): AgentProcess<OpencodeMessage> {
+  const output = new AsyncQueue<OpencodeMessage>();
+  const decisions = new AbortController();
+  const grace = runtime.closeGraceMs ?? OPENCODE_CLOSE_GRACE_MS;
+  let failure: Error | null = null;
+  let closed = false;
+  let opened = false;
+  let closing: Promise<void> | null = null;
+  const held: string[] = [];
+  let outstanding = 0;
+  let home: OpencodeSessionHome | null = null;
+  let connection: OpencodeConnection | null = null;
+  let sessionId: string | null = null;
+  let agent = OPENCODE_AGENTS[request.permissionMode === 'plan' ? 'plan' : 'default'];
+  // The sessions the session's own subagents started, with the call that started each.
+  const family = new Map<string, string | null>();
+
+  const route =
+    endpoint === null ? null : ((runtime.endpoints ?? []).find((one) => one.name === endpoint) ?? null);
+  const skills = opencodeSkillDirectories((request.plugins ?? []).map((plugin) => plugin.path));
+  const servers = opencodeMcpServers(request.mcpServers);
+  const resumeId = request.resume;
+  const model = request.model ?? (route === null ? null : (route.models[0] ?? null));
+  const providerId = route === null ? null : opencodeProviderId(route);
+  const problem = ((): string | null => {
+    if (endpoint !== null && route === null) {
+      return `endpoint-unknown: ${endpoint} is not one this opencode runtime routes`;
+    }
+    const found = opencodeRequestProblem(request);
+    if (found !== null) return `request-key-unsupported: ${found}`;
+    if (!servers.ok) return `${servers.refusal.reason}: ${servers.refusal.detail}`;
+    if (route !== null && model !== null && !route.models.includes(model)) {
+      return `request-key-unsupported: model ${model} is not one the endpoint ${route.name} lists`;
+    }
+    if (route === null && request.model !== null) {
+      return `request-key-unsupported: model ${request.model} names no endpoint; an opencode session reaches a model only through one`;
+    }
+    if (gate === null) {
+      return 'opencode-gate-not-active: this session has no gate, so no call could be decided';
+    }
+    return null;
+  })();
+
+  const fail = (detail: string): void => {
+    if (failure === null) failure = new Error(detail);
+    void shutDown();
+  };
+
+  async function call(
+    method: string,
+    input: JsonObject,
+    deadlineMs = OPENCODE_CALL_DEADLINE_MS,
+  ): Promise<JsonValue> {
+    const live = connection;
+    if (live === null) throw new Error(`${method}: the opencode host process is not open`);
+    const answered = await live.call(method, input, deadlineMs);
+    if (!answered.ok) throw new Error(answered.refusal.detail);
+    return answered.value;
+  }
+
+  function sessionOf(event: OpencodeEvent): string | null {
+    return opencodeWord(opencodeData(event)['sessionID']);
+  }
+
+  function ours(session: string | null): boolean {
+    return session !== null && (session === sessionId || family.has(session));
+  }
+
+  function onEvent(raw: JsonObject): void {
+    if (closed) return;
+    const event = raw as unknown as OpencodeEvent;
+    const data = opencodeData(event);
+    const session = sessionOf(event);
+    if (event.type === 'session.created') {
+      const parent = opencodeWord(data['parentID']);
+      if (session !== null && parent !== null && ours(parent) && !family.has(session)) {
+        family.set(session, null);
+        // The subagent's shell is given the same environment as the session's; until it lands, a command of
+        // its runs with the host process's own, which holds no credential either.
+        void call('session.environment', {
+          sessionID: session,
+          variables: opencodeShellEnv(request.env),
+        }).catch((error: unknown) =>
+          degrade(`a subagent's shell environment was not set: ${wordsOf(error)}`),
+        );
+      }
+    }
+    if (event.type === 'session.tool.progress') {
+      const child = opencodeWord(opencodeRecord(data['metadata'])['sessionID']);
+      const id = opencodeWord(data['id']);
+      if (child !== null && id !== null && family.has(child) && family.get(child) === null)
+        family.set(child, id);
+    }
+    if (event.type === 'session.inbox.delivered' && session === sessionId) {
+      outstanding = Math.max(0, outstanding - 1);
+    }
+    const message: OpencodeMessage = {
+      kind: 'event',
+      event,
+      session,
+      main: session !== null && session === sessionId,
+      spawnedBy: session === null ? null : (family.get(session) ?? null),
+    };
+    try {
+      gate?.observe(message);
+    } catch {
+      // A degrade the gate failed to name must not stop the event reaching the session.
+    }
+    if (event.type === 'permission.asked' && gate !== null) {
+      const asked = opencodeAskedOf(data);
+      if (asked !== null && ours(asked.sessionID)) {
+        void gate
+          .decide(asked, decisions.signal)
+          .then((answer) =>
+            call('permission.reply', {
+              sessionID: asked.sessionID,
+              requestID: asked.id,
+              decision: answer.decision,
+              ...(answer.message === undefined ? {} : { message: answer.message }),
+            }),
+          )
+          .catch((error: unknown) => {
+            // A request the runtime already settled (refused with another, or its session ended) cannot be
+            // answered; any other failure leaves the call waiting, which the runtime never runs.
+            if (!closed) degrade(`a permission answer was not delivered: ${wordsOf(error)}`);
+          });
+      }
+    }
+    if (event.type === 'form.created') {
+      // A form waits on an answer with no timeout, and this host attaches no interface to give one: the web
+      // search's provider choice and an MCP server's request for input are each cancelled at once, so what
+      // asked fails with the words below and the run goes on.
+      const form = opencodeRecord(data['form']);
+      const formID = opencodeWord(form['id']);
+      const formSession = opencodeWord(form['sessionID']);
+      if (formID !== null && formSession !== null) {
+        void call('session.form.cancel', {
+          sessionID: formSession,
+          formID,
+          message: 'this host answers no form: the session has no interface to show one',
+        }).catch((error: unknown) => {
+          if (!closed) degrade(`a form was not cancelled, so what asked it waits: ${wordsOf(error)}`);
+        });
+      }
+    }
+    if (event.type === 'session.execution.interrupted' && session !== null && ours(session)) {
+      gate?.endPending(session, 'the turn was interrupted while this decision was outstanding');
+    }
+    if (event.type === 'plugin.updated' && opened) void checkPlugins();
+    output.push(message);
+  }
+
+  async function checkPlugins(): Promise<void> {
+    try {
+      const plugins = listOf(await call('plugin.list', { location: { directory: request.cwd } }));
+      const foreign = plugins.filter((plugin) => opencodeRecord(plugin['source'])['type'] !== 'builtin');
+      if (foreign.length > 0) {
+        gate?.raise(
+          'gate-foreign-extension',
+          `plugins other than the runtime's own are now loaded: ${foreign.map((plugin) => opencodeWord(plugin['id']) ?? 'unnamed').join(', ')}`,
+          foreign.map((plugin) => opencodeWord(plugin['id']) ?? 'unnamed').join(','),
+        );
+      }
+    } catch {
+      // A plugin list that could not be read leaves the last reading standing.
+    }
+  }
+
+  async function readPosture(id: string, models: JsonValue): Promise<OpencodePostureRead> {
+    const location = { location: { directory: request.cwd } };
+    const [session, agents, saved, plugins, mcp, config] = await Promise.all([
+      call('session.get', { sessionID: id }),
+      call('agent.list', location),
+      // No project named: every saved approval the session's database holds.
+      call('permission.saved.list', {}),
+      call('plugin.list', location),
+      call('mcp.list', location),
+      call('config.get', location),
+    ]);
+    return {
+      rules: rulesOf(recordOf(session, 'session.get')['permissions']),
+      agents: listOf(agents).map((one) => ({ id: String(one['id']), rules: rulesOf(one['permissions']) })),
+      saved: listOf(saved).map((one) => ({
+        action: String(one['action']),
+        resource: String(one['resource']),
+      })),
+      plugins: listOf(plugins).map((one) => ({
+        ...(typeof one['id'] === 'string' ? { id: one['id'] } : {}),
+        source: { type: String(opencodeRecord(one['source'])['type']) },
+      })),
+      servers: listOf(mcp).map((one) => String(one['name'])),
+      config: listOf(config).map((one) => ({
+        type: String(one['type']),
+        ...(typeof one['path'] === 'string' ? { path: one['path'] } : {}),
+      })),
+      models: listOf(models).map((one) => ({ id: String(one['id']), providerID: String(one['providerID']) })),
+    };
+  }
+
+  function refuseOpen(reason: RefusalReason, detail: string): void {
+    gate?.raise(reason, detail, 'open');
+    fail(`${reason}: ${detail}`);
+  }
+
+  async function open(): Promise<void> {
+    if (gate === null) return;
+    const deadline = runtime.openDeadlineMs ?? OPENCODE_OPEN_DEADLINE_MS;
+    const nodeProblem = (runtime.nodeProblem ?? nodeCanRunOpencode)();
+    if (nodeProblem !== null) return fail(`runtime-unavailable: ${nodeProblem}`);
+    const install = (runtime.readInstall ?? readOpencodeInstall)(runtime.sdk);
+    if (!install.ok) return fail(`${install.refusal.reason}: ${install.refusal.detail}`);
+
+    const made = createOpencodeSessionHome(runtime.base);
+    if (!made.ok) return fail(`${made.refusal.reason}: ${made.refusal.detail}`);
+    home = made.value;
+    if (resumeId !== null) {
+      const carried = carryOpencodeStateIn(runtime.base, home.database, resumeId);
+      if (!carried.ok) return fail(`${carried.refusal.reason}: ${carried.refusal.detail}`);
+    }
+    const shell = runtime.shell ?? opencodeShellPath(process.platform, request.env);
+    gate.useShell(shell);
+    const env = opencodeHostEnv(request.env, home.env);
+    // The agent's commands run with the shell's environment, not the host process's: the local gate reads
+    // a command's variables as the shell will.
+    gate.spawnedWith(opencodeShellEnv(request.env));
+    const prompt = request.systemPrompt;
+    const append = isRuntimeDefaultPrompt(prompt) ? (prompt.append ?? '') : '';
+    const instructions: string[] = [];
+    if (append !== '') {
+      const file = join(home.home, 'instructions.md');
+      writeFileSync(file, append, { mode: 0o600 });
+      instructions.push(file);
+    }
+    const config = opencodeConfig({
+      provider:
+        route === null || providerId === null ? null : { id: providerId, entry: opencodeProvider(route) },
+      model,
+      servers: servers.ok ? servers.value : {},
+      skills: skills.directories,
+      instructions,
+      shell,
+    });
+    if (closed) return;
+
+    const connect = runtime.connect ?? connectOpencodeHost;
+    const connected = await connect({
+      cwd: request.cwd,
+      env,
+      install: runtime.sdk,
+      database: home.database,
+      configDirectory: home.configDirectory,
+      config: JSON.stringify(config),
+      openDeadlineMs: deadline,
+      onEvent,
+      onStreamEnd: (detail) => {
+        if (!closed) fail(`runtime-unavailable: the opencode server's event stream ended (${detail})`);
+      },
+      onExit: (exit: ChildExit) => {
+        if (!closed && failure === null)
+          failure = new Error(`the opencode host process exited (${describeExit(exit)})`);
+        if (!closed) void shutDown();
+      },
+      ...(request.onStderr === null ? {} : { onStderr: (line: string) => request.onStderr?.(`${line}\n`) }),
+      ...(runtime.killTree === undefined ? {} : { killTree: runtime.killTree }),
+      closeGraceMs: grace,
+    });
+    if (!connected.ok) return fail(`${connected.refusal.reason}: ${connected.refusal.detail}`);
+    connection = connected.value;
+    if (closed) {
+      await connection.close();
+      return;
+    }
+
+    // The plugins are active once the model list answers: every read after it sees the configured server.
+    const location = { location: { directory: request.cwd } };
+    const models = await call('model.list', location, deadline);
+    const rules = opencodeRuleset();
+    let info: Record<string, unknown>;
+    if (resumeId === null) {
+      info = recordOf(
+        await call(
+          'session.create',
+          {
+            location: { directory: request.cwd },
+            permissions: rules as unknown as JsonValue,
+            agent,
+            ...(providerId === null || model === null
+              ? {}
+              : { model: { id: model, providerID: providerId } }),
+          },
+          deadline,
+        ),
+        'session.create',
+      );
+    } else if (request.fork) {
+      info = recordOf(await call('session.fork', { sessionID: resumeId }, deadline), 'session.fork');
+    } else {
+      info = recordOf(await call('session.get', { sessionID: resumeId }, deadline), 'session.get');
+    }
+    const id = opencodeWord(info['id']);
+    if (id === null) return fail('runtime-unavailable: the opencode server named no session');
+    sessionId = id;
+    agent = opencodeWord(info['agent']) ?? agent;
+    gate.identify(id);
+    await call('session.environment', { sessionID: id, variables: opencodeShellEnv(request.env) }, deadline);
+    if (
+      resumeId !== null &&
+      opencodeWord(info['agent']) !== OPENCODE_AGENTS[request.permissionMode === 'plan' ? 'plan' : 'default']
+    ) {
+      const wanted = OPENCODE_AGENTS[request.permissionMode === 'plan' ? 'plan' : 'default'];
+      await call('session.switchAgent', { sessionID: id, agent: wanted }, deadline);
+      agent = wanted;
+    }
+    if (closed) return;
+
+    // The posture, read back before the first prompt.
+    const read = await readPosture(id, models);
+    const unread = opencodeReadBackProblem(read, {
+      servers: Object.keys(servers.ok ? servers.value : {}),
+      home: home.home,
+      providerId,
+    });
+    if (unread !== null) return refuseOpen('opencode-gate-not-active', unread);
+    if (closed) return;
+
+    opened = true;
+    output.push({
+      kind: 'opened',
+      sessionId: id,
+      model: opencodeModelName(info['model']) ?? (model === null ? null : model),
+      agent,
+      origin: resumeId === null ? 'new' : request.fork ? 'fork' : 'resume',
+    });
+    for (const text of held.splice(0)) send(text);
+  }
+
+  function send(text: string): void {
+    const id = sessionId;
+    if (id === null || connection === null) {
+      degrade('a prompt was not sent: the session is not open');
+      return;
+    }
+    outstanding += 1;
+    call('session.prompt', { sessionID: id, text, delivery: 'queue' }).catch((error: unknown) => {
+      outstanding = Math.max(0, outstanding - 1);
+      degrade(`a prompt was not sent: ${wordsOf(error)}`);
+    });
+  }
+
+  function shutDown(): Promise<void> {
+    closing ??= (async () => {
+      closed = true;
+      held.length = 0;
+      decisions.abort();
+      const live = connection;
+      connection = null;
+      if (live !== null) {
+        if (sessionId !== null) {
+          // The run ends first, while the server can still say so; the session stays in the database.
+          const interrupted = await live
+            .call('session.interrupt', { sessionID: sessionId }, grace)
+            .catch(() => null);
+          if (interrupted !== null && !interrupted.ok)
+            degrade(`the run was not interrupted: ${interrupted.refusal.detail}`);
+        }
+        // The process closes its server and exits when its stdin ends; its tree is ended after the grace.
+        await live.close();
+        const pid = live.pid;
+        if (pid !== null && runtime.killTree !== undefined)
+          await runtime.killTree(pid).catch(() => undefined);
+      }
+      if (home !== null && sessionId !== null) {
+        const kept = carryOpencodeStateOut(runtime.base, home.database, sessionId);
+        if (!kept.ok) degrade(kept.refusal.detail);
+      }
+      const removing = home;
+      home = null;
+      if (removing !== null) {
+        const removed = removing.remove();
+        if (!removed.ok) degrade(removed.refusal.detail);
+      }
+      output.end();
+    })();
+    return closing;
+  }
+
+  async function control(what: string, run: (id: string) => Promise<unknown>): Promise<void> {
+    if (closed) return;
+    const id = sessionId;
+    if (id === null || !opened) throw new Error(`${what}: the opencode session is not open yet`);
+    await within(run(id), OPENCODE_CALL_DEADLINE_MS, what);
+  }
+
+  if (problem !== null) {
+    failure = new Error(problem);
+    void Promise.resolve().then(() => output.end());
+  } else {
+    void Promise.resolve()
+      .then(() => open())
+      .catch((error: unknown) =>
+        fail(`runtime-unavailable: the opencode session could not open: ${wordsOf(error)}`),
+      );
+  }
+
+  async function* messages(): AsyncGenerator<OpencodeMessage, void> {
+    for await (const message of output) yield message;
+    if (failure !== null) throw failure;
+  }
+
+  return {
+    messages: messages(),
+    prompt(text: string): boolean {
+      if (closed || problem !== null || held.length + outstanding >= MAX_PENDING_PROMPTS) return false;
+      if (!opened) held.push(text);
+      else send(text);
+      return true;
+    },
+    async interrupt(): Promise<void> {
+      if (closed || !opened || sessionId === null) return;
+      gate?.endPending(sessionId, 'the turn was interrupted while this decision was outstanding');
+      await call('session.interrupt', { sessionID: sessionId }).catch((error: unknown) =>
+        degrade(`the turn was not interrupted: ${wordsOf(error)}`),
+      );
+    },
+    async setModel(selected: string | null): Promise<void> {
+      const next = selected ?? model;
+      if (next === null) return;
+      if (route === null || providerId === null) {
+        throw new Error(
+          `model ${next} names no endpoint; an opencode session reaches a model only through one`,
+        );
+      }
+      if (!route.models.includes(next))
+        throw new Error(`model ${next} is not one the endpoint ${route.name} lists`);
+      await control('the model', (id) =>
+        call('session.switchModel', { sessionID: id, model: { id: next, providerID: providerId } }),
+      );
+    },
+    async setPermissionMode(requested: string): Promise<void> {
+      if (!(OPENCODE_PERMISSION_MODES as readonly string[]).includes(requested)) {
+        throw new Error(`opencode takes ${OPENCODE_PERMISSION_MODES.join(', ')}, not ${requested}`);
+      }
+      const wanted = OPENCODE_AGENTS[requested as (typeof OPENCODE_PERMISSION_MODES)[number]];
+      await control('the agent', (id) => call('session.switchAgent', { sessionID: id, agent: wanted }));
+      agent = wanted;
+    },
+    setThinking(thinking: ThinkingConfig): Promise<void> {
+      if (thinking.type === 'adaptive') return Promise.resolve();
+      return Promise.reject(
+        new Error('opencode has no thinking switch; its reasoning is set by a model variant'),
+      );
+    },
+    setEffort(level: string): Promise<void> {
+      return Promise.reject(
+        new Error(
+          `effort ${level}: opencode sets reasoning through a model's variants, and this host's endpoints declare none`,
+        ),
+      );
+    },
+    pluginsApplied(): Promise<boolean | null> {
+      // The skills handed over are read by the server itself; it gives no answer for the set as a whole.
+      return Promise.resolve(null);
+    },
+    close(): void {
+      if (closed) return;
+      void shutDown();
+    },
+  };
+}

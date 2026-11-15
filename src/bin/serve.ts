@@ -48,7 +48,13 @@ import { readModelEndpoints } from '../host/model-endpoints.js';
 import type { CodexRuntimeRead, ReadCodexRuntimeOptions } from '../host/codex-runtime.js';
 import { codexNativeRuntime, readCodexRuntime } from '../host/codex-runtime.js';
 import { codexHookLines, pendingCodexHookState, probeCodexHook } from '../host/codex-hook.js';
-import { CODEX_RUNTIME, COPILOT_RUNTIME, PI_RUNTIME, QWEN_RUNTIME } from '../sessions/runtimes.js';
+import {
+  CODEX_RUNTIME,
+  COPILOT_RUNTIME,
+  OPENCODE_RUNTIME,
+  PI_RUNTIME,
+  QWEN_RUNTIME,
+} from '../sessions/runtimes.js';
 import type { QwenRuntimeRead, ReadQwenRuntimeOptions } from '../host/qwen-runtime.js';
 import { qwenNativeRuntime, readQwenRuntime } from '../host/qwen-runtime.js';
 import type { PiRuntimeRead, ReadPiRuntimeOptions } from '../host/pi-runtime.js';
@@ -57,6 +63,9 @@ import { piEndpointRoutes } from '../host/pi-endpoints.js';
 import type { CopilotRuntimeRead, ReadCopilotRuntimeOptions } from '../host/copilot-runtime.js';
 import { copilotNativeRuntime, readCopilotRuntime } from '../host/copilot-runtime.js';
 import { copilotEndpointRoutes } from '../host/copilot-endpoints.js';
+import type { OpencodeRuntimeRead, ReadOpencodeRuntimeOptions } from '../host/opencode-runtime.js';
+import { opencodeNativeRuntime, readOpencodeRuntime } from '../host/opencode-runtime.js';
+import { opencodeEndpointRoutes } from '../host/opencode-endpoints.js';
 import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
 import { MAX_PLUGIN_DIRS } from '../control/frames.js';
 import { writeLinkState } from '../host/link-state-file.js';
@@ -136,6 +145,8 @@ export interface ServeDeps {
   readonly readPiRuntime?: (options: ReadPiRuntimeOptions) => Promise<PiRuntimeRead>;
   /** Reads the Copilot runtime at start, when one is configured. Defaults to the real read. */
   readonly readCopilotRuntime?: (options: ReadCopilotRuntimeOptions) => Promise<CopilotRuntimeRead>;
+  /** Reads the opencode runtime at start, when one is configured. Defaults to the real read. */
+  readonly readOpencodeRuntime?: (options: ReadOpencodeRuntimeOptions) => Promise<OpencodeRuntimeRead>;
 }
 
 export type ServeOutcome =
@@ -181,6 +192,8 @@ interface Config {
    * read from, if any. Null = Copilot is not offered.
    */
   readonly copilot: { readonly sdk: string; readonly home: string; readonly tokenFile: string | null } | null;
+  /** The opencode SDK install and its runner-owned home; both, or neither. Null = opencode is not offered. */
+  readonly opencode: { readonly sdk: string; readonly home: string } | null;
 }
 
 function readConfig(env: NodeJS.ProcessEnv): Config | string {
@@ -300,6 +313,23 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     if (problem !== null) return problem;
   }
 
+  // opencode likewise: an SDK with no home would keep its sessions in the operator's own, and a home with
+  // no SDK offers nothing to run.
+  const opencodeSdk = nonEmpty(env['PERISCOPE_OPENCODE_SDK']);
+  const opencodeHome = nonEmpty(env['PERISCOPE_OPENCODE_HOME']);
+  if ((opencodeSdk === null) !== (opencodeHome === null)) {
+    return opencodeSdk === null
+      ? 'PERISCOPE_OPENCODE_HOME is set without PERISCOPE_OPENCODE_SDK: opencode is offered with both or neither'
+      : "PERISCOPE_OPENCODE_SDK is set without PERISCOPE_OPENCODE_HOME: opencode is offered with both or neither, and never from the operator's own home";
+  }
+  for (const [key, value] of [
+    ['PERISCOPE_OPENCODE_SDK', opencodeSdk],
+    ['PERISCOPE_OPENCODE_HOME', opencodeHome],
+  ] as const) {
+    const problem = value === null ? null : configValueProblem(key, value);
+    if (problem !== null) return problem;
+  }
+
   const configuredHostId = env['PERISCOPE_HOST_ID'];
   return {
     controllerUrl,
@@ -326,6 +356,7 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
       copilotSdk === null || copilotHome === null
         ? null
         : { sdk: copilotSdk, home: copilotHome, tokenFile: copilotTokenFile },
+    opencode: opencodeSdk === null || opencodeHome === null ? null : { sdk: opencodeSdk, home: opencodeHome },
   };
 }
 
@@ -736,6 +767,21 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
             }),
         };
 
+  // opencode, read the way a session starts it: the operator's SDK install held to the pin, this host's Node
+  // tested for what the SDK needs, and the runner-owned home, with nothing started.
+  const opencodeConfigured = config.opencode;
+  const opencode =
+    opencodeConfigured === null
+      ? null
+      : {
+          runtime: { sdk: opencodeConfigured.sdk, base: opencodeConfigured.home },
+          read: () =>
+            (deps.readOpencodeRuntime ?? readOpencodeRuntime)({
+              sdk: opencodeConfigured.sdk,
+              base: opencodeConfigured.home,
+            }),
+        };
+
   let linkStateProblemSaid = false;
   const onEvent = (event: HostEvent): void => {
     if (event.kind === 'link') {
@@ -833,6 +879,9 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
             copilotSdk: config.copilot.sdk,
             copilotTokenFile: config.copilot.tokenFile,
           }),
+      ...(config.opencode === null
+        ? {}
+        : { opencodeHome: config.opencode.home, opencodeSdk: config.opencode.sdk }),
     }),
     // Where the agents keep their session records, from the same sources and the same homes as the set
     // above: the read doors and the bulk lane refuse them whatever their root.
@@ -841,6 +890,7 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       ...(config.codex === null ? {} : { codexHome: config.codex.home }),
       ...(config.qwen === null ? {} : { qwenHome: config.qwen.home }),
       ...(config.copilot === null ? {} : { copilotHome: config.copilot.home }),
+      ...(config.opencode === null ? {} : { opencodeHome: config.opencode.home }),
     }),
     // The home the shell check expands `~` and `$HOME` to, from the same environment as the set above.
     home: homeDirectory(raw),
@@ -897,7 +947,7 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
             baseEnv: raw,
             homeDir,
             startProcess: deps.startProcess,
-            ...(codex === null && qwen === null && pi === null && copilot === null
+            ...(codex === null && qwen === null && pi === null && copilot === null && opencode === null
               ? {}
               : {
                   runtimes: {
@@ -919,6 +969,14 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
                             endpoints: copilotEndpointRoutes(endpoints === null ? [] : endpoints.endpoints),
                           }),
                         }),
+                    ...(opencode === null
+                      ? {}
+                      : {
+                          [OPENCODE_RUNTIME]: opencodeNativeRuntime({
+                            ...opencode.runtime,
+                            endpoints: opencodeEndpointRoutes(endpoints === null ? [] : endpoints.endpoints),
+                          }),
+                        }),
                   },
                 }),
           }),
@@ -929,6 +987,7 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     ...(qwen === null ? {} : { qwen }),
     ...(pi === null ? {} : { pi }),
     ...(copilot === null ? {} : { copilot }),
+    ...(opencode === null ? {} : { opencode }),
     report: onEvent,
   });
 
