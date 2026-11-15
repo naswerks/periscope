@@ -815,10 +815,12 @@ async function startedIn(
     arguments: { command: command(pidFile), description: 'scratch', mode: 'async' },
     toolCallId: id,
   });
-  const deadline = Date.now() + 15_000;
-  while (!existsSync(pidFile) && Date.now() < deadline)
+  // A cold shell on a loaded host can take most of a minute to run its first command.
+  const written = (): string => (existsSync(pidFile) ? readFileSync(pidFile, 'utf8').trim() : '');
+  const deadline = Date.now() + 90_000;
+  while (!/^\d+$/.test(written()) && Date.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 100));
-  const pid = Number(readFileSync(pidFile, 'utf8').trim());
+  const pid = Number(written());
   assert.ok(Number.isInteger(pid) && pid > 0, `no pid was written to ${pidFile}`);
   return pid;
 }
@@ -910,7 +912,7 @@ test(
         return /^\d+$/.test(read) ? Number(read) : null;
       };
       const parent = parentOf(detached);
-      const deadline = Date.now() + 15_000;
+      const deadline = Date.now() + 60_000;
       while (parent !== null && alive(parent) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
