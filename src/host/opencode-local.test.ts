@@ -779,6 +779,67 @@ test(
   },
 );
 
+test(
+  'an interrupt of the session reaches a subagent still running: its run ends, and the decision it waited on ends refused',
+  { skip, timeout: 240_000 },
+  async () => {
+    const dirs = await scratch();
+    const notes = join(dirs.work, 'notes.txt');
+    const stub = await scripted({
+      'SUB-MARKER': { toolCalls: [{ id: 'call_sub_read', name: 'read', arguments: { path: notes } }] },
+      'SPAWN-ONE': {
+        toolCalls: [
+          {
+            id: 'call_spawn',
+            name: 'subagent',
+            arguments: { agent: 'general', description: 'probe child', prompt: 'SUB-MARKER read the notes' },
+          },
+        ],
+      },
+    });
+    let ended: string | null = null;
+    const real = start(dirs, stub, {
+      // The subagent's call waits on a decision nobody gives; whatever ends the decision is recorded.
+      decide: (request, signal) =>
+        request.toolUseId === 'call_sub_read'
+          ? new Promise((resolve) => {
+              signal.addEventListener(
+                'abort',
+                () => {
+                  ended = String(signal.reason);
+                  resolve({ behavior: 'deny', message: 'ended' });
+                },
+                { once: true },
+              );
+            })
+          : Promise.resolve({ behavior: 'allow' }),
+    });
+    try {
+      await opened(real);
+      assert.equal(real.proc.prompt('SPAWN-ONE please'), true);
+      await until(
+        () => real.requests.some((request) => request.toolUseId === 'call_sub_read'),
+        "the subagent's request",
+      );
+      const childEnded = (): boolean =>
+        real.messages.some(
+          (message) =>
+            message.kind === 'event' &&
+            !message.main &&
+            /^session\.execution\.(succeeded|failed|interrupted)$/.test(message.event.type),
+        );
+      assert.equal(childEnded(), false, "control: the subagent's run is under way before the interrupt");
+      await real.proc.interrupt();
+      await until(() => ended !== null && childEnded(), "the subagent's run and its decision to end");
+      assert.match(String(ended), /the turn was interrupted/);
+    } finally {
+      await closed(real);
+      await stub.close();
+      await removeScratch(dirs);
+    }
+  },
+);
+
 /** A shell line the runtime's own reading finds no command in, which still writes `file`. */
 function lineWithNoCommand(file: string): string {
   return WINDOWS ? `\${${file}} = 'written'` : `> '${file}'`;

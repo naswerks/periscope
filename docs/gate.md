@@ -722,6 +722,13 @@ every request they raise.
   request still waiting, once the open is proven. A resumed session also reads the sessions the
   database holds and takes each whose line of parents reaches it as its own, so their commands run
   with the shell's environment, as a subagent started now does.
+- **An interrupt reaches the subagents.** A subagent runs in a session of its own, and the server does
+  not interrupt it with the session that started it: measured on the pinned SDK, an interrupt of the
+  session left a subagent waiting on its decision untouched. So an interrupt goes to the session and to
+  every subagent session with a run under way, and ends the decisions any of the session's sessions
+  still waits on, each refused. Shown on the pinned SDK: the subagent's run ends and its decision ends
+  refused. A command a shell still runs in the background is not a run of any session; whether an
+  interrupt ends it was not measured, and it ends at the close.
 - **One call can ask twice.** A path outside the session's location asks `external_directory` for its
   directory first, then its own action; decisions are kept by the request's id, so each is decided once.
   A `shell` call is the exception: it was decided whole before it ran, so its requests ask nobody.

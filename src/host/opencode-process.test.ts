@@ -667,6 +667,41 @@ test('an interrupt reaches the server, and a decision still pending for the sess
   }
 });
 
+test("an interrupt reaches each subagent with a run under way, and ends the decisions the session's subagents wait on", async () => {
+  const run = await started({ decide: () => new Promise(() => undefined) });
+  try {
+    await until(() => opened(run), 'the open');
+    const child = run.record.spawn('call_spawn');
+    const idle = run.record.spawn('call_spawn_idle');
+    run.record.emit('session.execution.started', { sessionID: child });
+    run.record.emit('session.execution.started', { sessionID: idle });
+    run.record.emit('session.execution.succeeded', { sessionID: idle });
+    const pending = run.record.ask({
+      id: 'per_child',
+      sessionID: child,
+      action: 'read',
+      resources: ['a.ts'],
+    });
+    await until(() => run.requests.length === 1, "the subagent's pending decision");
+    await run.process.interrupt();
+    assert.deepEqual(
+      run.record
+        .of('session.interrupt')
+        .map((input) => input['sessionID'])
+        .sort(),
+      ['ses_main', child].sort(),
+      'the interrupt reached the session alone, or a subagent that was not running',
+    );
+    assert.equal((await pending).decision, 'reject', "the subagent's decision outlived the interrupt");
+    // A subagent whose run has ended is not interrupted again.
+    run.record.emit('session.execution.interrupted', { sessionID: child });
+    await run.process.interrupt();
+    assert.equal(run.record.of('session.interrupt').length, 3);
+  } finally {
+    await closed(run);
+  }
+});
+
 test('a shell line the runtime reads no command in is decided before it runs: refused, it fails and never runs; allowed, it runs', async () => {
   const run = await started({
     fake: {

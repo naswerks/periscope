@@ -65,6 +65,9 @@ frame it sends decodes unchanged.
   whole line; refused, the call fails with the refusal's words and never runs. A call allowed there is
   asked about once: the requests it then raises are held to the host's own gate alone. The read-back
   admits that one plugin, by its id and its source.
+- Fixed: an opencode interrupt reaches the session's subagents. It reached the session's own run alone,
+  and a subagent with a run under way went on, its pending decision with it. An interrupt now goes to
+  every subagent session with a run under way and ends the decisions the session's sessions wait on.
 - Fixed: an opencode request is decided whichever of the server's sessions raised it. One from a session
   the process did not see created was dropped, never decided and never named, and its call waited for
   good: after a resume that was every subagent of the earlier run, which the server restarts by itself

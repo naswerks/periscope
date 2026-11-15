@@ -255,6 +255,8 @@ export function startOpencodeProcess(
   let agent = OPENCODE_AGENTS[request.permissionMode === 'plan' ? 'plan' : 'default'];
   // The sessions the session's own subagents started, with the call that started each.
   const family = new Map<string, string | null>();
+  // The subagents' sessions with a run under way: an interrupt of the session reaches each.
+  const runningChildren = new Set<string>();
   // The requests this process has taken up, by id: one raised before the stream was read is found again by
   // the open's own look, and is decided once.
   const takenUp = new Set<string>();
@@ -339,6 +341,12 @@ export function startOpencodeProcess(
       const id = opencodeWord(data['id']);
       if (child !== null && id !== null && family.has(child) && family.get(child) === null)
         family.set(child, id);
+    }
+    if (session !== null && session !== sessionId) {
+      if (event.type === 'session.execution.started') runningChildren.add(session);
+      else if (/^session\.execution\.(succeeded|failed|interrupted)$/.test(event.type)) {
+        runningChildren.delete(session);
+      }
     }
     if (event.type === 'session.inbox.delivered' && session === sessionId) {
       outstanding = Math.max(0, outstanding - 1);
@@ -775,9 +783,21 @@ export function startOpencodeProcess(
     },
     async interrupt(): Promise<void> {
       if (closed || !opened || sessionId === null) return;
-      gate?.endPending(sessionId, 'the turn was interrupted while this decision was outstanding');
-      await call('session.interrupt', { sessionID: sessionId }).catch((error: unknown) =>
-        degrade(`the turn was not interrupted: ${wordsOf(error)}`),
+      // A subagent runs in a session of its own, which the server does not interrupt with its parent's: the
+      // interrupt reaches the session and every subagent with a run under way, and ends the decisions each
+      // of the session's sessions still waits on.
+      const running = [sessionId, ...runningChildren];
+      for (const one of new Set([...running, ...family.keys()])) {
+        gate?.endPending(one, 'the turn was interrupted while this decision was outstanding');
+      }
+      await Promise.all(
+        running.map((one) =>
+          call('session.interrupt', { sessionID: one }).catch((error: unknown) =>
+            degrade(
+              `${one === sessionId ? 'the turn' : `the subagent session ${one}`} was not interrupted: ${wordsOf(error)}`,
+            ),
+          ),
+        ),
       );
     },
     async setModel(selected: string | null): Promise<void> {
