@@ -24,6 +24,14 @@ frame it sends decodes unchanged.
 - Changed: `@anthropic-ai/sdk`, which only the agent SDK's type definitions read, is `^1.8.0` (was
   `^0.129.0`); the agent SDK asks for `>=0.93.0`. Version 1 is published under the Apache-2.0 licence
   and brings `@opentelemetry/api` with it.
+- Security: the local gate places a path a tool names where the operating system puts it, then checks
+  it. On Windows a path with one leading separator (`\Users\x`, `/Users/x`) is rooted at the drive the
+  call runs on and `C:name` on that drive is beneath the call's directory; on every system `~` is the
+  home directory for a read, a write and a patch, as it was for a search. Each was joined under the
+  call's directory as text, so the gate judged a file inside the workspace while the tool opened
+  another: a read of a protected file, or a write outside the session's roots, passed. Two forms cannot
+  be placed and are refused with a new reason, `path-unplaceable`: a drive-relative path on another
+  drive, and another user's home (`~name/...`). Under a POSIX call directory nothing new is refused.
 - Security: Claude's `Monitor` tool is a shell tool. It runs the command its input names, so the local
   gate reads that command as it reads `Bash`'s (a push, a protected path) and a decision request names
   it `shell` with the `posix` dialect; it reached the gate as `other` and its command was never read. A

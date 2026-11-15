@@ -241,6 +241,12 @@ export function localGate(options: LocalGateOptions): LocalGate {
   const resolvesAgainstCallCwd = options.resolvesAgainstCallCwd ?? false;
   const resolvesWritesAgainstCallCwd = options.resolvesWritesAgainstCallCwd ?? false;
   const spawnEnv = options.spawnEnv;
+  // Each call's paths are placed against the directory that call runs in.
+  const at = (request: DecisionRequest, placesRelative: boolean): JailOptions => ({
+    ...jail,
+    callDirectory: request.cwd,
+    placesRelative,
+  });
 
   return (request: DecisionRequest): Refusal | null => {
     // A shell tool's call that watches a socket and names no command runs nothing a shell reads, so it
@@ -285,27 +291,20 @@ export function localGate(options: LocalGateOptions): LocalGate {
     }
 
     if (patchTools.has(request.toolName)) {
-      return checkPatch(request, jail);
+      // A patch's paths are always placed where the call runs.
+      return checkPatch(request, at(request, true));
     }
 
     if (writeTools.has(request.toolName)) {
-      const named = pathFromToolInput(request.toolInput);
-      if (!resolvesWritesAgainstCallCwd || named === null) return checkPath(named, jail);
-      const placed = againstCallCwd(named, request.cwd, jail.workspaceRoot);
-      return typeof placed === 'string' ? checkPath(placed, jail) : placed;
+      return checkPath(pathFromToolInput(request.toolInput), at(request, resolvesWritesAgainstCallCwd));
     }
 
     if (readTools.has(request.toolName)) {
-      const named = pathFromToolInput(request.toolInput);
-      if (!resolvesAgainstCallCwd || named === null) return checkReadPath(named, jail);
-      const placed = againstCallCwd(named, request.cwd, jail.workspaceRoot);
-      return typeof placed === 'string' ? checkReadPath(placed, jail) : placed;
+      return checkReadPath(pathFromToolInput(request.toolInput), at(request, resolvesAgainstCallCwd));
     }
 
     if (searchTools.has(request.toolName)) {
-      if (!resolvesAgainstCallCwd) return checkSearch(request.toolInput, jail);
-      const placed = placedSearchInput(request, jail.workspaceRoot);
-      return 'refused' in placed ? placed.refused : checkSearch(placed.input, jail);
+      return checkSearch(request.toolInput, at(request, resolvesAgainstCallCwd));
     }
 
     // No opinion. The surrounding gate asks whoever it was going to ask.
@@ -324,30 +323,10 @@ function strongerRefusal(first: Refusal | null, second: Refusal | null): Refusal
 }
 
 /**
- * `path` placed under the call's working directory when it is relative: the call's `cwd`, else the
- * workspace root. A relative path with neither to stand on is refused, because resolving it against this
- * process's own directory would check a file the call never named.
- */
-function againstCallCwd(path: string, callCwd: string, workspaceRoot: string | null): string | Refusal {
-  if (isAbsolutePath(path)) return path;
-  const base = isAbsolutePath(callCwd)
-    ? callCwd
-    : workspaceRoot !== null && isAbsolutePath(workspaceRoot)
-      ? workspaceRoot
-      : null;
-  if (base === null) {
-    return refusal(
-      'path-not-absolute',
-      `${path} is relative and the call states no absolute working directory to resolve it against`,
-    );
-  }
-  return `${base}/${path}`;
-}
-
-/**
- * Every file a patch call names goes through the jail and the protected set, as a write. The files come
- * from the patch's own header lines (`command`) or from `changes[].path` and `changes[].movePath`. A
- * patch that names no file this host can read is refused: there is nothing to bound.
+ * Every file a patch call names goes through the jail and the protected set, as a write, each placed
+ * where the call runs (`jail` carries the call's directory). The files come from the patch's own header
+ * lines (`command`) or from `changes[].path` and `changes[].movePath`. A patch that names no file this
+ * host can read is refused: there is nothing to bound.
  */
 function checkPatch(request: DecisionRequest, jail: JailOptions): Refusal | null {
   const paths = patchInputPaths(request.toolInput);
@@ -358,8 +337,7 @@ function checkPatch(request: DecisionRequest, jail: JailOptions): Refusal | null
     );
   }
   for (const path of paths) {
-    const placed = againstCallCwd(path, request.cwd, jail.workspaceRoot);
-    const refused = typeof placed === 'string' ? checkPath(placed, jail) : placed;
+    const refused = checkPath(path, jail);
     if (refused !== null) return refused;
   }
   return null;
@@ -393,43 +371,4 @@ export function shellDirectoryOf(toolInput: unknown): string | null {
   if (typeof toolInput !== 'object' || toolInput === null) return null;
   const directory = (toolInput as Record<string, unknown>)['directory'];
   return typeof directory === 'string' && directory.trim() !== '' ? directory : null;
-}
-
-/**
- * A search call's input with a relative `path`, and each relative entry of a `paths` list, placed under
- * where the call runs, as a runtime that resolves them there reads them; an absolute path, a home-relative
- * one or none is left as it is.
- */
-function placedSearchInput(
-  request: DecisionRequest,
-  workspaceRoot: string | null,
-): { readonly input: unknown } | { readonly refused: Refusal } {
-  const input = request.toolInput;
-  if (typeof input !== 'object' || input === null) return { input };
-  const record = input as Record<string, unknown>;
-  const place = (path: unknown): string | Refusal | null => {
-    if (typeof path !== 'string' || path.trim() === '' || path.startsWith('~') || isAbsolutePath(path)) {
-      return null;
-    }
-    return againstCallCwd(path, request.cwd, workspaceRoot);
-  };
-  let placedInput: Record<string, unknown> = record;
-  const path = place(record['path']);
-  if (path !== null) {
-    if (typeof path !== 'string') return { refused: path };
-    placedInput = { ...placedInput, path };
-  }
-  // A list of roots (`paths`) is placed entry by entry, as a single `path` is.
-  const listed = record['paths'];
-  if (Array.isArray(listed)) {
-    const entries: unknown[] = [];
-    for (const entry of listed as unknown[]) {
-      const placed = place(entry);
-      if (placed === null) entries.push(entry);
-      else if (typeof placed !== 'string') return { refused: placed };
-      else entries.push(placed);
-    }
-    placedInput = { ...placedInput, paths: entries };
-  }
-  return { input: placedInput };
 }

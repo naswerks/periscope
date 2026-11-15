@@ -155,7 +155,12 @@ Within the families the credential-path denial is scoped, and the scope is what 
 are jailed to the session's workspace. Reads are not jailed: a read goes anywhere this host's OS user
 can read, the agent's own tool output and installed packages included, and the protected set is what
 stops it. A search is refused when its root (`path`, else the workspace) is at or beneath a protected
-path, and also when a protected path sits beneath its root, because the search would read it. The
+path, and also when a protected path sits beneath its root, because the search would read it. Each
+path a tool names is placed first, where the operating system puts it for a tool running in the call's
+directory, so the file the gate judges is the file the tool opens: on Windows a path with one leading
+separator starts at the drive the call runs on and `C:name` on that drive is beneath the call's
+directory, and on every system `~` is the home directory. A drive-relative path on another drive and
+another user's home (`~name/...`) cannot be placed and are refused `path-unplaceable`. The
 shell scan matches a protected path written literally, through a home-directory form (`~`, `$HOME`,
 `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}` spellings, `%USERPROFILE%`),
 or through a variable of the session's spawn environment whose value is one absolute path, spelled

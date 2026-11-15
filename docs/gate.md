@@ -89,7 +89,15 @@ What refuses locally, and only locally: a write that lands outside every root th
 (`credential-path-denied`), and a git invocation whose verb is not on the allow-list. Reads are not
 jailed: a read goes anywhere the host's OS user can read except the protected set. A search (`Grep`,
 `Glob`) is refused when its root (`path`, else the workspace) is at or beneath a protected path and
-also when a protected path sits beneath its root. The shell scan matches a protected path written
+also when a protected path sits beneath its root. A path a read, a write, a patch or a search names is
+placed before any of this reads it, where the operating system puts it for a tool running in the call's
+directory (`src/gate/placement.ts`): under a call directory spelled the Windows way, a path with one
+leading separator (`\Users\x`, `/Users/x`) starts at that directory's drive or share, and `C:name` on
+the directory's own drive is beneath the directory; under any call directory `~`, `~/x` and `~\x` are
+the home directory when one is known. Under any other call directory a backslash or a drive-shaped name
+is the file name it is written as. Two forms cannot be placed and are refused `path-unplaceable`: a
+drive-relative path on another drive, whose directory no call states, and another user's home
+(`~name/...`). The shell scan matches a protected path written
 literally, through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}`
 spellings or `%USERPROFILE%`, or through a variable of the session's spawn environment whose value is
 one absolute path (`$NAME`, `${NAME}`, `$env:NAME`, `${env:NAME}`, `%NAME%`; PowerShell's and `cmd`'s

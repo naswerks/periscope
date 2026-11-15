@@ -160,6 +160,12 @@ export const REFUSAL_REASONS = [
   //   path-input-missing        a path-taking tool whose input carries no readable path. A call
   //                             whose target cannot be found is not one that can be bounded.
   //   path-unresolvable         normalizing the path failed. Unresolvable is not provably inside.
+  //   path-unplaceable          the path is spelled in a form whose file this host cannot find: a
+  //                             drive-relative path on a drive other than the call's own, whose
+  //                             directory no call states; another user's home (`~name/...`); a device
+  //                             or volume form that maps to no drive path. Every other form is placed
+  //                             where the operating system puts it and checked there, so this names
+  //                             only what is left.
   //   credential-path-denied    the call targets the host's own credential material. The agent runs
   //                             as the same OS user as the host, so file permissions are not a
   //                             boundary against it and this is the only control that is.
@@ -172,6 +178,7 @@ export const REFUSAL_REASONS = [
   //                             a publish can match none of its patterns).
   'path-input-missing',
   'path-unresolvable',
+  'path-unplaceable',
   'credential-path-denied',
   'shell-command-missing',
   'shell-boundary-command',

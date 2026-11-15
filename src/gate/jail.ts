@@ -29,6 +29,7 @@
 import type { Refusal } from '../core/refusal.js';
 import { refusal } from '../core/refusal.js';
 import { isContainedBy, isContainedByIgnoringCase, isAbsolutePath, normalizePath } from '../core/paths.js';
+import { placePath } from './placement.js';
 
 /**
  * Turns a path into its canonical absolute form.
@@ -72,6 +73,19 @@ export interface JailOptions {
    * @internal
    */
   readonly variables?: Readonly<Record<string, string | undefined>>;
+  /**
+   * The directory the call runs in. A path a tool names is placed against it the way the operating
+   * system places it for a tool running there (`placement.ts`): a rooted path at its drive's root, a
+   * drive-relative one beneath it. Absent or not absolute: the workspace root.
+   * @internal
+   */
+  readonly callDirectory?: string | null;
+  /**
+   * Place a plain relative path under the call's directory, rather than leave it for the resolver, which
+   * resolves it against this process's own. Defaults to false.
+   * @internal
+   */
+  readonly placesRelative?: boolean;
 }
 
 /** The tool-input fields that carry a path, in precedence order. First readable one wins. */
@@ -130,6 +144,33 @@ function resolveOrRefuse(
   return { resolved };
 }
 
+/** The directory a call's paths are placed against: the call's own when absolute, else the workspace root. */
+function callDirectoryOf(options: JailOptions): string | null {
+  for (const directory of [options.callDirectory, options.workspaceRoot]) {
+    if (typeof directory === 'string' && directory.trim() !== '' && isAbsolutePath(directory))
+      return directory;
+  }
+  return null;
+}
+
+/**
+ * A path a tool named, placed where the operating system puts it for a tool running in the call's
+ * directory and then resolved; or why neither could be done. The checks read the result, so the file
+ * they judge is the file the tool opens.
+ */
+function placeAndResolve(
+  candidate: string,
+  options: JailOptions,
+): { resolved: string } | { refusal: Refusal } {
+  const placed = placePath(candidate, {
+    directory: callDirectoryOf(options),
+    home: options.home,
+    placesRelative: options.placesRelative ?? false,
+  });
+  if (typeof placed !== 'string') return { refusal: placed };
+  return resolveOrRefuse(placed, options.resolve);
+}
+
 /**
  * Is this resolved path at or beneath one of the protected paths?
  *
@@ -167,7 +208,7 @@ const MISSING_PATH_DETAIL =
 export function checkPath(candidate: string | null, options: JailOptions): Refusal | null {
   if (candidate === null) return refusal('path-input-missing', MISSING_PATH_DETAIL);
 
-  const outcome = resolveOrRefuse(candidate, options.resolve);
+  const outcome = placeAndResolve(candidate, options);
   if ('refusal' in outcome) return outcome.refusal;
   const { resolved } = outcome;
 
@@ -219,7 +260,7 @@ function furtherRoots(options: JailOptions): string[] {
  */
 export function checkReadPath(candidate: string | null, options: JailOptions): Refusal | null {
   if (candidate === null) return refusal('path-input-missing', MISSING_PATH_DETAIL);
-  const outcome = resolveOrRefuse(candidate, options.resolve);
+  const outcome = placeAndResolve(candidate, options);
   if ('refusal' in outcome) return outcome.refusal;
   return credentialRefusal(outcome.resolved, options.protectedPaths);
 }
@@ -276,7 +317,7 @@ export function checkSearch(toolInput: unknown, options: JailOptions): Refusal |
   const roots = searchRoots(toolInput, options);
   if (roots === null) return null;
   for (const root of roots) {
-    const outcome = resolveOrRefuse(root, options.resolve);
+    const outcome = placeAndResolve(root, options);
     if ('refusal' in outcome) return outcome.refusal;
     const { resolved } = outcome;
     const covering = credentialRefusal(resolved, options.protectedPaths);
