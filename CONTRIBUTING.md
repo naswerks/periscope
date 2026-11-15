@@ -110,9 +110,11 @@ npm run build && PERISCOPE_LIVE=1 node --test --test-name-pattern="model catalog
 ```
 
 `src/host/further-writes.live.test.ts` holds that a Claude session's writes outside its own directory,
-under its temp folder and in its worktree of a further repository, land where the gate allows them.
-Claude is handed neither place as a directory, so only a real turn shows the gate's allow is enough;
-run it before tagging a release that moves where a session may write:
+under its temp folder and in its worktree of a further repository, land where the gate allows them,
+written by its Write tool and no shell command (the session's own tool calls say so). Its control
+withholds the further repository from the session: that write is refused as outside the session's
+roots, and the same check fails. Claude is handed neither place as a directory, so only a real turn
+shows the gate's allow is enough; run it before tagging a release that moves where a session may write:
 
 ```sh
 npm run build && PERISCOPE_LIVE=1 node --test dist/host/further-writes.live.test.js
