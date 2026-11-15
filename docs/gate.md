@@ -722,6 +722,15 @@ every request they raise.
   request still waiting, once the open is proven. A resumed session also reads the sessions the
   database holds and takes each whose line of parents reaches it as its own, so their commands run
   with the shell's environment, as a subagent started now does.
+- **No request is lost to its size.** This host reads a line of the host process's of at most 8 MiB and
+  drops a longer one whole, and an edit's request carries the whole text it writes, so a very large
+  write would have asked in a line that was dropped: nothing decided, nothing named, the call waiting
+  for good. The host process sends no such line. A line over half the bound has its longest texts cut,
+  each cut marked ` [cut: longer than one line to this host carries]`, until it fits; an id is never
+  that long, so the request arrives and is decided, on an input that says it was cut. A held `shell`
+  call is the exception: its line is what the host's own gate reads, so one too long to send whole is
+  refused by the hook, `rpc-line-too-large`, and never runs. A line this host does drop is named on the
+  session, `rpc-line-too-large`, once, and in the host's log each time.
 - **An interrupt reaches the subagents.** A subagent runs in a session of its own, and the server does
   not interrupt it with the session that started it: measured on the pinned SDK, an interrupt of the
   session left a subagent waiting on its decision untouched. So an interrupt goes to the session and to

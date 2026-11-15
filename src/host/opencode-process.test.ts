@@ -966,6 +966,22 @@ test("a resumed session takes the sessions an earlier process left as its own: e
   }
 });
 
+test("a line of the host process's that was dropped is named on the session, once, and in the host's log each time", async () => {
+  const run = await started();
+  try {
+    await until(() => opened(run), 'the open');
+    run.record.dropLine('an inbound line passed 8388608 bytes and was dropped whole');
+    run.record.dropLine('an inbound line passed 8388608 bytes and was dropped whole');
+    assert.deepEqual(
+      run.raised.map((one) => one.name),
+      ['rpc-line-too-large'],
+    );
+    assert.equal(run.degrades.filter((detail) => /^rpc-line-too-large: /.test(detail)).length, 2);
+  } finally {
+    await closed(run);
+  }
+});
+
 test("the pre-call gate missing from the server's plugins is named at the open, and the session opens", async () => {
   const run = await started({
     fake: { plugins: [{ id: 'opencode.tool.shell', source: { type: 'builtin' } }] },

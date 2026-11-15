@@ -4,7 +4,13 @@ import { PassThrough } from 'node:stream';
 
 import { ok, refuse } from '../core/result.js';
 import { waitFor } from '../test-support/ws-peer.js';
-import { OPENCODE_HOST_CALLS, serveOpencodeHost } from './opencode-host.js';
+import {
+  OPENCODE_HOST_CALLS,
+  OPENCODE_HOST_LINE_BYTES,
+  OPENCODE_LINE_CUT,
+  fitLine,
+  serveOpencodeHost,
+} from './opencode-host.js';
 import type {
   OpencodeCreateOptions,
   OpencodeEvent,
@@ -241,6 +247,61 @@ test('a call still held when this host goes away ends refused, and one held afte
     Promise.resolve(hook({ tool: 'shell', sessionID: 'ses_1', id: 'call_2', input: {} })),
     /the host that decides this call is gone/,
   );
+});
+
+test('an event too long for one line still arrives: its longest texts are cut and marked, and what names it is whole', async () => {
+  const server = fakeServer();
+  const run = served(server);
+  await run.answerTo(run.open());
+  await waitFor(() => server.calls.some((call) => call.member === 'event.subscribe'), 'the subscription');
+  const patch = 'x'.repeat(9 * 1024 * 1024);
+  server.push({
+    id: 'evt_big',
+    type: 'permission.asked',
+    data: { id: 'per_1', sessionID: 'ses_1', action: 'edit', resources: ['a.ts'], metadata: { patch } },
+  });
+  server.push({ id: 'evt_small', type: 'session.text.ended', data: { sessionID: 'ses_1', text: 'done' } });
+  const events = (): Record<string, unknown>[] =>
+    run.lines
+      .filter((line) => line['method'] === 'event')
+      .map((line) => (line['params'] as { event: Record<string, unknown> }).event);
+  await waitFor(() => events().length === 2, 'both events');
+  const [big, small] = events();
+  const data = big?.['data'] as { id: string; sessionID: string; metadata: { patch: string } };
+  assert.equal(big?.['id'], 'evt_big');
+  assert.equal(data.id, 'per_1', 'what names the request was cut');
+  assert.equal(data.sessionID, 'ses_1');
+  assert.ok(
+    data.metadata.patch.length < patch.length,
+    'the text was sent whole, in a line this host would drop',
+  );
+  assert.ok(data.metadata.patch.endsWith(OPENCODE_LINE_CUT), 'the cut is not marked');
+  assert.ok(data.metadata.patch.startsWith('xxxx'));
+  assert.ok(Buffer.byteLength(JSON.stringify(big), 'utf8') <= OPENCODE_HOST_LINE_BYTES);
+  // Control: an event that fits is sent as it is.
+  assert.deepEqual(small, {
+    id: 'evt_small',
+    type: 'session.text.ended',
+    data: { sessionID: 'ses_1', text: 'done' },
+  });
+  assert.equal(fitLine({ a: 'short', b: [1, 'two'] }), '{"a":"short","b":[1,"two"]}');
+  run.input.end();
+  await run.done;
+});
+
+test('a held call whose input is too long to send whole is refused, by name, and nothing of it is sent', async () => {
+  const server = fakeServer();
+  const run = served(server);
+  await run.answerTo(run.open(['shell']));
+  const hook = await preCallHookOf(run.created[0]);
+  const line = `echo ${'x'.repeat(5 * 1024 * 1024)}`;
+  await assert.rejects(
+    Promise.resolve(hook({ tool: 'shell', sessionID: 'ses_1', id: 'call_long', input: { command: line } })),
+    /rpc-line-too-large: this call's input is \d+ bytes, more than this host reads in one line/,
+  );
+  assert.equal(run.lines.filter((one) => one['method'] === 'gate').length, 0);
+  run.input.end();
+  await run.done;
 });
 
 test('control: with no tool named to be held, no call waits', async () => {

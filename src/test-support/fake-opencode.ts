@@ -117,6 +117,8 @@ export interface FakeOpencodeRecord {
     resources?: readonly string[];
     callId?: string;
   }): Promise<{ decision: string; message?: string }>;
+  /** Have the transport drop a line of the host process's, as one too long to read is dropped. */
+  dropLine(detail: string): void;
   /** Exit the host process, as if it died. */
   exit(code: number): void;
   /** End the event stream while the process lives. */
@@ -198,6 +200,9 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
           source: { type: 'tool', messageID: 'msg_1', id: request.callId ?? `call_of_${request.id}` },
         });
       });
+    },
+    dropLine(detail) {
+      live?.onRefusal?.({ reason: 'rpc-line-too-large', detail });
     },
     exit(code) {
       live?.onExit({ code, signal: null, error: null });

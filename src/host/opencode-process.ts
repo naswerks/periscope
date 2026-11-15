@@ -607,6 +607,12 @@ export function startOpencodeProcess(
         if (!closed) void shutDown();
       },
       ...(request.onStderr === null ? {} : { onStderr: (line: string) => request.onStderr?.(`${line}\n`) }),
+      // A line of the host process's that this host dropped is something the session lost: it is said on
+      // the session's state lane, once per reason, as well as in the host's log.
+      onRefusal: (refusal) => {
+        degrade(`${refusal.reason}: ${refusal.detail}`);
+        gate.raise(refusal.reason, refusal.detail, 'transport');
+      },
       ...(runtime.killTree === undefined ? {} : { killTree: runtime.killTree }),
       closeGraceMs: grace,
     });

@@ -65,6 +65,12 @@ frame it sends decodes unchanged.
   whole line; refused, the call fails with the refusal's words and never runs. A call allowed there is
   asked about once: the requests it then raises are held to the host's own gate alone. The read-back
   admits that one plugin, by its id and its source.
+- Fixed: an opencode request too large for one line is no longer lost. A line over 8 MiB from the host
+  process was dropped whole and named nowhere, and an edit's request carries the whole text it writes,
+  so a large write could wait unseen for good. The host process now cuts the longest texts of a line
+  that would be too long, marking each cut, so the request arrives and is decided; a held `shell` call
+  whose line is too long to send whole is refused by name; and a line that is dropped is named
+  `rpc-line-too-large` on the session.
 - Fixed: an opencode interrupt reaches the session's subagents. It reached the session's own run alone,
   and a subagent with a run under way went on, its pending decision with it. An interrupt now goes to
   every subagent session with a run under way and ends the decisions the session's sessions wait on.

@@ -22,11 +22,20 @@
  * it waits as long as this host takes to decide, and ends refused when this process's stdin ends. A call of
  * any other tool is not held: the hook sends a `began` notification naming it and lets it go on.
  *
+ * It sends no line this host would drop. This host reads a line of at most `MAX_RPC_LINE_BYTES` and drops a
+ * longer one whole, so an event that carried a very large text (a whole file in an edit's request) would
+ * never arrive, and the call waiting on its answer would wait for good. A line over half that bound has its
+ * longest texts cut, and each cut marked, until it fits (`fitLine`); an id is never that long, so the event
+ * and what it asks still arrive. A held call is the one exception: its input is what this host decides on,
+ * and a shell line too long to be sent whole is one its checks could not read, so that call is refused here
+ * with the reason and nothing is cut.
+ *
  * It writes nothing to its stdout but the protocol: whatever the SDK would log goes to stderr.
  */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { cutText } from '../control/fact-text.js';
 import type { JsonObject, JsonValue } from '../control/frames.js';
 import type { Result } from '../core/result.js';
 import type {
@@ -38,7 +47,13 @@ import type {
 } from './opencode-sdk.js';
 import { OPENCODE_GATE_PLUGIN } from './opencode-home.js';
 import { loadOpencodeSdk, readOpencodeInstall } from './opencode-sdk.js';
-import { classifyRpc, JsonLineDecoder, RPC_INTERNAL_ERROR, RPC_METHOD_NOT_FOUND } from './stdio-rpc.js';
+import {
+  classifyRpc,
+  JsonLineDecoder,
+  MAX_RPC_LINE_BYTES,
+  RPC_INTERNAL_ERROR,
+  RPC_METHOD_NOT_FOUND,
+} from './stdio-rpc.js';
 
 /** The server's calls this process answers, by name, and how each reaches the server. */
 export const OPENCODE_HOST_CALLS: Readonly<
@@ -64,6 +79,39 @@ export const OPENCODE_HOST_CALLS: Readonly<
   'config.get': (host, input) => host.config.get(input),
   'model.list': (host, input) => host.model.list(input),
 };
+
+/** The most bytes a line this process sends takes: half of what this host reads in one line. */
+export const OPENCODE_HOST_LINE_BYTES = MAX_RPC_LINE_BYTES / 2;
+
+/** What a text cut to fit a line ends with. */
+export const OPENCODE_LINE_CUT = ' [cut: longer than one line to this host carries]';
+
+/** `value` with every text longer than `length` cut to it and marked; everything else as it was. */
+function withTextsCut(value: JsonValue, length: number): JsonValue {
+  if (typeof value === 'string') {
+    return value.length > length ? `${cutText(value, length)}${OPENCODE_LINE_CUT}` : value;
+  }
+  if (Array.isArray(value)) return value.map((one) => withTextsCut(one, length));
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, one]) => [key, withTextsCut(one, length)]));
+  }
+  return value;
+}
+
+/**
+ * `message` as one line within `OPENCODE_HOST_LINE_BYTES`: as it is where it fits, else with its texts cut
+ * to the longest of a falling series of lengths at which it does.
+ */
+export function fitLine(message: JsonObject, budget: number = OPENCODE_HOST_LINE_BYTES): string {
+  const whole = JSON.stringify(message);
+  if (Buffer.byteLength(whole, 'utf8') <= budget) return whole;
+  let cut = whole;
+  for (let length = 1_048_576; length >= 64; length = Math.floor(length / 4)) {
+    cut = JSON.stringify(withTextsCut(message, length));
+    if (Buffer.byteLength(cut, 'utf8') <= budget) break;
+  }
+  return cut;
+}
 
 /** What this host answers a call held at the pre-call hook. */
 interface GateAnswer {
@@ -116,7 +164,7 @@ export function serveOpencodeHost(io: OpencodeHostIo): Promise<void> {
   const held = new Map<string, (answer: GateAnswer) => void>();
   let gates = 0;
 
-  const send = (message: JsonObject): void => io.write(`${JSON.stringify(message)}\n`);
+  const send = (message: JsonObject): void => io.write(`${fitLine(message)}\n`);
   const answer = (id: string | number, result: JsonValue): void => send({ jsonrpc: '2.0', id, result });
   const fail = (id: string | number, code: number, message: string): void =>
     send({ jsonrpc: '2.0', id, error: { code, message } });
@@ -126,8 +174,7 @@ export function serveOpencodeHost(io: OpencodeHostIo): Promise<void> {
       if (ended) return resolve(GATE_GONE);
       gates += 1;
       const id = `gate-${gates}`;
-      held.set(id, resolve);
-      send({
+      const request: JsonObject = {
         jsonrpc: '2.0',
         id,
         method: 'gate',
@@ -137,7 +184,17 @@ export function serveOpencodeHost(io: OpencodeHostIo): Promise<void> {
           callID: event.id,
           input: asJson(event.input),
         },
-      });
+      };
+      // What this host decides on is sent whole or not at all: an input cut to fit is not the call's own.
+      const bytes = Buffer.byteLength(JSON.stringify(request), 'utf8');
+      if (bytes > OPENCODE_HOST_LINE_BYTES) {
+        return resolve({
+          allow: false,
+          message: `rpc-line-too-large: this call's input is ${bytes} bytes, more than this host reads in one line, so the host could not read what it would run and the call did not run`,
+        });
+      }
+      held.set(id, resolve);
+      send(request);
     });
 
   /** This host's answer to a held call, read loosely: anything but a stated allow refuses. */
