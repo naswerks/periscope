@@ -92,8 +92,8 @@ function tasks(messages: readonly QwenMessage[]): Extract<AgentFact, { kind: 'ta
     .filter((fact): fact is Extract<AgentFact, { kind: 'tasks' }> => fact.kind === 'tasks');
 }
 
-const system = (subtype: string, data: JsonObject): QwenMessage =>
-  message({ type: 'system', subtype, uuid: `${subtype}-${String(data['task_id'])}`, session_id: 's1', data });
+const system = (subtype: string, data: JsonObject & { readonly task_id: string }): QwenMessage =>
+  message({ type: 'system', subtype, uuid: `${subtype}-${data.task_id}`, session_id: 's1', data });
 
 test('an agent task names the call that started it and, settled, the counts the CLI reported for it', () => {
   const lifted = tasks([

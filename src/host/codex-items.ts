@@ -173,7 +173,7 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
       return [];
     }
     if (message.kind !== 'notification') return [];
-    return this.#fromNotification(message.method, message.params as Fields);
+    return this.#fromNotification(message.method, message.params);
   }
 
   /** The items one notification fills, then those of every thread it names a spawn for. */
