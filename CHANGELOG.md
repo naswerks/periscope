@@ -197,6 +197,22 @@ frame it sends decodes unchanged.
   hold a hook, never counted as none. A session's home also holds the runtime's cache directory on
   every platform (`COPILOT_CACHE_HOME`), so off Windows the runtime's caches no longer stay in the
   operator's own.
+- Fixed, in a Copilot session:
+  - a degrade past the 4096 a session's state lane keeps reaches the host's log, each time it occurs;
+    it was dropped before anything heard of it;
+  - a call is decided on the arguments its pre-tool hook announced, and a permission request that
+    carries others is named `gate-hook-missing` (the call is still decided);
+  - an MCP call's item is named `mcp__server__tool` from the server and tool its own start event
+    states, the first call to a server included;
+  - a sub-agent's events no longer move the session's registers: its model change, mode change, skill
+    and server lists leave the session's receipt alone, and its cache reads are reported on its own
+    usage samples, not the session's;
+  - a model provider named in more than 64 characters no longer makes that step's spend unsendable;
+  - a command's exit code is stated when it is negative;
+  - an SDK import that failed is tried again by the next session, without a restart;
+  - a closing session's kept state replaces the older copy without deleting it first, so a move that
+    fails leaves the older copy for a resume;
+  - what the runtime writes to its standard error reaches the session's `onStderr` lane.
 - Fixed: a Copilot decision is never held past `decisionTimeoutMs`. Learning an attached server's tool
   list, which a call's `mcp__server__tool` spelling is read from, ran before the decision's deadline
   began and could take 30 seconds a server. The tools are now learned at the open from the runtime's

@@ -448,6 +448,25 @@ export function copilotRuntimePid(client: CopilotClient): number | null {
 }
 
 /**
+ * Be handed what the runtime process writes to its standard error, as it writes it, read from the same
+ * member as its pid. False when the member holds no stream to read. The SDK reads the same stream for its
+ * own error messages; a second reader takes nothing from the first.
+ */
+export function onCopilotRuntimeStderr(client: CopilotClient, listener: (text: string) => void): boolean {
+  const stream = (client as unknown as { cliProcess?: { stderr?: { on?: unknown } | null } | null })
+    .cliProcess?.stderr;
+  if (typeof stream?.on !== 'function') return false;
+  (stream as { on(event: 'data', handler: (chunk: unknown) => void): void }).on('data', (chunk) => {
+    try {
+      listener(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+    } catch {
+      // A reader that throws must not reach the stream the SDK reads too.
+    }
+  });
+  return true;
+}
+
+/**
  * Be told once when the runtime process exits, read from the same member as its pid. False when the member
  * is not there to watch: the session then learns of an exit only from a call that fails.
  */

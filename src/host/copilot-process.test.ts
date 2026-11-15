@@ -669,6 +669,22 @@ test('a resume copies the kept state into the fresh home first; a fork forks it 
   await rm(missing.base, { recursive: true, force: true });
 });
 
+test("what the runtime writes to its standard error reaches the session's own lane, as it was written", async () => {
+  const lines: string[] = [];
+  const run = await started({ request: { onStderr: (data) => lines.push(data) } });
+  await waitFor(() => opened(run), 'the open');
+  run.record.writeStderr('a warning of the runtime\n');
+  run.record.writeStderr('and a second, split');
+  assert.deepEqual(lines, ['a warning of the runtime\n', 'and a second, split']);
+  await closed(run);
+  // Control: a session that asks for no lane reads none, and a write changes nothing.
+  const quiet = await started();
+  await waitFor(() => opened(quiet), 'the open');
+  quiet.record.writeStderr('unread\n');
+  await closed(quiet);
+  assert.equal(lines.length, 2);
+});
+
 test("the open names the model the session's own start named, never one a sub-agent's start named", async () => {
   const run = await started({
     fake: { selectedModel: 'the-sessions-model', subAgentStartModel: 'a-sub-agents' },

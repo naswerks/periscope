@@ -111,6 +111,8 @@ export interface FakeCopilotRecord {
   readonly discoveries: { excludeHostHooks?: boolean }[];
   /** Exit the runtime process, as if it died. */
   exit(code: number): void;
+  /** Have the runtime process write to its standard error. */
+  writeStderr(text: string): void;
   /** Send one event to the live session, as the runtime would. */
   emit(type: string, data: Record<string, unknown>, envelope?: Partial<CopilotEvent>): void;
 }
@@ -121,6 +123,7 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
   record: FakeCopilotRecord;
 } {
   const exitListeners: ((code: number) => void)[] = [];
+  const stderrReaders: ((chunk: unknown) => void)[] = [];
   let live: { config: CopilotSessionConfig; id: string } | null = null;
   let events = 0;
   let calls = 0;
@@ -160,6 +163,9 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
     discoveries: [],
     exit(code) {
       for (const listener of exitListeners.splice(0)) listener(code);
+    },
+    writeStderr(text) {
+      for (const reader of stderrReaders) reader(Buffer.from(text, 'utf8'));
     },
     emit(type, data, envelope) {
       if (live !== null) emitTo(live.config, type, data, envelope);
@@ -390,6 +396,8 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
       /** Null while the process runs, as a child process's is; its code once it has exited. */
       exitCode: number | null;
       once(event: 'exit', handler: (code: unknown, signal: unknown) => void): void;
+      /** The process's standard error, which hands each reader the bytes written, as a stream does. */
+      stderr: { on(event: 'data', handler: (chunk: unknown) => void): void };
     } | null;
     readonly rpc = {
       sessions: {
@@ -430,6 +438,7 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
               once: (_event, handler) => {
                 exitListeners.push((code) => handler(code, null));
               },
+              stderr: { on: (_event, handler) => void stderrReaders.push(handler) },
             };
       const child = this.cliProcess;
       if (child !== null) {

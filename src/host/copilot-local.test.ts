@@ -55,7 +55,12 @@ import type {
   CopilotSession,
   CopilotSessionStartInput,
 } from './copilot-sdk.js';
-import { copilotRuntimePid, loadCopilotSdk, readCopilotInstall } from './copilot-sdk.js';
+import {
+  copilotRuntimePid,
+  loadCopilotSdk,
+  onCopilotRuntimeStderr,
+  readCopilotInstall,
+} from './copilot-sdk.js';
 import type { CopilotMessage } from './copilot-wire.js';
 import { nodePathResolver } from './paths.js';
 
@@ -956,6 +961,11 @@ test(
       const runtime = copilotRuntimePid(client);
       assert.ok(runtime !== null, "the SDK's runtime process member moved; the close could not end the tree");
       assert.equal(alive(runtime), true, 'control: the runtime reads as alive while the session is open');
+      assert.equal(
+        onCopilotRuntimeStderr(client, () => undefined),
+        true,
+        "the SDK's runtime process member holds no standard error to read; the session's lane would stay empty",
+      );
       // A command the shell started and still waits on: a grandchild of the runtime.
       const command = await startedIn(
         session,

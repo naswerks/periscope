@@ -89,6 +89,7 @@ import {
   copilotRuntimePid,
   loadCopilotSdk,
   onCopilotRuntimeExit,
+  onCopilotRuntimeStderr,
   readCopilotInstall,
 } from './copilot-sdk.js';
 import type { CopilotMessage } from './copilot-wire.js';
@@ -485,6 +486,9 @@ export function startCopilotProcess(
       if (!closed && failure === null) failure = new Error(`the Copilot runtime exited (${detail})`);
       if (!closed) void shutDown();
     });
+    // What the runtime writes to its standard error reaches the session's own lane, as every runtime's does.
+    const stderr = request.onStderr;
+    if (stderr !== null) onCopilotRuntimeStderr(started, (text) => stderr(text));
     if (closed) return;
     const policy = copilotPolicyDetail(
       mergeCopilotPolicyLooks(
