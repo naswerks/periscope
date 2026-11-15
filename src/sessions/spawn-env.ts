@@ -171,6 +171,9 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'AZURE_OPENAI_*',
   'AWS_*',
   'CLOUDFLARE_*',
+  // Copilot's own variables: its home, the runtime it would start in place of the pinned one, its
+  // sign-in, its model route and the rest of its process settings.
+  'COPILOT_*',
 ];
 
 /**

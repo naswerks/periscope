@@ -311,6 +311,33 @@ const TRANSITION_PI_FOREIGN_EXTENSION: SessionTransition = {
   },
 };
 
+/** Copilot's first ready: its open proven, at its tier, with a machine-wide policy hook known at the open. */
+const TRANSITION_READY_COPILOT: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'copilot-session-a',
+  cause: {
+    kind: 'agent-event',
+    event: 'copilot:session.start',
+    detail:
+      "the runtime's posture was read back, and a probe call reached this host through the pre-tool hook and the permission request",
+  },
+  controlTier: { level: 'intercepted-with-residual', degrades: ['gate-hook-foreign'] },
+};
+
+/** A Copilot session's gate naming a call that ran with no decision from this host, on the state lane. */
+const TRANSITION_COPILOT_HOOK_MISSING: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'copilot-session-a',
+  seq: 3,
+  from: 'working',
+  to: 'working',
+  cause: {
+    kind: 'refusal',
+    event: 'gate-hook-missing',
+    detail: 'Copilot ran call call_1 (view) with no decision from this host for it',
+  },
+};
+
 /** An open refused before any process existed, for one of the runtime and endpoint reasons. */
 const openRefused = (event: RefusalReason, detail: string): SessionTransition => ({
   ...TRANSITION_OPEN_REFUSED,
@@ -1046,6 +1073,40 @@ const AUTHORED = {
             'pi-extension-not-active',
             "this host's extension did not say hello over its channel within 30000ms, so pi may be running with no gate",
           ),
+        ),
+      ),
+    },
+    // Copilot: its first ready at its tier with the degrade known at open, a degrade its gate names, the
+    // open refused when the runtime is not in the posture this host started it in, and a native event.
+    {
+      name: 'session_update.state-transition-copilot-ready',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_COPILOT)),
+    },
+    {
+      name: 'session_update.state-transition-copilot-hook-missing',
+      frame: session(stateTransitionUpdate(TRANSITION_COPILOT_HOOK_MISSING)),
+    },
+    {
+      name: 'session_update.open-refused-copilot-gate-not-active',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused('copilot-gate-not-active', "the runtime's permission mode is allow-all, not manual"),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.agent-message-copilot',
+      frame: session(
+        agentMessageUpdate(
+          {
+            id: 'event-1',
+            parentId: null,
+            timestamp: '2000-01-01T00:00:00.000Z',
+            type: 'tool.execution_start',
+            data: { toolCallId: 'call_1', toolName: 'view', arguments: { path: 'README.md' } },
+          },
+          AT,
+          'copilot',
         ),
       ),
     },

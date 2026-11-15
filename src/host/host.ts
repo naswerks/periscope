@@ -124,10 +124,26 @@ import type { PiRuntimeConfig } from './pi-process.js';
 import type { PiRuntimeRead } from './pi-runtime.js';
 import { PI_MESSAGE_BINDING, piNativeRuntime, unavailablePiEntry } from './pi-runtime.js';
 import type { PiMessage } from './pi-wire.js';
+import { copilotEndpointEnv, copilotEndpointRoutes } from './copilot-endpoints.js';
+import { CopilotFactLift } from './copilot-facts.js';
+import { copilotDeadlineOrderRefusal, createCopilotSessionGate } from './copilot-gate.js';
+import { CopilotItemFill } from './copilot-items.js';
+import { copilotMcpServers } from './copilot-mcp.js';
+import { copilotSkillDirectories } from './copilot-pack.js';
+import type { CopilotRuntimeConfig } from './copilot-process.js';
+import type { CopilotRuntimeRead } from './copilot-runtime.js';
+import { COPILOT_MESSAGE_BINDING, copilotNativeRuntime, unavailableCopilotEntry } from './copilot-runtime.js';
+import type { CopilotMessage } from './copilot-wire.js';
 import type { Decider } from '../gate/decision.js';
 import type { LocalGate } from '../gate/local.js';
 import type { ToolFamilies } from '../gate/local.js';
-import { CODEX_TOOL_FAMILIES, PI_TOOL_FAMILIES, QWEN_TOOL_FAMILIES, localGate } from '../gate/local.js';
+import {
+  CODEX_TOOL_FAMILIES,
+  COPILOT_TOOL_FAMILIES,
+  PI_TOOL_FAMILIES,
+  QWEN_TOOL_FAMILIES,
+  localGate,
+} from '../gate/local.js';
 import type { GateOutcome } from '../gate/outcome.js';
 import { recordGateOutcome } from '../gate/outcome.js';
 import {
@@ -146,6 +162,7 @@ import { factLiftFor } from '../sessions/fact-lift.js';
 import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import {
   CODEX_RUNTIME,
+  COPILOT_RUNTIME,
   PI_RUNTIME,
   QWEN_RUNTIME,
   agentSkillsFor,
@@ -395,6 +412,9 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   }
   if (runtime === PI_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
     return composePiSession(options, machine, observer, clock);
+  }
+  if (runtime === COPILOT_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
+    return composeCopilotSession(options, machine, observer, clock);
   }
 
   // The conversation items: read from the session's messages, with the prompt its hook reports and the
@@ -733,6 +753,88 @@ function composePiSession(
 }
 
 /**
+ * `composeSession` for a session on Copilot: no SDK hooks, Copilot's own forwarding, and the session's gate:
+ * the runtime's pre-tool hook answers `ask` for every call, and the permission request that raises asks the
+ * gate. The gate's decision is the one a Claude call gets: the same local gate, decider, deadlines and
+ * outcome record.
+ */
+function composeCopilotSession(
+  options: ComposeSessionOptions,
+  machine: SessionStateMachine,
+  observer: SessionObserver,
+  clock: Clock,
+): Result<ComposedSession> {
+  const decisionTimeoutMs = options.gate?.decisionTimeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS;
+  const inverted = copilotDeadlineOrderRefusal(decisionTimeoutMs);
+  if (inverted !== null) return refuse<ComposedSession>('gate-deadlines-inverted', inverted);
+
+  // The items name each tool as the gate spells it, so the gate is read once it exists.
+  let spell: (name: string) => string = (name) => name;
+  // A sub-agent's event fills items only on a link that carries an item's parent.
+  const items = new CopilotItemFill(options.sessionKey, {
+    spawnedItems: () => itemParentsAtLinkVersion(options.linkVersion?.() ?? null),
+    toolName: (name) => spell(name),
+  });
+  const gate = createCopilotSessionGate({
+    sessionKey: options.sessionKey,
+    cwd: options.cwd,
+    decide: options.decide,
+    ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+    decisionTimeoutMs,
+    holdAfterMs: options.gate?.holdAfterMs ?? DEFAULT_HOLD_AFTER_MS,
+    servers: Object.keys(options.request?.mcpServers ?? {}),
+    onOutcome: (outcome) => {
+      recordGateOutcome(machine, outcome);
+      if (outcome.kind === 'deny' || outcome.kind === 'refused' || outcome.kind === 'expired') {
+        items.gateBlocked(outcome.request.toolUseId);
+      }
+      options.onOutcome?.(outcome);
+    },
+    // A degrade is recorded on the session's own machine, so it rides the wire as the session's state,
+    // and reaches the host's log beside it.
+    onDegrade: (name, detail) => {
+      observer.refused({ kind: 'refusal', event: name, detail });
+      options.onRefusal?.(refusal(name, detail));
+    },
+    onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
+    ...spawnedWithOf(options),
+  });
+  spell = (name) => gate.toolName(name);
+
+  const created = options.registry.create({
+    ...(options.request ?? {}),
+    cwd: options.cwd,
+    nativeGate: gate,
+    ...spawnedWithOf(options),
+  });
+  if (!created.ok) return refuse<ComposedSession>(created.refusal.reason, created.refusal.detail);
+  // The registry started this session on Copilot's own runtime, so its messages are Copilot's.
+  const session = created.value as unknown as HostedSession<CopilotMessage>;
+  // The session's plugin directories as the runtime takes them: their skills by name, and the directories
+  // it could not take, reported in the receipt.
+  const skills = copilotSkillDirectories((options.request?.plugins ?? []).map((plugin) => plugin.path));
+  const lift = new CopilotFactLift({
+    undeliveredPlugins: skills.problems,
+    handedOverSkills: qwenHandedOverSkills(skills.directories),
+  });
+  const detach = forwardNativeSession(
+    {
+      sessionKey: options.sessionKey,
+      session,
+      observer,
+      sink: options.sink,
+      clock,
+      ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
+      lift,
+      items,
+    },
+    COPILOT_MESSAGE_BINDING,
+  );
+  observer.created(`a session was requested in ${options.cwd}`);
+  return ok({ sessionKey: options.sessionKey, session: created.value, machine, observer, detach });
+}
+
+/**
  * The `where` for a directory nobody has read git facts for.
  *
  * Stated rather than left null: a transition whose `where` is absent cannot be told apart from one
@@ -1037,6 +1139,16 @@ export interface PeriscopeHostOptions {
    * @internal
    */
   readonly pi?: PeriscopePiOptions;
+  /**
+   * Copilot, offered beside Claude: how a Copilot session's runtime is started through the operator's SDK
+   * install, and the read at start that decides its entry in the hello (`readCopilotRuntime`). The host
+   * builds its registry with Copilot's own runtime when it builds one; an embedder passing its own
+   * `registry` gives it the runtime itself. Omitted, the hello does not list Copilot and a session naming
+   * `copilot` is refused `runtime-unavailable`. The daemon composes it from its config keys.
+   *
+   * @internal
+   */
+  readonly copilot?: PeriscopeCopilotOptions;
   readonly registry?: SessionRegistry;
   /** How the link is built. Defaults to the real `ControllerLink`. See `HostLink`. */
   readonly link?: (handlers: LinkHandlers) => HostLink;
@@ -1083,6 +1195,18 @@ export interface PeriscopePiOptions {
   readonly runtime: PiRuntimeConfig;
   /** The read at start; the binary composes `readPiRuntime` over the same CLI and base home. */
   readonly read: () => Promise<PiRuntimeRead>;
+}
+
+/**
+ * Copilot, as a host offers it.
+ *
+ * @internal
+ */
+export interface PeriscopeCopilotOptions {
+  /** The SDK install, the base home and the seams a session's runtime starts with. */
+  readonly runtime: CopilotRuntimeConfig;
+  /** The read at start; the binary composes `readCopilotRuntime` over the same install and base home. */
+  readonly read: () => Promise<CopilotRuntimeRead>;
 }
 
 /** What a host reports. Data rather than log lines, so an embedder decides the format. */
@@ -1312,6 +1436,8 @@ export class PeriscopeHost {
   #qwenEntry: HostAgentEntry | undefined;
   /** pi's entry as its read at start left it; undefined on a host that does not offer pi. */
   #piEntry: HostAgentEntry | undefined;
+  /** Copilot's entry as its read at start left it; undefined on a host that does not offer Copilot. */
+  #copilotEntry: HostAgentEntry | undefined;
   /**
    * The entries the hello lists after Claude's, fitted to the runtimes list's bound with Claude's
    * first: an entry that would push the list past it rides with no models, so one runtime's catalog
@@ -1361,7 +1487,10 @@ export class PeriscopeHost {
         homeDir: options.homeDir ?? '',
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
-        ...(options.codex === undefined && options.qwen === undefined && options.pi === undefined
+        ...(options.codex === undefined &&
+        options.qwen === undefined &&
+        options.pi === undefined &&
+        options.copilot === undefined
           ? {}
           : {
               runtimes: {
@@ -1387,6 +1516,14 @@ export class PeriscopeHost {
                       [PI_RUNTIME]: piNativeRuntime({
                         ...options.pi.runtime,
                         endpoints: piEndpointRoutes(options.endpoints ?? []),
+                      }),
+                    }),
+                ...(options.copilot === undefined
+                  ? {}
+                  : {
+                      [COPILOT_RUNTIME]: copilotNativeRuntime({
+                        ...options.copilot.runtime,
+                        endpoints: copilotEndpointRoutes(options.endpoints ?? []),
                       }),
                     }),
               },
@@ -1456,12 +1593,14 @@ export class PeriscopeHost {
     const readCodex = this.#options.codex?.read;
     const readQwen = this.#options.qwen?.read;
     const readPi = this.#options.pi?.read;
+    const readCopilot = this.#options.copilot?.read;
     const servesHomeAlone = this.#repositories.size === 0;
     if (
       readCatalog === undefined &&
       readCodex === undefined &&
       readQwen === undefined &&
       readPi === undefined &&
+      readCopilot === undefined &&
       servesHomeAlone
     ) {
       this.#link.start();
@@ -1474,8 +1613,9 @@ export class PeriscopeHost {
       readCodex === undefined ? Promise.resolve(undefined) : settledCodexRead(readCodex),
       readQwen === undefined ? Promise.resolve(undefined) : settledQwenRead(readQwen),
       readPi === undefined ? Promise.resolve(undefined) : settledPiRead(readPi),
+      readCopilot === undefined ? Promise.resolve(undefined) : settledCopilotRead(readCopilot),
       this.#readRepositoryList(),
-    ]).then(([catalog, codex, qwen, pi, repositories]) => {
+    ]).then(([catalog, codex, qwen, pi, copilot, repositories]) => {
       if (this.#pendingStart !== pending) return;
       this.#pendingStart = null;
       if (repositories !== undefined) {
@@ -1508,6 +1648,15 @@ export class PeriscopeHost {
           runtime: PI_RUNTIME,
           entry: pi.entry,
           detail: pi.detail,
+        });
+      }
+      if (copilot !== undefined) {
+        this.#copilotEntry = copilot.entry;
+        this.#report({
+          kind: 'runtime-catalog',
+          runtime: COPILOT_RUNTIME,
+          entry: copilot.entry,
+          detail: copilot.detail,
         });
       }
       if (catalog !== undefined) this.#stampAgent(catalog);
@@ -1871,7 +2020,9 @@ export class PeriscopeHost {
             ? qwenEndpointEnv(endpoint)
             : requested.value.runtime === PI_RUNTIME
               ? piEndpointEnv(endpoint)
-              : endpointSpawnEnv(endpoint);
+              : requested.value.runtime === COPILOT_RUNTIME
+                ? copilotEndpointEnv()
+                : endpointSpawnEnv(endpoint);
 
     const provider = this.#workspaces;
 
@@ -2089,6 +2240,11 @@ export class PeriscopeHost {
       const piServers = piMcpServers(servers.value);
       if (!piServers.ok) return giveBack(piServers.refusal);
     }
+    // A Copilot session takes them in Copilot's own form, the same way.
+    if (requested.value.runtime === COPILOT_RUNTIME) {
+      const copilotServers = copilotMcpServers(servers.value);
+      if (!copilotServers.ok) return giveBack(copilotServers.refusal);
+    }
 
     // The host's plugin directories, checked now: one that vanished since it was configured refuses
     // this open by name. The agent would report it in its init message's `plugin_errors`, but only
@@ -2202,9 +2358,18 @@ export class PeriscopeHost {
                   resolvesAgainstCallCwd: true,
                   resolvesWritesAgainstCallCwd: true,
                 }
-              : this.#options.toolFamilies === undefined
-                ? {}
-                : { toolFamilies: this.#options.toolFamilies }),
+              : runtimeOf(requested.value) === COPILOT_RUNTIME
+                ? // A Copilot session's tools are Copilot's: its own names, its shell read in the grammar it
+                  // runs in, and its relative paths, read and written, placed where the call runs.
+                  {
+                    toolFamilies: COPILOT_TOOL_FAMILIES,
+                    readsShellDialect: true,
+                    resolvesAgainstCallCwd: true,
+                    resolvesWritesAgainstCallCwd: true,
+                  }
+                : this.#options.toolFamilies === undefined
+                  ? {}
+                  : { toolFamilies: this.#options.toolFamilies }),
       }),
       ...(this.#options.codex === undefined
         ? {}
@@ -2240,6 +2405,11 @@ export class PeriscopeHost {
         ...(sessionHostEnv === undefined ? {} : { hostEnv: sessionHostEnv }),
         ...(runtimeOf(requested.value) === CODEX_RUNTIME && codexRoots.length > 0
           ? { nativeWriteRoots: codexRoots }
+          : {}),
+        // Copilot's read-back holds every directory its runtime allows to the session's own, its temp
+        // folder and its further worktrees, so the open is told them.
+        ...(runtimeOf(requested.value) === COPILOT_RUNTIME && writeRoots.length > 0
+          ? { nativeWriteRoots: writeRoots }
           : {}),
       },
       ...(this.#options.clock === undefined ? {} : { clock: this.#options.clock }),
@@ -2948,6 +3118,7 @@ export class PeriscopeHost {
       ...(this.#codexEntry === undefined ? [] : [this.#codexEntry]),
       ...(this.#qwenEntry === undefined ? [] : [this.#qwenEntry]),
       ...(this.#piEntry === undefined ? [] : [this.#piEntry]),
+      ...(this.#copilotEntry === undefined ? [] : [this.#copilotEntry]),
     ];
   }
 
@@ -3343,6 +3514,16 @@ async function settledPiRead(read: () => Promise<PiRuntimeRead>): Promise<PiRunt
   } catch (error) {
     const reason = `the pi runtime could not be read: ${describe(error)}`;
     return { entry: unavailablePiEntry(PI_PINNED_VERSION, reason), detail: reason };
+  }
+}
+
+/** The Copilot read, settled: a read that throws is reported as an unavailable runtime, never a failed start. */
+async function settledCopilotRead(read: () => Promise<CopilotRuntimeRead>): Promise<CopilotRuntimeRead> {
+  try {
+    return await read();
+  } catch (error) {
+    const reason = `the Copilot runtime could not be read: ${describe(error)}`;
+    return { entry: unavailableCopilotEntry(reason), detail: reason };
   }
 }
 

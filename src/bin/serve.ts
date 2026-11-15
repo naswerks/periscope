@@ -48,12 +48,15 @@ import { readModelEndpoints } from '../host/model-endpoints.js';
 import type { CodexRuntimeRead, ReadCodexRuntimeOptions } from '../host/codex-runtime.js';
 import { codexNativeRuntime, readCodexRuntime } from '../host/codex-runtime.js';
 import { codexHookLines, pendingCodexHookState, probeCodexHook } from '../host/codex-hook.js';
-import { CODEX_RUNTIME, PI_RUNTIME, QWEN_RUNTIME } from '../sessions/runtimes.js';
+import { CODEX_RUNTIME, COPILOT_RUNTIME, PI_RUNTIME, QWEN_RUNTIME } from '../sessions/runtimes.js';
 import type { QwenRuntimeRead, ReadQwenRuntimeOptions } from '../host/qwen-runtime.js';
 import { qwenNativeRuntime, readQwenRuntime } from '../host/qwen-runtime.js';
 import type { PiRuntimeRead, ReadPiRuntimeOptions } from '../host/pi-runtime.js';
 import { piNativeRuntime, readPiRuntime } from '../host/pi-runtime.js';
 import { piEndpointRoutes } from '../host/pi-endpoints.js';
+import type { CopilotRuntimeRead, ReadCopilotRuntimeOptions } from '../host/copilot-runtime.js';
+import { copilotNativeRuntime, readCopilotRuntime } from '../host/copilot-runtime.js';
+import { copilotEndpointRoutes } from '../host/copilot-endpoints.js';
 import { parsePluginDirs, pluginDirsProblem, readPluginManifests } from '../host/plugin-dirs.js';
 import { MAX_PLUGIN_DIRS } from '../control/frames.js';
 import { writeLinkState } from '../host/link-state-file.js';
@@ -131,6 +134,8 @@ export interface ServeDeps {
   readonly readQwenRuntime?: (options: ReadQwenRuntimeOptions) => Promise<QwenRuntimeRead>;
   /** Reads the pi runtime at start, when one is configured. Defaults to the real read. */
   readonly readPiRuntime?: (options: ReadPiRuntimeOptions) => Promise<PiRuntimeRead>;
+  /** Reads the Copilot runtime at start, when one is configured. Defaults to the real read. */
+  readonly readCopilotRuntime?: (options: ReadCopilotRuntimeOptions) => Promise<CopilotRuntimeRead>;
 }
 
 export type ServeOutcome =
@@ -171,6 +176,11 @@ interface Config {
   readonly qwen: { readonly binary: string; readonly home: string } | null;
   /** The pi CLI and its runner-owned home; both, or neither. Null = pi is not offered. */
   readonly pi: { readonly binary: string; readonly home: string } | null;
+  /**
+   * The Copilot SDK install and its runner-owned home, both or neither, and the file its GitHub token is
+   * read from, if any. Null = Copilot is not offered.
+   */
+  readonly copilot: { readonly sdk: string; readonly home: string; readonly tokenFile: string | null } | null;
 }
 
 function readConfig(env: NodeJS.ProcessEnv): Config | string {
@@ -268,6 +278,28 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     if (problem !== null) return problem;
   }
 
+  // Copilot likewise: an SDK with no home would keep its sessions in the operator's own, and a home with
+  // no SDK offers nothing to run. The token file names a sign-in for Copilot sessions alone.
+  const copilotSdk = nonEmpty(env['PERISCOPE_COPILOT_SDK']);
+  const copilotHome = nonEmpty(env['PERISCOPE_COPILOT_HOME']);
+  const copilotTokenFile = nonEmpty(env['PERISCOPE_COPILOT_TOKEN_FILE']);
+  if ((copilotSdk === null) !== (copilotHome === null)) {
+    return copilotSdk === null
+      ? 'PERISCOPE_COPILOT_HOME is set without PERISCOPE_COPILOT_SDK: Copilot is offered with both or neither'
+      : "PERISCOPE_COPILOT_SDK is set without PERISCOPE_COPILOT_HOME: Copilot is offered with both or neither, and never from the operator's own home";
+  }
+  if (copilotTokenFile !== null && copilotSdk === null) {
+    return 'PERISCOPE_COPILOT_TOKEN_FILE is set without PERISCOPE_COPILOT_SDK and PERISCOPE_COPILOT_HOME: the token signs in Copilot sessions, and Copilot is not offered';
+  }
+  for (const [key, value] of [
+    ['PERISCOPE_COPILOT_SDK', copilotSdk],
+    ['PERISCOPE_COPILOT_HOME', copilotHome],
+    ['PERISCOPE_COPILOT_TOKEN_FILE', copilotTokenFile],
+  ] as const) {
+    const problem = value === null ? null : configValueProblem(key, value);
+    if (problem !== null) return problem;
+  }
+
   const configuredHostId = env['PERISCOPE_HOST_ID'];
   return {
     controllerUrl,
@@ -290,6 +322,10 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     codex: codexBinary === null || codexHome === null ? null : { binary: codexBinary, home: codexHome },
     qwen: qwenBinary === null || qwenHome === null ? null : { binary: qwenBinary, home: qwenHome },
     pi: piBinary === null || piHome === null ? null : { binary: piBinary, home: piHome },
+    copilot:
+      copilotSdk === null || copilotHome === null
+        ? null
+        : { sdk: copilotSdk, home: copilotHome, tokenFile: copilotTokenFile },
   };
 }
 
@@ -681,6 +717,25 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
             }),
         };
 
+  // Copilot, read the way a session starts it: the operator's SDK install held to the pin and the
+  // runner-owned home, with nothing started; the token file read only when a session asks for a token.
+  const copilotConfigured = config.copilot;
+  const copilot =
+    copilotConfigured === null
+      ? null
+      : {
+          runtime: {
+            sdk: copilotConfigured.sdk,
+            base: copilotConfigured.home,
+            tokenFile: copilotConfigured.tokenFile,
+          },
+          read: () =>
+            (deps.readCopilotRuntime ?? readCopilotRuntime)({
+              sdk: copilotConfigured.sdk,
+              base: copilotConfigured.home,
+            }),
+        };
+
   let linkStateProblemSaid = false;
   const onEvent = (event: HostEvent): void => {
     if (event.kind === 'link') {
@@ -771,6 +826,13 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       ...(config.codex === null ? {} : { codexHome: config.codex.home }),
       ...(config.qwen === null ? {} : { qwenHome: config.qwen.home }),
       ...(config.pi === null ? {} : { piHome: config.pi.home }),
+      ...(config.copilot === null
+        ? {}
+        : {
+            copilotHome: config.copilot.home,
+            copilotSdk: config.copilot.sdk,
+            copilotTokenFile: config.copilot.tokenFile,
+          }),
     }),
     // Where the agents keep their session records, from the same sources and the same homes as the set
     // above: the read doors and the bulk lane refuse them whatever their root.
@@ -778,6 +840,7 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
       agentHome,
       ...(config.codex === null ? {} : { codexHome: config.codex.home }),
       ...(config.qwen === null ? {} : { qwenHome: config.qwen.home }),
+      ...(config.copilot === null ? {} : { copilotHome: config.copilot.home }),
     }),
     // The home the shell check expands `~` and `$HOME` to, from the same environment as the set above.
     home: homeDirectory(raw),
@@ -834,7 +897,7 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
             baseEnv: raw,
             homeDir,
             startProcess: deps.startProcess,
-            ...(codex === null && qwen === null && pi === null
+            ...(codex === null && qwen === null && pi === null && copilot === null
               ? {}
               : {
                   runtimes: {
@@ -848,6 +911,14 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
                             endpoints: piEndpointRoutes(endpoints === null ? [] : endpoints.endpoints),
                           }),
                         }),
+                    ...(copilot === null
+                      ? {}
+                      : {
+                          [COPILOT_RUNTIME]: copilotNativeRuntime({
+                            ...copilot.runtime,
+                            endpoints: copilotEndpointRoutes(endpoints === null ? [] : endpoints.endpoints),
+                          }),
+                        }),
                   },
                 }),
           }),
@@ -857,6 +928,7 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     ...(codex === null ? {} : { codex }),
     ...(qwen === null ? {} : { qwen }),
     ...(pi === null ? {} : { pi }),
+    ...(copilot === null ? {} : { copilot }),
     report: onEvent,
   });
 

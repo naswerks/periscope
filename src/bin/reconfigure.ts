@@ -111,6 +111,9 @@ export function configValueProblem(key: string, value: string): string | null {
     case 'PERISCOPE_CODEX_HOME':
     case 'PERISCOPE_QWEN_HOME':
     case 'PERISCOPE_PI_HOME':
+    case 'PERISCOPE_COPILOT_SDK':
+    case 'PERISCOPE_COPILOT_HOME':
+    case 'PERISCOPE_COPILOT_TOKEN_FILE':
       return isAbsolutePath(value) ? null : `${key} must be an absolute path — got '${value}'`;
     case 'PERISCOPE_CODEX_BIN':
       if (!isAbsolutePath(value)) return `${key} must be an absolute path — got '${value}'`;

@@ -587,6 +587,21 @@ export const REFUSAL_REASONS = [
   //                                opens; the detail names each source.
   'pi-extension-not-active',
   'gate-foreign-extension',
+
+  // The gate over a runtime whose pre-tool hook answers `ask` for every call and whose permission
+  // requests this host decides (Copilot): the first is a refusal. Its degrades are the names above:
+  // `gate-hook-missing` (a request the hook did not ask for, a hook that failed, a call no decision
+  // covered), `gate-hook-foreign` (a hook this host did not install decides), `gate-unhooked-call` (a
+  // provider-hosted tool ran) and `gate-mode-widened` (a mode in which the runtime approves calls itself).
+  //
+  //   copilot-gate-not-active      Refused: the open ends because the runtime, read back before the first
+  //                                prompt, is not in the posture this host started it in (its permission
+  //                                mode, its agent mode, an approve-all grant, a path outside the
+  //                                session's roots, a plugin, a tool this host turns off), or a probe call
+  //                                did not reach this host through the hook and the permission request
+  //                                both. Without the joined route a call the runtime allows by default
+  //                                runs undecided. The detail says which.
+  'copilot-gate-not-active',
 ] as const;
 
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];

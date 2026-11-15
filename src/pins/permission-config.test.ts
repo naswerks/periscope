@@ -99,6 +99,18 @@ const MODE_MODULES = [
   'host/pi-process.ts',
   // The pi fact lift states, inside the receipt, that pi has no mode in force. It sets nothing.
   'host/pi-facts.ts',
+  // The Copilot process maps the requested mode onto Copilot's agent mode (`default` is `interactive`,
+  // `plan` is `plan`), refuses any other by name, and creates every session in the permission mode
+  // `manual` alone, in which every call asks.
+  'host/copilot-process.ts',
+  // The Copilot seam declares the session configuration's `permissionMode: 'manual'`, the one mode this
+  // host composes, and the runtime's own answer to it. It sets nothing.
+  'host/copilot-sdk.ts',
+  // The Copilot read-back holds the mode the runtime reports to `manual`, and refuses the open otherwise:
+  // evidence read off the runtime's own answer. It sets nothing.
+  'host/copilot-home.ts',
+  // The Copilot fact lift states, inside the receipt, the agent mode the runtime reports. It sets nothing.
+  'host/copilot-facts.ts',
   'host/wire-request.ts',
   'sessions/registry.ts',
   'sessions/session.ts',
@@ -113,11 +125,16 @@ const MODE_MODULES = [
  *   only rules written are `ask` rules: each sends a call to this host's gate, so none can answer one.
  * - The `initialize` request this host sends Qwen Code's CLI names its permission timeout `canUseTool`:
  *   how long the CLI waits for this host's answer, never a second decider.
+ * - The Copilot seam's structural interface declares the session RPC's `permissions` namespace, which this
+ *   host only reads (the mode, the approve-all grants, the allowed paths); it sets `manual` once, through
+ *   the session's configuration at create. A later setter called through that namespace is a new carrier,
+ *   and comes back to this pin.
  */
 const NOT_OPTIONS: readonly { readonly file: string; readonly option: string }[] = [
   { file: 'host/codex-answers.ts', option: 'permissions' },
   { file: 'host/qwen-home.ts', option: 'permissions' },
   { file: 'host/qwen-process.ts', option: 'canUseTool' },
+  { file: 'host/copilot-sdk.ts', option: 'permissions' },
 ];
 
 /**
