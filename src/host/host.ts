@@ -205,7 +205,8 @@ import {
   readRepositoryFile,
   readWorkspaceFile,
 } from './repository-read.js';
-import { agentTranscriptPaths, homeDirectory, nodePathResolver } from './paths.js';
+import { canonicalPath } from './canonical-path.js';
+import { agentTranscriptPaths, homeDirectory, machineNames, nodePathResolver } from './paths.js';
 import { sessionTempRoots } from './write-roots.js';
 import {
   QWEN_MODE_MAP,
@@ -2480,6 +2481,10 @@ export class PeriscopeHost {
         resolve: nodePathResolver,
         protectedPaths: this.#options.protectedPaths,
         home,
+        // A share that names this machine's own drive is that drive's path, and a short name is read as
+        // the folder the file system says it is.
+        localNames: machineNames(),
+        realPath: canonicalPath,
         spawnEnv: () => spawnEnv,
         // A Codex session's tools are Codex's: its own names, its shell read in the grammar it runs
         // in, the directory a command runs in held to the protected set, and its paths relative to where

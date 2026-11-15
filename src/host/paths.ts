@@ -8,7 +8,7 @@
  * where the boundary pin says that belongs. The gate takes both of these as INJECTED values, so the
  * policy stays testable with a resolver that throws and a protected set nobody has to have on disk.
  */
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { isAbsolute, resolve as resolvePath } from 'node:path';
 
 /**
@@ -32,6 +32,21 @@ export function nodePathResolver(candidate: string): string {
   if (!isAbsolute(resolved))
     throw new Error(`resolving ${candidate} produced a non-absolute path: ${resolved}`);
   return resolved;
+}
+
+/**
+ * The names this machine answers to as a file server: its host name, and the name Windows gives it
+ * (`COMPUTERNAME`). The gate reads a share that names one of them and a drive (`\\name\C$\...`) as that
+ * drive's path. A name this machine is also reached by that neither states (an alias, an address of one
+ * of its network cards) is not known here, and a share written through it is checked as a share.
+ */
+export function machineNames(env: NodeJS.ProcessEnv = process.env): string[] {
+  const names: string[] = [];
+  for (const name of [safeHostname(), env['COMPUTERNAME']]) {
+    const known = typeof name === 'string' ? name.trim() : '';
+    if (known !== '' && !names.some((kept) => kept.toLowerCase() === known.toLowerCase())) names.push(known);
+  }
+  return names;
 }
 
 /**
@@ -431,6 +446,16 @@ export function join(base: string, ...segments: string[]): string {
   const trimmed = base.replace(/[\\/]+$/, '');
   const separator = trimmed.includes('\\') && !trimmed.includes('/') ? '\\' : '/';
   return [trimmed, ...segments].join(separator);
+}
+
+/** `hostname()` can throw where the system will not say; a machine with no name it can state has none here. */
+function safeHostname(): string | null {
+  try {
+    const name = hostname();
+    return name === '' ? null : name;
+  } catch {
+    return null;
+  }
 }
 
 /** `homedir()` throws on a system with no resolvable home; a missing home is not a reason to fail. */

@@ -32,6 +32,19 @@ frame it sends decodes unchanged.
   another: a read of a protected file, or a write outside the session's roots, passed. Two forms cannot
   be placed and are refused with a new reason, `path-unplaceable`: a drive-relative path on another
   drive, and another user's home (`~name/...`). Under a POSIX call directory nothing new is refused.
+- Security: the local gate reads the other ways Windows spells one file. A device prefix
+  (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it, so a long-path spelling of a workspace file
+  is now written where it was refused as outside the workspace, and one of a protected file is refused
+  where it passed. A share that names this machine's own drive (`\\localhost\C$\...`, a loopback
+  address, the host name or `COMPUTERNAME`) is that drive's path. The protected set is compared with
+  trailing dots and spaces and a stream name (`id_rsa.`, `id_rsa::$DATA`) folded away, and a path with a
+  segment shaped like a generated short name (`CREDEN~1.JSO`) is also compared as the file system names
+  it. A device or volume form that maps to no drive path is refused `path-unplaceable`. Still outside
+  the gate: a link, a short name set by hand, and a share reached by a name the host does not know as
+  its own.
+- Added: `LocalGateOptions.localNames` and `LocalGateOptions.realPath` (and the same two on
+  `JailOptions`), with `machineNames` and `canonicalPath` exported to fill them: the names this machine
+  answers to as a file server, and a path as the file system names it. `PeriscopeHost` passes both.
 - Security: Claude's `Monitor` tool is a shell tool. It runs the command its input names, so the local
   gate reads that command as it reads `Bash`'s (a push, a protected path) and a decision request names
   it `shell` with the `posix` dialect; it reached the gate as `other` and its command was never read. A

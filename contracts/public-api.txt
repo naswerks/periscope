@@ -55,8 +55,8 @@ gate: interface EscalationOptions { readonly credential?: ControllerCredential; 
 gate: interface EscalationResponse { readonly status: number; text: () => Promise<string> }
 gate: interface GlobalFlag { readonly argument: string; readonly flag: string }
 gate: interface Invocation { readonly args: readonly string[]; readonly dataPayloads: readonly string[]; readonly globalFlags: readonly GlobalFlag[]; readonly program: string; readonly verb: string }
-gate: interface JailOptions { readonly home?: string; readonly protectedPaths: readonly string[]; readonly resolve: PathResolver; readonly workspaceRoot: string; readonly writeRoots?: readonly string[] }
-gate: interface LocalGateOptions { readonly checksShellCwd?: boolean; readonly checksShellDirectory?: boolean; readonly home?: string; readonly protectedPaths: readonly string[]; readonly readsShellDialect?: boolean; readonly resolve: PathResolver; readonly resolvesAgainstCallCwd?: boolean; readonly resolvesWritesAgainstCallCwd?: boolean; readonly toolFamilies?: ToolFamilies; readonly workspaceRoot: string; readonly writeRoots?: readonly string[] }
+gate: interface JailOptions { readonly home?: string; readonly localNames?: readonly string[]; readonly protectedPaths: readonly string[]; readonly realPath?: PathResolver; readonly resolve: PathResolver; readonly workspaceRoot: string; readonly writeRoots?: readonly string[] }
+gate: interface LocalGateOptions { readonly checksShellCwd?: boolean; readonly checksShellDirectory?: boolean; readonly home?: string; readonly localNames?: readonly string[]; readonly protectedPaths: readonly string[]; readonly readsShellDialect?: boolean; readonly realPath?: PathResolver; readonly resolve: PathResolver; readonly resolvesAgainstCallCwd?: boolean; readonly resolvesWritesAgainstCallCwd?: boolean; readonly toolFamilies?: ToolFamilies; readonly workspaceRoot: string; readonly writeRoots?: readonly string[] }
 gate: interface ParsedCommand { readonly hasInterpreter: boolean; readonly invocations: readonly Invocation[]; readonly scannable: string }
 gate: interface PermissionGateOptions { readonly decide: Decider; readonly decisionTimeoutMs?: number; readonly grantOnAllow?: boolean; readonly holdAfterMs?: number; readonly localGate?: LocalGate; readonly matcherTimeoutSeconds?: number; readonly onDegrade?: (degrade: { readonly name: RefusalReason; readonly detail: string; }) => void; readonly onOutcome: OutcomeListener; readonly runtime?: string; readonly sessionKey: string }
 gate: interface ToolFamilies { readonly patch?: readonly string[]; readonly read: readonly string[]; readonly search?: readonly string[]; readonly shell: readonly string[]; readonly write: readonly string[] }
@@ -85,6 +85,7 @@ host: const TRANSCRIPT_PAGE_SIZE: 100
 host: const TRANSCRIPT_WHAT_PREFIX: "claude-transcript:"
 host: function agentTranscriptPaths(env?: NodeJS.ProcessEnv, options?: { readonly agentHome?: string | null; readonly codexHome?: string | null; readonly qwenHome?: string | null; readonly copilotHome?: string | null; readonly opencodeHome?: string | null; }): string[]
 host: function asSessionStore(store: TranscriptStore): SessionStore
+host: function canonicalPath(path: string): string
 host: function claudeProjectsRoot(env?: NodeJS.ProcessEnv): string | null
 host: function claudeTranscriptResolver(root: string): (what: string, sessionKey: string) => Result<string>
 host: function composeSession(options: ComposeSessionOptions): Result<ComposedSession>
@@ -99,6 +100,7 @@ host: function isConfigKey(value: string): value is ConfigKey
 host: function isMatchingUserEntry(line: string, needle: string | null): boolean
 host: function listRepositoryDirectory(root: string, relative: string, cap?: number, protectedPaths?: readonly string[], transcriptPaths?: readonly string[]): Promise<Result<RepositoryListing>>
 host: function listTranscripts(root: string, page?: { fromIndex?: number; pageSize?: number; }): Promise<TranscriptPage>
+host: function machineNames(env?: NodeJS.ProcessEnv): string[]
 host: function nodePathResolver(candidate: string): string
 host: function nodeStoreEffects(root: string): StoreEffects
 host: function openLoopbackListener(port?: number, timeoutMs?: number): Promise<Result<LoopbackListener>>
@@ -353,6 +355,7 @@ index: function authorizationValue(tokens: TokenSet): string
 index: function baselineAnchor(entries: readonly TranscriptEntry[]): string | null
 index: function buildAuthorizationUrl(config: IdentityConfig, authorizationEndpoint: string, pkce: Pkce, state: string, redirectUri: string): AuthorizationRequest
 index: function bulkDelivered(deliveryId: string, byteCount: number, stat?: { sizeBytes?: number; mtimeMs?: number; }): BulkDelivered
+index: function canonicalPath(path: string): string
 index: function challengeFor(verifier: string): string
 index: function checkPath(candidate: string | null, options: JailOptions): Refusal | null
 index: function checkShellForProtectedPaths(command: string, options: JailOptions): Refusal | null
@@ -421,6 +424,7 @@ index: function isUserEntry(entry: TranscriptEntry): boolean
 index: function isWiderThan(observed: number, requested: number): boolean
 index: function laneFor(message: SDKMessage): StreamLane
 index: function localGate(options: LocalGateOptions): LocalGate
+index: function machineNames(env?: NodeJS.ProcessEnv): string[]
 index: function markAbandoned(entry: OpenEntry, at: string, reason: string): TranscriptEntry
 index: function markOutlivesSubject(subjectAtMs: number, markAtMs: number, cutoffMs: number): boolean
 index: function mergeHooks(...registrations: readonly HookRegistrations[]): HookRegistrations
@@ -595,7 +599,7 @@ index: interface IdentityConfig { readonly authority: string; readonly clientId:
 index: interface IdentityEndpoints { readonly authorizationEndpoint: string; readonly deviceAuthorizationEndpoint: string; readonly tokenEndpoint: string }
 index: interface Invocation { readonly args: readonly string[]; readonly dataPayloads: readonly string[]; readonly globalFlags: readonly GlobalFlag[]; readonly program: string; readonly verb: string }
 index: interface ItemFill<M = SDKMessage> { attach?: (push: (item: AgentItem) => void) => void; fromMessage: (message: M) => readonly AgentItem[] }
-index: interface JailOptions { readonly home?: string; readonly protectedPaths: readonly string[]; readonly resolve: PathResolver; readonly workspaceRoot: string; readonly writeRoots?: readonly string[] }
+index: interface JailOptions { readonly home?: string; readonly localNames?: readonly string[]; readonly protectedPaths: readonly string[]; readonly realPath?: PathResolver; readonly resolve: PathResolver; readonly workspaceRoot: string; readonly writeRoots?: readonly string[] }
 index: interface JsonSchemaNode { readonly description?: string; readonly enum?: readonly JsonValue[]; readonly items?: JsonSchemaNode; readonly nullable?: boolean; readonly properties?: Readonly<Record<string, JsonSchemaNode>>; readonly required?: readonly string[]; readonly type?: string }
 index: interface JsonSchemaObject { readonly description?: string; readonly enum?: readonly JsonValue[]; readonly items?: JsonSchemaNode; readonly nullable?: boolean; readonly properties?: Readonly<Record<string, JsonSchemaNode>>; readonly required?: readonly string[]; readonly type?: "object" }
 index: interface JsonlStoreOptions { readonly dedupeOnAppend?: boolean }
@@ -609,7 +613,7 @@ index: interface LinkPing { readonly kind: "link_ping"; readonly nonce: string }
 index: interface LinkPong { readonly kind: "link_pong"; readonly nonce: string }
 index: interface LinkTransition { readonly at: string; readonly cause: "start_requested" | "socket_connected" | "hello_completed" | "socket_error" | "socket_closed" | "heartbeat_timeout" | "connect_timeout" | "protocol_version_rejected" | "replay_requested" | "credential_unavailable" | "credential_rejected" | "retry_scheduled" | "shutdown_requested"; readonly detail: string; readonly from: LinkState; readonly to: LinkState }
 index: interface LinkWelcome { readonly capabilities: readonly string[]; readonly cursors: readonly SessionCursor[]; readonly kind: "link_welcome"; readonly protocolRange: ProtocolRange; readonly protocolVersion: number }
-index: interface LocalGateOptions { readonly checksShellCwd?: boolean; readonly checksShellDirectory?: boolean; readonly home?: string; readonly protectedPaths: readonly string[]; readonly readsShellDialect?: boolean; readonly resolve: PathResolver; readonly resolvesAgainstCallCwd?: boolean; readonly resolvesWritesAgainstCallCwd?: boolean; readonly toolFamilies?: ToolFamilies; readonly workspaceRoot: string; readonly writeRoots?: readonly string[] }
+index: interface LocalGateOptions { readonly checksShellCwd?: boolean; readonly checksShellDirectory?: boolean; readonly home?: string; readonly localNames?: readonly string[]; readonly protectedPaths: readonly string[]; readonly readsShellDialect?: boolean; readonly realPath?: PathResolver; readonly resolve: PathResolver; readonly resolvesAgainstCallCwd?: boolean; readonly resolvesWritesAgainstCallCwd?: boolean; readonly toolFamilies?: ToolFamilies; readonly workspaceRoot: string; readonly writeRoots?: readonly string[] }
 index: interface LoopbackListener { close: () => void; readonly callback: Promise<Result<string>>; readonly port: number; readonly redirectUri: string }
 index: interface MachineFacts { readonly homeDir: string; readonly hostname: string; readonly platform: NodeJS.Platform; readonly release: string; readonly tempDir: string }
 index: interface McpServerOptions { readonly descriptors: readonly ToolDescriptor[]; readonly identity: () => ToolCallIdentity; readonly invoke: ToolInvoker; readonly name: string; readonly version?: string }

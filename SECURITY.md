@@ -170,9 +170,30 @@ is started with: the homes this host sets (`CODEX_HOME`, `QWEN_HOME`, `QWEN_CODE
 `CLAUDE_CONFIG_DIR` when you set it). A name is read as each shell reads it, PowerShell's and `cmd`'s
 without regard to case and a POSIX shell's exactly, and every comparison folds case. A command that
 only shows such a variable is refused like one that mentions the path itself:
-`echo "$PI_CODING_AGENT_DIR"` is, since the whole pi home is protected. What falls through is
-symlink indirection (the gate resolves paths as text and follows no link) and a shell command that
-reaches a protected path without naming it:
+`echo "$PI_CODING_AGENT_DIR"` is, since the whole pi home is protected.
+
+Windows names one file several ways, and a read, a write, a patch and a search are checked under each
+the gate can read. A device prefix (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it. A share that
+names this machine's own drive (`\\localhost\C$\...`, a loopback address, the machine's host name or
+`COMPUTERNAME`) is that drive's path. The dots and spaces that end a name, and a stream named after a
+colon (`id_rsa.`, `id_rsa::$DATA`), are folded away before the protected set is compared, as case is. A
+path with a segment shaped like a generated short name (`CREDEN~1.JSO`) is compared as written and as
+the file system says it is named. A device or volume form that maps to no drive path
+(`\\?\Volume{...}\`, `\\?\GLOBALROOT\...`) is refused `path-unplaceable`.
+
+What falls through a read, a write, a patch or a search:
+
+- symlink indirection, a junction included: the gate resolves a path as text and follows no link,
+  except on a path it asks the file system about for a short name;
+- a short name set by hand that has no generated shape (no `~` and digit);
+- a share that reaches this machine by a name the host cannot know as its own (an alias, an address of
+  one of its network cards), or a share an administrator made of a folder.
+
+The shell scan reads a command as text, so of the spellings above it matches one only where the command
+still contains the protected path as written: a device prefix before it, or a dot or a stream name after
+it. A dot or a space inside the path, a share of this machine's drive and a short name are not matched
+in a command. What also falls through is a shell command that reaches a protected path without naming
+it:
 
 - a recursive search of an ancestor directory;
 - a path the command builds at run time, from several variables (`%HOMEDRIVE%%HOMEPATH%`) or from a
@@ -185,9 +206,9 @@ reaches a protected path without naming it:
 
 What this means for fact 1's picture: offline, those calls escalate and are refused as outages, which
 is still fail-closed; online, for exactly those vectors, what stands between the agent and the token
-cache is your controller, not this gate. Closing them is a known open question: a link needs the
-filesystem the gate deliberately does not consult, and a computed path cannot be read from a
-command's text.
+cache is your controller, not this gate. Closing them is a known open question: following every link
+needs the filesystem on every check, which the gate consults only for a short name, and a computed
+path cannot be read from a command's text.
 
 Name what is lost, because "no opinion" undersells it. With the controller unreachable, such a call
 is refused as an outage rather than by name, which is precisely the distinction the local gate was

@@ -8,12 +8,19 @@
  * on drive C. Joining such a path under the call's directory as text would check one file while the tool
  * opens another, so each is placed here first and the jail and the protected set then read the result.
  *
+ * Windows also names one file several ways, and a form that maps to a drive path by its text is mapped
+ * to it, so the checks read the path every other spelling is compared with: a device prefix
+ * (`\\?\C:\...`, `\\.\C:\...`, which programs hand out for long paths) is the drive path after it,
+ * `\\?\UNC\server\share\...` is that share, and a share that names this machine's own drive
+ * (`\\localhost\C$\...`) is that drive's path.
+ *
  * Which rules hold is read from the call's directory: one spelled the Windows way (a drive or a share)
  * means Windows rules, and any other means POSIX rules, under which only `~` is placed and every other
  * path is the name it has always been.
  *
- * Two forms cannot be placed, and are refused by name: a drive-relative path on another drive, whose
- * directory no call states, and another user's home (`~name/...`), which this host cannot find.
+ * Three forms cannot be placed, and are refused by name: a drive-relative path on another drive, whose
+ * directory no call states; another user's home (`~name/...`), which this host cannot find; and a device
+ * or volume form that maps to no drive path (`\\?\Volume{...}\`, `\\.\PhysicalDrive0`).
  */
 import type { Refusal } from '../core/refusal.js';
 import { refusal } from '../core/refusal.js';
@@ -25,6 +32,8 @@ export interface Placement {
   readonly directory: string | null;
   /** The home directory `~` names. Absent or null: a `~` path is read as written. */
   readonly home?: string | null | undefined;
+  /** The names this machine answers to as a file server, beside `localhost` and the loopback addresses. */
+  readonly localNames?: readonly string[] | undefined;
   /** Whether a plain relative path is placed under the directory, or left as written for the resolver. */
   readonly placesRelative: boolean;
 }
@@ -54,6 +63,42 @@ function atHome(candidate: string, home: string | null | undefined): string | Re
     );
   }
   return candidate;
+}
+
+/** Whether a share's server names this machine: `localhost`, a loopback address, or one of `localNames`. */
+function namesThisMachine(server: string, localNames: readonly string[]): boolean {
+  const name = server.toLowerCase();
+  if (name === 'localhost' || name === '--1.ipv6-literal.net' || /^127(\.\d{1,3}){3}$/.test(name))
+    return true;
+  return localNames.some((local) => local.trim() !== '' && local.trim().toLowerCase() === name);
+}
+
+/**
+ * `candidate` with a device prefix, or a share of this machine's own drive, mapped to the drive path it
+ * names; any other path is returned as written. A device or volume form that names no drive path is
+ * refused. Windows reads either separator, so a path that starts with two of either is read here.
+ */
+function mapped(candidate: string, localNames: readonly string[]): string | Refusal {
+  if (!/^[\\/]{2}/.test(candidate)) return candidate;
+  let unified = candidate.replace(/\//g, '\\');
+  const device = /^\\\\[?.]\\(.*)$/s.exec(unified);
+  if (device !== null) {
+    const rest = device[1] ?? '';
+    if (/^[A-Za-z]:\\/.test(rest)) return rest;
+    const share = /^UNC\\(.*)$/is.exec(rest);
+    if (share === null) {
+      return refusal(
+        'path-unplaceable',
+        `${candidate} names a device or a volume, which maps to no drive path this host can check`,
+      );
+    }
+    unified = `\\\\${share[1] ?? ''}`;
+  }
+  const local = /^\\\\([^\\]+)\\([A-Za-z])\$(\\.*)?$/s.exec(unified);
+  if (local !== null && namesThisMachine(local[1] ?? '', localNames)) {
+    return `${local[2] ?? ''}:${local[3] ?? '\\'}`;
+  }
+  return device === null ? candidate : unified;
 }
 
 /** The root a path with one leading separator starts at: the directory's drive, or its share. */
@@ -92,15 +137,20 @@ function placedOnWindows(candidate: string, directory: string, placesRelative: b
 export function placePath(candidate: string, where: Placement): string | Refusal {
   const homed = atHome(candidate, where.home);
   if (typeof homed !== 'string') return homed;
-  if (where.directory !== null && isWindowsDirectory(where.directory)) {
-    return placedOnWindows(homed, where.directory, where.placesRelative);
+  const windows = where.directory !== null && isWindowsDirectory(where.directory);
+  // With no directory to read the rules from, a path that opens with two backslashes is Windows' own.
+  const windowsForm = windows || (where.directory === null && homed.startsWith('\\\\'));
+  const form = windowsForm ? mapped(homed, where.localNames ?? []) : homed;
+  if (typeof form !== 'string') return form;
+  if (windows && where.directory !== null) {
+    return placedOnWindows(form, where.directory, where.placesRelative);
   }
-  if (isAbsolutePath(homed) || !where.placesRelative) return homed;
+  if (isAbsolutePath(form) || !where.placesRelative) return form;
   if (where.directory === null) {
     return refusal(
       'path-not-absolute',
       `${candidate} is relative and the call states no absolute working directory to resolve it against`,
     );
   }
-  return `${where.directory}/${homed}`;
+  return `${where.directory}/${form}`;
 }

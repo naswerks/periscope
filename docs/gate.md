@@ -95,9 +95,19 @@ directory (`src/gate/placement.ts`): under a call directory spelled the Windows 
 leading separator (`\Users\x`, `/Users/x`) starts at that directory's drive or share, and `C:name` on
 the directory's own drive is beneath the directory; under any call directory `~`, `~/x` and `~\x` are
 the home directory when one is known. Under any other call directory a backslash or a drive-shaped name
-is the file name it is written as. Two forms cannot be placed and are refused `path-unplaceable`: a
-drive-relative path on another drive, whose directory no call states, and another user's home
-(`~name/...`). The shell scan matches a protected path written
+is the file name it is written as. Under Windows rules a form that maps to a drive path by its text is
+mapped before it is checked: a device prefix (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it,
+`\\?\UNC\server\share\...` is that share, and a share that names this machine's own drive
+(`\\localhost\C$\...`, a loopback address, or a name in `LocalGateOptions.localNames`, which the host
+fills with its host name and `COMPUTERNAME`) is that drive's path. Three forms cannot be placed and are
+refused `path-unplaceable`: a drive-relative path on another drive, whose directory no call states;
+another user's home (`~name/...`); and a device or volume form that maps to no drive path
+(`\\?\Volume{...}\`, `\\.\PhysicalDrive0`). The protected set is compared with a Windows path whose
+segments have lost what Windows ignores (trailing dots and spaces, a stream after a colon), and, for a
+path with a segment shaped like a generated short name (`PROGRA~1`), also with the path as the file
+system names it (`LocalGateOptions.realPath`; the host passes `canonicalPath`). A short name is never
+refused for its shape, and the write limits stay textual: a short name cannot leave its own folder, so
+a temp folder handed over in short form is written as before. The shell scan matches a protected path written
 literally, through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}`
 spellings or `%USERPROFILE%`, or through a variable of the session's spawn environment whose value is
 one absolute path (`$NAME`, `${NAME}`, `$env:NAME`, `${env:NAME}`, `%NAME%`; PowerShell's and `cmd`'s

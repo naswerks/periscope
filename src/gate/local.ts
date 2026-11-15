@@ -169,6 +169,20 @@ export interface LocalGateOptions {
   /** The home directory a shell command's `~` and `$HOME` forms name. */
   readonly home?: string | null;
   /**
+   * The names this machine answers to as a file server, beside `localhost` and the loopback addresses: a
+   * share that names one of them and a drive (`\\name\C$\...`) is checked as that drive's path.
+   * `host/paths.ts` reads the machine's own (`machineNames`). Absent: `localhost` and the loopback
+   * addresses alone.
+   */
+  readonly localNames?: readonly string[];
+  /**
+   * A path as the file system names it. Called only for a path with a segment shaped like a Windows short
+   * name (`PROGRA~1`); the protected set is then compared with the path as written and with what this
+   * returns. `host/canonical-path.ts` holds the one built on the file system. Absent: such a path is
+   * compared as written.
+   */
+  readonly realPath?: PathResolver;
+  /**
    * The session's spawn environment as far as the host knows it, read at every decision: a runtime's own
    * variables exist only once its process starts, after this gate is built. Each variable whose value is
    * one absolute path is spelled out where a shell command names it, before the protected-path scan.
@@ -228,6 +242,8 @@ export function localGate(options: LocalGateOptions): LocalGate {
     resolve: options.resolve,
     protectedPaths: options.protectedPaths,
     home: options.home ?? null,
+    ...(options.localNames === undefined ? {} : { localNames: options.localNames }),
+    ...(options.realPath === undefined ? {} : { realPath: options.realPath }),
   };
 
   const writeTools = new Set(families.write);

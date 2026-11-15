@@ -17,10 +17,13 @@
  * variable of the session's spawn environment whose value is a path (`$NAME`, `${NAME}`, `$env:NAME`,
  * `${env:NAME}`, `%NAME%`), each with a named refusal and with case folded. A search is refused when
  * its root is at or beneath a protected path and also when a protected path sits beneath its root,
- * since the search would read it. What stays outside: symlink indirection, and a shell command that
- * reaches a protected path without naming it (a recursive search of an ancestor, a path built at run
- * time, a variable the command or the runtime sets itself, a variable read through a command or an
- * expansion operator); those are not refused here.
+ * since the search would read it. Every path a tool names is placed first where the operating system
+ * puts it (`placement.ts`), and the protected set is compared with what Windows ignores folded away and,
+ * for a path with a short-name segment, with the path as the file system names it. What stays outside: a
+ * link, a short name with no generated shape, a share that reaches this machine by a name it was not
+ * told, and a shell command that reaches a protected path without naming it (a recursive search of an
+ * ancestor, a path built at run time, a variable the command or the runtime sets itself, a variable read
+ * through a command or an expansion operator); those are not refused here.
  *
  * Every unknown resolves toward refusing. No path in the input: refuse. A resolver that throws:
  * refuse. Not absolute: refuse. No declared root: refuse, because a jail with no walls is not a
@@ -65,6 +68,19 @@ export interface JailOptions {
   readonly protectedPaths: readonly string[];
   /** The home directory a shell command's `~` and `$HOME` forms name. Absent: the forms stay as written. */
   readonly home?: string | null;
+  /**
+   * The names this machine answers to as a file server, beside `localhost` and the loopback addresses. A
+   * share that names one of them and a drive (`\\name\C$\...`) is read as that drive's path. Absent: only
+   * `localhost` and the loopback addresses are this machine.
+   */
+  readonly localNames?: readonly string[];
+  /**
+   * A path as the file system names it: each existing folder on the way by its long name. Called only for
+   * a path with a segment shaped like a Windows short name (`PROGRA~1`), and the protected set is then
+   * compared with the path as written and with what this returns. It may throw; a throw, or its absence,
+   * leaves the path checked as written. `host/canonical-path.ts` holds the one built on the file system.
+   */
+  readonly realPath?: PathResolver;
   /**
    * The session's spawn environment, as far as the host knows it. Each variable whose value is one
    * absolute path is spelled out where a shell command names it, before the protected-path scan, so a
@@ -165,6 +181,7 @@ function placeAndResolve(
   const placed = placePath(candidate, {
     directory: callDirectoryOf(options),
     home: options.home,
+    localNames: options.localNames,
     placesRelative: options.placesRelative ?? false,
   });
   if (typeof placed !== 'string') return { refusal: placed };
@@ -172,22 +189,71 @@ function placeAndResolve(
 }
 
 /**
+ * A Windows path with what Windows ignores folded away: the dots and spaces that end a segment, and a
+ * stream named after a colon (`id_rsa::$DATA`, `id_rsa.`, and `id_rsa` open one file). A path that is not
+ * spelled the Windows way is returned normalized and otherwise as written, since there each of those is
+ * part of the name.
+ */
+function foldedForWindows(path: string): string {
+  const normalized = normalizePath(path);
+  const prefix = /^[A-Za-z]:\//.exec(normalized)?.[0] ?? (path.startsWith('\\\\') ? '//' : '');
+  if (prefix === '') return normalized;
+  const segments: string[] = [];
+  for (const segment of normalized.slice(prefix.length).split('/')) {
+    const colon = segment.indexOf(':');
+    const named = (colon === -1 ? segment : segment.slice(0, colon)).replace(/[. ]+$/, '');
+    if (named !== '') segments.push(named);
+  }
+  return prefix + segments.join('/');
+}
+
+/** A segment shaped like a short name Windows generates: `PROGRA~1`, `CREDEN~1.JSO`. */
+const SHORT_NAME_SEGMENT = /(^|[\\/])[^\\/]*~\d+(\.[^\\/.]{0,3})?(?=[\\/]|$)/;
+
+/**
+ * The spellings of a path the protected set is compared with: the path as written, with what Windows
+ * ignores folded away, and, where a segment has the shape of a short name and the file system can be
+ * asked, what the file system says the path names. A short name is never refused for its shape: it is
+ * expanded, and where it cannot be the path is compared as written.
+ */
+function comparedSpellings(path: string, options: JailOptions): string[] {
+  const spellings = [foldedForWindows(path)];
+  if (options.realPath === undefined || !SHORT_NAME_SEGMENT.test(path)) return spellings;
+  try {
+    const real = options.realPath(path);
+    if (typeof real === 'string' && real !== '') spellings.push(foldedForWindows(real));
+  } catch {
+    // Not expandable: the path is compared as written.
+  }
+  return spellings;
+}
+
+/** Whether `inner` is `outer` or beneath it, in any spelling the protected set is compared with. */
+function withinProtection(inner: string, outer: string, options: JailOptions): boolean {
+  const outers = comparedSpellings(outer, options);
+  return comparedSpellings(inner, options).some((one) =>
+    outers.some((other) => isContainedByIgnoringCase(one, other)),
+  );
+}
+
+/**
  * Is this resolved path at or beneath one of the protected paths?
  *
  * The comparison is segment-wise after normalizing both sides, so a protected `C:\Users\x\.ssh` does
  * not also protect `C:\Users\x\.ssh-notes`, and the protected path itself counts as protected. Case is
- * folded: on a filesystem that ignores it, another spelling names the same file.
+ * folded, and so is what Windows ignores at the end of a name: on a filesystem that ignores it, another
+ * spelling names the same file.
  */
-function protectedPathCovering(resolved: string, protectedPaths: readonly string[]): string | null {
-  for (const candidate of protectedPaths) {
-    if (isContainedByIgnoringCase(resolved, candidate)) return candidate;
+function protectedPathCovering(resolved: string, options: JailOptions): string | null {
+  for (const candidate of options.protectedPaths) {
+    if (withinProtection(resolved, candidate, options)) return candidate;
   }
   return null;
 }
 
 /** The credential refusal for a resolved path, or null when no protected path covers it. */
-function credentialRefusal(resolved: string, protectedPaths: readonly string[]): Refusal | null {
-  const covering = protectedPathCovering(resolved, protectedPaths);
+function credentialRefusal(resolved: string, options: JailOptions): Refusal | null {
+  const covering = protectedPathCovering(resolved, options);
   if (covering === null) return null;
   return refusal(
     'credential-path-denied',
@@ -212,7 +278,7 @@ export function checkPath(candidate: string | null, options: JailOptions): Refus
   if ('refusal' in outcome) return outcome.refusal;
   const { resolved } = outcome;
 
-  const credential = credentialRefusal(resolved, options.protectedPaths);
+  const credential = credentialRefusal(resolved, options);
   if (credential !== null) return credential;
 
   const declared = options.workspaceRoot !== null && options.workspaceRoot.trim() !== '';
@@ -262,7 +328,7 @@ export function checkReadPath(candidate: string | null, options: JailOptions): R
   if (candidate === null) return refusal('path-input-missing', MISSING_PATH_DETAIL);
   const outcome = placeAndResolve(candidate, options);
   if ('refusal' in outcome) return outcome.refusal;
-  return credentialRefusal(outcome.resolved, options.protectedPaths);
+  return credentialRefusal(outcome.resolved, options);
 }
 
 /** The characters that begin the wildcard part of a glob pattern. */
@@ -319,10 +385,10 @@ export function checkSearch(toolInput: unknown, options: JailOptions): Refusal |
     const outcome = placeAndResolve(root, options);
     if ('refusal' in outcome) return outcome.refusal;
     const { resolved } = outcome;
-    const covering = credentialRefusal(resolved, options.protectedPaths);
+    const covering = credentialRefusal(resolved, options);
     if (covering !== null) return covering;
     for (const candidate of options.protectedPaths) {
-      if (isContainedByIgnoringCase(candidate, resolved)) {
+      if (withinProtection(candidate, resolved, options)) {
         return refusal(
           'credential-path-denied',
           `a search under ${resolved} reads ${candidate}, which holds credential material; search a directory that does not contain it`,

@@ -200,3 +200,167 @@ test('control: a relative path is left as written where the gate does not place 
   assert.equal(placedAt('/a/b', null), '/a/b');
   assert.equal(placedAt('a/b', '/work'), '/work/a/b');
 });
+
+// ---------------------------------------------------------------------------
+// Other spellings of one file
+// ---------------------------------------------------------------------------
+
+test('a device prefix is the drive path after it: a protected file under it is refused, and any other is read or written as its plain spelling is', () => {
+  for (const path of [
+    '\\\\?\\C:\\Users\\op\\.ssh\\id_rsa',
+    '\\\\.\\C:\\Users\\op\\.ssh\\id_rsa',
+    '//?/C:/Users/op/.ssh/id_rsa',
+  ]) {
+    assert.equal(pi(request('read', { path }))?.reason, 'credential-path-denied', path);
+  }
+  assert.equal(pi(request('read', { path: '\\\\?\\C:\\work\\session-1\\a.ts' })), null);
+  assert.equal(
+    pi(request('write', { path: '\\\\?\\C:\\work\\session-1\\out.txt', content: 'x' })),
+    null,
+    'the long-path spelling of a file in the workspace is written',
+  );
+  assert.equal(
+    pi(request('write', { path: '\\\\?\\C:\\elsewhere\\out.txt', content: 'x' }))?.reason,
+    'path-escapes-root',
+  );
+});
+
+test("a share that names this machine's own drive is that drive's path", () => {
+  const named = placing({ localNames: ['RUNNER-7'] });
+  for (const path of [
+    '\\\\localhost\\C$\\Users\\op\\.ssh\\id_rsa',
+    '\\\\127.0.0.1\\c$\\Users\\op\\.ssh\\id_rsa',
+    '\\\\runner-7\\C$\\Users\\op\\.ssh\\id_rsa',
+    '\\\\?\\UNC\\localhost\\C$\\Users\\op\\.ssh\\id_rsa',
+  ]) {
+    assert.equal(named(request('read', { path }))?.reason, 'credential-path-denied', path);
+  }
+  assert.equal(
+    named(request('grep', { pattern: 'x', path: '\\\\localhost\\C$\\Users\\op' }))?.reason,
+    'credential-path-denied',
+    'a search above the protected folder',
+  );
+  // Control: another machine's share is a share, and so is this machine's under a name the gate was not told.
+  assert.equal(named(request('read', { path: '\\\\files\\C$\\Users\\op\\.ssh\\id_rsa' })), null);
+  assert.equal(pi(request('read', { path: '\\\\runner-7\\C$\\Users\\op\\.ssh\\id_rsa' })), null);
+  assert.equal(named(request('read', { path: '\\\\files\\team\\notes.txt' })), null);
+});
+
+test('a device or volume form that maps to no drive path is refused by name', () => {
+  for (const path of [
+    '\\\\?\\Volume{4c1b02c1-d990-11dc-99ae-806e6f6e6963}\\Users\\op\\.ssh\\id_rsa',
+    '\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\Users\\op\\.ssh\\id_rsa',
+    '\\\\.\\PhysicalDrive0',
+    '\\\\.\\C:',
+  ]) {
+    assert.equal(pi(request('read', { path }))?.reason, 'path-unplaceable', path);
+  }
+});
+
+test('what Windows ignores at the end of a name, and a stream named after it, do not hide a protected path', () => {
+  for (const path of [
+    `${KEYS}.\\id_rsa`,
+    `${KEYS} \\id_rsa`,
+    `${KEYS}\\id_rsa::$DATA`,
+    `${KEYS}::$INDEX_ALLOCATION\\id_rsa`,
+    'C:\\Users\\op.\\.ssh\\id_rsa',
+  ]) {
+    assert.equal(pi(request('read', { path }))?.reason, 'credential-path-denied', path);
+  }
+  const file = placing({ protectedPaths: ['C:\\Users\\op\\.claude.json'] });
+  assert.equal(
+    file(request('read', { path: 'C:\\Users\\op\\.claude.json::$DATA' }))?.reason,
+    'credential-path-denied',
+  );
+  assert.equal(
+    file(request('read', { path: 'C:\\Users\\op\\.claude.json.' }))?.reason,
+    'credential-path-denied',
+  );
+  assert.equal(
+    pi(request('grep', { pattern: 'x', path: 'C:\\Users\\op.' }))?.reason,
+    'credential-path-denied',
+    'a search root that holds the protected folder',
+  );
+  // Control: a neighbour whose name only starts the same is not the protected path, and the write limits stay as strict as they were.
+  assert.equal(pi(request('read', { path: 'C:\\Users\\op\\.ssh-notes\\a.txt' })), null);
+  assert.equal(
+    pi(request('write', { path: 'C:\\work\\session-1.\\out.txt', content: 'x' }))?.reason,
+    'path-escapes-root',
+  );
+});
+
+test('a short name is read as the folder the file system says it is, and never refused for its shape', () => {
+  const asked: string[] = [];
+  const realPath = (path: string): string => {
+    asked.push(path);
+    return path.replace(/SSH~1/i, '.ssh').replace(/OP~1/i, 'op');
+  };
+  const expanding = placing({ realPath });
+  assert.equal(
+    expanding(request('read', { path: 'C:\\Users\\op\\SSH~1\\id_rsa' }))?.reason,
+    'credential-path-denied',
+  );
+  assert.equal(
+    expanding(request('read', { path: 'C:\\Users\\OP~1\\.ssh\\id_rsa' }))?.reason,
+    'credential-path-denied',
+  );
+  assert.equal(
+    expanding(request('grep', { pattern: 'x', path: 'C:\\Users\\OP~1' }))?.reason,
+    'credential-path-denied',
+  );
+  // A short name that names something else is read, and one in the workspace or a further root is written.
+  assert.equal(expanding(request('read', { path: 'C:\\PROGRA~1\\nodejs\\node.exe' })), null);
+  assert.equal(
+    expanding(request('write', { path: 'C:\\work\\session-1\\BUILDO~1\\a.txt', content: 'x' })),
+    null,
+  );
+  const temp = placing({ realPath, writeRoots: ['C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\s1'] });
+  assert.equal(
+    temp(request('write', { path: 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\s1\\out.txt', content: 'x' })),
+    null,
+    'a temp folder handed over in short form is still written',
+  );
+  // The file system is asked only about a path with a segment of that shape.
+  asked.length = 0;
+  expanding(request('read', { path: 'C:\\work\\session-1\\src\\a.ts' }));
+  assert.deepEqual(asked, []);
+});
+
+test('control: with no way to ask the file system, or one that fails, a short name is checked as written', () => {
+  assert.equal(pi(request('read', { path: 'C:\\Users\\op\\SSH~1\\id_rsa' })), null);
+  const failing = placing({
+    realPath: () => {
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(failing(request('read', { path: 'C:\\Users\\op\\SSH~1\\id_rsa' })), null);
+  assert.equal(failing(request('read', { path: `${KEYS}\\id_rsa` }))?.reason, 'credential-path-denied');
+});
+
+test('a protected path that is itself spelled with a short name covers the long spelling of the same folder', () => {
+  const realPath = (path: string): string => path.replace(/RUNNER~1/i, 'runner-account');
+  const short = placing({ protectedPaths: ['C:\\Users\\RUNNER~1\\.periscope'], realPath });
+  assert.equal(
+    short(request('read', { path: 'C:\\Users\\runner-account\\.periscope\\token-cache.json' }))?.reason,
+    'credential-path-denied',
+  );
+});
+
+test('control: under a POSIX path a trailing dot, a colon and two leading slashes are part of an ordinary name', () => {
+  const linux = localGate({
+    workspaceRoot: '/work/session-1',
+    resolve: (path) => posix.resolve(path),
+    protectedPaths: ['/home/op/.ssh'],
+    home: '/home/op',
+    toolFamilies: PI_TOOL_FAMILIES,
+    resolvesAgainstCallCwd: true,
+    resolvesWritesAgainstCallCwd: true,
+  });
+  const read = (path: string): ReturnType<typeof linux> =>
+    linux(request('read', { path }, '/work/session-1'));
+  assert.equal(read('/home/op/.ssh./id_rsa'), null);
+  assert.equal(read('/home/op/.ssh:old/id_rsa'), null);
+  assert.equal(read('//./home/op/notes.txt'), null);
+  assert.equal(read('//?/C:/Users/op/.ssh/id_rsa'), null);
+  assert.equal(read('/home/op/.ssh/id_rsa')?.reason, 'credential-path-denied');
+});
