@@ -911,7 +911,14 @@ async function startedIn(
     toolCallId: id,
   });
   // A cold shell on a loaded host can take most of a minute to run its first command.
-  const written = (): string => (existsSync(pidFile) ? readFileSync(pidFile, 'utf8').trim() : '');
+  // The shell may still hold the file open while it writes it: a read that is refused then is tried again.
+  const written = (): string => {
+    try {
+      return existsSync(pidFile) ? readFileSync(pidFile, 'utf8').trim() : '';
+    } catch {
+      return '';
+    }
+  };
   const deadline = Date.now() + 90_000;
   while (!/^\d+$/.test(written()) && Date.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 100));
