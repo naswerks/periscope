@@ -205,7 +205,9 @@ frame it sends decodes unchanged.
   command names: the local gate reads the directory a Codex shell call runs in as it reads a Qwen Code
   shell call's `directory` (`checksShellCwd`). Either directory is read in every spelling a path is: a
   relative one is placed under the session's directory, and one the call does not state is read as the
-  session's. Neither is refused for its form, only for where it lands.
+  session's. Neither is refused for its form, only for where it lands. The directory is read as text,
+  as every path is: one that reaches the protected set through a link is not seen
+  ([SECURITY.md](SECURITY.md) says what falls through).
 - Security: a Codex command approval of the kind `humanCommand`, a command Codex's own requirements mark
   for a fresh decision, is decided fresh and never answered from the hook's decision for the same call.
   The app-server sends one only to a connection that opted into experimental API, which this host never

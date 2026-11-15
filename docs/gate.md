@@ -222,8 +222,9 @@ the decision deadline.
   operator's Copilot SDK install (`PERISCOPE_COPILOT_SDK`, the runtime every session starts from) and
   the token file (`PERISCOPE_COPILOT_TOKEN_FILE`); the operator's own `~/.copilot` and
   `COPILOT_HOME`, whole; the whole of opencode's runner base (`PERISCOPE_OPENCODE_HOME`: each session's
-  home, with its database and the configuration that holds an endpoint's key, and every database kept for
-  a resume) and the operator's opencode SDK install (`PERISCOPE_OPENCODE_SDK`, the server every session's
+  home, with its database, and every database kept for
+  a resume; an endpoint's key is in none of them, since the configuration that carries it crosses into
+  the host process over its stdin and is never written to a file) and the operator's opencode SDK install (`PERISCOPE_OPENCODE_SDK`, the server every session's
   host process loads); the operator's own opencode directories (`~/.local/share/opencode`,
   `~/.config/opencode`, `~/.local/state/opencode`, and each under `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and
   `XDG_STATE_HOME` when set), whole; and opencode's machine-wide configuration directory

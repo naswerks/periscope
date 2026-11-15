@@ -666,8 +666,11 @@ hello says so ([gate.md](docs/gate.md), the opencode gate). What holds, and what
 - **The SDK is yours, not this package's.** periscope never installs `@opencode/sdk` and never depends on
   it; you install the pinned version into a directory of the runner's own. The host checks the install's
   versions and files at start, loads it by its path inside that install, and lists any other install
-  unavailable. The whole directory is in the protected set, so a session cannot replace the server the
-  next one runs.
+  unavailable. The whole directory is in the protected set: a write, a patch or a search that names it
+  is refused, and so is a shell line that names it, before it runs. A shell line that builds the path
+  at run time names nothing the host can read, and is your controller's to refuse (below), so what
+  keeps a session from replacing the server the next one runs is the two together, not the protected
+  set alone.
 - **No port.** The SDK hosts opencode's server in the process that loads it, so each session's server runs
   in a host process this package starts, spoken to over its stdio alone; it opens no listener. opencode's
   process daemon, which runs the shell's commands, accepts its owner over a Unix socket or a named pipe

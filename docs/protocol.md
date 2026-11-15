@@ -167,11 +167,13 @@ A `host_configure_result` carries the same `agent`.
 From v15, `configuration.agents` lists the runtimes the host can spawn sessions on, one
 `HostAgentEntry` each, at most `MAX_AGENT_ENTRIES`, and is optional:
 
-- `runtime`: the name a `session_new` names it by (`claude`, `codex`, `qwen-code`, `pi`).
+- `runtime`: the name a `session_new` names it by (`claude`, `codex`, `qwen-code`, `pi`, `copilot`,
+  `opencode`).
 - `version` and `sdkVersion`: the runtime's own version, and the version of the library the host
   drives it through, null when there is none. Claude's are `agent`'s `claudeCodeVersion` and
   `sdkVersion`; Codex's `version` is its app-server's, Qwen Code's and pi's their CLIs', and the
-  `sdkVersion` of each is null.
+  `sdkVersion` of each is null. Copilot's `version` is its runtime's and its `sdkVersion` the SDK's
+  that pins that runtime; opencode's are both its SDK's, which is the server a session runs.
 - `models`: the models it offers, each a `HostModel` as above.
 - `vocabularies`: `{ permissionModes, efforts, thinking }`, the words a `session_new` or
   `session_configure` may name for it, and whether it takes a thinking control.
@@ -181,7 +183,7 @@ From v15, `configuration.agents` lists the runtimes the host can spawn sessions 
   `session_new` naming it is refused `runtime-unavailable`. Claude is always available.
 
 This host lists Claude, built from the same catalog read `agent` carries, then Codex, then Qwen
-Code and then pi when its operator configured each ([configuration](configuration.md)), so `agents` is null when
+Code, then pi, then Copilot and then opencode when its operator configured each ([configuration](configuration.md)), so `agents` is null when
 `agent` is null and absent when it is absent. Codex's entry is its pinned version, the models its app-server
 lists, the permission modes `default`, `dontAsk` and `bypassPermissions`, the efforts its models
 list, `thinking` true only when a listed model takes the effort `none`, and the tier
@@ -193,7 +195,13 @@ an endpoint's, and the session names it), the permission modes `bypassPermission
 `provider/id` (read at start from a pi with nothing of its own and no session; none when that read
 fails or is past the hello's bounds), each listing the six efforts when it reasons and none when it
 does not, no permission modes, the efforts `minimal`, `low`, `medium`, `high`, `xhigh` and `max`
-(pi's thinking levels), `thinking` true, and the tier `intercepted`. The whole list is held to `MAX_AGENT_CATALOG_BYTES` as JSON. Claude's entry is placed first, and a later
+(pi's thinking levels), `thinking` true, and the tier `intercepted`. Copilot's entry is its pinned
+runtime and SDK versions, no models (Copilot lists its models only once signed in, and the read at start
+signs nothing in, so a session names its model, or its endpoint's), the permission modes `default` and
+`plan`, the efforts `low`, `medium`, `high`, `xhigh` and `max`, `thinking` false, and the tier
+`intercepted-with-residual`. opencode's entry is its pinned SDK version, no models (an opencode
+session's model is an endpoint's, and the session names it), the permission modes `default` and `plan`,
+no efforts, `thinking` false, and the tier `intercepted-with-residual`. The whole list is held to `MAX_AGENT_CATALOG_BYTES` as JSON. Claude's entry is placed first, and a later
 entry that would push the list past the budget rides with `models: []`, named once, so one
 runtime's catalog never empties another's; a list Claude's entry alone cannot fit takes the catalog
 with it, both riding null. A `host_configure_result` carries the same `agents`.
@@ -206,7 +214,7 @@ From v15, `configuration.endpoints` lists the model endpoints the host's operato
   `openai-responses`, `openai-chat`). A wire API a newer peer adds is read; the host sends only the
   ones it declares.
 - `runtimes`: the runtimes that can reach it. Each speaks the endpoint's wire API (Claude speaks
-  `anthropic-messages`, Codex `openai-responses`, Qwen Code and pi all three, opencode `openai-chat`), and
+  `anthropic-messages`, Codex `openai-responses`, Qwen Code, pi and Copilot all three, opencode `openai-chat`), and
   the host refuses
   at start
   an endpoint naming
@@ -240,6 +248,8 @@ Claude is `namespaced`, `per-session`: the agent CLI's plugin directories. Codex
 `per-session`: each directory's `skills/` is a skill directory in the session's own settings, and the
 CLI lists its skills by name alone. pi is `bare`, `per-session`: each directory's `skills/` is handed
 to the session's pi as a skill directory on its command line, and pi lists its skills by name alone.
+Copilot is `bare`, `per-session`: each directory's `skills/` is one of the session's skill directories,
+every other skill source off, and Copilot lists its skills by name alone.
 opencode is `bare`, `per-session`: each directory's `skills/` is a skill path in the session's own
 configuration, and opencode lists its skills by name alone. A word a newer peer adds is read; the host sends
 only the words it declares.
@@ -445,7 +455,7 @@ runtime reported it, so an absent one reads as null, a `usage` member included (
 tokens alone), and each text is held to `MAX_FACT_TEXT_LENGTH`, as the codec holds it. Claude's come from `task_started`, `task_progress` (the summary a running subagent
 writes about every 30 seconds) and `task_notification`. Codex's name the call that started the sub-agent
 (`toolUseId`, where a call named its thread) and, on a settled entry, the message Codex reported for its
-end as its `summary` (a completed agent's final answer, an errored one's error). A Codex entry states no `usage`:
+end as its `summary` (a completed agent's final answer, an errored one's error). Qwen Code's name the call that started the task where the CLI says which, and a settled agent task its `usage` when the CLI reports all three counts. Copilot's name the call that spawned the sub-agent, which is also the task's id, a settled one its `usage` in the counts the runtime reports and, failed, the runtime's error as its `summary`. opencode's name the call that started the subagent's session and, failed, the run's error as its `summary`; opencode reports no counts for a subagent's run, so its entry states no `usage`. Qwen Code, Copilot and opencode report no output file. A Codex entry states no `usage`:
 a sub-agent's thread reports a token total, but one spawned with its parent's context (`fork_context`)
 counts on from the parent's running total, and nothing the host receives says which spawn did. Codex
 reports no output file for a sub-agent. So a Codex sub-agent's tokens are in no total a controller is
@@ -704,7 +714,10 @@ carry `parentId` (below):
   subagents fill items at 20, and so does a Codex sub-agent's thread, its turns apart from the session's
   own (a sub-agent's turn ending moves none of the session's state), and so do a Qwen Code
   subagent's tool calls and their results, the only messages of a subagent the CLI writes, each naming
-  its spawning call's `tool_use` id.
+  its spawning call's `tool_use` id. A Copilot sub-agent's events fill items at 20, each naming the
+  call its event says spawned it (`parentToolCallId`), and one that names none fills nothing. An
+  opencode subagent runs in a session of its own, and its events fill items at 20, each naming the call
+  that started that session; one whose starting call is not known fills nothing.
 
 Claude's items come from `UserPromptSubmit` (the turn's start and its prompt), each assistant
 `text`, `thinking`, `redacted_thinking` and `tool_use` block, each `tool_result` block, each `result`
@@ -715,7 +728,13 @@ turn and item notifications, its plan updates and its notices (`CODEX_ITEM_FILLS
 running from `agent_start` to `agent_settled` (a pi turn is one model call, so the conversation's turn
 is the whole run a prompt starts), its user and assistant `message_end`s, each `tool_execution_end`,
 and its retries, failed compactions, extension errors and notifications (`PiItemFill`,
-`src/host/pi-items.ts`, and each `PI_COVERAGE` row's note); a pi item's `turnId` is null.
+`src/host/pi-items.ts`, and each `PI_COVERAGE` row's note); a pi item's `turnId` is null. Copilot's come
+from its session events: a run from the first prompt the runtime takes to `session.idle`, each prompt,
+each `assistant.message` and `assistant.reasoning`, each tool's start and end, and its errors and
+warnings (`CopilotItemFill`, `src/host/copilot-items.ts`). opencode's come from the server's stream: a
+run of the session's own from its start to its end, each queued prompt, each finished text and
+reasoning part, each call the server announces and its end, and a run's or a model call's failure
+(`OpencodeItemFill`, `src/host/opencode-items.ts`). A Copilot and an opencode item's `turnId` is null.
 
 A kind or a vocabulary word a newer peer adds is read on the way in and refused on the way out; an
 item kind this build does not model decodes and reads as null through `readAgentItem`. Every member
