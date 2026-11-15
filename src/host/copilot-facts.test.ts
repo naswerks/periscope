@@ -488,6 +488,25 @@ test("the fill: a server's tool is named by the server and the tool its start ev
   );
 });
 
+test("the fill: a command's exit code is stated whatever its sign, and is null only where the runtime states none", () => {
+  const fill = new CopilotItemFill('session-1');
+  fill.fromMessage(event('user.message', { content: 'run them' }));
+  const codeOf = (id: string, shellExecution: unknown): number | null | undefined => {
+    const [result] = fill.fromMessage(
+      event('tool.execution_complete', { toolCallId: id, success: false, result: {}, shellExecution }),
+    );
+    return result?.kind === 'tool_result' ? result.exitCode : undefined;
+  };
+  assert.equal(codeOf('call_1', { exitCode: -1 }), -1, 'a negative exit code read as not stated');
+  assert.equal(codeOf('call_2', { exitCode: -1073741510 }), -1073741510);
+  assert.equal(codeOf('call_3', { exitCode: 137 }), 137);
+  assert.equal(codeOf('call_4', { exitCode: 0 }), 0);
+  // Control: no code, or one that is no number, is not stated.
+  assert.equal(codeOf('call_5', {}), null);
+  assert.equal(codeOf('call_6', { exitCode: 'killed' }), null);
+  assert.equal(codeOf('call_7', undefined), null);
+});
+
 test('the fill: a call the gate refused is blocked; a run that errored fails with the error, and an aborted one is interrupted', () => {
   const fill = new CopilotItemFill('s', {
     toolName: (name) => (name === 'nas-read' ? 'mcp__nas__read' : name),

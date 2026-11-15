@@ -54,6 +54,14 @@ export function copilotCount(value: unknown): number | null {
 }
 
 /**
+ * A whole number of either sign, or null when the runtime states none: a command's exit code, which is
+ * negative for a process a signal ended and for a Windows status read as signed.
+ */
+export function copilotInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+
+/**
  * The call that spawned the agent an event belongs to, by its id: the event's `parentToolCallId`. Null on
  * the session's own thread.
  */

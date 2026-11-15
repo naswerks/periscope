@@ -25,8 +25,8 @@ import type { ItemFill } from '../sessions/item-fill.js';
 import { copilotErrorWords } from '../state/copilot-observer.js';
 import type { CopilotMessage } from './copilot-wire.js';
 import {
-  copilotCount,
   copilotData,
+  copilotInteger,
   copilotRecord,
   copilotSpawnedBy,
   copilotWord,
@@ -217,7 +217,7 @@ export class CopilotItemFill implements ItemFill<CopilotMessage> {
         toolUseId: id,
         status: this.#blocked.has(id) ? 'blocked' : data['success'] === false ? 'failed' : 'completed',
         output,
-        exitCode: copilotCount(copilotRecord(data['shellExecution'])['exitCode']),
+        exitCode: copilotInteger(copilotRecord(data['shellExecution'])['exitCode']),
         durationMs: null,
         changes,
         truncated: false,
