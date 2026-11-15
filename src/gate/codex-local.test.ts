@@ -179,6 +179,31 @@ test('a Codex shell command that runs inside the protected set is refused there,
   );
 });
 
+test("a shell call's directory that is not absolute is placed under the session's and checked there; one the call does not state is the session's", () => {
+  const command = 'Get-Content rollout.jsonl';
+  const runningIn = (cwd: string): string | null =>
+    codexCwdGate(request({ toolInput: { command }, cwd, shellDialect: 'powershell' }))?.reason ?? null;
+  assert.equal(runningIn('../Users/agent/.codex-home/sessions/2026'), 'credential-path-denied');
+  assert.equal(runningIn('\\Users\\agent\\.codex-home\\sessions'), 'credential-path-denied');
+  // Nothing is refused for being relative or unstated: only for where it lands.
+  assert.equal(runningIn('packages/core'), null);
+  assert.equal(runningIn(''), null);
+  assert.equal(runningIn('D:elsewhere'), null, 'a directory this host cannot place is not refused here');
+  // The directory a shell tool names beside its command is placed the same way.
+  const named = localGate({
+    workspaceRoot: WORKSPACE,
+    resolve: fakeResolve,
+    protectedPaths: [SESSIONS],
+    toolFamilies: { write: [], read: [], shell: ['run_shell_command'] },
+    checksShellDirectory: true,
+  });
+  const inDirectory = (directory: string): string | null =>
+    named(request({ toolName: 'run_shell_command', toolInput: { command: 'ls', directory }, cwd: directory }))
+      ?.reason ?? null;
+  assert.equal(inDirectory('../Users/agent/.codex-home/sessions'), 'credential-path-denied');
+  assert.equal(inDirectory('src'), null);
+});
+
 // ---------------------------------------------------------------------------
 // Patches
 // ---------------------------------------------------------------------------

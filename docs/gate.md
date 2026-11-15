@@ -384,7 +384,9 @@ hook channel, and Codex's approval channel.
   run arguments nobody approved.
 - **Codex's tools in the local gate** (`CODEX_TOOL_FAMILIES`): `Bash` through the shell rules, the
   directory it runs in through the protected set (`checksShellCwd`: Codex's hook input names a local shell
-  call's own working directory as its `cwd`, and the call's input carries the command alone), `apply_patch`
+  call's own working directory as its `cwd`, and the call's input carries the command alone; a relative
+  one is placed under the session's directory and one the call does not state is read as the session's,
+  so neither skips the check and neither is refused for its form), `apply_patch`
   with every file its patch names (`src/gate/patch.ts`) through the jail, `view_image` through the
   protected set, relative paths resolved where the call runs. Codex's `Bash` runs
   PowerShell on Windows, so its commands are read both ways and refused when either reading refuses
@@ -451,7 +453,8 @@ is the settings file this host writes for each session (`src/host/qwen-home.ts`)
 - **Qwen Code's tools in the local gate** (`QWEN_TOOL_FAMILIES`): `write_file`, `edit` and
   `notebook_edit` through the jail; `read_file`, `zoom_image`, `display_image` and `list_directory`
   through the protected set; `run_shell_command` and `monitor` through the shell rules, the
-  `directory` a command runs in through the protected set (`checksShellDirectory`); `glob` and
+  `directory` a command runs in through the protected set (`checksShellDirectory`; a relative one placed
+  under the session's directory); `glob` and
   `grep_search` through the protected set, relative paths placed where the call runs. A `cmd` command
   is read both ways, in `cmd`'s grammar (`readCmdCommand`, `src/gate/command.ts`: carets are escapes
   outside double quotes, a `#` is no comment, and there is no heredoc) and as POSIX, and refused when

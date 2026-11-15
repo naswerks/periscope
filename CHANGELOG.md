@@ -90,7 +90,9 @@ frame it sends decodes unchanged.
   hook's input, and the call's input carries the command alone.
 - Security: a Codex shell command that runs inside the protected set is refused there, whatever its
   command names: the local gate reads the directory a Codex shell call runs in as it reads a Qwen Code
-  shell call's `directory` (`checksShellCwd`).
+  shell call's `directory` (`checksShellCwd`). Either directory is read in every spelling a path is: a
+  relative one is placed under the session's directory, and one the call does not state is read as the
+  session's. Neither is refused for its form, only for where it lands.
 - Security: a Codex command approval of the kind `humanCommand`, a command Codex's own requirements mark
   for a fresh decision, is decided fresh and never answered from the hook's decision for the same call.
   The app-server sends one only to a connection that opted into experimental API, which this host never

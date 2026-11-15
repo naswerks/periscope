@@ -204,14 +204,16 @@ export interface LocalGateOptions {
   /**
    * Check the directory a shell call runs in (its input's `directory`) against the protected set, as a
    * read of that directory. Defaults to false. Set for a runtime whose shell tool takes the directory
-   * beside the command: a relative path in the command is a path under it.
+   * beside the command: a relative path in the command is a path under it. A relative directory is placed
+   * under the session's.
    */
   readonly checksShellDirectory?: boolean;
   /**
-   * Check the working directory a shell call runs in (the request's `cwd`, when absolute) against the
-   * protected set, as a read of that directory. Defaults to false. Set for a runtime that reports a shell
-   * call's own working directory as the call's `cwd` and keeps it out of the input: a relative path in the
-   * command is a path under it.
+   * Check the working directory a shell call runs in (the request's `cwd`) against the protected set, as a
+   * read of that directory. Defaults to false. Set for a runtime that reports a shell call's own working
+   * directory as the call's `cwd` and keeps it out of the input: a relative path in the command is a path
+   * under it. A relative `cwd` is placed under the session's directory, and an absent one is read as the
+   * session's directory.
    */
   readonly checksShellCwd?: boolean;
   /**
@@ -263,6 +265,20 @@ export function localGate(options: LocalGateOptions): LocalGate {
     callDirectory: request.cwd,
     placesRelative,
   });
+  // The directory a command runs in, held to the protected set as a read of it. An absolute one is
+  // checked as it is. A relative one is a directory under the session's, and one the call does not state
+  // is the session's own; neither is refused for being unstated, only for where it lands.
+  const runsIn = (directory: string): Refusal | null => {
+    if (isAbsolutePath(directory)) return checkReadPath(directory, jail);
+    const session = jail.workspaceRoot;
+    if (session === null || !isAbsolutePath(session)) return null;
+    const refused = checkReadPath(directory.trim() === '' ? session : directory, {
+      ...jail,
+      callDirectory: session,
+      placesRelative: true,
+    });
+    return refused?.reason === 'credential-path-denied' ? refused : null;
+  };
 
   return (request: DecisionRequest): Refusal | null => {
     // A shell tool's call that watches a socket and names no command runs nothing a shell reads, so it
@@ -279,11 +295,11 @@ export function localGate(options: LocalGateOptions): LocalGate {
       }
       if (checksShellDirectory) {
         const directory = shellDirectoryOf(request.toolInput);
-        const inside = directory === null ? null : checkReadPath(directory, jail);
+        const inside = directory === null ? null : runsIn(directory);
         if (inside !== null) return inside;
       }
-      if (checksShellCwd && isAbsolutePath(request.cwd)) {
-        const inside = checkReadPath(request.cwd, jail);
+      if (checksShellCwd) {
+        const inside = runsIn(request.cwd);
         if (inside !== null) return inside;
       }
       // One parse, both consumers. The credential check runs first because a command naming the
