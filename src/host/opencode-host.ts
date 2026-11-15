@@ -46,6 +46,7 @@ export const OPENCODE_HOST_CALLS: Readonly<
 > = {
   'session.create': (host, input) => host.session.create(input as never),
   'session.get': (host, input) => host.session.get(input as never),
+  'session.list': (host, input) => host.session.list(input),
   'session.prompt': (host, input) => host.session.prompt(input as never),
   'session.interrupt': (host, input) => host.session.interrupt(input as never),
   'session.remove': (host, input) => host.session.remove(input as never),
@@ -55,6 +56,7 @@ export const OPENCODE_HOST_CALLS: Readonly<
   'session.environment': (host, input) => host.session.environment(input as never),
   'session.form.cancel': (host, input) => host.session.form.cancel(input as never),
   'permission.reply': (host, input) => host.permission.reply(input as never),
+  'permission.request.list': (host, input) => host.permission.request.list(input),
   'permission.saved.list': (host, input) => host.permission.saved.list(input),
   'agent.list': (host, input) => host.agent.list(input),
   'plugin.list': (host, input) => host.plugin.list(input),

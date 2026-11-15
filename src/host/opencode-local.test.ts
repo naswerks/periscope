@@ -929,11 +929,31 @@ test(
         open?.kind === 'opened' ? [open.sessionId, open.origin].join(' ') : '',
         `${sessionId} resume`,
       );
+      // The server may restart what the earlier process left running as soon as it is created, so the turn
+      // read here is the one this prompt starts, found by its own words, whichever run ends first.
       const seen = stub.requests.length;
-      await ran(resumed, 'carry on');
+      assert.equal(resumed.proc.prompt('carry on'), true);
+      const ownTurn = (): StubModelRequest | undefined =>
+        stub.requests.slice(seen).find((request) => lastUser(request).includes('carry on'));
+      await until(() => ownTurn() !== undefined, "the resumed session's own turn");
       assert.ok(
-        stub.requests.slice(seen).some((request) => stubRequestText(request).includes('SPAWN-ONE please')),
+        stubRequestText(ownTurn() as StubModelRequest).includes('SPAWN-ONE please'),
         'the resumed session does not hold the earlier turn',
+      );
+      await until(
+        () =>
+          resumed.messages.some(
+            (message) =>
+              message.kind === 'event' &&
+              message.main &&
+              message.event.type === 'session.execution.succeeded',
+          ),
+        "the end of the resumed session's turn",
+      );
+      // Whatever the earlier process's sessions asked after the resume was answered, never left waiting.
+      assert.deepEqual(
+        resumed.degrades.filter((detail) => /permission answer was not delivered/.test(detail)),
+        [],
       );
     } finally {
       await closed(resumed);

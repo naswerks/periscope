@@ -86,6 +86,8 @@ export interface OpencodeHost {
       agent?: string;
     }): Promise<OpencodeSessionInfo>;
     get(input: { sessionID: string }): Promise<OpencodeSessionInfo>;
+    /** Every session the server's database holds: the session's own and each subagent's. */
+    list(input?: { readonly limit?: number }): Promise<{ readonly data: readonly OpencodeSessionInfo[] }>;
     prompt(input: { sessionID: string; text: string; delivery?: 'queue' | 'steer' }): Promise<unknown>;
     interrupt(input: { sessionID: string }): Promise<{ readonly interrupted: boolean }>;
     remove(input: { sessionID: string }): Promise<void>;
@@ -106,6 +108,10 @@ export interface OpencodeHost {
       decision: 'once' | 'reject';
       message?: string;
     }): Promise<void>;
+    readonly request: {
+      /** Every request still waiting on an answer, whichever session raised it. */
+      list(input?: OpencodeLocation): Promise<{ readonly data: readonly unknown[] }>;
+    };
     readonly saved: {
       /** Every saved approval the server holds; with no project named, every project's. */
       list(input?: {

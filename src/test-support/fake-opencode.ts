@@ -79,6 +79,18 @@ export interface FakeOpencodeOptions {
   readonly heldAtConnect?: FakeOpencodeCall;
   /** Handed the function that lets a call that `waits` go on. */
   readonly release?: (resume: () => void) => void;
+  /** Sessions an earlier process left in the database: each with the session that started it. */
+  readonly earlierSessions?: readonly { readonly id: string; readonly parentID: string }[];
+  /** Requests raised before the adapter read the stream: no event tells of them, the server lists them. */
+  readonly waitingAtOpen?: readonly {
+    readonly id: string;
+    readonly sessionID: string;
+    readonly action: string;
+    readonly resources?: readonly string[];
+    readonly callId?: string;
+  }[];
+  /** A request raised as soon as the server is created, before the adapter has opened its session. */
+  readonly askedAtConnect?: { readonly id: string; readonly sessionID: string; readonly action: string };
 }
 
 /** What the fake recorded. */
@@ -90,11 +102,21 @@ export interface FakeOpencodeRecord {
   readonly replies: { requestID: string; decision: string; message?: string }[];
   /** Each call the server held before it ran, with the adapter's answer. */
   readonly held: { callId: string; allow: boolean }[];
+  /** Each request raised outside a run that the adapter answered, with its answer. */
+  readonly settled: { requestID: string; decision: string; message?: string }[];
   readonly lifecycle: string[];
   /** Send one event, as the server would. */
   emit(type: string, data: Record<string, unknown>): void;
   /** Start a subagent's session under the session, by the call that started it; its id. */
   spawn(callId: string, agent?: string): string;
+  /** Raise one request as the server would, for any session, and settle with the adapter's answer. */
+  ask(request: {
+    id: string;
+    sessionID: string;
+    action: string;
+    resources?: readonly string[];
+    callId?: string;
+  }): Promise<{ decision: string; message?: string }>;
   /** Exit the host process, as if it died. */
   exit(code: number): void;
   /** End the event stream while the process lives. */
@@ -146,6 +168,7 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
     calls: [],
     replies: [],
     held: [],
+    settled: [],
     lifecycle: [],
     emit: send,
     spawn(callId, agent = 'general') {
@@ -159,6 +182,22 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
         metadata: { sessionID: id },
       });
       return id;
+    },
+    ask(request) {
+      return new Promise((resolve) => {
+        waiting.set(request.id, {
+          session: request.sessionID,
+          settle: (decision, message) => resolve({ decision, ...(message === undefined ? {} : { message }) }),
+        });
+        send('permission.asked', {
+          id: request.id,
+          sessionID: request.sessionID,
+          action: request.action,
+          resources: [...(request.resources ?? [])],
+          metadata: {},
+          source: { type: 'tool', messageID: 'msg_1', id: request.callId ?? `call_of_${request.id}` },
+        });
+      });
     },
     exit(code) {
       live?.onExit({ code, signal: null, error: null });
@@ -336,6 +375,26 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
         }
         return info(sessionID);
       }
+      case 'session.list':
+        return {
+          data: [
+            ...[...sessions.keys()].map((id) => ({ id })),
+            ...(options.earlierSessions ?? []).map((one) => ({ id: one.id, parentID: one.parentID })),
+          ],
+        };
+      case 'permission.request.list':
+        return {
+          data: (options.waitingAtOpen ?? [])
+            .filter((one) => waiting.has(one.id))
+            .map((one) => ({
+              id: one.id,
+              sessionID: one.sessionID,
+              action: one.action,
+              resources: [...(one.resources ?? [])],
+              metadata: {},
+              source: { type: 'tool', messageID: 'msg_1', id: one.callId ?? `call_of_${one.id}` },
+            })),
+        };
       case 'session.fork': {
         const id = `${sessionID}-fork`;
         const from = sessions.get(sessionID);
@@ -431,6 +490,16 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
     config = JSON.parse(opened.config) as Record<string, unknown>;
     record.configs.push(config);
     const pid = options.pid === undefined ? 4343 : options.pid;
+    for (const one of options.waitingAtOpen ?? []) {
+      waiting.set(one.id, {
+        session: one.sessionID,
+        settle: (decision) => record.settled.push({ requestID: one.id, decision }),
+      });
+    }
+    if (options.askedAtConnect !== undefined) {
+      const asked = options.askedAtConnect;
+      void record.ask(asked).then((answer) => record.settled.push({ requestID: asked.id, ...answer }));
+    }
     const early = options.heldAtConnect;
     if (early !== undefined && opened.onHeldCall !== undefined) {
       void opened

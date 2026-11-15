@@ -799,6 +799,138 @@ test('a call that ran with no request and no decision is named when it ends, and
   );
 });
 
+test('a request from a session this process did not see created is decided, not dropped, and an interrupt of that session ends its decision', async () => {
+  const run = await started();
+  try {
+    await until(() => opened(run), 'the open');
+    const answer = await run.record.ask({
+      id: 'per_stranger',
+      sessionID: 'ses_from_before',
+      action: 'read',
+      resources: ['a.ts'],
+      callId: 'call_stranger',
+    });
+    assert.equal(answer.decision, 'once', 'the request was never answered');
+    assert.equal(run.requests[0]?.toolUseId, 'call_stranger');
+    assert.equal(
+      run.requests[0]?.agentId,
+      'ses_from_before',
+      'the decision request names the session that asked',
+    );
+    assert.deepEqual(run.degrades, []);
+  } finally {
+    await closed(run);
+  }
+  const waitingRun = await started({ decide: () => new Promise(() => undefined) });
+  try {
+    await until(() => opened(waitingRun), 'the open');
+    const pending = waitingRun.record.ask({ id: 'per_cut', sessionID: 'ses_from_before', action: 'read' });
+    await until(() => waitingRun.requests.length === 1, 'the pending decision');
+    waitingRun.record.emit('session.execution.interrupted', { sessionID: 'ses_from_before' });
+    assert.equal((await pending).decision, 'reject');
+  } finally {
+    await closed(waitingRun);
+  }
+});
+
+test('requests raised before this process read the stream are found at the open and decided, each once', async () => {
+  const run = await started({
+    request: { resume: 'ses_kept' },
+    before: (base) => {
+      mkdirSync(join(base, 'state', 'ses_kept'), { recursive: true });
+      writeFileSync(join(base, 'state', 'ses_kept', 'session.db'), 'database');
+    },
+    fake: {
+      waitingAtOpen: [
+        {
+          id: 'per_early',
+          sessionID: 'ses_old_child',
+          action: 'read',
+          resources: ['a.ts'],
+          callId: 'call_early',
+        },
+      ],
+    },
+  });
+  try {
+    await until(() => run.record.settled.length === 1, "the early request's answer");
+    assert.deepEqual(run.record.settled, [{ requestID: 'per_early', decision: 'once' }]);
+    assert.equal(run.requests.length, 1);
+    assert.equal(run.requests[0]?.toolUseId, 'call_early');
+    // The stream telling of the same request afterwards asks nobody again.
+    run.record.emit('permission.asked', {
+      id: 'per_early',
+      sessionID: 'ses_old_child',
+      action: 'read',
+      resources: ['a.ts'],
+      metadata: {},
+      source: { id: 'call_early' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(run.requests.length, 1, 'the same request was decided twice');
+    assert.equal(run.record.of('permission.request.list').length, 1);
+  } finally {
+    await closed(run);
+  }
+});
+
+test('a request raised before the open is proven waits for the proof: decided once it holds, refused where it does not', async () => {
+  const asked = { id: 'per_first', sessionID: 'ses_main', action: 'read' } as const;
+  const run = await started({ fake: { askedAtConnect: asked } });
+  try {
+    await until(() => run.record.settled.length === 1, "the early request's answer");
+    assert.equal(run.record.settled[0]?.decision, 'once');
+    assert.equal(run.requests.length, 1);
+    assert.ok(opened(run), 'the request was decided before the open was proven');
+  } finally {
+    await closed(run);
+  }
+  const refused = await started({
+    fake: { askedAtConnect: asked, plugins: [{ id: 'a-package', source: { type: 'package' } }] },
+  });
+  assert.match((await refused.ended)?.message ?? '', /opencode-gate-not-active/);
+  assert.equal(refused.requests.length, 0, 'a session that never opened asked its decider');
+});
+
+test("a resumed session takes the sessions an earlier process left as its own: each is given the shell's environment, and so is one it starts", async () => {
+  const run = await started({
+    request: { resume: 'ses_kept', env: { PATH: 'p', MARKER: 'm' } },
+    before: (base) => {
+      mkdirSync(join(base, 'state', 'ses_kept'), { recursive: true });
+      writeFileSync(join(base, 'state', 'ses_kept', 'session.db'), 'database');
+    },
+    fake: {
+      earlierSessions: [
+        { id: 'ses_old_child', parentID: 'ses_kept' },
+        { id: 'ses_old_grandchild', parentID: 'ses_old_child' },
+        { id: 'ses_of_another', parentID: 'ses_not_this_one' },
+      ],
+    },
+  });
+  try {
+    await until(() => opened(run), 'the open');
+    const given = (): string[] =>
+      run.record
+        .of('session.environment')
+        .map((input) => (typeof input['sessionID'] === 'string' ? input['sessionID'] : ''));
+    await until(() => given().includes('ses_old_grandchild'), "the earlier sessions' environment");
+    assert.deepEqual(given().sort(), ['ses_kept', 'ses_old_child', 'ses_old_grandchild']);
+    // A session one of them starts now is the session's own too.
+    run.record.emit('session.created', { sessionID: 'ses_new', parentID: 'ses_old_child', agent: 'general' });
+    await until(() => given().includes('ses_new'), "the new subagent's environment");
+  } finally {
+    await closed(run);
+  }
+  // Control: a session that is not resumed reads no earlier sessions.
+  const fresh = await started();
+  try {
+    await until(() => opened(fresh), 'the open');
+    assert.equal(fresh.record.of('session.list').length, 0);
+  } finally {
+    await closed(fresh);
+  }
+});
+
 test("the pre-call gate missing from the server's plugins is named at the open, and the session opens", async () => {
   const run = await started({
     fake: { plugins: [{ id: 'opencode.tool.shell', source: { type: 'builtin' } }] },

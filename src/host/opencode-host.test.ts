@@ -34,6 +34,7 @@ function fakeServer(options: { readonly streamError?: string; readonly failing?:
     session: {
       create: member('session.create', { id: 'ses_1' }),
       get: member('session.get', { id: 'ses_1' }),
+      list: member('session.list', { data: [] }),
       prompt: member('session.prompt'),
       interrupt: member('session.interrupt', { interrupted: true }),
       remove: member('session.remove'),
@@ -43,7 +44,11 @@ function fakeServer(options: { readonly streamError?: string; readonly failing?:
       environment: member('session.environment'),
       form: { cancel: member('session.form.cancel') },
     },
-    permission: { reply: member('permission.reply'), saved: { list: member('permission.saved.list', []) } },
+    permission: {
+      reply: member('permission.reply'),
+      request: { list: member('permission.request.list', { data: [] }) },
+      saved: { list: member('permission.saved.list', []) },
+    },
     agent: { list: member('agent.list', { data: [] }) },
     plugin: { list: member('plugin.list', { data: [] }) },
     mcp: { list: member('mcp.list', { data: [] }) },

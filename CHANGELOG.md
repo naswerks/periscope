@@ -65,6 +65,12 @@ frame it sends decodes unchanged.
   whole line; refused, the call fails with the refusal's words and never runs. A call allowed there is
   asked about once: the requests it then raises are held to the host's own gate alone. The read-back
   admits that one plugin, by its id and its source.
+- Fixed: an opencode request is decided whichever of the server's sessions raised it. One from a session
+  the process did not see created was dropped, never decided and never named, and its call waited for
+  good: after a resume that was every subagent of the earlier run, which the server restarts by itself
+  as soon as it is created. A request raised before the open is proven now waits for the proof, one
+  raised before the stream was read is found at the open, and a resumed session takes the earlier
+  process's subagent sessions as its own.
 - Fixed: an opencode call that ran with no decision is named however it leaves. It was named only when
   it succeeded; one that failed, was interrupted or was still running at the close was never named.
   The pre-call hook now tells the host of every call the server begins, so each is named

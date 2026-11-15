@@ -47,7 +47,7 @@ import type { AgentInitFacts, AgentProcess, AgentProcessRequest, ThinkingConfig 
 import { MAX_PENDING_PROMPTS, isRuntimeDefaultPrompt } from './agent-process.js';
 import type { OpencodeEndpointRoute } from './opencode-endpoints.js';
 import { opencodeProvider, opencodeProviderId } from './opencode-endpoints.js';
-import type { OpencodeSessionGate } from './opencode-gate.js';
+import type { OpencodeAnswer, OpencodeAsked, OpencodeSessionGate } from './opencode-gate.js';
 import { OPENCODE_HELD_TOOLS, opencodeAskedOf } from './opencode-gate.js';
 import type { OpencodePostureRead, OpencodeSessionHome } from './opencode-home.js';
 import {
@@ -92,6 +92,10 @@ export const OPENCODE_OPEN_DEADLINE_MS = 90_000;
 export const OPENCODE_CALL_DEADLINE_MS = 30_000;
 /** How long each step of the close may take before the next one runs. */
 export const OPENCODE_CLOSE_GRACE_MS = 10_000;
+/** How many request ids one session remembers having taken up. */
+const MAX_TAKEN_UP = 8192;
+/** How many sessions of an earlier process one resume reads from the database. */
+const MAX_ADOPTED_SESSIONS = 1000;
 
 /** What an opencode runtime is configured with, beside each session's own request. */
 export interface OpencodeRuntimeConfig {
@@ -251,6 +255,9 @@ export function startOpencodeProcess(
   let agent = OPENCODE_AGENTS[request.permissionMode === 'plan' ? 'plan' : 'default'];
   // The sessions the session's own subagents started, with the call that started each.
   const family = new Map<string, string | null>();
+  // The requests this process has taken up, by id: one raised before the stream was read is found again by
+  // the open's own look, and is decided once.
+  const takenUp = new Set<string>();
   // Settles once the open is proven, or has failed: a call the server holds before then waits on it.
   let settleProven: (proven: boolean) => void = () => undefined;
   const proven = new Promise<boolean>((resolve) => {
@@ -348,25 +355,9 @@ export function startOpencodeProcess(
     } catch {
       // A degrade the gate failed to name must not stop the event reaching the session.
     }
-    if (event.type === 'permission.asked' && gate !== null) {
+    if (event.type === 'permission.asked') {
       const asked = opencodeAskedOf(data);
-      if (asked !== null && ours(asked.sessionID)) {
-        void gate
-          .decide(asked, decisions.signal)
-          .then((answer) =>
-            call('permission.reply', {
-              sessionID: asked.sessionID,
-              requestID: asked.id,
-              decision: answer.decision,
-              ...(answer.message === undefined ? {} : { message: answer.message }),
-            }),
-          )
-          .catch((error: unknown) => {
-            // A request the runtime already settled (refused with another, or its session ended) cannot be
-            // answered; any other failure leaves the call waiting, which the runtime never runs.
-            if (!closed) degrade(`a permission answer was not delivered: ${wordsOf(error)}`);
-          });
-      }
+      if (asked !== null) answerRequest(asked);
     }
     if (event.type === 'form.created') {
       // A form waits on an answer with no timeout, and this host attaches no interface to give one: the web
@@ -385,11 +376,86 @@ export function startOpencodeProcess(
         });
       }
     }
-    if (event.type === 'session.execution.interrupted' && session !== null && ours(session)) {
+    if (event.type === 'session.execution.interrupted' && session !== null) {
       gate?.endPending(session, 'the turn was interrupted while this decision was outstanding');
     }
     if (event.type === 'plugin.updated' && opened) void checkPlugins();
     output.push(message);
+  }
+
+  /**
+   * Decide one permission request and answer it. One server runs one session of this host's, so every
+   * session in it is this host's to decide for: the session's own, a subagent's, and one an earlier process
+   * of the same session started, which this process never saw created. A request raised before the open is
+   * proven waits for the proof, and is refused where it does not hold.
+   */
+  function answerRequest(asked: OpencodeAsked): void {
+    if (gate === null || takenUp.has(asked.id)) return;
+    if (takenUp.size >= MAX_TAKEN_UP) {
+      const oldest = takenUp.values().next().value;
+      if (oldest !== undefined) takenUp.delete(oldest);
+    }
+    takenUp.add(asked.id);
+    const decider = gate;
+    void (async () => {
+      const answer: OpencodeAnswer = (await proven)
+        ? await decider.decide(asked, decisions.signal)
+        : {
+            decision: 'reject',
+            message:
+              'opencode-gate-not-active: the session is not open in the posture this host started it in, so the call did not run',
+          };
+      if (closed) return;
+      await call('permission.reply', {
+        sessionID: asked.sessionID,
+        requestID: asked.id,
+        decision: answer.decision,
+        ...(answer.message === undefined ? {} : { message: answer.message }),
+      });
+    })().catch((error: unknown) => {
+      // A request the runtime already settled (refused with another, or its session ended) cannot be
+      // answered; any other failure leaves the call waiting, which the runtime never runs.
+      if (!closed) degrade(`a permission answer was not delivered: ${wordsOf(error)}`);
+    });
+  }
+
+  /**
+   * The sessions an earlier process of this session left in the database, taken as the session's own: each
+   * whose line of parents reaches the session is given the shell's environment, as one this process sees
+   * created is. Read once, when a kept session is opened again.
+   */
+  async function adoptEarlierSessions(id: string, deadline: number): Promise<void> {
+    const listed = listOf(await call('session.list', { limit: MAX_ADOPTED_SESSIONS }, deadline));
+    const parentOf = new Map<string, string>();
+    for (const one of listed) {
+      const child = opencodeWord(one['id']);
+      const parent = opencodeWord(one['parentID']);
+      if (child !== null && parent !== null) parentOf.set(child, parent);
+    }
+    for (const child of parentOf.keys()) {
+      // Up the line of parents, a bounded number of steps, to the session itself.
+      let at: string | undefined = child;
+      for (let step = 0; step < 32 && at !== undefined && at !== id; step += 1) at = parentOf.get(at);
+      if (at !== id || family.has(child)) continue;
+      family.set(child, null);
+      void call('session.environment', {
+        sessionID: child,
+        variables: opencodeShellEnv(request.env),
+      }).catch((error: unknown) => degrade(`a subagent's shell environment was not set: ${wordsOf(error)}`));
+    }
+  }
+
+  /** The requests raised before this process read the stream, each taken up as one the stream announced. */
+  async function takeUpWaitingRequests(): Promise<void> {
+    try {
+      const waiting = listOf(await call('permission.request.list', { location: { directory: request.cwd } }));
+      for (const one of waiting) {
+        const asked = opencodeAskedOf(one);
+        if (asked !== null) answerRequest(asked);
+      }
+    } catch (error) {
+      degrade(`the requests waiting at the open could not be read: ${wordsOf(error)}`);
+    }
   }
 
   /**
@@ -575,6 +641,7 @@ export function startOpencodeProcess(
     agent = opencodeWord(info['agent']) ?? agent;
     gate.identify(id);
     await call('session.environment', { sessionID: id, variables: opencodeShellEnv(request.env) }, deadline);
+    if (resumeId !== null) await adoptEarlierSessions(id, deadline);
     if (
       resumeId !== null &&
       opencodeWord(info['agent']) !== OPENCODE_AGENTS[request.permissionMode === 'plan' ? 'plan' : 'default']
@@ -613,6 +680,8 @@ export function startOpencodeProcess(
       agent,
       origin: resumeId === null ? 'new' : request.fork ? 'fork' : 'resume',
     });
+    // A run the server restarted at its creation may have asked before this process read the stream.
+    void takeUpWaitingRequests();
     for (const text of held.splice(0)) send(text);
   }
 

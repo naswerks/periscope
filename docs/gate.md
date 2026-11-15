@@ -713,6 +713,15 @@ every request they raise.
   outcome's words, which the model reads and goes on from; a reject never goes without words, since one
   without would end the turn. Nothing broader is ever sent: no `always`. An allow that rewrites the input
   is refused (`canRewriteInput: false`).
+- **Every session of the server is the session's.** One server runs one session of this host's, so a
+  request is decided whichever of the server's sessions raised it: the session's own, a subagent's, and
+  one an earlier process of the same session started, which a resumed session never sees created. The
+  server restarts what an earlier process left running as soon as it is created, before the open is
+  proven, so a request raised before the proof waits for it and is refused only where it fails; and a
+  request raised before this host read the stream at all is found by asking the server for every
+  request still waiting, once the open is proven. A resumed session also reads the sessions the
+  database holds and takes each whose line of parents reaches it as its own, so their commands run
+  with the shell's environment, as a subagent started now does.
 - **One call can ask twice.** A path outside the session's location asks `external_directory` for its
   directory first, then its own action; decisions are kept by the request's id, so each is decided once.
   A `shell` call is the exception: it was decided whole before it ran, so its requests ask nobody.
