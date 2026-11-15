@@ -288,9 +288,6 @@ test('the degrades the session events name, each once per key', () => {
     event('tool.execution_complete', { toolCallId: 'call_undecided', toolName: 'view', success: true }),
   );
   run.built.observe(
-    event('tool.execution_complete', { toolCallId: `${COPILOT_PROBE_ID_PREFIX}x`, success: false }),
-  );
-  run.built.observe(
     event('assistant.server_tool_progress', { kind: 'web_search', outputIndex: 0, status: 'in_progress' }),
   );
   run.built.observe(
@@ -320,6 +317,75 @@ test('a decided call that ran raises nothing', async () => {
   await run.built.decide(request('view', 'call_1'));
   run.built.observe(event('tool.execution_complete', { toolCallId: 'call_1', success: true }));
   assert.deepEqual(run.raised, []);
+});
+
+const finished = (toolCallId: string, success: boolean, toolName = 'view'): CopilotEvent =>
+  event('tool.execution_complete', { toolCallId, toolName, success });
+
+test("a call that ran against this host's refusal is named; a refused call that did not run is not", async () => {
+  const run = gate(deny);
+  run.built.preToolUse(hooked('create', 'call_refused'));
+  assert.equal((await run.built.decide(request('create', 'call_refused'))).kind, 'reject');
+  run.built.observe(finished('call_refused', true, 'create'));
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-hook-missing'],
+  );
+  assert.match(run.raised[0]?.detail ?? '', /ran call call_refused \(create\) although this host refused it/);
+  // Control: the refusal held, the call failed with the refusal's words, and nothing is named.
+  const held = gate(deny);
+  held.built.preToolUse(hooked('create', 'call_held'));
+  await held.built.decide(request('create', 'call_held'));
+  held.built.observe(finished('call_held', false, 'create'));
+  assert.deepEqual(held.raised, []);
+  // A request of the runtime's own flow is refused here too, and a call that ran past that is named.
+  const own = gate(allow);
+  await own.built.decide({ kind: 'write', toolCallId: 'call_own', toolName: 'create' });
+  own.built.observe(finished('call_own', true, 'create'));
+  assert.match(own.raised.at(-1)?.detail ?? '', /although this host refused it/);
+});
+
+test("a call id handed out again is a new call: the first one's answer does not cover it", async () => {
+  const run = gate(allow);
+  run.built.preToolUse(hooked('view', 'call_0'));
+  await run.built.decide(request('view', 'call_0'));
+  run.built.observe(finished('call_0', true));
+  assert.equal(run.raised.length, 0, 'the decided call ran');
+  // The provider reuses the id for a later call, and this one reaches no hook and no request.
+  run.built.observe(finished('call_0', true));
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-hook-missing'],
+  );
+  assert.match(run.raised[0]?.detail ?? '', /ran call call_0 \(view\) with no decision from this host/);
+});
+
+test('a call that finishes while this host is still deciding it is named', async () => {
+  let answer: (decision: unknown) => void = () => undefined;
+  const run = gate(() => new Promise((resolve) => (answer = resolve)));
+  run.built.preToolUse(hooked('view', 'call_early'));
+  const deciding = run.built.decide(request('view', 'call_early'));
+  await Promise.resolve();
+  run.built.observe(finished('call_early', true));
+  assert.match(
+    run.raised[0]?.detail ?? '',
+    /finished call call_early \(view\) while this host was still deciding it/,
+  );
+  answer({ behavior: 'allow' });
+  await deciding;
+});
+
+test('only the probe this gate minted is its own: another id that starts the same is a call like any other', () => {
+  const run = gate(allow);
+  const minted = run.built.probe();
+  run.built.observe(finished(minted.id, false));
+  assert.equal(run.raised.length, 0, "the probe's own end is this host's doing");
+  run.built.observe(finished(`${COPILOT_PROBE_ID_PREFIX}of-someone-else`, true));
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-hook-missing'],
+  );
+  assert.match(run.raised[0]?.detail ?? '', /with no decision from this host for it/);
 });
 
 test('the deadline order: a decision deadline at the measured wait is admitted, a millisecond over is refused', () => {

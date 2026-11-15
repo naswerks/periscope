@@ -22,7 +22,10 @@
  * What it names, each a degrade raised once per (name, key):
  * - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the hook
  *   did not ask; the request is refused, never decided), a `hook` request no pre-tool hook announced, a
- *   pre-tool hook the runtime reports as failed, or a tool that ran with no decision for its call;
+ *   pre-tool hook the runtime reports as failed, or a call that finished with no decision of this host's
+ *   behind it: none at all, one still being awaited, or a refusal the call ran against. Each call's answer
+ *   is kept until the call finishes and forgotten then, so a provider that hands out the same call id
+ *   again starts with no answer;
  * - `gate-hook-foreign`: a hook this host did not install decided a request (`resolvedByHook`), or a
  *   machine-wide policy hook was found when the session opened;
  * - `gate-unhooked-call`: a provider-hosted tool ran (`assistant.server_tool_progress`), which no hook sees;
@@ -77,7 +80,7 @@ export const COPILOT_PROBE_ID_PREFIX = 'periscope-route-probe-';
 
 /** How many calls' hook inputs one session keeps while their requests are outstanding. */
 const MAX_PENDING_HOOKS = 1024;
-/** How many decided call ids one session keeps, to tell a decided call from an undecided one. */
+/** How many calls' answers one session keeps while the calls have not finished. */
 const MAX_DECIDED_IDS = 8192;
 /** How many distinct degrades one session raises at most; past it, the host's own log still has each. */
 const MAX_RAISED_DEGRADES = 4096;
@@ -206,6 +209,12 @@ interface HookedCall {
   readonly agentType: string | null;
 }
 
+/**
+ * What this host has said about one call that has not finished yet: it is still being asked about, it was
+ * allowed, it was refused, or a hook this host did not install answered for it.
+ */
+type CallAnswer = 'awaited' | 'allowed' | 'refused' | 'foreign';
+
 interface ProbeState {
   readonly id: string;
   hooked: boolean;
@@ -229,7 +238,9 @@ function recordOf(value: unknown): Record<string, unknown> {
 export function createCopilotSessionGate(options: CopilotSessionGateOptions): CopilotSessionGate {
   const raised = new Set<string>();
   const hooked = new Map<string, HookedCall>();
-  const decided = new Set<string>();
+  // Each unfinished call's answer, by its call id. One runtime serves one session, so the id alone names the
+  // call; an entry leaves when its call finishes, so an id a provider hands out again is a new call.
+  const answers = new Map<string, CallAnswer>();
   const servers = new Map<string, readonly string[]>(options.servers.map((server) => [server, []]));
   // The offered tools the runtime says an attached server brings: never a built-in, whatever their names.
   const fromServers = new Set<string>();
@@ -263,12 +274,12 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
     }
   };
 
-  const remember = (id: string): void => {
-    if (decided.size >= MAX_DECIDED_IDS) {
-      const oldest = decided.values().next().value;
-      if (oldest !== undefined) decided.delete(oldest);
+  const remember = (id: string, answer: CallAnswer): void => {
+    if (!answers.has(id) && answers.size >= MAX_DECIDED_IDS) {
+      const oldest = answers.keys().next().value;
+      if (oldest !== undefined) answers.delete(oldest);
     }
-    decided.add(id);
+    answers.set(id, answer);
   };
 
   const decideCall: CallDecision = createCallDecision({
@@ -363,7 +374,7 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           `Copilot asked for a ${kind} permission${id === null ? '' : ` for call ${id}`} through its own flow, so the pre-tool hook did not ask; refused rather than decided`,
           id ?? kind,
         );
-        if (id !== null) remember(id);
+        if (id !== null) remember(id, 'refused');
         return {
           kind: 'reject',
           feedback: `gate-hook-missing: this host decides a call only through its pre-tool hook, and this ${kind} request did not come through it`,
@@ -375,7 +386,8 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
       }
       const call = hooked.get(id);
       hooked.delete(id);
-      remember(id);
+      // Refused until an answer says otherwise: every way out of here but an allow is a refusal.
+      remember(id, 'refused');
       if (call === undefined) {
         raise(
           'gate-hook-missing',
@@ -396,7 +408,11 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
       await learnServers(asked);
       nameIfUnnamed(asked, 'was asked to run');
       const request = requestOf(raw, call, id);
+      remember(id, 'awaited');
       const outcome = await decideCall(request, signal ?? new AbortController().signal);
+      // Written once the answer is known and before the runtime is told, so a call that finishes after
+      // this is read against what it was told.
+      remember(id, outcome.kind === 'allow' ? 'allowed' : 'refused');
       return copilotAnswerOf(outcome);
     },
     observe(event) {
@@ -406,7 +422,7 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           if (data['resolvedByHook'] === true) {
             const inner = recordOf(data['permissionRequest']);
             const id = named(inner['toolCallId']) ? inner['toolCallId'] : null;
-            if (id !== null) remember(id);
+            if (id !== null) remember(id, 'foreign');
             raise(
               'gate-hook-foreign',
               `a hook this host did not install answered Copilot's ${named(inner['kind']) ? inner['kind'] : 'unnamed'} request${id === null ? '' : ` for call ${id}`} before this host was asked`,
@@ -427,15 +443,29 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           }
           return;
         }
-        case 'tool.execution_start':
         case 'tool.execution_complete': {
+          // Read when the call finishes: the decision follows the call's start.
           const id = named(data['toolCallId']) ? data['toolCallId'] : null;
-          if (id === null || id.startsWith(COPILOT_PROBE_ID_PREFIX) || decided.has(id)) return;
-          if (event.type === 'tool.execution_start') return; // the decision follows the start; read at the end
+          // Only the probe this gate minted is its own; another id that merely starts the same is a call.
+          if (id === null || (probe !== null && id === probe.id)) return;
+          const answer = answers.get(id);
+          answers.delete(id);
+          if (answer === 'allowed' || answer === 'foreign') return;
+          const ran = data['success'] === true;
+          // A refused call that did not run is what a refusal is.
+          if (answer === 'refused' && !ran) return;
+          const call = `call ${id}${named(data['toolName']) ? ` (${data['toolName']})` : ''}`;
           raise(
             'gate-hook-missing',
-            `Copilot ran call ${id}${named(data['toolName']) ? ` (${data['toolName']})` : ''} with no decision from this host for it`,
-            id,
+            answer === 'refused'
+              ? `Copilot ran ${call} although this host refused it`
+              : answer === 'awaited'
+                ? `Copilot finished ${call} while this host was still deciding it, so no decision of this host's stood behind it`
+                : ran
+                  ? `Copilot ran ${call} with no decision from this host for it`
+                  : `Copilot finished ${call}, which failed, with no decision from this host for it`,
+            // Its own key: what a call did at its end is said beside whatever was said of its request.
+            `finished:${id}`,
           );
           return;
         }

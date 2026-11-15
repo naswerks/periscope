@@ -609,7 +609,10 @@ the one this host decides.
   - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the
     hook did not ask; the request is refused, never decided), a `hook` request whose call no hook
     announced, a pre-tool hook the runtime reports as failed (after which it lets the call proceed), or
-    a tool that ran with no decision from this host for its call.
+    a call that finished with no decision of this host's behind it: none at all, one still awaited, or
+    a refusal the call ran against. Each call's answer is kept by its call id until
+    `tool.execution_complete` and forgotten then, so an id a provider hands out again is a new call; only
+    the probe id this gate minted is exempt, never an id that merely starts the same.
   - `gate-hook-foreign`: a hook this host did not install answered a request (`resolvedByHook`), or a
     machine-wide policy hook (`%ProgramData%\GitHub\Copilot\policy.d\*.json`, or the
     `HKLM\Software\Policies\GitHub\Copilot` key) was found at the open, which lowers the opening

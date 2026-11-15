@@ -587,10 +587,14 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   plugin, none of the tools it turns off) and runs one probe call through the hook and the request. A
   runtime that is not as the host started it refuses the open `copilot-gate-not-active`.
 - **The hook fails open; the gate does not depend on it alone.** A pre-tool hook that throws or times
-  out lets a call proceed in the runtime. The host's hook does no I/O and answers at once, and a call
-  that ran with no decision, a request the hook did not raise, or a hook the runtime reports as failed
-  is named `gate-hook-missing`. A permission request this host did not raise through the hook is
-  refused, never decided.
+  out lets a call proceed in the runtime. The host's hook does no I/O and answers at once. The host
+  keeps what it answered for each call until that call finishes, and names `gate-hook-missing` a call
+  that finished with no decision behind it: none at all, one the host was still waiting on, or a refusal
+  the call ran against. A request the hook did not raise, and a hook the runtime reports as failed, are
+  named the same way. A permission request this host did not raise through the hook is refused, never
+  decided. What the naming cannot tell apart is two calls running at once under one call id, which a
+  model's provider would have to hand out twice in the same turn; an id handed out again later is a new
+  call.
 - **What no hook sees is named.** A tool the model's provider runs itself is named
   `gate-unhooked-call`; a machine-wide policy hook (`%ProgramData%\GitHub\Copilot\policy.d` or the
   `HKLM\Software\Policies\GitHub\Copilot` key), which runs whatever a session's settings say, is named
