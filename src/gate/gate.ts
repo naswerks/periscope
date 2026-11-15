@@ -333,12 +333,12 @@ function readRequest(input: HookInput, sessionKey: string, runtime: string): Dec
       agentId: text(anyInput['agent_id']),
       agentType: text(anyInput['agent_type']),
       // Read from the name by Claude's map, the tool names this hook carries; never left out.
-      toolKind: claudeToolKind(toolName),
+      toolKind: claudeToolKind(toolName, anyInput['tool_input']),
       // Supplied by the composer, like `sessionKey`: the session's runtime, not the agent's input.
       runtime,
       // The grammar the shell tool runs its command in, stated for the decider; absent for every other
       // tool. Data only: this host's own gate reads Claude's commands as it always has.
-      ...dialectOf(toolName),
+      ...dialectOf(toolName, anyInput['tool_input']),
     };
   } catch {
     return null;
@@ -346,8 +346,8 @@ function readRequest(input: HookInput, sessionKey: string, runtime: string): Dec
 }
 
 /** `shellDialect` for a Claude shell tool, as a spread: absent, never null, for every other tool. */
-function dialectOf(toolName: string): { readonly shellDialect?: ShellDialect } {
-  const dialect = claudeShellDialect(toolName);
+function dialectOf(toolName: string, toolInput: unknown): { readonly shellDialect?: ShellDialect } {
+  const dialect = claudeShellDialect(toolName, toolInput);
   return dialect === null ? {} : { shellDialect: dialect };
 }
 

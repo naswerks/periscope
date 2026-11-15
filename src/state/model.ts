@@ -197,7 +197,7 @@ export type HookEventName = (typeof HOOK_EVENTS)[number];
 /**
  * The SDK message discriminators this model names as causes — `type` for the plain kinds,
  * `type/subtype` for the `system` family. Only the ones that can move a session appear here;
- * `coverage.ts` accounts for all 39 members of the union, wired or declined.
+ * `coverage.ts` accounts for all 40 members of the union, wired or declined.
  */
 export const MESSAGE_EVENTS = [
   'system/init',

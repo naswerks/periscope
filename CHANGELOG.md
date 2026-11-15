@@ -15,6 +15,25 @@ controller is refused at the handshake by name. Every member version 20 adds is 
 payload kind: a version-19 controller reads each as an unknown key on a kind it already reads, and every
 frame it sends decodes unchanged.
 
+- Changed: the agent SDK is `@anthropic-ai/claude-agent-sdk` 0.3.325, pinned exactly, bundling Claude
+  Code 2.1.325 (was 0.3.284 and 2.1.284). The hello's catalog is the one the new CLI offers. Its one new
+  message, `system/session_writes_lost` (the CLI could not save transcript lines or its own
+  configuration because the disk was full), rides the update lane and moves no state. Its one new
+  built-in tool, `OfferChromeSetup`, names no path and runs no command, and is `other`. No hook event
+  was added.
+- Changed: `@anthropic-ai/sdk`, which only the agent SDK's type definitions read, is `^1.8.0` (was
+  `^0.129.0`); the agent SDK asks for `>=0.93.0`. Version 1 is published under the Apache-2.0 licence
+  and brings `@opentelemetry/api` with it.
+- Security: Claude's `Monitor` tool is a shell tool. It runs the command its input names, so the local
+  gate reads that command as it reads `Bash`'s (a push, a protected path) and a decision request names
+  it `shell` with the `posix` dialect; it reached the gate as `other` and its command was never read. A
+  `Monitor` call that watches a socket runs no command and is `other`. Which shell `Monitor` runs on a
+  Windows host whose shell tool is PowerShell is not measured.
+- Security: the env floor holds the agent CLI's session-service credentials and remote route,
+  `CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`, `CLAUDE_BG_SESSION_CREDENTIAL` and `CLAUDE_CODE_REMOTE_SDK_URL`,
+  so no controller can set them. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses the
+  start, by name.
+
 ## [1.10.0] - 2026-11-11
 
 Protocol 19; the window is `[18, 19]`, so a version-18 controller is still spoken to. Version 19 lets a

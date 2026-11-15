@@ -169,6 +169,10 @@ export const MESSAGE_ROUTING = {
     lane: 'update',
     note: "an informational message from the agent. Forwarded for the same reason as notification: the judgement is the controller's.",
   },
+  'system/session_writes_lost': {
+    lane: 'update',
+    note: 'the agent could not save transcript lines or its own configuration because the disk was full, so a resume may miss part of the conversation. A degrade, and the agent says so nowhere else on its stream, so it goes on the wire as mirror_error does.',
+  },
   tool_use_summary: {
     lane: 'update',
     note: 'a settled summary of a tool call — what a cold reader sees instead of raw arguments.',

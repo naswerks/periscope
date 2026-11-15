@@ -75,6 +75,11 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'ANTHROPIC_BASE_URL',
   'CLAUDE_CODE_OAUTH_TOKEN',
   'ANTHROPIC_API_KEY',
+  // The agent CLI's session-service credentials and the remote route it dials a session over: who it
+  // signs in as, and where its turns go.
+  'CLAUDE_CODE_SESSIONS_OAUTH_TOKEN',
+  'CLAUDE_BG_SESSION_CREDENTIAL',
+  'CLAUDE_CODE_REMOTE_SDK_URL',
   // The model route and the identity it uses: the endpoint, its token and headers, its socket, every
   // provider's base URL, region and project.
   'ANTHROPIC_*',

@@ -143,6 +143,7 @@ export const CLAUDE_ITEM_COVERAGE = {
   },
   'system/mirror_error': { handling: 'declined', note: `${NATIVE_ONLY}; a transcript store event` },
   'system/informational': { handling: 'declined', note: `${NATIVE_ONLY}; a message for an interactive user` },
+  'system/session_writes_lost': { handling: 'declined', note: `${NATIVE_ONLY}; a storage event` },
 } as const satisfies Readonly<Record<MessageDiscriminator, CoverageRow>>;
 
 /** Every content block kind an assistant message can carry, filled or declined. */
@@ -310,7 +311,7 @@ export class ClaudeItemFill implements ItemFill<SDKMessage> {
           turnId: null,
           toolUseId: block.id,
           toolName: block.name,
-          toolKind: claudeToolKind(block.name),
+          toolKind: claudeToolKind(block.name, block.input),
           input: isObject(block.input) ? (block.input as JsonObject) : null,
           truncated: false,
         });

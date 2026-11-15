@@ -69,6 +69,22 @@ test('a shell call with no command refuses rather than being read as an empty on
   assert.equal(gate(request({ toolInput: {} }))?.reason, 'shell-command-missing');
 });
 
+test('regression: a Monitor command is read as a shell command, so a push it would run is refused locally, by name', () => {
+  const monitor = (toolInput: Record<string, unknown>): DecisionRequest =>
+    request({ toolName: 'Monitor', toolInput: { description: 'watch', timeout_ms: 60_000, ...toolInput } });
+  assert.equal(gate(monitor({ command: 'git push origin main' }))?.reason, 'shell-boundary-command');
+  assert.equal(gate(monitor({ command: 'tail -f build.log' })), null, 'an ordinary command gets no opinion');
+  assert.equal(
+    gate(monitor({ command: `cat ${CREDENTIALS}/token` }))?.reason,
+    gate(request({ toolInput: { command: `cat ${CREDENTIALS}/token` } }))?.reason,
+    'a Monitor command naming a protected path refuses as the same Bash command does',
+  );
+  // A Monitor that watches a socket runs no command: no shell opinion, and not a missing command.
+  assert.equal(gate(monitor({ ws: { url: 'wss://example.invalid/events' } })), null);
+  // Control: with neither a command nor a socket it is the missing command it always was.
+  assert.equal(gate(monitor({}))?.reason, 'shell-command-missing');
+});
+
 test('a write outside the workspace refuses', () => {
   const found = gate(request({ toolName: 'Write', toolInput: { file_path: 'C:/elsewhere/x.txt' } }));
   assert.equal(found?.reason, 'path-escapes-root');

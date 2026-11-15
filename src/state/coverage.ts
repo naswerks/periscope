@@ -190,7 +190,7 @@ export const HOOK_COVERAGE = {
 } as const satisfies Record<HookEvent, CoverageRow>;
 
 /**
- * All 39 members of the SDKMessage union, keyed by discriminator.
+ * All 40 members of the SDKMessage union, keyed by discriminator.
  *
  * Fewer keys than members: several shapes share one discriminator (`user` covers the ordinary and
  * the replayed user message; `result` covers success and every error subtype). The pin walks the
@@ -352,6 +352,10 @@ export const MESSAGE_COVERAGE = {
   'system/informational': {
     handling: 'declined',
     note: 'a generic text banner, including hook feedback. Content.',
+  },
+  'system/session_writes_lost': {
+    handling: 'declined',
+    note: "transcript lines or the agent's own configuration were not saved because the disk was full, sent once as the process exits. It changes what a later resume can read, not what the session is doing, and it carries no fact this host reports: the persistence layer's, and it rides the wire whole.",
   },
 } as const satisfies Record<MessageDiscriminator, CoverageRow>;
 

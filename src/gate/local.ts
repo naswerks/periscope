@@ -37,6 +37,7 @@ import {
 import { classifyShellCommand } from './shell.js';
 import { parseCommand, readCmdCommand } from './command.js';
 import { patchPaths } from './patch.js';
+import { watchesSocketOnly } from './tool-kind.js';
 import { isAbsolutePath } from '../core/paths.js';
 
 /**
@@ -78,7 +79,9 @@ export interface ToolFamilies {
 export const DEFAULT_TOOL_FAMILIES: ToolFamilies = {
   write: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'],
   read: ['Read', 'NotebookRead'],
-  shell: ['Bash', 'PowerShell'],
+  // `Monitor` runs the command its input names, as `Bash` does; a call that watches a socket instead
+  // names no command and is not a shell call.
+  shell: ['Bash', 'PowerShell', 'Monitor'],
   search: ['Grep', 'Glob'],
 };
 
@@ -202,7 +205,9 @@ export function localGate(options: LocalGateOptions): LocalGate {
   const spawnEnv = options.spawnEnv;
 
   return (request: DecisionRequest): Refusal | null => {
-    if (shellTools.has(request.toolName)) {
+    // A shell tool's call that watches a socket and names no command runs nothing a shell reads, so it
+    // is no shell call; with no command and no socket it is still refused below.
+    if (shellTools.has(request.toolName) && !watchesSocketOnly(request.toolInput)) {
       // The shell scan reads the session's variables as they stand now, not as they stood at construction.
       const shellJail: JailOptions = spawnEnv === undefined ? jail : { ...jail, variables: spawnEnv() };
       const command = commandFromToolInput(request.toolInput);

@@ -16,7 +16,7 @@ import type { EscalationTransport } from './escalate.js';
 import { escalatingDecider } from './escalate.js';
 import { permissionHooks } from './gate.js';
 import { DEFAULT_TOOL_FAMILIES } from './local.js';
-import { CLAUDE_TOOL_KINDS, claudeToolKind } from './tool-kind.js';
+import { CLAUDE_TOOL_KINDS, claudeShellDialect, claudeToolKind, watchesSocketOnly } from './tool-kind.js';
 
 /**
  * Each input type the agent SDK's `sdk-tools.d.ts` declares, the tool name a `PreToolUse` input
@@ -60,9 +60,11 @@ const SDK_TOOLS: ReadonlyArray<readonly [inputType: string, toolName: string, ki
   ['RemoteTriggerInput', 'RemoteTrigger', 'other'],
   ['ShowOnboardingRolePickerInput', 'ShowOnboardingRolePicker', 'other'],
   ['ReadNotificationsInput', 'ReadNotifications', 'other'],
-  // Its input carries a shell command, and it is `other`: the map names the shell family the gate
-  // classifies, and this tool is not in it.
-  ['MonitorInput', 'Monitor', 'other'],
+  // Its input carries a shell command, so it is a shell tool; a call that watches a socket instead is
+  // `other` (below).
+  ['MonitorInput', 'Monitor', 'shell'],
+  // Offers to set up the user's own browser: no path, no command.
+  ['OfferChromeSetupInput', 'OfferChromeSetup', 'other'],
   ['ProposeSkillsInput', 'ProposeSkills', 'other'],
   ['ProposeGoalInput', 'ProposeGoal', 'other'],
   ['ArtifactInput', 'Artifact', 'other'],
@@ -94,6 +96,19 @@ test("every Claude tool name maps to its documented kind, and a name the map doe
   // A name that merely contains the MCP prefix is not an MCP tool; one that starts with it is.
   assert.equal(claudeToolKind('not_mcp__x'), 'other');
   assert.equal(claudeToolKind('mcp__server__tool'), 'mcp');
+});
+
+test('regression: a Monitor call that runs a command is a POSIX shell call, and one that watches a socket runs none', () => {
+  const runs = { description: 'build log', timeout_ms: 60_000, command: 'tail -f build.log' };
+  const watches = { description: 'events', timeout_ms: 60_000, ws: { url: 'wss://example.invalid/events' } };
+  assert.equal(claudeToolKind('Monitor', runs), 'shell');
+  assert.equal(claudeShellDialect('Monitor', runs), 'posix');
+  assert.equal(claudeToolKind('Monitor', watches), 'other');
+  assert.equal(claudeShellDialect('Monitor', watches), null);
+  // Control: the socket reading belongs to the input, not to the name; a Bash call is never read as one.
+  assert.equal(claudeToolKind('Bash', { command: 'ls' }), 'shell');
+  assert.equal(watchesSocketOnly({ command: 'ls', ws: { url: 'wss://x' } }), false);
+  assert.equal(watchesSocketOnly({}), false, 'an input naming neither is no socket watch');
 });
 
 test('the tool kinds are the seven the wire declares, and the map uses no other word', () => {

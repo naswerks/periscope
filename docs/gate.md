@@ -291,9 +291,12 @@ be correlated without re-deriving it from transport state. It also carries `tool
 session's runtime, which the composer passes in beside `sessionKey` (`PermissionGateOptions.runtime`).
 A decider can hold one policy per kind across runtimes; `toolName` is unchanged and still says
 exactly which tool it is. The map names the shell, file and web tools and every `mcp__` tool; a tool
-it does not name is `other`, whatever its input carries, and never left without a kind. A shell call
+it does not name is `other`, whatever its input carries, and never left without a kind. Claude's
+`Monitor` runs the command its input names, so it is `shell` and in the shell family; a `Monitor` call
+that watches a socket (`ws`, no `command`) runs none and is `other`. A shell call
 also carries `shellDialect` (`SHELL_DIALECTS`: `posix` or `powershell`), the grammar its command runs
-in: Claude's `Bash` is `posix` and its `PowerShell` is `powershell`; Qwen Code's `run_shell_command`
+in: Claude's `Bash` and `Monitor` are `posix` and its `PowerShell` is `powershell` (which shell
+`Monitor` runs on a Windows host whose shell tool is PowerShell is not measured); Qwen Code's `run_shell_command`
 is `cmd` on Windows, unless the environment the CLI starts with names Git Bash (`posix`) or PowerShell
 (`powershell`) as its shell, and `posix` elsewhere. For Claude it is data for the decider only; the
 local gate reads Claude's commands as it always has. Both are

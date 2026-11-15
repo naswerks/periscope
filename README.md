@@ -60,12 +60,12 @@ PERISCOPE_CONTROLLER_URL and PERISCOPE_DECISION_URL written to the config file -
 The fourth starts the host, in the foreground, until you stop it:
 
 ```
-[host] periscope 1.8.1 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
+[host] periscope 1.11.0 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
 [credential] paired as ph-8cb226ae… - the paired credential is presented on every dial
-[agent] Claude Code 2.1.284 (agent SDK 0.3.284), 12 model(s) in the hello
+[agent] Claude Code 2.1.325 (agent SDK 0.3.325), 12 model(s) in the hello
 [link] idle -> connecting (start_requested)
 [link] connecting -> open (socket_connected)
-[link] open -> accepted (hello_completed) — protocol v17
+[link] open -> accepted (hello_completed) — protocol v20
 ```
 
 Before it dials, the host asks the agent which models it offers, without sending a prompt, and the
@@ -143,8 +143,8 @@ anything. The figure for a release is in [`CHANGELOG.md`](CHANGELOG.md).
 
 |                                  |                                       |
 | -------------------------------- | ------------------------------------- |
-| `@anthropic-ai/claude-agent-sdk` | **0.3.284**, pinned exactly, no caret |
-| Claude Code CLI                  | **2.1.284** (bundled with that SDK)   |
+| `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret |
+| Claude Code CLI                  | **2.1.325** (bundled with that SDK)   |
 | Codex app-server                 | **0.162.1**, pinned, when configured  |
 | Qwen Code CLI                    | **0.25.1**, pinned, when configured   |
 | pi CLI                           | **1.2.0**, pinned, when configured    |

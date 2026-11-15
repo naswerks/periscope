@@ -141,7 +141,8 @@ on POSIX does not create protection on Windows.
 
 The local gate matches on tool name, in four families (`DEFAULT_TOOL_FAMILIES`): writes are `Write`,
 `Edit`, `MultiEdit`, `NotebookEdit`; reads are `Read`, `NotebookRead`; searches are `Grep`, `Glob`;
-shells are `Bash`, `PowerShell`. An MCP tool arrives as `mcp__{server}__{tool}`, matches nothing, and
+shells are `Bash`, `PowerShell`, `Monitor` (a `Monitor` call that watches a socket runs no command and
+is no shell call). An MCP tool arrives as `mcp__{server}__{tool}`, matches nothing, and
 gets no local opinion, so the decision escalates to your controller. That is fail-closed and correct.
 
 Within the families the credential-path denial is scoped, and the scope is what to review. Writes
@@ -569,7 +570,9 @@ over the link and without a further credential:
   cannot write it over the link. Beneath the floor no declaration reaches: `PATH`, `NODE_OPTIONS`,
   `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`,
   `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
-  `ANTHROPIC_API_KEY`, Codex's home, model route, credentials and certificate authority (the eight
+  `ANTHROPIC_API_KEY`, the agent CLI's session-service credentials and remote route
+  (`CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`, `CLAUDE_BG_SESSION_CREDENTIAL`, `CLAUDE_CODE_REMOTE_SDK_URL`),
+  Codex's home, model route, credentials and certificate authority (the eight
   names [Codex sessions](#codex-sessions) lists), Qwen Code's own variables and the model routes it
   reads (the names [Qwen Code sessions](#qwen-code-sessions) lists), pi's own variables, its
   extension's configuration and the model routes it reads (the names [pi sessions](#pi-sessions)
@@ -652,8 +655,8 @@ stops being true.
 
 |                                  |                                                              |
 | -------------------------------- | ------------------------------------------------------------ |
-| `@anthropic-ai/claude-agent-sdk` | **0.3.284**, pinned exactly, no caret                        |
-| Bundled Claude Code CLI          | **2.1.284**                                                  |
+| `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret                        |
+| Bundled Claude Code CLI          | **2.1.325**                                                  |
 | Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows |
 | Codex app-server                 | **0.162.1**, pinned; any other version is listed unavailable |
 | Qwen Code CLI                    | **0.25.1**, pinned; any other version is listed unavailable  |

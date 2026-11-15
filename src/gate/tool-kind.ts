@@ -8,10 +8,15 @@
  */
 import type { ShellDialect, ToolKind } from './decision.js';
 
-/** The kind of each Claude tool this table names. Every other name is `other`. */
+/**
+ * The kind of each Claude tool this table names. Every other name is `other`. `Monitor` runs the shell
+ * command its input names and reports each line it prints, so it is a shell tool; a `Monitor` call that
+ * watches a socket instead names no command and is `other` (`watchesSocketOnly`).
+ */
 export const CLAUDE_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   Bash: 'shell',
   PowerShell: 'shell',
+  Monitor: 'shell',
   Read: 'file_read',
   Grep: 'file_read',
   Glob: 'file_read',
@@ -24,23 +29,50 @@ export const CLAUDE_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   WebSearch: 'web',
 };
 
-/** The grammar each Claude shell tool runs its command in: `Bash` a POSIX shell, `PowerShell` PowerShell. */
+/**
+ * The grammar each Claude shell tool runs its command in: `Bash` a POSIX shell, `PowerShell` PowerShell,
+ * and `Monitor` the grammar `Bash` runs. Which shell `Monitor` runs on a Windows host whose shell tool is
+ * PowerShell is not measured.
+ */
 export const CLAUDE_SHELL_DIALECTS: Readonly<Record<string, ShellDialect>> = {
   Bash: 'posix',
   PowerShell: 'powershell',
+  Monitor: 'posix',
 };
 
-/** The dialect of the Claude shell tool named `toolName`, or null for a tool that runs no command. */
-export function claudeShellDialect(toolName: string): ShellDialect | null {
+/**
+ * Whether a tool's input watches a socket and runs no command: it names a `ws` object and no `command`.
+ * A `Monitor` call takes one or the other, never both.
+ */
+export function watchesSocketOnly(toolInput: unknown): boolean {
+  if (typeof toolInput !== 'object' || toolInput === null || Array.isArray(toolInput)) return false;
+  const input = toolInput as Record<string, unknown>;
+  const ws = input['ws'];
+  return input['command'] === undefined && typeof ws === 'object' && ws !== null && !Array.isArray(ws);
+}
+
+/**
+ * The dialect of the Claude shell tool named `toolName`, or null for a tool that runs no command. A call
+ * whose input (`toolInput`, where it is known) watches a socket runs none.
+ */
+export function claudeShellDialect(toolName: string, toolInput?: unknown): ShellDialect | null {
+  if (toolInput !== undefined && watchesSocketOnly(toolInput)) return null;
   return Object.hasOwn(CLAUDE_SHELL_DIALECTS, toolName) ? (CLAUDE_SHELL_DIALECTS[toolName] ?? null) : null;
 }
 
 /** The prefix every MCP tool name carries. */
 const MCP_TOOL_PREFIX = 'mcp__';
 
-/** The kind of the Claude tool named `toolName`: its row in the table, `mcp` by prefix, else `other`. */
-export function claudeToolKind(toolName: string): ToolKind {
-  if (Object.hasOwn(CLAUDE_TOOL_KINDS, toolName)) return CLAUDE_TOOL_KINDS[toolName] ?? 'other';
+/**
+ * The kind of the Claude tool named `toolName`: its row in the table, `mcp` by prefix, else `other`. A
+ * shell tool's call whose input (`toolInput`, where it is known) watches a socket runs no command, and
+ * is `other`.
+ */
+export function claudeToolKind(toolName: string, toolInput?: unknown): ToolKind {
+  if (Object.hasOwn(CLAUDE_TOOL_KINDS, toolName)) {
+    const kind = CLAUDE_TOOL_KINDS[toolName] ?? 'other';
+    return kind === 'shell' && toolInput !== undefined && watchesSocketOnly(toolInput) ? 'other' : kind;
+  }
   if (toolName.startsWith(MCP_TOOL_PREFIX)) return 'mcp';
   return 'other';
 }
