@@ -9,8 +9,10 @@ import {
   COPILOT_RUNTIME_PINNED_VERSION,
   COPILOT_SDK_PINNED_VERSION,
   copilotPlatform,
+  loadCopilotSdk,
   readCopilotInstall,
 } from './copilot-sdk.js';
+import type { CopilotInstall } from './copilot-sdk.js';
 import type { CopilotMessage } from './copilot-wire.js';
 
 const PLATFORM = 'win32-x64';
@@ -102,6 +104,31 @@ test('an install off the pin, incomplete or absent is refused runtime-unavailabl
     install(otherPlatform);
     assert.match(refused(otherPlatform, 'linux-x64'), /the Copilot runtime for linux-x64 is not installed/);
     return Promise.resolve();
+  }));
+
+test('an SDK that could not be loaded is tried again by the next session, and one that loaded is kept', () =>
+  withTempDir('copilot-load', async (directory) => {
+    const entry = join(directory, 'index.mjs');
+    const install: CopilotInstall = {
+      directory,
+      entry,
+      runtime: join(directory, 'copilot-runtime'),
+      sdkVersion: '1.0.34',
+      runtimeVersion: '1.0.112',
+    };
+    const absent = await loadCopilotSdk(install);
+    assert.equal(absent.ok, false);
+    assert.equal(absent.ok ? null : absent.refusal.reason, 'runtime-unavailable');
+    // The operator puts the SDK in place under the running host.
+    writeFileSync(
+      entry,
+      'export class CopilotClient {}\nexport const RuntimeConnection = { forStdio: () => ({ kind: "stdio" }) };\n',
+    );
+    const repaired = await loadCopilotSdk(install);
+    assert.ok(repaired.ok, repaired.ok ? '' : `the first failure was kept: ${repaired.refusal.detail}`);
+    // Control: the loaded module is the one every later session gets.
+    const again = await loadCopilotSdk(install);
+    assert.ok(again.ok && again.value === repaired.value);
   }));
 
 test("the platform word is the runtime packages' own", () => {

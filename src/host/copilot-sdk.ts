@@ -395,7 +395,9 @@ const loaded = new Map<string, Promise<Result<CopilotSdk>>>();
 
 /**
  * Import the SDK from a checked install. The module is loaded once per entry and kept: a later session
- * reuses it. Refuses `runtime-unavailable` when the module does not load or lacks what this host calls.
+ * reuses it. Refuses `runtime-unavailable` when the module does not load or lacks what this host calls. A
+ * refusal is not kept: the next session tries the import again, so an install repaired under a running host
+ * is taken without a restart.
  */
 export function loadCopilotSdk(install: CopilotInstall): Promise<Result<CopilotSdk>> {
   const known = loaded.get(install.entry);
@@ -421,6 +423,9 @@ export function loadCopilotSdk(install: CopilotInstall): Promise<Result<CopilotS
     return ok(module as unknown as CopilotSdk);
   })();
   loaded.set(install.entry, loading);
+  void loading.then((result) => {
+    if (!result.ok && loaded.get(install.entry) === loading) loaded.delete(install.entry);
+  });
   return loading;
 }
 
