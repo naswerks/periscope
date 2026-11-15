@@ -2168,9 +2168,15 @@ export class PeriscopeHost {
         home,
         spawnEnv: () => spawnEnv,
         // A Codex session's tools are Codex's: its own names, its shell read in the grammar it runs
-        // in, and its paths relative to where the call runs.
+        // in, the directory a command runs in held to the protected set, and its paths relative to where
+        // the call runs.
         ...(runtimeOf(requested.value) === CODEX_RUNTIME
-          ? { toolFamilies: CODEX_TOOL_FAMILIES, readsShellDialect: true, resolvesAgainstCallCwd: true }
+          ? {
+              toolFamilies: CODEX_TOOL_FAMILIES,
+              readsShellDialect: true,
+              checksShellCwd: true,
+              resolvesAgainstCallCwd: true,
+            }
           : runtimeOf(requested.value) === QWEN_RUNTIME
             ? // A Qwen Code session's tools are Qwen's: its own names, its shell read in the grammar it
               // runs in, the directory a command runs in held to the protected set, and its relative

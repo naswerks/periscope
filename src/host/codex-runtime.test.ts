@@ -56,10 +56,21 @@ test('control: a line that leads with the version reads its second token, which 
     codexVersionProblem('the binary', codexVersionOf('0.162.1 codex-cli')) ?? '',
     /is Codex codex-cli; this host is pinned/,
   );
-  assert.equal(codexVersionProblem('the binary', '0.162.1'), null);
+  assert.equal(codexVersionProblem('the binary', CODEX_PINNED_VERSION), null);
   assert.match(codexVersionProblem('the binary', '0.0.0') ?? '', /an unreleased build \(0\.0\.0\)/);
   assert.match(codexVersionProblem('the binary', null) ?? '', /reports no version/);
 });
+
+test('the release the pin moved from is refused by name, and the pinned release is admitted', () => {
+  assert.equal(
+    codexVersionProblem('the binary', '0.162.1'),
+    `the binary is Codex 0.162.1; this host is pinned to Codex ${CODEX_PINNED_VERSION}`,
+  );
+  assert.equal(codexVersionProblem('the binary', CODEX_PINNED_VERSION), null);
+});
+
+/** The pinned version as it reads inside a regular expression. */
+const PINNED = CODEX_PINNED_VERSION.replace(/\./g, '\\.');
 
 test("the userAgent's version is what follows the originator's slash", () => {
   assert.equal(
@@ -88,12 +99,12 @@ test('an absent binary and an off-version one are each refused runtime-unavailab
   assert.equal(absent.ok ? '' : absent.refusal.reason, 'runtime-unavailable');
   assert.match(
     absent.ok ? '' : absent.refusal.detail,
-    /C:\/missing\/codex\.exe is absent; this host is pinned to Codex 0\.162\.1/,
+    new RegExp(`C:/missing/codex\\.exe is absent; this host is pinned to Codex ${PINNED}`),
   );
   const newer = await readCodexVersion('C:/tools/codex.exe', {}, answering('codex-cli 0.163.0\n'));
   assert.match(
     newer.ok ? '' : newer.refusal.detail,
-    /C:\/tools\/codex\.exe is Codex 0\.163\.0; this host is pinned to Codex 0\.162\.1/,
+    new RegExp(`C:/tools/codex\\.exe is Codex 0\\.163\\.0; this host is pinned to Codex ${PINNED}`),
   );
   const pinned = await readCodexVersion(
     'C:/tools/codex.exe',
@@ -156,7 +167,7 @@ async function read(options: Partial<FakeCodexOptions> = {}, extra: Partial<Read
       home: root.path,
       env: { PATH: 'p' },
       clientVersion: '1.7.0',
-      runVersion: answering('codex-cli 0.162.1\n'),
+      runVersion: answering(`codex-cli ${CODEX_PINNED_VERSION}\n`),
       spawn: fake.spawn,
       killTree: () => {
         fake.child.exit(null, 'SIGKILL');
@@ -174,7 +185,7 @@ test('a signed-in home on the pinned binary is available with its listed models,
   const found = await read();
   assert.equal(found.detail, null);
   assert.equal(found.entry.available, true);
-  assert.equal(found.entry.version, '0.162.1');
+  assert.equal(found.entry.version, CODEX_PINNED_VERSION);
   assert.deepEqual(
     found.entry.models.map((model) => model.value),
     ['gpt-6-sol', 'gpt-6-luna'],
@@ -208,7 +219,7 @@ test('an off-version binary is unavailable before any server is started', async 
   assert.equal(found.entry.available, false);
   assert.match(
     found.entry.unavailableReason ?? '',
-    /is Codex 0\.161\.0; this host is pinned to Codex 0\.162\.1/,
+    new RegExp(`is Codex 0\\.161\\.0; this host is pinned to Codex ${PINNED}`),
   );
 });
 
@@ -242,7 +253,7 @@ test('the npm launcher, run by this Node, answers --version and serves the read:
     });
     assert.equal(found.detail, null, found.detail ?? '');
     assert.equal(found.entry.available, true);
-    assert.equal(found.entry.version, '0.162.1');
+    assert.equal(found.entry.version, CODEX_PINNED_VERSION);
     assert.equal(found.entry.models.length, 2);
   } finally {
     root.done();

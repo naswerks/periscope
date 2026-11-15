@@ -665,7 +665,7 @@ stops being true.
 | `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret                        |
 | Bundled Claude Code CLI          | **2.1.325**                                                  |
 | Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows |
-| Codex app-server                 | **0.162.1**, pinned; any other version is listed unavailable |
+| Codex app-server                 | **0.169.0**, pinned; any other version is listed unavailable |
 | Qwen Code CLI                    | **0.25.1**, pinned; any other version is listed unavailable  |
 | pi                               | **1.2.0**, pinned; any other version is listed unavailable   |
 

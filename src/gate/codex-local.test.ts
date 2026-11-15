@@ -136,6 +136,50 @@ test('the credential scan reads the raw command under either dialect', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Where a shell command runs
+// ---------------------------------------------------------------------------
+
+// At rust-v0.169.0 Codex's `PreToolUse` input carries a local shell call's own working directory as its
+// `cwd` (the call's `workdir`, resolved), and the tool input carries the command alone.
+const SESSIONS = 'C:/Users/agent/.codex-home/sessions';
+const TEMP = 'C:/Users/agent/AppData/Local/Temp';
+const cwdGate = (checksShellCwd: boolean) =>
+  localGate({
+    workspaceRoot: WORKSPACE,
+    writeRoots: [TEMP],
+    resolve: fakeResolve,
+    protectedPaths: [CREDENTIALS, SESSIONS],
+    toolFamilies: CODEX_TOOL_FAMILIES,
+    readsShellDialect: true,
+    checksShellCwd,
+    resolvesAgainstCallCwd: true,
+  });
+const codexCwdGate = cwdGate(true);
+
+test('a Codex shell command that runs inside the protected set is refused there, whatever it names', () => {
+  const command = 'Get-Content rollout.jsonl';
+  assert.equal(
+    codexCwdGate(request({ toolInput: { command }, cwd: `${SESSIONS}/2026`, shellDialect: 'powershell' }))
+      ?.reason,
+    'credential-path-denied',
+  );
+  // Control: the same command running in the workspace, or in the temp folder the session may write in, is
+  // no local objection; and a gate that does not read the directory has none either.
+  assert.equal(
+    codexCwdGate(request({ toolInput: { command }, cwd: WORKSPACE, shellDialect: 'powershell' })),
+    null,
+  );
+  assert.equal(
+    codexCwdGate(request({ toolInput: { command }, cwd: `${TEMP}/scratch`, shellDialect: 'powershell' })),
+    null,
+  );
+  assert.equal(
+    cwdGate(false)(request({ toolInput: { command }, cwd: `${SESSIONS}/2026`, shellDialect: 'powershell' })),
+    null,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Patches
 // ---------------------------------------------------------------------------
 

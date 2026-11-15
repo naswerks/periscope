@@ -405,8 +405,8 @@ A host offers Codex beside Claude when `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODE
 Then a `session_new` naming `runtime: "codex"` runs Codex's app-server in the session's directory,
 and the hello's `agents` lists Codex after Claude ([the wire protocol](protocol.md)).
 
-- **The version is pinned.** This release runs Codex 0.162.1 (`CODEX_PINNED_VERSION`). Install that
-  version (`npm install -g @openai/codex@0.162.1`, or the release's native binary) and point
+- **The version is pinned.** This release runs Codex 0.169.0 (`CODEX_PINNED_VERSION`). Install that
+  version (`npm install -g @openai/codex@0.169.0`, or the release's native binary) and point
   `PERISCOPE_CODEX_BIN` at it. A binary that reports another version, or none, is listed unavailable
   with the path, the version it reports and the version pinned; the host still starts, and a session
   naming `codex` is refused `runtime-unavailable` with that reason. Nothing installs or updates it.
@@ -597,7 +597,7 @@ fails it says `the hello carries no model catalog` with the reason, and the host
 that declares model endpoints prints `[endpoints] 2 model endpoint(s) declared: deepseek, zai`, names
 only, and `[endpoint] deepseek: default listed and not mapped` for an agent alias an endpoint lists as
 a model without mapping it, which a session naming it is refused (`model-endpoint-mismatch`). A host
-offering Codex prints `[codex] codex 0.162.1, 6 model(s) in the hello, control tier
+offering Codex prints `[codex] codex 0.169.0, 6 model(s) in the hello, control tier
 intercepted-with-residual`, or `[codex] codex is listed unavailable` with the reason, and then whether
 periscope's hook was written to the runner's home and answered its probe. A host offering Qwen Code
 prints `[qwen-code] qwen-code 0.25.1, 0 model(s) in the hello, control tier intercepted-with-residual`,

@@ -164,6 +164,13 @@ export interface LocalGateOptions {
    */
   readonly checksShellDirectory?: boolean;
   /**
+   * Check the working directory a shell call runs in (the request's `cwd`, when absolute) against the
+   * protected set, as a read of that directory. Defaults to false. Set for a runtime that reports a shell
+   * call's own working directory as the call's `cwd` and keeps it out of the input: a relative path in the
+   * command is a path under it.
+   */
+  readonly checksShellCwd?: boolean;
+  /**
    * Resolve a relative path a read tool names against the call's own working directory (`cwd`), else
    * the workspace root, rather than this process's. Defaults to false. Set for a runtime whose file
    * tools take paths relative to where the call runs; a patch's paths are always resolved this way.
@@ -200,6 +207,7 @@ export function localGate(options: LocalGateOptions): LocalGate {
   const patchTools = new Set(families.patch ?? []);
   const readsShellDialect = options.readsShellDialect ?? false;
   const checksShellDirectory = options.checksShellDirectory ?? false;
+  const checksShellCwd = options.checksShellCwd ?? false;
   const resolvesAgainstCallCwd = options.resolvesAgainstCallCwd ?? false;
   const resolvesWritesAgainstCallCwd = options.resolvesWritesAgainstCallCwd ?? false;
   const spawnEnv = options.spawnEnv;
@@ -220,6 +228,10 @@ export function localGate(options: LocalGateOptions): LocalGate {
       if (checksShellDirectory) {
         const directory = shellDirectoryOf(request.toolInput);
         const inside = directory === null ? null : checkReadPath(directory, jail);
+        if (inside !== null) return inside;
+      }
+      if (checksShellCwd && isAbsolutePath(request.cwd)) {
+        const inside = checkReadPath(request.cwd, jail);
         if (inside !== null) return inside;
       }
       // One parse, both consumers. The credential check runs first because a command naming the

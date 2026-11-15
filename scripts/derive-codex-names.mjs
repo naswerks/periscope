@@ -4,7 +4,7 @@
  * release, read from a clone of the Codex repository at that release's tag, with no binary.
  *
  *   node scripts/derive-codex-names.mjs <codex clone> <tag>
- *   node scripts/derive-codex-names.mjs C:/src/codex rust-v0.162.1
+ *   node scripts/derive-codex-names.mjs C:/src/codex rust-v0.169.0
  *
  * Needs Node 23.8 or later (`zlib.zstdDecompressSync`) and git on the path.
  *

@@ -60,6 +60,21 @@ frame it sends decodes unchanged.
   and the next compaction reports `started`; the entry stayed open, no `ended` was sent and the next
   `started` was suppressed. A compaction that succeeds still ends at its boundary, with its token
   counts.
+- Changed: Codex is pinned at 0.169.0 (was 0.162.1); a binary that reports any other version, 0.162.1
+  included, is listed unavailable by name, so the operator installs `@openai/codex@0.169.0` before a Codex
+  session runs. `contracts/codex-protocol-names.json` is the 0.169.0 release's. Its two new
+  notifications are declined: `thread/section/changed` is opted out at `initialize`, and
+  `thread/readState/changed` is experimental. Its new client methods are not called.
+- Changed: a Codex shell call's decision request carries the command's own working directory as its
+  `cwd`, where it carried the session's: Codex 0.169.0 names a local shell call's working directory in its
+  hook's input, and the call's input carries the command alone.
+- Security: a Codex shell command that runs inside the protected set is refused there, whatever its
+  command names: the local gate reads the directory a Codex shell call runs in as it reads a Qwen Code
+  shell call's `directory` (`checksShellCwd`).
+- Security: a Codex command approval of the kind `humanCommand`, a command Codex's own requirements mark
+  for a fresh decision, is decided fresh and never answered from the hook's decision for the same call.
+  The app-server sends one only to a connection that opted into experimental API, which this host never
+  does, and with none it refuses the call itself.
 
 ## [1.10.0] - 2026-11-11
 

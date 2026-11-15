@@ -18,7 +18,7 @@ import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 
 /** The Codex release this host is built and tested against. A binary reporting any other is refused. */
-export const CODEX_PINNED_VERSION = '0.162.1';
+export const CODEX_PINNED_VERSION = '0.169.0';
 
 /** How long `--version` may take before the binary is reported as not answering. */
 export const CODEX_VERSION_TIMEOUT_MS = 10_000;

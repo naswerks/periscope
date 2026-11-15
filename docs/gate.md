@@ -343,16 +343,20 @@ hook channel, and Codex's approval channel.
   after its hook, and waits with no deadline of its own. An approval for a call the hook decided is
   answered from that decision; one the hook did not decide is decided fresh; at the host's deadline it
   is declined and `gate-approval-unanswered` is raised. Input written to a running command is always
-  decided fresh. An MCP tool approval names no call, so it is tied to the call pending on that server;
+  decided fresh, and so is a command Codex's own requirements mark for a fresh decision (`humanCommand`),
+  which the app-server sends only to a connection that opted into experimental API, which this host never
+  does; with no such connection Codex refuses the call itself. An MCP tool approval names no call, so it is tied to the call pending on that server;
   with several pending, each is decided and the approval is accepted only when every one was allowed
   (`gate-approval-ambiguous` otherwise). The answers are `accept`, `decline` and `cancel`, never a
   grant for the session, an amendment to Codex's rules, or a root.
 - **An allow that rewrites the input is refused on Codex** (`permission-decision-unrecognised`):
   Codex's hook can only let a call proceed as asked or block it, and running half the decision would
   run arguments nobody approved.
-- **Codex's tools in the local gate** (`CODEX_TOOL_FAMILIES`): `Bash` through the shell rules,
-  `apply_patch` with every file its patch names (`src/gate/patch.ts`) through the jail, `view_image`
-  through the protected set, relative paths resolved where the call runs. Codex's `Bash` runs
+- **Codex's tools in the local gate** (`CODEX_TOOL_FAMILIES`): `Bash` through the shell rules, the
+  directory it runs in through the protected set (`checksShellCwd`: Codex's hook input names a local shell
+  call's own working directory as its `cwd`, and the call's input carries the command alone), `apply_patch`
+  with every file its patch names (`src/gate/patch.ts`) through the jail, `view_image` through the
+  protected set, relative paths resolved where the call runs. Codex's `Bash` runs
   PowerShell on Windows, so its commands are read both ways and refused when either reading refuses
   (`readsShellDialect`): the POSIX reading of `<# note #> git push` hides the push behind what it takes
   for a comment.

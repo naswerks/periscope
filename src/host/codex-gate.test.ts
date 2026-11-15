@@ -579,6 +579,40 @@ test("input for a running command is always decided fresh, never answered from t
   host.stop();
 });
 
+// `humanCommand` is the approval kind the app-server protocol declares at rust-v0.169.0
+// (`CommandExecutionApprovalKind`) for a command Codex's own requirements mark for a fresh decision, with an
+// `approvalId` of its own.
+test("a command Codex marks for a fresh decision is decided fresh, never answered from the hook's decision", async () => {
+  const { host, link, fake, asked } = await gateHost({
+    decide: (request) =>
+      request.toolUseId === 'approval-human'
+        ? { behavior: 'deny', message: 'decided afresh' }
+        : { behavior: 'allow' },
+  });
+  open(link);
+  await ready(link);
+  await askHook(fake, hookEvent('call_human'));
+  const answered = await fake.server.ask(
+    'item/commandExecution/requestApproval',
+    commandApproval('call_human', { kind: 'humanCommand', approvalId: 'approval-human' }),
+  );
+  assert.deepEqual(answered['result'], { decision: 'decline' });
+  assert.deepEqual(
+    asked.map((request) => request.toolUseId),
+    ['call_human', 'approval-human'],
+    'the checkpoint was answered from the hook decision',
+  );
+  // Control: an ordinary approval after its hook call is answered from the hook's decision, asking nobody again.
+  await askHook(fake, hookEvent('call_plain'));
+  const plain = await fake.server.ask(
+    'item/commandExecution/requestApproval',
+    commandApproval('call_plain', { kind: 'command' }),
+  );
+  assert.deepEqual(plain['result'], { decision: 'accept' });
+  assert.equal(asked.length, 3, 'an ordinary approval asked the decider again');
+  host.stop();
+});
+
 test("at the host's deadline an approval is declined, named gate-approval-unanswered, and the call does not run", async () => {
   const { host, link, fake } = await gateHost({ decide: () => new Promise(() => undefined) });
   open(link, {}, { decisionTimeoutMs: 200, holdAfterMs: 50, matcherTimeoutSeconds: null });
