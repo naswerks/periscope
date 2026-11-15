@@ -502,6 +502,7 @@ async function claudeCallAnswers(
   baseEnv: Readonly<Record<string, string>>,
   protectedPaths: readonly string[],
   calls: readonly (readonly [toolName: string, input: unknown])[],
+  cwd = 'C:/work',
 ): Promise<{ answers: string[]; causes: string[] }> {
   const processes = fakeAgents();
   const link = new FakeLink();
@@ -521,13 +522,13 @@ async function claudeCallAnswers(
       return link;
     },
   });
-  link.deliver('handle-1', sessionNew('C:/work'));
+  link.deliver('handle-1', sessionNew(cwd));
   await settle();
   const request = processes.started[0]?.request;
   assert.ok(request !== undefined, 'no session was started');
   const answers: string[] = [];
   for (const [toolName, input] of calls) {
-    const output = await callHooks(request, preToolUse(toolName, input));
+    const output = await callHooks(request, { ...preToolUse(toolName, input), cwd });
     answers.push(
       (output as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput
         ?.permissionDecision ?? '',
@@ -556,6 +557,36 @@ test("regression: with CLAUDE_CONFIG_DIR set, its sign-in named through the vari
   // Control: the variable unset in the session's environment, the same commands name no protected path.
   const unset = await claudeAnswers({ PATH: 'p' }, [credentials], spellings);
   assert.deepEqual(unset.answers, ['allow', 'allow', 'allow']);
+});
+
+test("a Claude session's relative search and read are checked where the call runs, not where this process runs", async () => {
+  // The session runs beside the protected folder, and this process somewhere else entirely: a path that
+  // climbs out of the session's directory names the protected folder only when it is placed there.
+  const session = resolve('/operator/work/session-1');
+  const keys = resolve('/operator/keys');
+  const calls: (readonly [string, unknown])[] = [
+    ['Grep', { pattern: 'BEGIN', path: '../../keys' }],
+    ['Glob', { pattern: '*.pem', path: '../../keys' }],
+    ['Read', { file_path: '../../keys/id_rsa' }],
+  ];
+  const answered = await claudeCallAnswers({ PATH: 'p' }, [keys], calls, session);
+  assert.deepEqual(answered.answers, ['deny', 'deny', 'deny']);
+  assert.equal(
+    answered.causes.filter((cause) => cause === 'refusal/credential-path-denied').length,
+    calls.length,
+    answered.causes.join(', '),
+  );
+  // Control: a relative path that stays in the session's own tree is searched and read.
+  const inside = await claudeCallAnswers(
+    { PATH: 'p' },
+    [keys],
+    [
+      ['Grep', { pattern: 'x', path: 'src' }],
+      ['Read', { file_path: 'src/a.ts' }],
+    ],
+    session,
+  );
+  assert.deepEqual(inside.answers, ['allow', 'allow']);
 });
 
 test(

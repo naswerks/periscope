@@ -2535,9 +2535,15 @@ export class PeriscopeHost {
                       resolvesAgainstCallCwd: true,
                       resolvesWritesAgainstCallCwd: true,
                     }
-                  : this.#options.toolFamilies === undefined
-                    ? {}
-                    : { toolFamilies: this.#options.toolFamilies }),
+                  : // A Claude session's tools are the agent SDK's: a relative path a read or a search names
+                    // is a path under where the call runs, not under this process's own directory. A write
+                    // is left to the resolver, as it was: the CLI hands the hook a write's path whole.
+                    {
+                      resolvesAgainstCallCwd: true,
+                      ...(this.#options.toolFamilies === undefined
+                        ? {}
+                        : { toolFamilies: this.#options.toolFamilies }),
+                    }),
       }),
       ...(this.#options.codex === undefined
         ? {}

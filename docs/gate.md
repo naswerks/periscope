@@ -95,7 +95,11 @@ directory (`src/gate/placement.ts`): under a call directory spelled the Windows 
 leading separator (`\Users\x`, `/Users/x`) starts at that directory's drive or share, and `C:name` on
 the directory's own drive is beneath the directory; under any call directory `~`, `~/x` and `~\x` are
 the home directory when one is known. Under any other call directory a backslash or a drive-shaped name
-is the file name it is written as. Under Windows rules a form that maps to a drive path by its text is
+is the file name it is written as. A plain relative path is placed under the call's directory where the
+gate is told to (`resolvesAgainstCallCwd`, `resolvesWritesAgainstCallCwd`): `PeriscopeHost` sets the
+first for every runtime, Claude included, so a relative read or search is checked where the call runs
+and never where the host process happens to be, and the second for the runtimes whose tools write
+relative to where they run. Under Windows rules a form that maps to a drive path by its text is
 mapped before it is checked: a device prefix (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it,
 `\\?\UNC\server\share\...` is that share, and a share that names this machine's own drive
 (`\\localhost\C$\...`, a loopback address, or a name in `LocalGateOptions.localNames`, which the host

@@ -32,6 +32,11 @@ frame it sends decodes unchanged.
   another: a read of a protected file, or a write outside the session's roots, passed. Two forms cannot
   be placed and are refused with a new reason, `path-unplaceable`: a drive-relative path on another
   drive, and another user's home (`~name/...`). Under a POSIX call directory nothing new is refused.
+- Security: a Claude session's relative read or search path is checked where the call runs. `Grep` and
+  `Glob` take a relative `path`, and the local gate resolved it against the host process's own
+  directory, so a path that climbed out of the session's directory into a protected folder was judged
+  as some other folder and passed. `PeriscopeHost` now places it under the call's directory, as it does
+  for every other runtime. A write is unchanged.
 - Security: the local gate reads the other ways Windows spells one file. A device prefix
   (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it, so a long-path spelling of a workspace file
   is now written where it was refused as outside the workspace, and one of a protected file is refused
