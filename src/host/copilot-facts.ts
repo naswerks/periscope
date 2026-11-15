@@ -240,12 +240,14 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
       }
       case 'session.shutdown':
         return this.#fromShutdown(data);
-      case 'user.message':
-        if (main && !this.#running) {
-          this.#running = true;
-          this.#settled = [];
-        }
-        return NOTHING;
+      case 'user.message': {
+        if (!main || this.#running) return NOTHING;
+        this.#running = true;
+        // A sub-agent settled in the run before no longer stands; said once, when one had settled.
+        if (this.#settled.length === 0) return NOTHING;
+        this.#settled = [];
+        return facts([this.#tasksFact()]);
+      }
       case 'session.idle':
         if (main) this.#running = false;
         return NOTHING;

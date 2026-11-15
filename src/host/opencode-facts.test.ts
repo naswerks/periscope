@@ -198,6 +198,22 @@ test("each subagent's session is a task from its run's start to its end, named b
   );
 });
 
+test('a new run says the subagents settled in the run before stand no longer: the cleared tasks fact, once, and only when one had settled', () => {
+  const lift = new OpencodeFactLift();
+  const child = { session: 'ses_child', spawnedBy: 'call_spawn' };
+  lift.fromMessage({ kind: 'opened', sessionId: 'ses_main', model: 'm', agent: 'build', origin: 'new' });
+  assert.deepEqual(lift.fromMessage(event('session.execution.started')).facts, [], 'nothing had settled');
+  lift.fromMessage(event('session.execution.started', {}, child));
+  lift.fromMessage(event('session.execution.succeeded', {}, child));
+  lift.fromMessage(event('session.execution.succeeded'));
+  const cleared = lift.fromMessage(event('session.execution.started')).facts;
+  assert.deepEqual(cleared, [{ kind: 'tasks', runtime: 'opencode', running: [], settled: [] }]);
+  // Said once: the run under way, and the next with nothing settled, say nothing.
+  assert.deepEqual(lift.fromMessage(event('session.execution.started')).facts, []);
+  lift.fromMessage(event('session.execution.succeeded'));
+  assert.deepEqual(lift.fromMessage(event('session.execution.started')).facts, []);
+});
+
 test("each streamed delta is a fragment of its channel; a subagent's names the call that started it, and one whose call is not known is none", () => {
   const lift = new OpencodeFactLift();
   const fragments = (message: OpencodeMessage) => lift.fromMessage(message).fragments;

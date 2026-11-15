@@ -65,6 +65,10 @@ frame it sends decodes unchanged.
   whole line; refused, the call fails with the refusal's words and never runs. A call allowed there is
   asked about once: the requests it then raises are held to the host's own gate alone. The read-back
   admits that one plugin, by its id and its source.
+- Fixed: a new run of an opencode or a Copilot session says the subagents settled in the run before
+  stand no longer. The settled list was cleared and no `tasks` fact was sent, so a controller went on
+  showing them until some later task moved. The cleared fact is sent once, and only when one had
+  settled, as it is for a Claude, a Codex and a Qwen Code session.
 - Fixed: a session home an opencode host left behind when it did not close its session is cleared by
   the next opencode session to open, its database kept for a resume first. It stayed under the base
   for good, and the session in it could not be resumed.

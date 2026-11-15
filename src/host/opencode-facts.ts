@@ -217,11 +217,12 @@ export class OpencodeFactLift implements FactLift<OpencodeMessage> {
 
   #runStarted(message: Extract<OpencodeMessage, { kind: 'event' }>): LiftedFacts {
     if (message.main) {
-      if (!this.#running) {
-        this.#running = true;
-        this.#settled = [];
-      }
-      return NOTHING;
+      if (this.#running) return NOTHING;
+      this.#running = true;
+      // A subagent settled in the run before no longer stands; said once, when one had settled.
+      if (this.#settled.length === 0) return NOTHING;
+      this.#settled = [];
+      return facts([this.#tasksFact()]);
     }
     const session = message.session;
     const spawnedBy = message.spawnedBy;

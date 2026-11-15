@@ -367,6 +367,25 @@ test('a sub-agent is a task named by the call that spawned it, settled with what
   assert.deepEqual(next[0].settled, [], 'the settled tasks started over with the run');
 });
 
+test('a new run says the sub-agents settled in the run before stand no longer: the cleared tasks fact, once, and only when one had settled', () => {
+  const lift = new CopilotFactLift();
+  lift.fromMessage(opened);
+  assert.deepEqual(
+    lift.fromMessage(event('user.message', { content: 'go' })).facts,
+    [],
+    'nothing had settled',
+  );
+  lift.fromMessage(event('subagent.started', { toolCallId: 'call_task', agentName: 'task' }));
+  lift.fromMessage(event('subagent.completed', { toolCallId: 'call_task' }));
+  lift.fromMessage(event('session.idle', {}));
+  const cleared = lift.fromMessage(event('user.message', { content: 'again' })).facts;
+  assert.deepEqual(cleared, [{ kind: 'tasks', runtime: 'copilot', running: [], settled: [] }]);
+  // Said once: a second prompt taken in the same run, and the next run with nothing settled, say nothing.
+  assert.deepEqual(lift.fromMessage(event('user.message', { content: 'more' })).facts, []);
+  lift.fromMessage(event('session.idle', {}));
+  assert.deepEqual(lift.fromMessage(event('user.message', { content: 'last' })).facts, []);
+});
+
 test("the deltas are fragments, a sub-agent's naming the call that spawned it, and one naming no spawning call is never read as the session's own", () => {
   const lift = new CopilotFactLift();
   assert.deepEqual(
