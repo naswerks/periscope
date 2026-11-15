@@ -23,8 +23,10 @@
  *     and the sub-agents settled since the turn began, with how each ended where the item says; the
  *     next `turn/started` clears them. Each names the call that started it (`toolUseId`) where a call
  *     named its thread, and a settled one carries the message Codex reported for its end (`summary`): a
- *     completed agent's final answer, an errored one's error. Codex reports no usage and no output file
- *     for a sub-agent, so `usage` and `outputFile` are never stated.
+ *     completed agent's final answer, an errored one's error. `usage` is never stated: a sub-agent's own
+ *     thread reports a token total, but a thread spawned with the parent's context (`fork_context`)
+ *     counts on from the parent's running total, and nothing this host receives says which spawn did.
+ *     Codex reports no output file for a sub-agent, so `outputFile` is never stated either.
  *   - `compaction`: the observer's report of the compaction entry, as for every runtime.
  * And one fragment per text or reasoning delta.
  *
@@ -436,8 +438,8 @@ export class CodexFactLift implements FactLift<CodexMessage> {
 
   /**
    * A sub-agent ended, as `status` says, with the message Codex reported for its end where there is one;
-   * the first ending the turn reports for it stands. Codex reports no usage and no output file for a
-   * sub-agent, so neither is stated.
+   * the first ending the turn reports for it stands. No usage is stated, since a sub-agent's thread total
+   * can carry its parent's (see the header), and Codex reports no output file for a sub-agent.
    */
   #settle(agent: string, status: TaskSettlement, summary: string | null): void {
     if (this.#settled.has(agent)) return;

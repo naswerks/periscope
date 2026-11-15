@@ -464,11 +464,14 @@ export interface ReceiptMcpServer {
   readonly status: string;
 }
 
-/** What a task has used so far, as the runtime last reported it: tokens, tool calls and time running. */
+/**
+ * What a task has used so far, as the runtime last reported it: tokens, tool calls and time running. Each
+ * is stated only where the runtime reported it, so a task can state its tokens alone; absent reads as null.
+ */
 export interface TaskUsage {
-  readonly tokens: number;
-  readonly toolUses: number;
-  readonly durationMs: number;
+  readonly tokens?: number | null;
+  readonly toolUses?: number | null;
+  readonly durationMs?: number | null;
 }
 
 /**

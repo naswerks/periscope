@@ -415,12 +415,14 @@ The message still rides; a consumer that wants it whole still has it.
 From v20 a `tasks` entry, running or settled, may also carry what the runtime reported of the task: the
 call that started it (`toolUseId`), its latest `summary`, its `usage` (`tokens`, `toolUses`,
 `durationMs`) and the `outputFile` its output is written to (a path only). Each is stated only where the
-runtime reported it, so an absent one reads as null, and each text is held to `MAX_FACT_TEXT_LENGTH`, as
-the codec holds it. Claude's come from `task_started`, `task_progress` (the summary a running subagent
+runtime reported it, so an absent one reads as null, a `usage` member included (a usage can state its
+tokens alone), and each text is held to `MAX_FACT_TEXT_LENGTH`, as the codec holds it. Claude's come from `task_started`, `task_progress` (the summary a running subagent
 writes about every 30 seconds) and `task_notification`. Codex's name the call that started the sub-agent
 (`toolUseId`, where a call named its thread) and, on a settled entry, the message Codex reported for its
-end as its `summary` (a completed agent's final answer, an errored one's error); Codex reports no usage
-and no output file for a sub-agent.
+end as its `summary` (a completed agent's final answer, an errored one's error). A Codex entry states no `usage`:
+a sub-agent's thread reports a token total, but one spawned with its parent's context (`fork_context`)
+counts on from the parent's running total, and nothing the host receives says which spawn did. Codex
+reports no output file for a sub-agent.
 
 Codex's sources: `session_handle` is the thread id the opening answer names; `agent_receipt` is
 built from the opening answers, so it rides before `ready`, and sent again on a reroute, a skills

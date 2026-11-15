@@ -43,8 +43,8 @@ frame it sends decodes unchanged.
   reads no parent: there they ride `agent_message` alone, as before.
 - Added: what a task reported of itself, on each `tasks` entry, running or settled (`TaskReport`, all
   optional): the call that started it (`toolUseId`), its latest `summary`, its `usage` (`TaskUsage`:
-  `tokens`, `toolUses`, `durationMs`) and its `outputFile`, each stated only where the runtime reported
-  it. Claude's are read from `task_started`, `task_progress` and `task_notification`; every text a
+  `tokens`, `toolUses`, `durationMs`, each optional and nullable, so a usage can state its tokens alone)
+  and its `outputFile`, each stated only where the runtime reported it. Claude's are read from `task_started`, `task_progress` and `task_notification`; every text a
   Claude entry carries, its `description` included, is now cut at `MAX_FACT_TEXT_LENGTH`, on a code
   point boundary, where an over-long description made a frame the codec refused.
 - Added: every Claude session asks for its subagents' progress summaries (`agentProgressSummaries`): a
@@ -83,8 +83,10 @@ frame it sends decodes unchanged.
   Claude, a link negotiated below 20 is sent none of a sub-agent's items.
 - Added: a Codex `tasks` entry names the call that started its sub-agent (`toolUseId`), and a settled
   entry carries the message Codex reported for its end as its `summary` (a completed agent's final
-  answer, an errored one's error), cut at `MAX_FACT_TEXT_LENGTH` on a code point boundary. Codex reports no
-  usage and no output file for a sub-agent, so neither is stated.
+  answer, an errored one's error), cut at `MAX_FACT_TEXT_LENGTH` on a code point boundary. No `usage` is
+  stated: a sub-agent's thread reports a token total, but one spawned with its parent's context
+  (`fork_context`) counts on from the parent's running total, and nothing the host receives says which
+  spawn did. Codex reports no output file for a sub-agent, so none is stated.
 - Fixed: a Codex sub-agent's fragments name the call that started its thread and keep it: a later call
   about the same agent (a message, a wait, a close) no longer takes the parent over.
 - Changed: Qwen Code is pinned at 0.27.3 (was 0.25.1); a CLI that reports any other version, 0.25.1

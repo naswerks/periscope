@@ -687,7 +687,7 @@ index: interface StateTransitionUpdate { readonly transition: SessionTransition;
 index: interface StoreEffects { appendTo: (token: string, text: string) => Promise<void>; list: (projectKey: string) => Promise<readonly { token: string; sessionId: string; mtime: number; }[]>; readAll: (token: string) => Promise<string | null>; remove: (token: string) => Promise<void>; subkeys: (projectKey: string, sessionId: string) => Promise<readonly string[]> }
 index: interface StoredSession { readonly mtime: number; readonly sessionId: string }
 index: interface TaskReport { readonly outputFile?: string; readonly summary?: string; readonly toolUseId?: string; readonly usage?: TaskUsage }
-index: interface TaskUsage { readonly durationMs: number; readonly tokens: number; readonly toolUses: number }
+index: interface TaskUsage { readonly durationMs?: number; readonly tokens?: number; readonly toolUses?: number }
 index: interface TasksFact { readonly kind: "tasks"; readonly running: readonly RunningTaskEntry[]; readonly runtime: string; readonly settled?: readonly SettledTaskEntry[] }
 index: interface ThinkingItem { readonly itemId: string; readonly kind: "thinking"; readonly parentId?: string; readonly summary: boolean; readonly text: string; readonly truncated: boolean; readonly turnId: string }
 index: interface TokenCacheWrite { readonly mode: CredentialModeOutcome; readonly path: string }
@@ -1079,7 +1079,7 @@ protocol: interface SettledTaskEntry { readonly outputFile?: string; readonly st
 protocol: interface SpendFacts { readonly byModel: readonly ModelSpendFact[]; readonly cost: number; readonly costBasis: "list" | "managed" | "guessed" | "provider-reported" | "catalogue-estimated" | "self-hosted" | "unreported"; readonly currency: string }
 protocol: interface StateTransitionUpdate { readonly transition: SessionTransition; readonly update: "state_transition" }
 protocol: interface TaskReport { readonly outputFile?: string; readonly summary?: string; readonly toolUseId?: string; readonly usage?: TaskUsage }
-protocol: interface TaskUsage { readonly durationMs: number; readonly tokens: number; readonly toolUses: number }
+protocol: interface TaskUsage { readonly durationMs?: number; readonly tokens?: number; readonly toolUses?: number }
 protocol: interface TasksFact { readonly kind: "tasks"; readonly running: readonly RunningTaskEntry[]; readonly runtime: string; readonly settled?: readonly SettledTaskEntry[] }
 protocol: interface ThinkingItem { readonly itemId: string; readonly kind: "thinking"; readonly parentId?: string; readonly summary: boolean; readonly text: string; readonly truncated: boolean; readonly turnId: string }
 protocol: interface ToolCallItem { readonly input: JsonObject; readonly itemId: string; readonly kind: "tool_call"; readonly parentId?: string; readonly toolKind: "shell" | "file_read" | "file_write" | "file_edit" | "mcp" | "web" | "other"; readonly toolName: string; readonly toolUseId: string; readonly truncated: boolean; readonly turnId: string }

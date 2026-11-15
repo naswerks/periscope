@@ -259,6 +259,46 @@ test('a task entry names the call that started it and the message it ended with;
   assert.equal('outputFile' in (entry ?? {}), false, 'Codex reports no output file for a sub-agent');
 });
 
+test("a sub-agent whose own thread reports a token total still states no usage: a forked thread's total carries its parent's", () => {
+  const lift = new CodexFactLift();
+  lift.fromMessage(opened);
+  const tasks = (message: CodexMessage) =>
+    lift.fromMessage(message).facts.flatMap((fact) => (fact.kind === 'tasks' ? [fact] : []));
+  tasks(spawn(THREAD, 'call-spawn', ['agent-1']));
+  // The sub-agent's thread counts on from the parent's running total when it was spawned with its context.
+  const tokens = {
+    totalTokens: 52000,
+    inputTokens: 50000,
+    cachedInputTokens: 0,
+    outputTokens: 2000,
+    reasoningOutputTokens: 0,
+  };
+  lift.fromMessage(
+    notification('thread/tokenUsage/updated', {
+      threadId: 'agent-1',
+      turnId: 'agent-1-turn',
+      tokenUsage: { total: tokens, last: tokens, modelContextWindow: 200000 },
+    }),
+  );
+  const [settled] = tasks(
+    completed(THREAD, {
+      type: 'collabAgentToolCall',
+      id: 'call-wait',
+      tool: 'wait',
+      status: 'completed',
+      receiverThreadIds: ['agent-1'],
+      agentsStates: { 'agent-1': { status: 'completed', message: 'Done.' } },
+    }),
+  );
+  const entry = settled?.settled?.[0] as Record<string, unknown> | undefined;
+  assert.equal(entry?.['taskId'], 'agent-1');
+  assert.equal(
+    'usage' in (entry ?? {}),
+    false,
+    "a sub-agent thread's total is stated as its usage, though it can carry the parent's",
+  );
+});
+
 test("a sub-agent's long final message is cut at the bound, never inside a surrogate pair", () => {
   const lift = new CodexFactLift();
   lift.fromMessage(opened);
