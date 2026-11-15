@@ -292,6 +292,8 @@ interface Real {
   readonly raised: { name: RefusalReason; detail: string }[];
   readonly degrades: string[];
   readonly connected: OpencodeConnectOptions[];
+  /** The request the adapter was handed, as it was handed it. */
+  readonly request: AgentProcessRequest;
   readonly ended: Promise<Error | null>;
   hostPid(): number | null;
   events(type: string): OpencodeEvent[];
@@ -392,6 +394,7 @@ function start(dirs: Scratch, stub: StubModel, options: Open = {}): Real {
     raised,
     degrades,
     connected,
+    request,
     ended,
     hostPid: () => pid,
     events,
@@ -756,11 +759,12 @@ test(
       assert.equal(shell?.shellDialect, WINDOWS ? 'powershell' : 'posix');
       assert.equal(shell?.toolUseId, 'call_env');
       const seen = readEnvFile(envFile);
-      // Control: the planted copies were in the spawn environment, and the marker reaches the shell.
-      assert.ok(
-        Object.values(processRequest(dirs, { env: scratchEnv(dirs, planted) }).env).some((value) =>
-          value.includes(PLANTED),
-        ),
+      // Control: the planted copies were in the environment the adapter itself was handed, and the marker
+      // reaches the shell.
+      assert.deepEqual(
+        Object.keys(planted).filter((name) => !(real.request.env[name] ?? '').includes(PLANTED)),
+        ['PERISCOPE_WORKTREE_PROBE'],
+        'a planted copy was not in the environment the session was asked to start with',
       );
       assert.equal(seen['MARKER'], MARKER, 'the marker did not reach the shell, so the read proves nothing');
       const hostEnv = real.connected[0]?.env ?? {};

@@ -134,8 +134,10 @@ async function opencodeHost(
 
 async function stopped(run: OpencodeHostRun): Promise<void> {
   run.host.stop();
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  await rm(run.base, { recursive: true, force: true });
+  // Every host process the test opened has been closed: the stop is done with the base.
+  const count = (what: string): number => run.record.lifecycle.filter((one) => one === what).length;
+  await until(() => count('close') >= count('connect'), "the stop to close each session's host process");
+  await rm(run.base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 async function until(check: () => boolean, what: string, ms = 5000): Promise<void> {
@@ -262,11 +264,13 @@ test("the local gate reads opencode's own tool names: a read of a protected file
           id: 'call_search',
           name: 'grep',
           input: { pattern: 'x', path: join(where.secret, '..') },
+          // A search asks with its pattern as the resource and its directory in the metadata, as the runtime
+          // sends it.
           requests: [
             {
               action: 'grep',
               resources: ['x'],
-              metadata: { input: { pattern: 'x', path: join(where.secret, '..') } },
+              metadata: { root: '.', path: join(where.secret, '..') },
             },
           ],
         },
@@ -278,9 +282,14 @@ test("the local gate reads opencode's own tool names: a read of a protected file
     await until(() => run.link.transitions().some((one) => one.to === 'ready'), 'the session to be ready');
     run.link.deliver('session-1', { kind: 'session_prompt', text: 'read the token' }, 2);
     await until(() => run.link.transitions().some((one) => one.to === 'idle'), 'the run to settle');
-    assert.deepEqual(run.decided, [], 'a protected read was asked about');
+    assert.deepEqual(run.decided, [], 'a protected read or search was asked about');
     const answered = replies(run.record);
     assert.equal(answered['per_call_read_1'], 'reject');
+    assert.equal(
+      answered['per_call_search_1'],
+      'reject',
+      'a search under a protected directory was not refused',
+    );
     const refused = run.link
       .transitions()
       .filter((one) => one.cause.kind === 'refusal' && one.cause.event === 'credential-path-denied');

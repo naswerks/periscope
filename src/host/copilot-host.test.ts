@@ -141,8 +141,10 @@ async function copilotHost(
 
 async function stopped(run: CopilotHost): Promise<void> {
   run.host.stop();
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  await rm(run.base, { recursive: true, force: true });
+  // Every runtime the test started has been stopped: the stop is done with the base.
+  const stops = (): number => run.record.lifecycle.filter((one) => one === 'forceStop').length;
+  await until(() => stops() >= run.record.clients.length, "the stop to end each session's runtime");
+  await rm(run.base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 async function until(check: () => boolean, what: string, ms = 5000): Promise<void> {
