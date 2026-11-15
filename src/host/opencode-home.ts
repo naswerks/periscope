@@ -33,6 +33,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -236,11 +237,33 @@ function isPlainId(id: string): boolean {
   return /^[A-Za-z0-9._-]{1,128}$/.test(id) && id !== '.' && id !== '..';
 }
 
+/** How a kept database is copied, renamed and removed; the file system's own by default. */
+export interface OpencodeStateFiles {
+  copy(from: string, to: string): void;
+  rename(from: string, to: string): void;
+  remove(path: string): void;
+}
+
+const NODE_STATE_FILES: OpencodeStateFiles = {
+  copy: copyFileSync,
+  rename: renameSync,
+  remove: (path) => rmSync(path, { recursive: true, force: true }),
+};
+
 /**
  * Copy a closing session's database out of its home into the base, replacing an older copy. A session that
  * left none moves nothing. Refuses with why it could not.
+ *
+ * The older copy is replaced, never deleted first: the new database is copied beside it under a name no
+ * session id can spell, the older copy is stepped aside, the new one takes its name, and only then is the
+ * older one removed. A step that fails leaves the older copy where a resume reads it.
  */
-export function carryOpencodeStateOut(base: string, database: string, sessionId: string): Result<void> {
+export function carryOpencodeStateOut(
+  base: string,
+  database: string,
+  sessionId: string,
+  files: OpencodeStateFiles = NODE_STATE_FILES,
+): Result<void> {
   if (!isPlainId(sessionId)) {
     return refuse('runtime-unavailable', `the session id ${sessionId} names no directory`);
   }
@@ -248,20 +271,46 @@ export function carryOpencodeStateOut(base: string, database: string, sessionId:
   const ensured = ensureOpencodeBase(base);
   if (!ensured.ok) return ensured;
   const to = join(ensured.value.state, sessionId);
+  // `~` is in no session id (`isPlainId`), so neither name can be one a resume asks for.
+  const arriving = `${to}~arriving`;
+  const leaving = `${to}~leaving`;
   try {
-    rmSync(to, { recursive: true, force: true });
-    mkdirSync(to, { recursive: true, mode: 0o700 });
+    // What an earlier close left half done: an older copy stepped aside and never replaced goes back.
+    if (existsSync(leaving) && !existsSync(to)) files.rename(leaving, to);
+    files.remove(arriving);
+    mkdirSync(arriving, { recursive: true, mode: 0o700 });
     for (const name of OPENCODE_DATABASE_FILES) {
       const from = join(database, '..', name);
-      if (existsSync(from)) copyFileSync(from, join(to, name));
+      if (existsSync(from)) files.copy(from, join(arriving, name));
     }
-    return ok(undefined);
+    const replaces = existsSync(to);
+    if (replaces) {
+      files.remove(leaving);
+      files.rename(to, leaving);
+    }
+    try {
+      files.rename(arriving, to);
+    } catch (error) {
+      if (replaces) files.rename(leaving, to);
+      throw error;
+    }
   } catch (error) {
+    try {
+      files.remove(arriving);
+    } catch {
+      // What could not be brought in is left for the next close to clear.
+    }
     return refuse(
       'runtime-unavailable',
       `session ${sessionId}'s database could not be kept: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  try {
+    files.remove(leaving);
+  } catch {
+    // The new database is in place; the older copy is cleared by the next close.
+  }
+  return ok(undefined);
 }
 
 /**

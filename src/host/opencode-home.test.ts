@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -81,6 +91,60 @@ test("a closing session's database is kept by its id, and a resume carries it in
       assert.ok(!carryOpencodeStateIn(base, second.value.database, id).ok, `in: ${id}`);
       assert.ok(!carryOpencodeStateOut(base, second.value.database, id).ok, `out: ${id}`);
     }
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('a kept database is replaced, never deleted first: a close that cannot bring the new one in leaves the older copy for a resume', async () => {
+  const base = await tempDir('opencode-replace');
+  try {
+    const first = createOpencodeSessionHome(base);
+    assert.ok(first.ok);
+    writeFileSync(first.value.database, 'first');
+    assert.ok(carryOpencodeStateOut(base, first.value.database, 'ses_kept').ok);
+    const kept = join(base, 'state', 'ses_kept', 'session.db');
+    assert.equal(readFileSync(kept, 'utf8'), 'first');
+
+    // The next close cannot copy the new database.
+    const second = createOpencodeSessionHome(base);
+    assert.ok(second.ok);
+    writeFileSync(second.value.database, 'second');
+    const remove = (path: string): void => rmSync(path, { recursive: true, force: true });
+    const failing = carryOpencodeStateOut(base, second.value.database, 'ses_kept', {
+      copy: () => {
+        throw new Error('the volume is full');
+      },
+      rename: renameSync,
+      remove,
+    });
+    assert.equal(failing.ok, false);
+    assert.match(failing.ok ? '' : failing.refusal.detail, /could not be kept: the volume is full/);
+    assert.equal(readFileSync(kept, 'utf8'), 'first', 'the older copy was deleted before its replacement');
+
+    // The new database arrives beside the older one, and the last step fails: the older copy is put back.
+    let renames = 0;
+    const lastStepFails = carryOpencodeStateOut(base, second.value.database, 'ses_kept', {
+      copy: copyFileSync,
+      rename: (from, to) => {
+        renames += 1;
+        if (renames === 2) throw new Error('the name is held');
+        renameSync(from, to);
+      },
+      remove,
+    });
+    assert.equal(lastStepFails.ok, false);
+    assert.equal(readFileSync(kept, 'utf8'), 'first', 'the older copy was not put back');
+    assert.deepEqual(
+      readdirSync(join(base, 'state')),
+      ['ses_kept'],
+      'something was left beside the kept database',
+    );
+
+    // Control: a close that can, replaces it, and leaves nothing else in the directory.
+    assert.ok(carryOpencodeStateOut(base, second.value.database, 'ses_kept').ok);
+    assert.equal(readFileSync(kept, 'utf8'), 'second');
+    assert.deepEqual(readdirSync(join(base, 'state')), ['ses_kept']);
   } finally {
     await rm(base, { recursive: true, force: true });
   }

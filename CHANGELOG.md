@@ -78,6 +78,8 @@ frame it sends decodes unchanged.
 - Fixed: a session home an opencode host left behind when it did not close its session is cleared by
   the next opencode session to open, its database kept for a resume first. It stayed under the base
   for good, and the session in it could not be resumed.
+- Fixed: a closing opencode session's database replaces the older copy the base keeps without deleting
+  it first, so a copy that fails leaves the older one for a resume.
 - Fixed: an opencode host process is started with the one environment switch the pinned SDK reads,
   `OPENCODE_DISABLE_FREE_MODELS`. Four more were set that no file of the SDK reads; they did nothing and
   are gone, and the documents say what turns each of those things off (an option the server is created
