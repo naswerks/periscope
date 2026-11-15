@@ -450,6 +450,25 @@ a sub-agent's thread reports a token total, but one spawned with its parent's co
 counts on from the parent's running total, and nothing the host receives says which spawn did. Codex
 reports no output file for a sub-agent.
 
+**When a `tasks` fact is sent.** A task that starts or ends, and a task whose summary or any other
+member but its usage changes, is sent at once, and every entry in that fact carries its latest usage. A
+change in usage alone is sent too, but at most once in `TASKS_USAGE_PACE_MS` (five seconds) for the
+session: a running subagent's usage moves with every progress message, and each fact is the whole list
+on the lane that is never dropped. Figures that were held go out with the first message of any kind
+after the pace has passed and with the turn's `result`, and a task's end always carries its last
+figures, so no figure is lost; a reader sees a running task's usage at most five seconds late. Only
+Claude reports a usage while a task runs, so only its facts are paced.
+
+**The tasks budget.** A `tasks` fact's two lists take at most `MAX_TASKS_FACT_BYTES` as JSON
+(`fitTasks`, `src/control/tasks-budget.ts`), on every runtime, so the fact always fits a frame however
+many tasks a session ran. Each list is held to `MAX_FACT_LIST_ENTRIES`, the newest settled entries kept.
+Past the budget, text is cut first: every `description`, `summary` and `outputFile` longer than one
+length is cut to it, that length the longest at which the fact fits, so the longest texts give first and
+a short one gives nothing. Only when every text is down to sixteen characters are entries left out, the
+oldest settled first, and a running task only after every settled one. An id is never cut. The fact has
+no member that says it was cut: a text shorter than the runtime wrote, in a fact near the budget, is
+one.
+
 Codex's sources: `session_handle` is the thread id the opening answer names; `agent_receipt` is
 built from the opening answers, so it rides before `ready`, and sent again on a reroute, a skills
 change, an MCP server's status, and a setter applied on a `turn/start` (`source: 'host'`);
@@ -606,7 +625,8 @@ and reads as null through `readAgentFacts`.
 
 **Bounds.** A fact's lists hold at most `MAX_FACT_LIST_ENTRIES` entries, its free text at most
 `MAX_FACT_TEXT_LENGTH` characters and its words at most `MAX_FACT_WORD_LENGTH`; `MAX_FRAME_BYTES`
-stays the outer guard.
+stays the outer guard. A `tasks` fact, the one fact whose lists carry free text, is also held to the
+tasks budget above, so it never meets that guard.
 
 Every member a fact declares is optional on the wire: a peer that omits one is read as not stating
 it. Only `fact` itself and its `kind` are required in an `agent_facts` body.
@@ -1323,6 +1343,7 @@ Over the link:
 | `src/host/claude-facts.ts`                                           | The Claude lift: the fact layer read out of the agent's own messages                                                                                                                                                                                                                                                                                                                                                 |
 | `src/sessions/item-fill.ts`                                          | `ItemFill`: what a runtime's conversation item fill is                                                                                                                                                                                                                                                                                                                                                               |
 | `src/control/item-budget.ts`                                         | `fitAgentItem`: an item held to `MAX_AGENT_ITEM_BYTES`, its cut said in `truncated`                                                                                                                                                                                                                                                                                                                                  |
+| `src/control/tasks-budget.ts`                                        | `fitTasks`: a `tasks` fact held to `MAX_TASKS_FACT_BYTES`, text cut before an entry is left out                                                                                                                                                                                                                                                                                                                      |
 | `src/host/claude-items.ts`                                           | The Claude fill, `CLAUDE_ITEM_COVERAGE` and `CLAUDE_BLOCK_ITEMS`: the items read out of the agent's messages and its prompt hook                                                                                                                                                                                                                                                                                     |
 | `src/host/codex-items.ts`                                            | The Codex fill and `CODEX_ITEM_FILLS`: the items read out of the app-server's notifications                                                                                                                                                                                                                                                                                                                          |
 | `src/host/bulk-post.ts`                                              | The streamed outbound POST behind `bulk_request` and its origin bind                                                                                                                                                                                                                                                                                                                                                 |

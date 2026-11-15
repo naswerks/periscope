@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { decode } from './codec.js';
-import { factText } from './fact-text.js';
+import { cutText, factText } from './fact-text.js';
 import { MAX_FACT_TEXT_LENGTH } from './frames.js';
 
 /** Whether `text` holds a surrogate with no partner beside it. */
@@ -49,4 +49,12 @@ test('what the helper cuts decodes: a fact carrying it is within the bound the c
   });
   const decoded = decode(wire);
   assert.ok(decoded.ok, decoded.ok ? '' : decoded.refusal.detail);
+});
+
+test('a text is cut to any length asked, on a code point, and a length of none leaves nothing', () => {
+  assert.equal(cutText('abcdef', 4), 'abcd');
+  assert.equal(cutText('abc', 4), 'abc');
+  assert.equal(cutText('ab\u{20000}cd', 3), 'ab', 'the pair that would be split is left out whole');
+  assert.equal(cutText('ab\u{20000}cd', 4), 'ab\u{20000}');
+  assert.equal(cutText('abc', 0), '');
 });

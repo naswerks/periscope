@@ -8,10 +8,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { decode } from '../control/codec.js';
 import type { AgentFact, ModelSpendFact } from '../control/frames.js';
 import { MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
+import { fixedTicker } from '../core/time.js';
 import type { SDKMessage } from './agent-process.js';
-import { ClaudeFactLift, costBasisOf, rolledUpBasis } from './claude-facts.js';
+import { ClaudeFactLift, TASKS_USAGE_PACE_MS, costBasisOf, rolledUpBasis } from './claude-facts.js';
 
 /** The SDK's shapes carry many fields the lift never reads; only the read ones are supplied. */
 const message = (shape: Record<string, unknown>): SDKMessage => shape as unknown as SDKMessage;
@@ -659,7 +661,8 @@ const lastRunning = (facts: readonly AgentFact[]): readonly unknown[] =>
   only(facts, 'tasks').at(-1)?.running ?? [];
 
 test('a running task carries the call that started it, and its latest summary and usage as the task messages report them', () => {
-  const lift = new ClaudeFactLift();
+  const ticker = fixedTicker(0);
+  const lift = new ClaudeFactLift({ ticker });
   factsOf(lift, started('agent-1', 'local_agent', { tool_use_id: 'toolu_task' }));
   const first = factsOf(lift, progressed('agent-1', { summary: 'reading the store' }));
   assert.deepEqual(lastRunning(first), [
@@ -672,6 +675,8 @@ test('a running task carries the call that started it, and its latest summary an
       usage: { tokens: 1200, toolUses: 3, durationMs: 4500 },
     },
   ]);
+  // The next progress message arrives after the pace, so its figures are sent with it.
+  ticker.advance(TASKS_USAGE_PACE_MS);
   const later = factsOf(
     lift,
     progressed('agent-1', { usage: { total_tokens: 2400, tool_uses: 5, duration_ms: 9000 } }),
@@ -755,4 +760,130 @@ test('every text a task entry carries is cut at its bound, the description among
   const [settled] = (settledOf(factsOf(lift, done))[0] ?? []) as { summary: string; outputFile: string }[];
   assert.equal(settled?.summary.length, MAX_FACT_TEXT_LENGTH);
   assert.equal(settled?.outputFile.length, MAX_FACT_TEXT_LENGTH);
+});
+
+// ---------------------------------------------------------------------------
+// how often the tasks fact is sent, and how large it may grow
+// ---------------------------------------------------------------------------
+
+const usageOf = (tokens: number): Record<string, number> => ({
+  total_tokens: tokens,
+  tool_uses: 1,
+  duration_ms: tokens,
+});
+
+/** The tokens each tasks fact in `facts` states for its first running task. */
+const tokensSent = (facts: readonly AgentFact[]): (number | null | undefined)[] =>
+  only(facts, 'tasks').map((fact) => fact.running[0]?.usage?.tokens);
+
+test('a change in usage alone is held to the pace: several inside it send at most one tasks fact', () => {
+  const lift = new ClaudeFactLift();
+  factsOf(lift, started('agent-1', 'local_agent', { tool_use_id: 'toolu_task' }));
+  const ticks = factsOf(
+    lift,
+    progressed('agent-1', { usage: usageOf(100) }),
+    progressed('agent-1', { usage: usageOf(200) }),
+    progressed('agent-1', { usage: usageOf(300) }),
+  );
+  assert.ok(
+    only(ticks, 'tasks').length <= 1,
+    `three usage-only messages inside the pace sent ${only(ticks, 'tasks').length} tasks facts`,
+  );
+});
+
+test('held usage goes out with the first message after the pace, whatever that message is, and carries the latest figures', () => {
+  const ticker = fixedTicker(0);
+  const lift = new ClaudeFactLift({ ticker });
+  factsOf(lift, started('agent-1', 'local_agent'));
+  ticker.advance(1_000);
+  assert.deepEqual(tokensSent(factsOf(lift, progressed('agent-1', { usage: usageOf(100) }))), []);
+  ticker.advance(1_000);
+  assert.deepEqual(tokensSent(factsOf(lift, progressed('agent-1', { usage: usageOf(200) }))), []);
+  // A message that is no task message at all, still inside the pace: nothing yet.
+  ticker.advance(1_000);
+  assert.deepEqual(tokensSent(factsOf(lift, assistant('msg-1', callUsage()))), []);
+  // The pace has passed since the task started: the next message of any kind carries the held figures.
+  ticker.advance(TASKS_USAGE_PACE_MS - 3_000);
+  assert.deepEqual(tokensSent(factsOf(lift, assistant('msg-2', callUsage()))), [200]);
+  // Nothing is held now, so another message says nothing about tasks.
+  ticker.advance(TASKS_USAGE_PACE_MS);
+  assert.deepEqual(tokensSent(factsOf(lift, assistant('msg-3', callUsage()))), []);
+});
+
+test('control: a usage that moves long after the last tasks fact is sent at once', () => {
+  const ticker = fixedTicker(0);
+  const lift = new ClaudeFactLift({ ticker });
+  factsOf(lift, started('agent-1', 'local_agent'));
+  ticker.advance(TASKS_USAGE_PACE_MS);
+  assert.deepEqual(tokensSent(factsOf(lift, progressed('agent-1', { usage: usageOf(100) }))), [100]);
+  // And the one right behind it waits its turn.
+  assert.deepEqual(tokensSent(factsOf(lift, progressed('agent-1', { usage: usageOf(200) }))), []);
+});
+
+test('a start, a finish and a changed summary are sent at once inside the pace, each with the latest usage', () => {
+  const ticker = fixedTicker(0);
+  const lift = new ClaudeFactLift({ ticker });
+  factsOf(lift, init(), started('agent-1', 'local_agent'));
+  factsOf(lift, progressed('agent-1', { usage: usageOf(100) }));
+  // A changed summary, with usage that had been held behind it.
+  assert.deepEqual(
+    tokensSent(factsOf(lift, progressed('agent-1', { summary: 'reading the store', usage: usageOf(150) }))),
+    [150],
+  );
+  factsOf(lift, progressed('agent-1', { usage: usageOf(175) }));
+  // Another task starts: the list changed, and the first task's held figures ride along.
+  assert.deepEqual(tokensSent(factsOf(lift, started('agent-2', 'local_agent'))), [175]);
+  // The finish carries the last figures, whatever was held.
+  factsOf(lift, progressed('agent-1', { usage: usageOf(190) }));
+  const done = message({
+    type: 'system',
+    subtype: 'task_notification',
+    uuid: 'done-agent-1',
+    task_id: 'agent-1',
+    status: 'completed',
+    usage: usageOf(200),
+  });
+  const finished = only(factsOf(lift, done), 'tasks');
+  assert.equal(finished.length, 1);
+  assert.equal(finished[0]?.settled?.[0]?.usage?.tokens, 200);
+});
+
+test("the turn's result carries whatever usage was held, so the last figures of a task that outlives the turn arrive", () => {
+  const ticker = fixedTicker(0);
+  const lift = new ClaudeFactLift({ ticker });
+  factsOf(lift, level([{ task_id: 'bash-1', task_type: 'local_bash', description: 'suite' }]));
+  assert.deepEqual(tokensSent(factsOf(lift, progressed('bash-1', { usage: usageOf(100) }))), []);
+  assert.deepEqual(tokensSent(factsOf(lift, result())), [100]);
+  // Control: with nothing held and nothing changed, a result says nothing about tasks.
+  assert.deepEqual(tokensSent(factsOf(lift, result({ uuid: 'result-2' }))), []);
+});
+
+test('a tasks fact always fits a frame: two hundred settled tasks with full-length summaries still decode', () => {
+  const lift = new ClaudeFactLift();
+  factsOf(lift, init());
+  let last: AgentFact | undefined;
+  for (let index = 0; index < 200; index += 1) {
+    const done = message({
+      type: 'system',
+      subtype: 'task_notification',
+      uuid: `done-${index}`,
+      task_id: `agent-${index}`,
+      tool_use_id: `toolu_${index}`,
+      status: 'completed',
+      summary: 'x'.repeat(MAX_FACT_TEXT_LENGTH),
+      output_file: `/tmp/tasks/agent-${index}.output`,
+    });
+    last = only(factsOf(lift, done), 'tasks').at(-1) ?? last;
+  }
+  assert.ok(last !== undefined, 'no tasks fact was sent, so there is nothing to measure');
+  const decoded = decode(
+    JSON.stringify({
+      frame: 'session',
+      sessionId: 's-1',
+      seq: 1,
+      at: '2000-01-01T00:00:00.000Z',
+      payload: { kind: 'session_update', body: { update: 'agent_facts', fact: last, sourceId: null } },
+    }),
+  );
+  assert.ok(decoded.ok, decoded.ok ? '' : `${decoded.refusal.reason}: ${decoded.refusal.detail}`);
 });

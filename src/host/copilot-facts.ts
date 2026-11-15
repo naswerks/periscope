@@ -38,6 +38,7 @@ import type {
   SpendFacts,
 } from '../control/frames.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH, MAX_FACT_WORD_LENGTH } from '../control/frames.js';
+import { fitTasks } from '../control/tasks-budget.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import { COPILOT_RUNTIME } from '../sessions/runtimes.js';
 import type { CompactionReport } from '../state/observer.js';
@@ -322,12 +323,8 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
   }
 
   #tasksFact(): AgentFact {
-    return {
-      kind: 'tasks',
-      runtime: COPILOT_RUNTIME,
-      running: bounded([...this.#tasks.values()]),
-      settled: [...this.#settled],
-    };
+    const { running, settled } = fitTasks([...this.#tasks.values()], this.#settled);
+    return { kind: 'tasks', runtime: COPILOT_RUNTIME, running, settled };
   }
 
   #fragment(event: CopilotEvent, data: Readonly<Record<string, unknown>>): LiftedFacts {

@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { decode } from '../control/codec.js';
 import type { AgentFact, JsonObject } from '../control/frames.js';
+import { MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
 import { CodexFactLift, codexFactSourceId } from './codex-facts.js';
 import type { CodexMessage } from './codex-wire.js';
 
@@ -439,5 +441,43 @@ test('settled sub-agents: an errored agent failed, an interrupted one stopped, a
     settledOf(notification('turn/started', { threadId: THREAD, turn: { id: 't3', status: 'inProgress' } })),
     [],
     'nothing settled, nothing said',
+  );
+});
+
+test('a tasks fact always fits a frame: eighty sub-agents settled with full-length answers still decode, every one kept', () => {
+  const { lift } = openedLift();
+  const answerOf = (index: number): string => `${index}:`.padEnd(MAX_FACT_TEXT_LENGTH, 'y');
+  let last: AgentFact | undefined;
+  for (let index = 0; index < 80; index += 1) {
+    const facts = lift.fromMessage(
+      notification('item/completed', {
+        threadId: THREAD,
+        turnId: 't',
+        item: {
+          type: 'collabAgentToolCall',
+          id: `call-${index}`,
+          tool: 'wait',
+          receiverThreadIds: [],
+          agentsStates: { [`agent-${index}`]: { status: 'completed', message: answerOf(index) } },
+        },
+      }),
+    ).facts;
+    last = facts.findLast((fact) => fact.kind === 'tasks') ?? last;
+  }
+  assert.ok(last?.kind === 'tasks', 'no tasks fact was sent, so there is nothing to measure');
+  const decoded = decode(
+    JSON.stringify({
+      frame: 'session',
+      sessionId: 's-1',
+      seq: 1,
+      at: '2000-01-01T00:00:00.000Z',
+      payload: { kind: 'session_update', body: { update: 'agent_facts', fact: last, sourceId: null } },
+    }),
+  );
+  assert.ok(decoded.ok, decoded.ok ? '' : `${decoded.refusal.reason}: ${decoded.refusal.detail}`);
+  assert.equal(last.settled?.length, 80, 'a sub-agent was left out while its answer could still be cut');
+  assert.ok(
+    last.settled?.every((task, index) => task.summary?.startsWith(`${index}:`) === true),
+    'each answer keeps its head',
   );
 });

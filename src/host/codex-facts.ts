@@ -46,6 +46,7 @@ import type {
   TaskSettlement,
 } from '../control/frames.js';
 import { factText } from '../control/fact-text.js';
+import { fitTasks } from '../control/tasks-budget.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import { CODEX_RUNTIME } from '../sessions/runtimes.js';
@@ -453,8 +454,7 @@ export class CodexFactLift implements FactLift<CodexMessage> {
   }
 
   #tasksIfChanged(): AgentFact[] {
-    const running = bounded([...this.#running.values()]);
-    const settled = bounded([...this.#settled.values()]);
+    const { running, settled } = fitTasks([...this.#running.values()], [...this.#settled.values()]);
     const key = JSON.stringify([running, settled]);
     if (key === this.#runningSent) return [];
     this.#runningSent = key;

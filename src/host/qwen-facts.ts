@@ -37,6 +37,7 @@ import type {
   TaskUsage,
 } from '../control/frames.js';
 import { factText } from '../control/fact-text.js';
+import { fitTasks } from '../control/tasks-budget.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import { QWEN_RUNTIME } from '../sessions/runtimes.js';
@@ -393,8 +394,7 @@ export class QwenFactLift implements FactLift<QwenMessage> {
   }
 
   #tasksIfChanged(): AgentFact[] {
-    const running = bounded([...this.#running.values()]);
-    const settled = bounded([...this.#settled.values()]);
+    const { running, settled } = fitTasks([...this.#running.values()], [...this.#settled.values()]);
     const key = JSON.stringify([running, settled]);
     if (key === this.#tasksSent) return [];
     this.#tasksSent = key;

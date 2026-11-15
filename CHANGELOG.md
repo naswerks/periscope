@@ -73,6 +73,16 @@ frame it sends decodes unchanged.
   and its `outputFile`, each stated only where the runtime reported it. Claude's are read from `task_started`, `task_progress` and `task_notification`; every text a
   Claude entry carries, its `description` included, is now cut at `MAX_FACT_TEXT_LENGTH`, on a code
   point boundary, where an over-long description made a frame the codec refused.
+- Changed: a `tasks` fact is sent at once when a task starts, ends or changes its summary, and a change
+  in a task's usage alone is sent at most once in five seconds for the session
+  (`TASKS_USAGE_PACE_MS`). Every `task_progress` message re-sent the whole list on the lane that is
+  never dropped, because a running subagent's usage moves with each one. Held figures go out with the
+  first message after the pace and with the turn's result, and a task's end carries its last figures.
+- Fixed: a `tasks` fact always fits a frame. Its lists are held to `MAX_TASKS_FACT_BYTES` on every
+  runtime (`fitTasks`): text is cut first, the longest first, and entries are left out last, the oldest
+  settled first. A session with many settled tasks made a fact past the frame limit, which the codec
+  refused, so nothing about any task arrived for the rest of the turn; a Claude session's lists also
+  had no entry bound.
 - Added: every Claude session asks for its subagents' progress summaries (`agentProgressSummaries`): a
   running subagent states what it is doing about every 30 seconds, on its own model, and the summary
   rides its task's entry.

@@ -35,6 +35,7 @@ import type {
 } from '../control/frames.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_WORD_LENGTH } from '../control/frames.js';
 import { factText } from '../control/fact-text.js';
+import { fitTasks } from '../control/tasks-budget.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import { OPENCODE_RUNTIME } from '../sessions/runtimes.js';
 import type { CompactionReport } from '../state/observer.js';
@@ -263,12 +264,8 @@ export class OpencodeFactLift implements FactLift<OpencodeMessage> {
   }
 
   #tasksFact(): AgentFact {
-    return {
-      kind: 'tasks',
-      runtime: OPENCODE_RUNTIME,
-      running: bounded([...this.#tasks.values()]),
-      settled: [...this.#settled],
-    };
+    const { running, settled } = fitTasks([...this.#tasks.values()], this.#settled);
+    return { kind: 'tasks', runtime: OPENCODE_RUNTIME, running, settled };
   }
 
   #fragment(
