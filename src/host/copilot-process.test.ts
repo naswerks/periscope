@@ -317,6 +317,48 @@ test('control: each posture the read-back refuses ends the open by name, before 
   }
 });
 
+test("a built-in the tables do not name does not refuse the open: it is named once, a server's tool is not taken for one, and its call is asked about like any other", async () => {
+  const asked: string[] = [];
+  const run = await started({
+    request: { mcpServers: { docs: { type: 'http', url: 'http://127.0.0.1:9/mcp' } } },
+    fake: {
+      offeredTools: ['powershell', 'view', 'workspace_snapshot', 'telemetry_probe'],
+      offeredServerTools: { docs: ['search', 'workspace_snapshot_of_docs'] },
+      serverTools: { docs: ['search', 'workspace_snapshot_of_docs'] },
+      calls: () => [{ toolName: 'workspace_snapshot', toolArgs: { depth: 1 }, toolCallId: 'call_unnamed' }],
+    },
+    decide: (request) => {
+      asked.push(`${request.toolName}:${request.toolKind ?? ''}`);
+      return Promise.resolve({ behavior: 'allow' });
+    },
+  });
+  await waitFor(() => opened(run), 'the open');
+  const named = run.raised.filter((one) => one.name === 'gate-tool-unnamed');
+  assert.deepEqual(
+    named.map((one) => /the tool (\S+),/.exec(one.detail)?.[1]),
+    ['workspace_snapshot', 'telemetry_probe'],
+    'each built-in the tables do not hold, and neither a table row nor a server tool',
+  );
+  assert.ok(
+    named.every((one) => /Copilot offers the tool/.test(one.detail)),
+    named.map((one) => one.detail).join(' | '),
+  );
+  // The session is open and takes a prompt; the unnamed tool's call goes for a decision and runs on an allow.
+  run.process.prompt('go');
+  await waitFor(() => types(run).includes('session.idle'), 'the run');
+  assert.deepEqual(asked, ['workspace_snapshot:other']);
+  assert.equal(
+    run.record.answers.find((one) => one.toolCallId === 'call_unnamed')?.answer.kind,
+    'approve-once',
+  );
+  assert.equal(
+    run.raised.filter((one) => one.name === 'gate-tool-unnamed').length,
+    2,
+    'a tool already named is not named again when it is called',
+  );
+  assert.equal(await closed(run), null);
+});
+
 test('a directory the session writes to beside its own is admitted by the read-back', async () => {
   const run = await started({
     fake: { directories: [ROOT, 'C:/tmp/periscope'] },

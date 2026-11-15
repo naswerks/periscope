@@ -219,6 +219,37 @@ test("the gate asks the runtime for a server's tools once, when a call names it,
   assert.equal(run.built.toolName('view'), 'view', 'a built-in is never read as a server tool');
 });
 
+test('a built-in the tables do not name is named once and decided like any other call; a named built-in and a server tool are not', async () => {
+  const run = gate(allow, ['docs']);
+  run.built.toolsOffered(['view', 'powershell', 'docs-search', 'late_arrival'], ['docs-search']);
+  const unnamed = (): string[] =>
+    run.raised.filter((one) => one.name === 'gate-tool-unnamed').map((one) => one.detail);
+  assert.equal(unnamed().length, 1);
+  assert.match(
+    unnamed()[0] ?? '',
+    /Copilot offers the tool late_arrival, which this host's tables do not name/,
+  );
+  // Offered again, or called: said once.
+  run.built.toolsOffered(['late_arrival'], []);
+  run.built.preToolUse(hooked('late_arrival', 'call_1'));
+  const answer = await run.built.decide(request('late_arrival', 'call_1'));
+  assert.deepEqual(answer, { kind: 'approve-once' }, 'the call is decided, never refused for its name');
+  assert.equal(run.requests[0]?.toolName, 'late_arrival');
+  assert.equal(run.requests[0]?.toolKind, 'other');
+  assert.equal(unnamed().length, 1);
+  // A built-in that appears only when it is called is named then.
+  run.built.preToolUse(hooked('appeared_later', 'call_2'));
+  await run.built.decide(request('appeared_later', 'call_2'));
+  assert.equal(unnamed().length, 2);
+  assert.match(unnamed()[1] ?? '', /Copilot was asked to run the tool appeared_later/);
+  // Control: a table's own tool, and a name an attached server's tools could carry, are no strangers.
+  run.built.preToolUse(hooked('view', 'call_3', { path: 'C:/work/a.ts' }));
+  await run.built.decide(request('view', 'call_3', { path: 'C:/work/a.ts' }));
+  run.built.preToolUse(hooked('docs-not-listed-yet', 'call_4'));
+  await run.built.decide(request('docs-not-listed-yet', 'call_4'));
+  assert.equal(unnamed().length, 2);
+});
+
 test('the probe is refused here, never asked of anyone, and reports how far it got', async () => {
   const run = gate(allow);
   const probe = run.built.probe();

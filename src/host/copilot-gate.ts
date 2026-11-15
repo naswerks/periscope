@@ -27,7 +27,10 @@
  *   machine-wide policy hook was found when the session opened;
  * - `gate-unhooked-call`: a provider-hosted tool ran (`assistant.server_tool_progress`), which no hook sees;
  * - `gate-mode-widened`: the runtime reports a permission mode other than `manual`, or an agent mode other
- *   than `interactive` and `plan`.
+ *   than `interactive` and `plan`;
+ * - `gate-tool-unnamed`: the runtime offers, or the model called, a built-in this host's tables do not name
+ *   (`COPILOT_TOOL_KINDS`, `COPILOT_OTHER_TOOLS`, `COPILOT_EXCLUDED_TOOLS`). The session opens and the call is
+ *   asked about as any other is, kind `other`; the name is said so the tables can learn it.
  */
 import type { RefusalReason } from '../core/refusal.js';
 import type { CallDecision } from '../gate/call-decision.js';
@@ -147,6 +150,11 @@ export interface CopilotSessionGate {
   spawnedWith(env: Readonly<Record<string, string | undefined>>): void;
   /** Told an attached server's tools, as the runtime lists them, for the MCP spelling. */
   serverTools(server: string, tools: readonly string[]): void;
+  /**
+   * Told every tool the runtime offers the session at its open, and which of them an attached server
+   * brings. A built-in among them that the tables do not name is named, once each.
+   */
+  toolsOffered(names: readonly string[], fromServers: readonly string[]): void;
   /** Told how to ask the runtime for an attached server's tools, when a decision needs them and none are known. */
   useToolLister(list: (server: string) => Promise<readonly string[] | null>): void;
   /** Spells a tool name as the decision requests and the items carry it. */
@@ -223,6 +231,8 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
   const hooked = new Map<string, HookedCall>();
   const decided = new Set<string>();
   const servers = new Map<string, readonly string[]>(options.servers.map((server) => [server, []]));
+  // The offered tools the runtime says an attached server brings: never a built-in, whatever their names.
+  const fromServers = new Set<string>();
   let sessionId = '';
   let probe: ProbeState | null = null;
   let listTools: ((server: string) => Promise<readonly string[] | null>) | null = null;
@@ -275,6 +285,19 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
 
   const toolName = (copilotName: string): string =>
     isCopilotBuiltin(copilotName) ? copilotName : copilotMcpToolName(copilotName, servers);
+
+  // A tool that is no built-in the tables hold, no server's tool by the runtime's own list and no name an
+  // attached server's tools could carry: a built-in this host has no row for. Said once per tool.
+  const nameIfUnnamed = (name: string, when: string): void => {
+    if (!named(name) || isCopilotBuiltin(name) || fromServers.has(name)) return;
+    if (toolName(name) !== name) return;
+    for (const server of servers.keys()) if (name.startsWith(`${server}-`)) return;
+    raise(
+      'gate-tool-unnamed',
+      `Copilot ${when} the tool ${name}, which this host's tables do not name: it has no kind but other and no local family, so each of its calls is asked about like any other and nothing here bounds what it does`,
+      name,
+    );
+  };
 
   const requestOf = (
     raw: CopilotPermissionRequest,
@@ -371,6 +394,7 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
         };
       }
       await learnServers(asked);
+      nameIfUnnamed(asked, 'was asked to run');
       const request = requestOf(raw, call, id);
       const outcome = await decideCall(request, signal ?? new AbortController().signal);
       return copilotAnswerOf(outcome);
@@ -458,6 +482,10 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
     },
     serverTools(server, tools) {
       if (servers.has(server)) servers.set(server, [...tools]);
+    },
+    toolsOffered(names, brought) {
+      for (const name of brought) fromServers.add(name);
+      for (const name of names) nameIfUnnamed(name, 'offers');
     },
     useToolLister(list) {
       listTools = list;

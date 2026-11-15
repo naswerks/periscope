@@ -186,6 +186,10 @@ frame it sends decodes unchanged.
   not hold is refused with the new reason `copilot-gate-not-active`. Mid-session the gate names
   `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call` and `gate-mode-widened` with Copilot's
   meanings ([gate.md](docs/gate.md)); a machine-wide policy hook is named `gate-hook-foreign` at the open.
+- Added: a new degrade, `gate-tool-unnamed`. A Copilot session is offered every built-in the runtime
+  has, and one the host's tables do not name reached the gate as `other`, in no family, with nothing
+  said. It is now named once per tool, when the session opens or at its first call. The session opens
+  and the call is decided like any other; nothing is refused or turned off for it.
 - Added: `write_powershell`, `write_bash` and `manage_schedule` are turned off in every Copilot session:
   left out of its tools, read back absent at the open, and refused at the gate.
 - Added: a Copilot session's `decisionTimeoutMs` may be at most 240,000ms, the wait the runtime was

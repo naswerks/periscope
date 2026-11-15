@@ -599,7 +599,8 @@ export const REFUSAL_REASONS = [
   // requests this host decides (Copilot): the first is a refusal. Its degrades are the names above:
   // `gate-hook-missing` (a request the hook did not ask for, a hook that failed, a call no decision
   // covered), `gate-hook-foreign` (a hook this host did not install decides), `gate-unhooked-call` (a
-  // provider-hosted tool ran) and `gate-mode-widened` (a mode in which the runtime approves calls itself).
+  // provider-hosted tool ran) and `gate-mode-widened` (a mode in which the runtime approves calls itself),
+  // and one of its own, the last below.
   //
   //   copilot-gate-not-active      Refused: the open ends because the runtime, read back before the first
   //                                prompt, is not in the posture this host started it in (its permission
@@ -608,7 +609,13 @@ export const REFUSAL_REASONS = [
   //                                did not reach this host through the hook and the permission request
   //                                both. Without the joined route a call the runtime allows by default
   //                                runs undecided. The detail says which.
+  //   gate-tool-unnamed            A degrade: the runtime offers, or the model called, a built-in tool this
+  //                                host's tables do not name. It has no kind but `other` and no local
+  //                                family, so nothing this host knows of it bounds what it does. The
+  //                                session opens and each call to it is asked about like any other; the
+  //                                name is said once per tool, so the tables can learn it.
   'copilot-gate-not-active',
+  'gate-tool-unnamed',
 
   // The gate over a runtime this host hosts in a child process of its own, whose sessions this host creates
   // with permission rules that send every action to ask and whose permission requests this host decides

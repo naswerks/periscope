@@ -58,6 +58,8 @@ export interface FakeCopilotOptions {
   readonly plugins?: readonly unknown[];
   /** The tools the session offers. Null until built, when `lazyTools` is set. */
   readonly offeredTools?: readonly string[];
+  /** The offered tools an attached server brings: `{server}-{tool}` for each, listed beside the built-ins. */
+  readonly offeredServerTools?: Readonly<Record<string, readonly string[]>>;
   readonly lazyTools?: boolean;
   /** Each attached server's tools, by name. */
   readonly serverTools?: Readonly<Record<string, readonly string[]>>;
@@ -267,11 +269,18 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
             tools:
               options.lazyTools === true && !toolsBuilt
                 ? null
-                : (options.offeredTools ?? ['powershell', 'view', 'create', 'edit', 'grep', 'glob']).map(
-                    (name) => ({
-                      name,
-                    }),
-                  ),
+                : [
+                    ...(options.offeredTools ?? ['powershell', 'view', 'create', 'edit', 'grep', 'glob']).map(
+                      (name) => ({ name }),
+                    ),
+                    ...Object.entries(options.offeredServerTools ?? {}).flatMap(([server, tools]) =>
+                      tools.map((tool) => ({
+                        name: `${server}-${tool}`,
+                        mcpServerName: server,
+                        mcpToolName: tool,
+                      })),
+                    ),
+                  ],
           }),
         initializeAndValidate: () => {
           toolsBuilt = true;

@@ -260,6 +260,7 @@ async function readPosture(session: CopilotSession): Promise<CopilotPostureRead>
     await rpc.tools.initializeAndValidate();
     metadata = await rpc.tools.getCurrentMetadata();
   }
+  const offered = metadata.tools ?? [];
   return {
     permissionModeResult: session.permissionModeResult ?? null,
     permissionMode: permission.mode,
@@ -267,7 +268,12 @@ async function readPosture(session: CopilotSession): Promise<CopilotPostureRead>
     allowAll,
     paths,
     plugins: plugins.plugins,
-    offeredTools: (metadata.tools ?? []).map((tool) => tool.name),
+    offeredTools: offered.map((tool) => tool.name),
+    offeredServerTools: offered.flatMap((tool) =>
+      typeof tool.mcpServerName === 'string' && tool.mcpServerName !== ''
+        ? [{ name: tool.name, server: tool.mcpServerName }]
+        : [],
+    ),
   };
 }
 
@@ -468,6 +474,11 @@ export function startCopilotProcess(
       home: home?.home ?? '',
     });
     if (unread !== null) return refuseOpen('copilot-gate-not-active', unread);
+    // A built-in the tables do not name is named, once, and the session opens: its calls ask like any other.
+    gate.toolsOffered(
+      read.offeredTools,
+      (read.offeredServerTools ?? []).map((tool) => tool.name),
+    );
     gate.useToolLister(async (server) => {
       const listed = await within(
         session.rpc.mcp.listTools({ serverName: server }),

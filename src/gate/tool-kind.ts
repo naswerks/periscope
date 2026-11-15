@@ -225,9 +225,13 @@ export const COPILOT_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
 
 /**
  * The built-ins of the pinned Copilot runtime that are `other` by name: each one a tool the runtime offers
- * that runs no command, reads or writes no path by itself and fetches no URL. Together with
- * `COPILOT_TOOL_KINDS` and `COPILOT_EXCLUDED_TOOLS` it names every built-in the runtime lists on Windows and
- * on a POSIX host (`copilot-local.test.ts` holds the three to the runtime's own list).
+ * that runs no command and reads or writes no path its input names. Two of them act on more than their
+ * input says: `dynamic_workflows_manage` writes a workflow's code into the session's own extension and
+ * loads it, and `run_dynamic_workflow` runs one. Each call of either asks like any other, as `other`, so
+ * it is the controller's to decide. Together with `COPILOT_TOOL_KINDS` and `COPILOT_EXCLUDED_TOOLS` the
+ * list names every built-in the runtime lists on Windows and on a POSIX host (`copilot-local.test.ts`
+ * holds the three to the runtime's own list); a built-in none of the three names is named to the
+ * controller when a session opens (`gate-tool-unnamed`).
  */
 export const COPILOT_OTHER_TOOLS: readonly string[] = [
   'read_powershell',

@@ -150,6 +150,16 @@ export interface CopilotSessionConfig {
   readonly onEvent: (event: CopilotEvent) => void;
 }
 
+/**
+ * One tool the session offers, as the runtime lists it: the name the model calls it by, and, for a tool an
+ * attached MCP server brings, that server's configured name and the tool's own name there.
+ */
+export interface CopilotOfferedTool {
+  readonly name: string;
+  readonly mcpServerName?: string;
+  readonly mcpToolName?: string;
+}
+
 /** The session RPC reads and writes this host uses. Each is the runtime's own, answered over the SDK's pipe. */
 export interface CopilotSessionRpc {
   readonly permissions: {
@@ -178,7 +188,7 @@ export interface CopilotSessionRpc {
       params: Record<string, never>,
     ): Promise<{ readonly tools: readonly { readonly name: string }[] }>;
     /** The tools the session offers now; `tools` is null until the runtime has built its list. */
-    getCurrentMetadata(): Promise<{ readonly tools: readonly { readonly name: string }[] | null }>;
+    getCurrentMetadata(): Promise<{ readonly tools: readonly CopilotOfferedTool[] | null }>;
     /** Has the runtime build its tool list now, before the first prompt. */
     initializeAndValidate(): Promise<unknown>;
   };

@@ -527,13 +527,21 @@ test(
         excludedHere.includes('manage_schedule'),
         'the scheduler is no longer a built-in: the list is stale',
       );
-      const offered = ((await real.session.rpc.tools.getCurrentMetadata()).tools ?? []).map(
-        (tool) => tool.name,
-      );
+      const listed = (await real.session.rpc.tools.getCurrentMetadata()).tools ?? [];
+      const offered = listed.map((tool) => tool.name);
       assert.ok(offered.includes('view'));
       assert.deepEqual(
         offered.filter((name) => COPILOT_EXCLUDED_TOOLS.includes(name)),
         [],
+      );
+      // What the open reads: every tool the session is offered that no server brings is one the tables
+      // name, so an open on the pinned runtime names no stranger.
+      assert.deepEqual(
+        listed
+          .filter((tool) => tool.mcpServerName === undefined && !known(tool.name))
+          .map((tool) => tool.name),
+        [],
+        'the session is offered built-ins this host has no word for',
       );
     } finally {
       await real.close();

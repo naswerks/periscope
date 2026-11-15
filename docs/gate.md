@@ -614,6 +614,11 @@ the one this host decides.
   - `gate-mode-widened`: the runtime reports a permission mode other than `manual`, or an agent mode
     other than `interactive` and `plan`. Measured on the pinned runtime: in `allow-all` a call still
     asks while the hook answers `ask`.
+  - `gate-tool-unnamed`: the runtime offers the session, or the model called, a built-in none of the
+    three tables names (`COPILOT_TOOL_KINDS`, `COPILOT_OTHER_TOOLS`, `COPILOT_EXCLUDED_TOOLS`). The
+    session opens all the same, and each call of that tool asks like any other, as kind `other` with no
+    local family; the name is said once per tool, at the open or at its first call, so the tables can
+    learn it. A tool the runtime lists as an attached server's is never taken for one.
 - **What it does not hold.** A command the agent detaches from its shell on purpose (on Windows,
   `Start-Process`, measured on the pinned runtime) is in no process tree of the session, so it outlives
   the session's close. A command the session's shell still runs, in the foreground or the background,

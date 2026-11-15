@@ -591,6 +591,13 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   `HKLM\Software\Policies\GitHub\Copilot` key), which runs whatever a session's settings say, is named
   `gate-hook-foreign` at the open; a permission or agent mode the host did not set is named
   `gate-mode-widened`.
+- **A built-in the host does not know is named, not refused.** The session is offered every built-in
+  the runtime has, less the three turned off. One the host's tables do not name has no kind but `other`
+  and no local family, so neither the write limits nor the protected set read its input: what bounds it
+  is your controller's decision, which every call of it still waits for. The host names it
+  `gate-tool-unnamed` when the session opens, or at its first call. Two the tables do name act on more
+  than their input says: `dynamic_workflows_manage` writes a workflow's code into the session's own
+  extension and loads it, and `run_dynamic_workflow` runs one. Both are kind `other`, and both ask.
 - **Three tools are turned off.** `write_powershell` and `write_bash`, which type into a shell already
   running, and `manage_schedule`, which runs a prompt later outside your queue, are never offered, and a
   call of one is refused.
