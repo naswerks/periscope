@@ -315,6 +315,20 @@ export function opencodeConfig(parts: OpencodeConfigParts): Record<string, unkno
   };
 }
 
+/** The one plugin of this host's a session's server is created with: the pre-call gate (`opencode-host.ts`). */
+export const OPENCODE_GATE_PLUGIN = 'periscope.gate';
+
+/** The source the server states for a plugin handed to it at its creation, as an object. */
+export const OPENCODE_GATE_PLUGIN_SOURCE = 'sdk';
+
+/** Whether a listed plugin is this host's own pre-call gate: by its id and its source, both. */
+export function isOpencodeGatePlugin(plugin: {
+  readonly id?: string;
+  readonly source: { readonly type: string };
+}): boolean {
+  return plugin.id === OPENCODE_GATE_PLUGIN && plugin.source.type === OPENCODE_GATE_PLUGIN_SOURCE;
+}
+
 /** What the server said about its posture, read before the first prompt. */
 export interface OpencodePostureRead {
   /** The session's own rules. */
@@ -358,7 +372,8 @@ function ruleWords(rule: OpencodeRule): string {
 /**
  * Why the server is not in the posture this host created it in, or null when it is: the session's rules are
  * this host's rules exactly; every agent's rules end with them; no approval is saved; every plugin is one of
- * the runtime's own and none of those turned off runs; the servers are the session's; no configuration but
+ * the runtime's own or this host's pre-call gate, and none of those turned off runs; the servers are the
+ * session's; no configuration but
  * this host's is loaded; and no model but the session's provider's is offered.
  */
 export function opencodeReadBackProblem(
@@ -378,7 +393,9 @@ export function opencodeReadBackProblem(
   if (read.saved.length > 0) {
     return `the server holds saved approvals: ${read.saved.map((one) => `${one.action} ${one.resource}`).join(', ')}`;
   }
-  const foreign = read.plugins.filter((plugin) => plugin.source.type !== 'builtin');
+  const foreign = read.plugins.filter(
+    (plugin) => plugin.source.type !== 'builtin' && !isOpencodeGatePlugin(plugin),
+  );
   if (foreign.length > 0) {
     return `plugins other than the runtime's own are loaded: ${foreign.map((plugin) => plugin.id ?? plugin.source.type).join(', ')}`;
   }

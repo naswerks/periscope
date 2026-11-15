@@ -180,6 +180,103 @@ test("the input is the call's own: the request's metadata first, else the input 
   );
 });
 
+test('a held call is decided whole before it runs: the line, its kind and dialect, where it runs and who made it', async () => {
+  const run = gate(allow);
+  run.built.useShell(
+    WINDOWS ? 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' : '/bin/bash',
+  );
+  run.built.observe(message('session.created', { agent: 'general', parentID: 'ses_main' }, 'ses_child'));
+  const line = "${C:/work/f.txt} = 'x'";
+  assert.deepEqual(
+    await run.built.decideHeld({
+      tool: 'shell',
+      sessionID: 'ses_child',
+      callId: 'call_1',
+      input: { command: line, workdir: 'sub' },
+    }),
+    { decision: 'once' },
+  );
+  const request = run.requests[0];
+  assert.equal(request?.toolName, 'shell');
+  assert.equal(request.toolKind, 'shell');
+  assert.equal(request.toolUseId, 'call_1');
+  assert.deepEqual(request.toolInput, { command: line, workdir: 'sub' });
+  assert.equal(request.cwd, `${CWD}/sub`);
+  assert.equal(request.shellDialect, WINDOWS ? 'powershell' : 'posix');
+  assert.equal(request.agentId, 'ses_child');
+  assert.equal(request.agentType, 'general');
+  // A refusal reaches the call as words, and an input that is no record is decided as an empty one.
+  const refusing = gate(deny);
+  assert.deepEqual(
+    await refusing.built.decideHeld({ tool: 'shell', sessionID: 'ses_main', callId: 'call_2', input: null }),
+    { decision: 'reject', message: 'not that one' },
+  );
+  assert.deepEqual(refusing.requests[0]?.toolInput, {});
+});
+
+test("a call allowed whole is not asked about again: what it asks afterwards is held to this host's own gate alone, until the call ends", async () => {
+  const secret = WINDOWS ? 'C:/Users/op/.ssh' : '/home/op/.ssh';
+  const run = gate(allow, {
+    localGate: localGate({
+      workspaceRoot: CWD,
+      resolve: nodePathResolver,
+      protectedPaths: [secret],
+      toolFamilies: OPENCODE_TOOL_FAMILIES,
+    }),
+  });
+  await run.built.decideHeld({
+    tool: 'shell',
+    sessionID: 'ses_main',
+    callId: 'call_1',
+    input: { command: 'ls' },
+  });
+  assert.equal(run.requests.length, 1);
+  // Its own requests, the directory it goes to and the command, are answered and nobody is asked.
+  assert.deepEqual(
+    await run.built.decide(
+      asked({ id: 'per_1', action: 'external_directory', resources: [`${CWD}/elsewhere/*`] }),
+    ),
+    { decision: 'once' },
+  );
+  assert.deepEqual(await run.built.decide(asked({ id: 'per_2', action: 'shell', resources: ['ls'] })), {
+    decision: 'once',
+  });
+  assert.equal(run.requests.length, 1, 'the decider was asked about the same call again');
+  // The host's own gate still reads each path such a request names.
+  const blocked = await run.built.decide(
+    asked({ id: 'per_3', action: 'external_directory', resources: [`${secret}/*`] }),
+  );
+  assert.equal(blocked.decision, 'reject');
+  assert.match(blocked.message ?? '', /credential-path-denied/);
+  assert.equal(run.requests.length, 1);
+  // Control: the same call id in another session, and the call once it has ended, are asked about.
+  await run.built.decide(asked({ id: 'per_4', sessionID: 'ses_other', action: 'shell', resources: ['ls'] }));
+  assert.equal(run.requests.length, 2);
+  run.built.observe(message('session.tool.success', { id: 'call_1', content: [] }));
+  await run.built.decide(asked({ id: 'per_5', action: 'shell', resources: ['ls'] }));
+  assert.equal(run.requests.length, 3);
+});
+
+test('a held call that was refused keeps no allow, and an interrupt ends one still being decided', async () => {
+  const refusing = gate(deny);
+  await refusing.built.decideHeld({ tool: 'shell', sessionID: 'ses_main', callId: 'call_1', input: {} });
+  await refusing.built.decide(asked({ action: 'shell', resources: ['ls'] }));
+  assert.equal(refusing.requests.length, 2, 'a refused call left an allow behind');
+
+  const waiting = gate(() => new Promise(() => undefined));
+  const deciding = waiting.built.decideHeld({
+    tool: 'shell',
+    sessionID: 'ses_main',
+    callId: 'call_2',
+    input: {},
+  });
+  await Promise.resolve();
+  waiting.built.endPending('ses_main', 'the turn was interrupted while this decision was outstanding');
+  const ended = await deciding;
+  assert.equal(ended.decision, 'reject');
+  assert.match(ended.message ?? '', /the turn was interrupted/);
+});
+
 test('a deny reaches the model as a refusal with its words', async () => {
   const run = gate(deny);
   assert.deepEqual(await run.built.decide(asked({ action: 'edit' })), {

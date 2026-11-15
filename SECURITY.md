@@ -682,13 +682,25 @@ hello says so ([gate.md](docs/gate.md), the opencode gate). What holds, and what
 - **One provider.** A session's configuration allows no model provider but the endpoint it opened on, and
   the open is refused if the server offers a model of any other.
 - **Proven before the first prompt.** The host reads the server back (the session's rules, every agent's,
-  no saved approval, only the runtime's own plugins and none it turns off, only the session's MCP servers,
-  no configuration but its own, no model but the endpoint's). A server that is not as the host created it
-  refuses the open `opencode-gate-not-active`.
+  no saved approval, only the runtime's own plugins, the host's own pre-call gate and none it turns off,
+  only the session's MCP servers, no configuration but its own, no model but the endpoint's). A server
+  that is not as the host created it refuses the open `opencode-gate-not-active`.
+- **A shell call is decided before it runs, whole.** opencode's `shell` tool asks only about the
+  commands its own reading finds in a line, and a line it finds none in raises no request at all: on
+  Windows, where the shell is PowerShell, an assignment through a provider path
+  (`${C:\path\file} = 'x'`) is such a line, and it writes a file. So the server is created with one
+  plugin of this host's, whose pre-call hook holds every `shell` call, a subagent's included, until the
+  host has decided the whole line (its own gate, then your controller); refused, the call fails with
+  the refusal's words and never runs. Shown on the pinned SDK on Windows: such a line, refused, writes
+  nothing. What a shell line can still do is what any shell line can: the host's own gate refuses a
+  line that names a protected path, and reads a path only as text, so a line that builds a path at run
+  time (from a variable, a substitution, an encoded string) is your controller's to refuse, and the
+  controller is shown the whole line.
 - **What runs undecided is named.** A tool the model's provider runs itself is named `gate-unhooked-call`;
-  a call that ran with no request for it, `gate-hook-missing`; rules that are no longer this host's, or an
-  approval it never gave, `gate-mode-widened`; a plugin that is not the runtime's own, loaded after the
-  open, `gate-foreign-extension`.
+  a call that ran with no request for it, `gate-hook-missing` (the same name says, at the open, that the
+  host's pre-call gate is not among the server's plugins); rules that are no longer this host's, or an
+  approval it never gave, `gate-mode-widened`; a plugin that is neither the runtime's own nor the host's
+  gate, loaded after the open, `gate-foreign-extension`.
 - **Tools that cannot be decided are turned off.** Code Mode's `execute`, `question`, image generation,
   the browser, and the session, worktree, model-catalogue, artifact and schedule tools that run without
   asking are denied in every session's rules, never offered, and a request naming one is refused. A form

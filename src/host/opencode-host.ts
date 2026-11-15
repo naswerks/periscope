@@ -14,6 +14,13 @@
  * And it sends every event of the server's stream as an `event` notification, from the moment the server is
  * created. When its stdin ends it closes the server, which ends what the server still runs, and exits.
  *
+ * What it asks: the server is created with one plugin of this package's (`OPENCODE_GATE_PLUGIN`), whose
+ * pre-call hook the server runs before every tool call it runs, a subagent's included. For a call of a tool
+ * the `open` request named (`gatedTools`), the hook sends this host a `gate` request (the tool, the session,
+ * the call's id, its input) and waits for the answer: allowed, the call runs; refused, the hook rejects with
+ * the answer's words and the call fails with them, its tool never run. The hook has no deadline of its own:
+ * it waits as long as this host takes to decide, and ends refused when this process's stdin ends.
+ *
  * It writes nothing to its stdout but the protocol: whatever the SDK would log goes to stderr.
  */
 import { realpathSync } from 'node:fs';
@@ -21,7 +28,14 @@ import { fileURLToPath } from 'node:url';
 
 import type { JsonObject, JsonValue } from '../control/frames.js';
 import type { Result } from '../core/result.js';
-import type { OpencodeHost, OpencodeInstall, OpencodeSdk } from './opencode-sdk.js';
+import type {
+  OpencodeExecuteBefore,
+  OpencodeHost,
+  OpencodeInstall,
+  OpencodePlugin,
+  OpencodeSdk,
+} from './opencode-sdk.js';
+import { OPENCODE_GATE_PLUGIN } from './opencode-home.js';
 import { loadOpencodeSdk, readOpencodeInstall } from './opencode-sdk.js';
 import { classifyRpc, JsonLineDecoder, RPC_INTERNAL_ERROR, RPC_METHOD_NOT_FOUND } from './stdio-rpc.js';
 
@@ -46,6 +60,18 @@ export const OPENCODE_HOST_CALLS: Readonly<
   'mcp.list': (host, input) => host.mcp.list(input),
   'config.get': (host, input) => host.config.get(input),
   'model.list': (host, input) => host.model.list(input),
+};
+
+/** What this host answers a call held at the pre-call hook. */
+interface GateAnswer {
+  readonly allow: boolean;
+  readonly message: string;
+}
+
+/** What a held call is told when nothing can decide it any more. */
+const GATE_GONE: GateAnswer = {
+  allow: false,
+  message: 'the host that decides this call is gone, so the call did not run',
 };
 
 /** What the process needs from its surroundings; each defaults to the real one. */
@@ -81,11 +107,66 @@ export function serveOpencodeHost(io: OpencodeHostIo): Promise<void> {
   const events = new AbortController();
   let host: OpencodeHost | null = null;
   let opening: Promise<void> | null = null;
+  let ended = false;
+  // The tools whose every call waits at the pre-call hook, and each call waiting there, by its request's id.
+  let gatedTools: ReadonlySet<string> = new Set();
+  const held = new Map<string, (answer: GateAnswer) => void>();
+  let gates = 0;
 
   const send = (message: JsonObject): void => io.write(`${JSON.stringify(message)}\n`);
   const answer = (id: string | number, result: JsonValue): void => send({ jsonrpc: '2.0', id, result });
   const fail = (id: string | number, code: number, message: string): void =>
     send({ jsonrpc: '2.0', id, error: { code, message } });
+
+  const askGate = (event: OpencodeExecuteBefore): Promise<GateAnswer> =>
+    new Promise((resolve) => {
+      if (ended) return resolve(GATE_GONE);
+      gates += 1;
+      const id = `gate-${gates}`;
+      held.set(id, resolve);
+      send({
+        jsonrpc: '2.0',
+        id,
+        method: 'gate',
+        params: {
+          tool: event.tool,
+          sessionID: event.sessionID,
+          callID: event.id,
+          input: asJson(event.input),
+        },
+      });
+    });
+
+  /** This host's answer to a held call, read loosely: anything but a stated allow refuses. */
+  const settleGate = (id: string, result: JsonValue | null, error: string | null): void => {
+    const settle = held.get(id);
+    if (settle === undefined) return;
+    held.delete(id);
+    const answered = typeof result === 'object' && result !== null && !Array.isArray(result) ? result : {};
+    const words = answered['message'];
+    settle(
+      error === null && answered['allow'] === true
+        ? { allow: true, message: '' }
+        : {
+            allow: false,
+            message:
+              typeof words === 'string' && words !== ''
+                ? words
+                : (error ?? 'this host refused the call and gave no reason'),
+          },
+    );
+  };
+
+  const gate: OpencodePlugin = {
+    id: OPENCODE_GATE_PLUGIN,
+    setup: async (context) => {
+      await context.tool.hook('execute.before', async (event) => {
+        if (!gatedTools.has(event.tool)) return;
+        const answer = await askGate(event);
+        if (!answer.allow) throw new Error(answer.message);
+      });
+    },
+  };
 
   const forwardEvents = (server: OpencodeHost): void => {
     void (async () => {
@@ -115,6 +196,10 @@ export function serveOpencodeHost(io: OpencodeHostIo): Promise<void> {
     ) {
       return fail(id, RPC_INTERNAL_ERROR, 'open needs install, database, configDirectory and config');
     }
+    const named = params['gatedTools'];
+    gatedTools = new Set(
+      Array.isArray(named) ? named.filter((one): one is string => typeof one === 'string') : [],
+    );
     const install = (io.readInstall ?? readOpencodeInstall)(directory);
     if (!install.ok)
       return fail(id, RPC_INTERNAL_ERROR, `${install.refusal.reason}: ${install.refusal.detail}`);
@@ -126,6 +211,7 @@ export function serveOpencodeHost(io: OpencodeHostIo): Promise<void> {
         config: { directory: configDirectory, project: false, claude: false, content },
         models: { fetch: false },
         fs: { filewatcher: false, fff: false },
+        plugins: [gate],
       });
       host = created;
       forwardEvents(created);
@@ -157,11 +243,12 @@ export function serveOpencodeHost(io: OpencodeHostIo): Promise<void> {
   };
 
   return new Promise<void>((resolve) => {
-    let ended = false;
     const end = (): void => {
       if (ended) return;
       ended = true;
       events.abort();
+      // Nothing can decide a held call once this host is gone: each ends refused.
+      for (const id of [...held.keys()]) settleGate(id, null, GATE_GONE.message);
       void (async () => {
         if (opening !== null) await opening.catch(() => undefined);
         const closing = host;
@@ -175,7 +262,18 @@ export function serveOpencodeHost(io: OpencodeHostIo): Promise<void> {
       for (const decoded of decoder.push(chunk)) {
         if (!decoded.ok) continue;
         const message = classifyRpc(decoded.value);
-        if (!message.ok || message.value.kind !== 'request') continue;
+        if (!message.ok) continue;
+        if (message.value.kind === 'answer') {
+          settleGate(String(message.value.id), message.value.result, null);
+          continue;
+        }
+        if (message.value.kind === 'error') {
+          if (message.value.id !== null) {
+            settleGate(String(message.value.id), null, message.value.error.message);
+          }
+          continue;
+        }
+        if (message.value.kind !== 'request') continue;
         const { id, method, params } = message.value;
         if (method === 'open') {
           opening = open(id, params).finally(() => {

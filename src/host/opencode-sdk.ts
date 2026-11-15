@@ -151,6 +151,37 @@ export interface OpencodeHost {
   close(): Promise<void>;
 }
 
+/** One call about to run, as the server hands it to a pre-call hook. */
+export interface OpencodeExecuteBefore {
+  /** The tool's name, as the server registered it. */
+  readonly tool: string;
+  readonly sessionID: string;
+  /** The call's own id, the one its permission requests name as their source. */
+  readonly id: string;
+  /** The call's input, as the model sent it. */
+  readonly input: unknown;
+}
+
+/** What a plugin's setup is handed, as far as this package reads it. */
+export interface OpencodePluginContext {
+  readonly tool: {
+    /**
+     * Registers a callback the server runs before every tool call it runs itself, a subagent's included. A
+     * callback that rejects fails that call alone, with the rejection's words; the call's tool never runs.
+     */
+    hook(
+      name: 'execute.before',
+      callback: (event: OpencodeExecuteBefore) => Promise<void> | void,
+    ): Promise<unknown>;
+  };
+}
+
+/** A plugin handed to a host at its creation as an object, so it is set up before any run starts. */
+export interface OpencodePlugin {
+  readonly id: string;
+  setup(context: OpencodePluginContext): Promise<void> | void;
+}
+
 /** The options a host is created with: where it keeps its database and the configuration it loads. */
 export interface OpencodeCreateOptions {
   readonly database: { readonly path: string };
@@ -162,6 +193,8 @@ export interface OpencodeCreateOptions {
   };
   readonly models: { readonly fetch: false };
   readonly fs: { readonly filewatcher: false; readonly fff: false };
+  /** The plugins the host is created with, beside the runtime's own: this package's pre-call gate alone. */
+  readonly plugins?: readonly OpencodePlugin[];
 }
 
 /** The one export this host takes from the SDK. */

@@ -6,7 +6,9 @@
  * The process is opened with the session's configuration in the `open` request itself, so what that
  * configuration holds (an endpoint's key among it) crosses the process's stdin into its memory and is never
  * written into an environment or a file. Every event of the server's stream arrives as an `event`
- * notification; each call this host makes is one of the process's fixed list, by name.
+ * notification; each call this host makes is one of the process's fixed list, by name. A call of a tool this
+ * host names (`gatedTools`) is held by the server before it runs and arrives as a `gate` request, which this
+ * host answers: the call runs, or it fails with this host's words.
  */
 import { fileURLToPath } from 'node:url';
 
@@ -15,7 +17,7 @@ import type { Refusal } from '../core/refusal.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import type { ChildExit, SpawnChild } from './stdio-rpc.js';
-import { describeExit, startStdioRpc } from './stdio-rpc.js';
+import { RPC_METHOD_NOT_FOUND, describeExit, startStdioRpc } from './stdio-rpc.js';
 
 /** The program a session's host process runs: this package's own, beside this file. */
 export function opencodeHostScript(): string {
@@ -34,6 +36,22 @@ export interface OpencodeConnection {
   close(): Promise<void>;
 }
 
+/** One call the server holds at its pre-call hook until this host answers. */
+export interface OpencodeHeldCall {
+  /** The tool's name, as the server registered it. */
+  readonly tool: string;
+  readonly sessionID: string;
+  readonly callId: string;
+  /** The call's input, as the model sent it. */
+  readonly input: JsonValue;
+}
+
+/** This host's answer to a held call: it runs, or it fails with the words and its tool never runs. */
+export interface OpencodeHeldAnswer {
+  readonly allow: boolean;
+  readonly message?: string;
+}
+
 /** What one host process is opened with. */
 export interface OpencodeConnectOptions {
   /** The session's directory, where the process runs. */
@@ -48,6 +66,10 @@ export interface OpencodeConnectOptions {
   readonly config: string;
   readonly openDeadlineMs: number;
   readonly onEvent: (event: JsonObject) => void;
+  /** The tools whose every call the server holds at its pre-call hook for `onHeldCall`'s answer. */
+  readonly gatedTools?: readonly string[];
+  /** Decides one held call before it runs. Absent, every held call is refused. */
+  readonly onHeldCall?: (call: OpencodeHeldCall) => Promise<OpencodeHeldAnswer>;
   /** The server's stream ended while the process lives, with why. */
   readonly onStreamEnd: (detail: string) => void;
   readonly onExit: (exit: ChildExit) => void;
@@ -88,6 +110,32 @@ export const connectOpencodeHost: ConnectOpencode = async (options) => {
         options.onStreamEnd(typeof params['detail'] === 'string' ? params['detail'] : 'with no reason given');
       }
     },
+    onRequest: async (method, params) => {
+      if (method !== 'gate') {
+        return { error: { code: RPC_METHOD_NOT_FOUND, message: `${method} is not handled here` } };
+      }
+      const tool = params['tool'];
+      const sessionID = params['sessionID'];
+      const callId = params['callID'];
+      const decide = options.onHeldCall;
+      if (
+        decide === undefined ||
+        typeof tool !== 'string' ||
+        typeof sessionID !== 'string' ||
+        typeof callId !== 'string'
+      ) {
+        return {
+          result: {
+            allow: false,
+            message: 'this host could not read the call the runtime held, so the call did not run',
+          },
+        };
+      }
+      const answer = await decide({ tool, sessionID, callId, input: params['input'] ?? null });
+      return {
+        result: { allow: answer.allow, ...(answer.message === undefined ? {} : { message: answer.message }) },
+      };
+    },
     onExit: options.onExit,
     ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }),
     ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
@@ -104,6 +152,7 @@ export const connectOpencodeHost: ConnectOpencode = async (options) => {
       database: options.database,
       configDirectory: options.configDirectory,
       config: options.config,
+      gatedTools: [...(options.gatedTools ?? [])],
     },
     options.openDeadlineMs,
   );

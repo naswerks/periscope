@@ -7,7 +7,9 @@
  *   runtime's own, the servers are the configuration's, the configuration is read from the adapter's directory,
  *   and the models are the configured provider's.
  * - A prompt is queued, delivered and run in order, one run at a time. Each call of a run announces itself
- *   (`session.tool.input.started`, `session.tool.called`), asks once for each request it raises
+ *   (`session.tool.input.started`, `session.tool.called`). A call of a tool the adapter asked to have held
+ *   (`gatedTools`) then waits on the adapter's answer before anything else: refused, it fails with the
+ *   answer's words and raises nothing. A call that goes on asks once for each request it raises
  *   (`permission.asked`), and waits forever for the answer. A refused request fails the call with the words,
  *   and refuses every other request of its session still waiting, as the server does; an approved call
  *   succeeds.
@@ -71,6 +73,8 @@ export interface FakeOpencodeOptions {
   readonly hanging?: readonly string[];
   /** The host process's id; null for one that never started. */
   readonly pid?: number | null;
+  /** A call the server holds as soon as it is created, before the adapter has opened its session. */
+  readonly heldAtConnect?: FakeOpencodeCall;
 }
 
 /** What the fake recorded. */
@@ -80,6 +84,8 @@ export interface FakeOpencodeRecord {
   readonly configs: Record<string, unknown>[];
   readonly calls: { method: string; input: JsonObject }[];
   readonly replies: { requestID: string; decision: string; message?: string }[];
+  /** Each call the server held before it ran, with the adapter's answer. */
+  readonly held: { callId: string; allow: boolean }[];
   readonly lifecycle: string[];
   /** Send one event, as the server would. */
   emit(type: string, data: Record<string, unknown>): void;
@@ -96,6 +102,8 @@ export interface FakeOpencodeRecord {
 const DEFAULT_PLUGINS = [
   { id: 'opencode.tool.shell', source: { type: 'builtin' }, state: { status: 'active' } },
   { id: 'opencode.tool.edit', source: { type: 'builtin' }, state: { status: 'active' } },
+  // This host's own pre-call gate, as the server lists a plugin it was created with.
+  { id: 'periscope.gate', source: { type: 'sdk' }, state: { status: 'active' } },
 ];
 
 /** A fake host process and what it records. */
@@ -133,6 +141,7 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
     configs: [],
     calls: [],
     replies: [],
+    held: [],
     lifecycle: [],
     emit: send,
     spawn(callId, agent = 'general') {
@@ -199,6 +208,26 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
     if (call.executed === true) {
       send('session.tool.success', { sessionID: session, id: call.id, executed: true, content: [] });
       return;
+    }
+    if (live?.gatedTools?.includes(call.name) === true) {
+      const held =
+        live.onHeldCall === undefined
+          ? { allow: false, message: 'nothing answers a held call' }
+          : await live.onHeldCall({
+              tool: call.name,
+              sessionID: session,
+              callId: call.id,
+              input: { ...(call.input ?? {}) } as JsonObject,
+            });
+      record.held.push({ callId: call.id, allow: held.allow });
+      if (!held.allow) {
+        send('session.tool.failed', {
+          sessionID: session,
+          id: call.id,
+          error: { type: 'tool.error', message: held.message ?? 'refused' },
+        });
+        return;
+      }
     }
     const requests = call.requests ?? [{ action: call.name }];
     let index = 0;
@@ -395,6 +424,17 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
     config = JSON.parse(opened.config) as Record<string, unknown>;
     record.configs.push(config);
     const pid = options.pid === undefined ? 4343 : options.pid;
+    const early = options.heldAtConnect;
+    if (early !== undefined && opened.onHeldCall !== undefined) {
+      void opened
+        .onHeldCall({
+          tool: early.name,
+          sessionID: early.session ?? options.sessionId ?? 'ses_main',
+          callId: early.id,
+          input: { ...(early.input ?? {}) } as JsonObject,
+        })
+        .then((answer) => record.held.push({ callId: early.id, allow: answer.allow }));
+    }
     return Promise.resolve(
       ok({
         call: async (method: string, input: JsonObject, deadlineMs: number): Promise<Result<JsonValue>> => {

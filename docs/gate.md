@@ -685,6 +685,24 @@ every request they raise.
   by itself, the last rule a call matches asks. A subagent's session inherits the rules at its creation,
   and a fork copies them. Shown on the pinned SDK driven by a stub model on a loopback port
   (`opencode-local.test.ts`): a subagent's call and a forked session's call each ask.
+- **A shell call is decided before it runs.** The `shell` tool raises a request only for the commands
+  the runtime's own reading finds in a line; a line it finds none in (on PowerShell, an assignment
+  through a provider path such as `${C:\path\file} = 'x'`) raises nothing and would run undecided. So
+  each session's server is created with one plugin of this host's (`periscope.gate`, handed to the SDK's
+  `create`, so it is set up before any run starts), which registers the SDK's pre-call hook
+  (`execute.before`). The server runs that hook before every tool call it runs itself, a subagent's
+  included, and a hook that rejects fails that call alone with its words. For a call of a tool in
+  `OPENCODE_HELD_TOOLS` (`shell`) the hook asks this host and waits: the host reads the call as a
+  `DecisionRequest` (the whole line as its input, its directory, its dialect, the subagent that made
+  it) and decides it by the same call decision as any other. It has no deadline of its own beyond the
+  session's `decisionTimeoutMs`, and ends refused when the turn is interrupted, the session closes or
+  the host is gone. A call that reaches the hook before the open is proven waits for the proof, and is
+  refused only if the proof fails. A call allowed there is not asked about again: each request it then
+  raises (`external_directory` for its directory, `shell` for a command the runtime found) is held to
+  this host's own gate alone, which still reads every path the request names. Every other tool keeps
+  the route below, since each raises its request. Shown on the pinned SDK (`opencode-local.test.ts`):
+  a line with no command, refused, writes nothing; allowed, it runs after one decision; a subagent's
+  line is decided the same way.
 - **One decision per request.** A request names its own id, the session it asks for, its action, the
   resources it names (a path, a command, a URL), and the call that raised it (`source.id`). The host reads it
   as a `DecisionRequest`: the tool's name in this host's spelling (a built-in's action, an MCP tool as
@@ -697,6 +715,7 @@ every request they raise.
   is refused (`canRewriteInput: false`).
 - **One call can ask twice.** A path outside the session's location asks `external_directory` for its
   directory first, then its own action; decisions are kept by the request's id, so each is decided once.
+  A `shell` call is the exception: it was decided whole before it ran, so its requests ask nobody.
 - **A request refused with another.** When this host refuses one request, opencode refuses every other
   request of the same session still waiting, with the same words. Each such decision still pending here is
   ended, recorded as refused (`permission-decision-unavailable`, with the words the runtime refused it
@@ -704,7 +723,8 @@ every request they raise.
 - **Proven before the first prompt** (`opencodeReadBackProblem`, and the open in
   `src/host/opencode-process.ts`). Once the server's plugins are active, the server is read back: the
   session's rules are exactly this host's; every agent's rules end with them; no approval is saved; every
-  plugin is the runtime's own and none turned off runs; the MCP servers are the session's; every
+  plugin is the runtime's own or this host's pre-call gate (by its id and the source the server states
+  for a plugin handed to `create`, `sdk`, both), and none turned off runs; the MCP servers are the session's; every
   configuration place it read is inside the session's home; and no model but the endpoint provider's is
   offered. Anything else refuses the open `opencode-gate-not-active`, naming what differed, and no prompt
   is sent. A planted allow rule and a second provider are each refused on the pinned SDK.
@@ -739,18 +759,23 @@ every request they raise.
   `edit`, `patch` and `opencode_worktree_remove` tools ask) through the jail, each path the request names
   checked one at a time, a relative one placed in the session's location; `read` and `external_directory`
   (`<directory>/*` read as the directory) through the protected set; `shell` through the shell rules, in the
-  grammar of the shell this host names (`powershell` on Windows, `posix` elsewhere); `glob` and `grep`
-  through the protected set. The variables a command's paths are read with are the agent's shell's.
+  grammar of the shell this host names (`powershell` on Windows, or `cmd` where Windows PowerShell is not at
+  its fixed path; `posix` elsewhere); `glob` and `grep` through the protected set. The variables a command's
+  paths are read with are the agent's shell's. opencode's own reading of a line is a POSIX one whatever the
+  shell, so where the shell is `cmd.exe` the commands its requests name can differ from what `cmd` runs;
+  this host decides the whole line, in the `cmd` grammar, before it runs.
 - **What the reused names mean on opencode.** Each is raised once per call, request or session:
   - `gate-unhooked-call`: a tool the model's provider ran itself (`session.tool.called` with
     `executed: true`), which raises no request.
-  - `gate-hook-missing`: a call that ran with no request for it (`session.tool.success` for a call this
-    host decided nothing on), such as a shell line that names no command.
+  - `gate-hook-missing`: a call that ran with no decision of this host's behind it
+    (`session.tool.success` for a call it decided nothing on), or, at the open, this host's pre-call
+    gate missing from the server's plugins, without which a shell line that names no command is such a
+    call.
   - `gate-mode-widened`: the rules of one of the session's sessions changed after the open and are no
     longer this host's (`session.permissions`), or an answer this host never gave approved a request
     (`permission.replied`).
-  - `gate-foreign-extension`: a plugin that is not the runtime's own loaded after the open
-    (`plugin.updated`, after which the plugins are read again).
+  - `gate-foreign-extension`: a plugin that is neither the runtime's own nor this host's pre-call gate
+    loaded after the open (`plugin.updated`, after which the plugins are read again).
 - **What it does not hold.**
   - A `webfetch` the gate allows follows the redirects the site sends, up to opencode's limit: the decision
     request names the URL asked for, and opencode holds each redirect only to the rules' denials, which

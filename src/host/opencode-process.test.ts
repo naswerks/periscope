@@ -26,7 +26,7 @@ import {
   opencodeShellPath,
   startOpencodeProcess,
 } from './opencode-process.js';
-import type { OpencodeInstall } from './opencode-sdk.js';
+import type { OpencodeEvent, OpencodeInstall } from './opencode-sdk.js';
 import type { OpencodeMessage } from './opencode-wire.js';
 
 const ROOT = process.platform === 'win32' ? 'C:/work/session-1' : '/work/session-1';
@@ -164,6 +164,12 @@ const opened = (run: Started): boolean => run.messages.some((message) => message
 const types = (run: Started): string[] =>
   run.messages.flatMap((message) => (message.kind === 'event' ? [message.event.type] : []));
 const until = (condition: () => boolean, what: string): Promise<void> => waitFor(condition, what, 5_000);
+
+/** The events of `type` the session's process yielded, in order. */
+const eventsOf = (run: Started, type: string): OpencodeEvent[] =>
+  run.messages.flatMap((message) =>
+    message.kind === 'event' && message.event.type === type ? [message.event] : [],
+  );
 
 /** Each value in `secrets` that appears in `env`, by the variable that holds it. */
 function credentialsIn(env: Readonly<Record<string, string>>, secrets: readonly string[]): string[] {
@@ -639,7 +645,7 @@ test('the setters apply now: a listed model, the plan agent; an unlisted model, 
 test('an interrupt reaches the server, and a decision still pending for the session ends refused', async () => {
   let release: () => void = () => undefined;
   const run = await started({
-    fake: { calls: () => [{ id: 'call_wait', name: 'shell', input: { command: 'git status' } }] },
+    fake: { calls: () => [{ id: 'call_wait', name: 'edit', input: { path: 'a.ts' } }] },
     decide: (_request, signal) =>
       new Promise((resolve) => {
         release = () => resolve({ behavior: 'allow' });
@@ -656,6 +662,120 @@ test('an interrupt reaches the server, and a decision still pending for the sess
     await until(() => run.record.replies.length === 1, 'the ended decision');
     assert.equal(run.record.replies[0]?.decision, 'reject');
     release();
+  } finally {
+    await closed(run);
+  }
+});
+
+test('a shell line the runtime reads no command in is decided before it runs: refused, it fails and never runs; allowed, it runs', async () => {
+  const run = await started({
+    fake: {
+      calls: (prompt) => [
+        // A line with no command raises no request of its own.
+        { id: prompt, name: 'shell', input: { command: "${C:/work/f.txt} = 'x'" }, requests: [] },
+      ],
+    },
+    decide: (request) =>
+      Promise.resolve(
+        request.toolUseId === 'refused'
+          ? { behavior: 'deny', message: 'not that line' }
+          : { behavior: 'allow' },
+      ),
+  });
+  try {
+    await until(() => opened(run), 'the open');
+    assert.deepEqual(run.record.connects[0]?.gatedTools, ['shell']);
+    run.process.prompt('refused');
+    await until(() => eventsOf(run, 'session.execution.succeeded').length === 1, 'the first run');
+    assert.deepEqual(run.record.held, [{ callId: 'refused', allow: false }]);
+    assert.equal(run.requests[0]?.toolName, 'shell');
+    assert.deepEqual(run.requests[0]?.toolInput, { command: "${C:/work/f.txt} = 'x'" });
+    const failed = eventsOf(run, 'session.tool.failed')[0]?.data as { error?: { message?: string } };
+    assert.equal(failed.error?.message, 'not that line');
+    assert.equal(eventsOf(run, 'session.tool.success').length, 0, 'a refused line ran');
+    run.process.prompt('allowed');
+    await until(() => eventsOf(run, 'session.execution.succeeded').length === 2, 'the second run');
+    assert.deepEqual(run.record.held[1], { callId: 'allowed', allow: true });
+    assert.equal(eventsOf(run, 'session.tool.success').length, 1);
+    assert.equal(run.requests.length, 2, 'each line was asked about once');
+    assert.deepEqual(
+      run.raised.filter((one) => one.name === 'gate-hook-missing'),
+      [],
+      'a line this host decided was named as one it did not',
+    );
+  } finally {
+    await closed(run);
+  }
+});
+
+test("a shell call's own requests are answered from the decision made before it ran: the decider is asked once", async () => {
+  const run = await started({
+    fake: {
+      calls: () => [
+        {
+          id: 'call_1',
+          name: 'shell',
+          input: { command: 'git status', workdir: 'C:/elsewhere' },
+          requests: [
+            { action: 'external_directory', resources: ['C:/elsewhere/*'] },
+            { action: 'shell', resources: ['git status'] },
+          ],
+        },
+      ],
+    },
+  });
+  try {
+    run.process.prompt('go');
+    await until(() => eventsOf(run, 'session.execution.succeeded').length === 1, 'the run');
+    assert.equal(run.requests.length, 1, 'the same call was asked about more than once');
+    assert.deepEqual(
+      run.record.replies.map((reply) => reply.decision),
+      ['once', 'once'],
+    );
+    assert.equal(eventsOf(run, 'session.tool.success').length, 1);
+  } finally {
+    await closed(run);
+  }
+});
+
+test('a call held before the open is proven waits for the proof and is then decided like any other', async () => {
+  const run = await started({
+    fake: { heldAtConnect: { id: 'call_early', name: 'shell', input: { command: 'git status' } } },
+  });
+  try {
+    await until(() => run.record.held.length === 1, "the early call's answer");
+    assert.deepEqual(run.record.held, [{ callId: 'call_early', allow: true }]);
+    assert.equal(run.requests[0]?.toolUseId, 'call_early');
+    assert.ok(opened(run), 'the call was decided before the open was proven');
+  } finally {
+    await closed(run);
+  }
+});
+
+test('a call held before the open is refused when the open is not proven, and nobody is asked', async () => {
+  const run = await started({
+    fake: {
+      heldAtConnect: { id: 'call_early', name: 'shell', input: { command: 'git status' } },
+      plugins: [{ id: 'a-package', source: { type: 'package' } }],
+    },
+  });
+  await until(() => run.record.held.length === 1, "the early call's answer");
+  assert.deepEqual(run.record.held, [{ callId: 'call_early', allow: false }]);
+  assert.equal(run.requests.length, 0);
+  assert.match((await run.ended)?.message ?? '', /opencode-gate-not-active/);
+});
+
+test("the pre-call gate missing from the server's plugins is named at the open, and the session opens", async () => {
+  const run = await started({
+    fake: { plugins: [{ id: 'opencode.tool.shell', source: { type: 'builtin' } }] },
+  });
+  try {
+    await until(() => opened(run), 'the open');
+    assert.deepEqual(
+      run.raised.map((one) => one.name),
+      ['gate-hook-missing'],
+    );
+    assert.match(run.raised[0]?.detail ?? '', /pre-call gate is not among the server's plugins/);
   } finally {
     await closed(run);
   }

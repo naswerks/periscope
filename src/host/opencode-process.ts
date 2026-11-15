@@ -48,12 +48,13 @@ import { MAX_PENDING_PROMPTS, isRuntimeDefaultPrompt } from './agent-process.js'
 import type { OpencodeEndpointRoute } from './opencode-endpoints.js';
 import { opencodeProvider, opencodeProviderId } from './opencode-endpoints.js';
 import type { OpencodeSessionGate } from './opencode-gate.js';
-import { opencodeAskedOf } from './opencode-gate.js';
+import { OPENCODE_HELD_TOOLS, opencodeAskedOf } from './opencode-gate.js';
 import type { OpencodePostureRead, OpencodeSessionHome } from './opencode-home.js';
 import {
   carryOpencodeStateIn,
   carryOpencodeStateOut,
   createOpencodeSessionHome,
+  isOpencodeGatePlugin,
   opencodeConfig,
   opencodeHostEnv,
   opencodeReadBackProblem,
@@ -62,7 +63,12 @@ import {
 } from './opencode-home.js';
 import { opencodeMcpServers } from './opencode-mcp.js';
 import { opencodeSkillDirectories } from './opencode-pack.js';
-import type { ConnectOpencode, OpencodeConnection } from './opencode-relay.js';
+import type {
+  ConnectOpencode,
+  OpencodeConnection,
+  OpencodeHeldAnswer,
+  OpencodeHeldCall,
+} from './opencode-relay.js';
 import { connectOpencodeHost } from './opencode-relay.js';
 import type { OpencodeEvent, OpencodeInstall, OpencodeRule } from './opencode-sdk.js';
 import { OPENCODE_SDK_PINNED_VERSION, nodeCanRunOpencode, readOpencodeInstall } from './opencode-sdk.js';
@@ -245,6 +251,11 @@ export function startOpencodeProcess(
   let agent = OPENCODE_AGENTS[request.permissionMode === 'plan' ? 'plan' : 'default'];
   // The sessions the session's own subagents started, with the call that started each.
   const family = new Map<string, string | null>();
+  // Settles once the open is proven, or has failed: a call the server holds before then waits on it.
+  let settleProven: (proven: boolean) => void = () => undefined;
+  const proven = new Promise<boolean>((resolve) => {
+    settleProven = resolve;
+  });
 
   const route =
     endpoint === null ? null : ((runtime.endpoints ?? []).find((one) => one.name === endpoint) ?? null);
@@ -381,10 +392,37 @@ export function startOpencodeProcess(
     output.push(message);
   }
 
+  /**
+   * One call the server holds before it runs. The server restarts a run an earlier process left as soon as
+   * it is created, so a call can be held before the open is proven: it waits for the proof, is decided like
+   * any other once the proof holds, and is refused only where it does not.
+   */
+  async function onHeldCall(held: OpencodeHeldCall): Promise<OpencodeHeldAnswer> {
+    if (gate === null || !(await proven) || closed) {
+      return {
+        allow: false,
+        message:
+          'opencode-gate-not-active: the session is not open in the posture this host started it in, so the call did not run',
+      };
+    }
+    const answer = await gate.decideHeld(held, decisions.signal);
+    return {
+      allow: answer.decision === 'once',
+      ...(answer.message === undefined ? {} : { message: answer.message }),
+    };
+  }
+
   async function checkPlugins(): Promise<void> {
     try {
       const plugins = listOf(await call('plugin.list', { location: { directory: request.cwd } }));
-      const foreign = plugins.filter((plugin) => opencodeRecord(plugin['source'])['type'] !== 'builtin');
+      const foreign = plugins.filter(
+        (plugin) =>
+          opencodeRecord(plugin['source'])['type'] !== 'builtin' &&
+          !isOpencodeGatePlugin({
+            ...(typeof plugin['id'] === 'string' ? { id: plugin['id'] } : {}),
+            source: { type: String(opencodeRecord(plugin['source'])['type']) },
+          }),
+      );
       if (foreign.length > 0) {
         gate?.raise(
           'gate-foreign-extension',
@@ -483,6 +521,8 @@ export function startOpencodeProcess(
       config: JSON.stringify(config),
       openDeadlineMs: deadline,
       onEvent,
+      gatedTools: OPENCODE_HELD_TOOLS,
+      onHeldCall,
       onStreamEnd: (detail) => {
         if (!closed) fail(`runtime-unavailable: the opencode server's event stream ended (${detail})`);
       },
@@ -552,9 +592,18 @@ export function startOpencodeProcess(
       providerId,
     });
     if (unread !== null) return refuseOpen('opencode-gate-not-active', unread);
+    if (!read.plugins.some(isOpencodeGatePlugin)) {
+      // Named, and the session opens: every call that raises a request is still decided.
+      gate.raise(
+        'gate-hook-missing',
+        "this host's pre-call gate is not among the server's plugins, so a shell line the runtime reads no command in would run with no decision of this host's",
+        'open:gate-plugin',
+      );
+    }
     if (closed) return;
 
     opened = true;
+    settleProven(true);
     output.push({
       kind: 'opened',
       sessionId: id,
@@ -582,6 +631,8 @@ export function startOpencodeProcess(
     closing ??= (async () => {
       closed = true;
       held.length = 0;
+      // A call still waiting on the open's proof ends refused: the session never opened, or is closing.
+      settleProven(false);
       decisions.abort();
       const live = connection;
       connection = null;

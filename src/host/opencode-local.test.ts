@@ -11,6 +11,8 @@
  *   off; a planted allow rule or a second provider refuses the open by name;
  * - a refused write does not land and the model reads why; a shell call asks in its dialect; a subagent's call
  *   and a forked session's call each ask; an MCP server whose name has an underscore is told apart;
+ * - a shell line the runtime's own reading finds no command in, which raises no request, is decided before it
+ *   runs, the session's own and a subagent's alike: refused, it writes nothing;
  * - a write outside the session's roots is refused before it runs, and one inside a further worktree lands;
  *   a decision nobody gives ends at its deadline;
  * - the environment a command runs in, and the host process's, hold a marker and no credential or variable of
@@ -769,6 +771,92 @@ test(
         ['OPENCODE_SESSION_ID', 'OPENCODE_TERMINAL'],
       );
       assert.equal(seen['OPENCODE_SESSION_ID'], real.sessionId());
+    } finally {
+      await closed(real);
+      await stub.close();
+      await removeScratch(dirs);
+    }
+  },
+);
+
+/** A shell line the runtime's own reading finds no command in, which still writes `file`. */
+function lineWithNoCommand(file: string): string {
+  return WINDOWS ? `\${${file}} = 'written'` : `> '${file}'`;
+}
+
+test(
+  "a shell line that names no command is decided before it runs: refused, it writes nothing; allowed, it runs, asked about once; a subagent's line is decided the same way, naming its session",
+  { skip, timeout: 240_000 },
+  async () => {
+    const dirs = await scratch();
+    const refused = join(dirs.work, 'no-command-refused.txt');
+    const allowed = join(dirs.work, 'no-command-allowed.txt');
+    const byChild = join(dirs.work, 'no-command-child.txt');
+    const stub = await scripted({
+      'CHILD-LINE': {
+        toolCalls: [{ id: 'call_child', name: 'shell', arguments: { command: lineWithNoCommand(byChild) } }],
+      },
+      'SPAWN-LINE': {
+        toolCalls: [
+          {
+            id: 'call_spawn_line',
+            name: 'subagent',
+            arguments: { agent: 'general', description: 'probe child', prompt: 'CHILD-LINE run it' },
+          },
+        ],
+      },
+      'REFUSED-LINE': {
+        toolCalls: [
+          { id: 'call_refused', name: 'shell', arguments: { command: lineWithNoCommand(refused) } },
+        ],
+      },
+      'ALLOWED-LINE': {
+        toolCalls: [
+          { id: 'call_allowed', name: 'shell', arguments: { command: lineWithNoCommand(allowed) } },
+        ],
+      },
+    });
+    const real = start(dirs, stub, {
+      decide: (request) =>
+        Promise.resolve(
+          request.toolUseId === 'call_refused'
+            ? { behavior: 'deny', message: 'not that line, scratch' }
+            : { behavior: 'allow' },
+        ),
+    });
+    try {
+      await opened(real);
+      await ran(real, 'REFUSED-LINE now');
+      const asked = real.requests.find((request) => request.toolUseId === 'call_refused');
+      assert.ok(asked !== undefined, 'the line ran with no decision asked of this host');
+      assert.equal(asked.toolName, 'shell');
+      assert.equal(asked.toolKind, 'shell');
+      assert.equal((asked.toolInput as { command?: string }).command, lineWithNoCommand(refused));
+      assert.equal(existsSync(refused), false, 'a refused line wrote its file');
+      await ran(real, 'ALLOWED-LINE now');
+      assert.equal(
+        real.requests.filter((request) => request.toolUseId === 'call_allowed').length,
+        1,
+        'an allowed line is asked about once',
+      );
+      assert.equal(existsSync(allowed), true, 'an allowed line did not run');
+      // A subagent's line is held by the same hook: it is decided, naming the subagent's session, and runs.
+      await ran(real, 'SPAWN-LINE please');
+      await until(
+        () => real.requests.some((request) => request.toolUseId === 'call_child') && existsSync(byChild),
+        "the subagent's line",
+      );
+      const child = real.requests.find((request) => request.toolUseId === 'call_child');
+      assert.equal(child?.toolKind, 'shell');
+      assert.ok(
+        child.agentId !== null && child.agentId !== real.sessionId(),
+        "the decision request for a subagent's line names the subagent's session",
+      );
+      assert.deepEqual(
+        real.raised.filter((one) => one.name === 'gate-hook-missing'),
+        [],
+        'a call this host decided was named as one it did not',
+      );
     } finally {
       await closed(real);
       await stub.close();

@@ -57,6 +57,14 @@ frame it sends decodes unchanged.
 - Added: `LocalGateOptions.localNames` and `LocalGateOptions.realPath` (and the same two on
   `JailOptions`), with `machineNames` and `canonicalPath` exported to fill them: the names this machine
   answers to as a file server, and a path as the file system names it. `PeriscopeHost` passes both.
+- Security: an opencode `shell` call is decided before it runs, whole. The `shell` tool asks only about
+  the commands the runtime's own reading finds in a line, so a line it finds none in ran with nothing
+  asked: on Windows, a PowerShell assignment through a provider path writes a file that way. Each
+  session's server is now created with one plugin of this host's, whose pre-call hook holds every
+  `shell` call, a subagent's included, until the host's own gate and the controller have decided the
+  whole line; refused, the call fails with the refusal's words and never runs. A call allowed there is
+  asked about once: the requests it then raises are held to the host's own gate alone. The read-back
+  admits that one plugin, by its id and its source.
 - Added: `outcome` on an ended `compaction` fact, optional, on protocol 20: `completed` or `failed`
   (`COMPACTION_OUTCOMES`), where the source that ended the compaction says how it came out. A failed
   compaction was reported `ended`, the same as one that worked, and the fact had no member to tell

@@ -17,7 +17,13 @@
  * One call can ask more than once (a path outside the location asks `external_directory`, then its own
  * action), so decisions are kept by the request's id. Only one-time answers are ever sent: `once`, or `reject`
  * with words, which the model reads and goes on from; a reject with no words would end the turn, so there are
- * always words. An allow that rewrites the input is refused (`canRewriteInput: false`). A request whose action
+ * always words. An allow that rewrites the input is refused (`canRewriteInput: false`).
+ *
+ * A `shell` call is decided before it runs, whole (`decideHeld`): the server holds every call of a tool in
+ * `OPENCODE_HELD_TOOLS` at its pre-call hook, and this host's answer there lets it run or fails it with the
+ * answer's words. The `shell` tool raises a request only for the commands the runtime's own reading finds in
+ * a line, so a line it finds none in would otherwise run with nothing asked. A call allowed there is not
+ * asked about again: each request it then raises is held to this host's own gate alone. A request whose action
  * this host turns off (`OPENCODE_DENIED_TOOLS`) is refused here without asking anyone, so a rule the runtime
  * loses later cannot run one. When this host refuses one request, the runtime refuses every other request of
  * that session still waiting, with the same words: each such decision still pending here is ended, recorded
@@ -59,6 +65,22 @@ export interface OpencodeAsked {
   readonly metadata: Readonly<Record<string, unknown>>;
   /** The call that raised it, or null. */
   readonly callId: string | null;
+}
+
+/**
+ * The tools whose every call the server holds at its pre-call hook until this host has decided it. The
+ * `shell` tool asks only about the commands the runtime's own reading finds in a line, and a line it finds
+ * none in (an assignment to a file through a provider path, a bare redirection) raises no request at all, so
+ * the whole line is decided here, before it runs.
+ */
+export const OPENCODE_HELD_TOOLS: readonly string[] = ['shell'];
+
+/** One call the server holds before it runs: the tool, the session it runs in, its id and its input. */
+export interface OpencodeHeld {
+  readonly tool: string;
+  readonly sessionID: string;
+  readonly callId: string;
+  readonly input: unknown;
 }
 
 /** What this host answers one request with. */
@@ -144,6 +166,12 @@ export interface OpencodeSessionGate {
   readonly runtime: typeof OPENCODE_RUNTIME;
   /** Answers one request. Never rejects. */
   decide(asked: OpencodeAsked, signal?: AbortSignal): Promise<OpencodeAnswer>;
+  /**
+   * Answers one call the server holds before it runs: the call whole, by this host's own gate and then the
+   * decider. An allow is kept for the call until it ends, so each request the call then raises is held to
+   * this host's own gate alone and nobody is asked about the same call twice. Never rejects.
+   */
+  decideHeld(held: OpencodeHeld, signal?: AbortSignal): Promise<OpencodeAnswer>;
   /** Told every message the session's process yields: the inputs, the subagents and the degrades are read here. */
   observe(message: OpencodeMessage): void;
   /** Told the session's own id once the server has named it. */
@@ -214,6 +242,8 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
   const agentOf = new Map<string, string>();
   const ruleset = opencodeRuleset();
   const resourcesOf = new WeakMap<DecisionRequest, OpencodeAsked>();
+  // The calls allowed whole before they ran, by session and call id, until each ends.
+  const allowedHeld = new Set<string>();
   let sessionId = '';
   let shell: string | null = null;
 
@@ -281,8 +311,53 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
     canRewriteInput: false,
   });
 
+  // What a call already allowed whole asks afterwards: held to this host's own gate, and asked of nobody.
+  const decideFollowUp: CallDecision = createCallDecision({
+    decide: () => Promise.resolve({ behavior: 'allow' }),
+    onOutcome: options.onOutcome,
+    sessionKey: options.sessionKey,
+    runtime: OPENCODE_RUNTIME,
+    ...(local === undefined ? {} : { localGate: local }),
+    decisionTimeoutMs: options.decisionTimeoutMs,
+    holdAfterMs: options.holdAfterMs,
+    canRewriteInput: false,
+  });
+
   const toolName = (action: string): string =>
     isOpencodeBuiltin(action) ? action : opencodeMcpToolName(action, options.servers);
+
+  const callKey = (session: string, id: string): string => `${session}\u0000${id}`;
+
+  // A shell call runs in the directory its input names, under the session's location when relative.
+  const directoryOf = (toolKind: string, toolInput: unknown): string => {
+    const workdir = toolKind === 'shell' ? opencodeWord(opencodeRecord(toolInput)['workdir']) : null;
+    return workdir === null
+      ? options.cwd
+      : /^([A-Za-z]:[\\/]|[\\/])/.test(workdir)
+        ? workdir
+        : `${options.cwd}/${workdir}`;
+  };
+
+  const heldRequestOf = (held: OpencodeHeld): DecisionRequest => {
+    const spelled = toolName(held.tool);
+    const toolKind = opencodeToolKind(spelled);
+    const toolInput =
+      typeof held.input === 'object' && held.input !== null && !Array.isArray(held.input) ? held.input : {};
+    const child = held.sessionID !== sessionId && sessionId !== '';
+    return {
+      toolName: spelled,
+      toolUseId: held.callId,
+      toolInput,
+      sessionId,
+      sessionKey: options.sessionKey,
+      cwd: directoryOf(toolKind, toolInput),
+      agentId: child ? held.sessionID : null,
+      agentType: child ? (agentOf.get(held.sessionID) ?? null) : null,
+      toolKind,
+      runtime: OPENCODE_RUNTIME,
+      ...(toolKind === 'shell' && shell !== null ? { shellDialect: opencodeShellDialect(shell) } : {}),
+    };
+  };
 
   const requestOf = (asked: OpencodeAsked): DecisionRequest => {
     const spelled = toolName(asked.action);
@@ -294,14 +369,7 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
       typeof metadataInput === 'object' && metadataInput !== null && !Array.isArray(metadataInput)
         ? metadataInput
         : (announced ?? { resources: [...asked.resources] });
-    // A shell call runs in the directory its input names, under the session's location when relative.
-    const workdir = toolKind === 'shell' ? opencodeWord(opencodeRecord(toolInput)['workdir']) : null;
-    const cwd =
-      workdir === null
-        ? options.cwd
-        : /^([A-Za-z]:[\\/]|[\\/])/.test(workdir)
-          ? workdir
-          : `${options.cwd}/${workdir}`;
+    const cwd = directoryOf(toolKind, toolInput);
     const child = asked.sessionID !== sessionId && sessionId !== '';
     return {
       toolName: spelled,
@@ -337,13 +405,38 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
       const forward = (): void => controller.abort(signal?.reason);
       signal?.addEventListener('abort', forward, { once: true });
       pending.set(asked.id, { sessionID: asked.sessionID, controller });
+      // A call this host allowed whole before it ran is not asked about again: what it asks now is held to
+      // this host's own gate, which reads each path the request names.
+      const wholeCallAllowed =
+        asked.callId !== null && allowedHeld.has(callKey(asked.sessionID, asked.callId));
       try {
-        const outcome = await decideCall(request, controller.signal);
+        const outcome = await (wholeCallAllowed ? decideFollowUp : decideCall)(request, controller.signal);
         return opencodeAnswerOf(outcome);
       } finally {
         pending.delete(asked.id);
         signal?.removeEventListener('abort', forward);
         remember(answered, asked.id);
+      }
+    },
+    async decideHeld(held, signal) {
+      remember(decided, held.callId);
+      const key = callKey(held.sessionID, held.callId);
+      const request = heldRequestOf(held);
+      // The held input is the call's own: a request the call raises afterwards is read with it.
+      known(held.callId).input = opencodeRecord(request.toolInput);
+      const controller = new AbortController();
+      const forward = (): void => controller.abort(signal?.reason);
+      if (signal?.aborted === true) forward();
+      else signal?.addEventListener('abort', forward, { once: true });
+      const waitingAs = `held:${key}`;
+      pending.set(waitingAs, { sessionID: held.sessionID, controller });
+      try {
+        const outcome = await decideCall(request, controller.signal);
+        if (outcome.kind === 'allow') remember(allowedHeld, key);
+        return opencodeAnswerOf(outcome);
+      } finally {
+        pending.delete(waitingAs);
+        signal?.removeEventListener('abort', forward);
       }
     },
     observe(message) {
@@ -378,8 +471,16 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
           }
           return;
         }
+        case 'session.tool.failed': {
+          const id = opencodeWord(data['id']);
+          const session = opencodeWord(data['sessionID']);
+          if (id !== null && session !== null) allowedHeld.delete(callKey(session, id));
+          return;
+        }
         case 'session.tool.success': {
           const id = opencodeWord(data['id']);
+          const session = opencodeWord(data['sessionID']);
+          if (id !== null && session !== null) allowedHeld.delete(callKey(session, id));
           if (id === null || data['executed'] === true || decided.has(id)) return;
           const name = calls.get(id)?.name ?? null;
           raise(
