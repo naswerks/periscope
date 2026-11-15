@@ -145,6 +145,11 @@ export interface CopilotSessionGate {
   preToolUse(input: CopilotPreToolInput): CopilotPreToolOutput;
   /** Answers one permission request. Never rejects. */
   decide(request: CopilotPermissionRequest, signal?: AbortSignal): Promise<CopilotPermissionAnswer>;
+  /**
+   * Ends every decision still waiting, in `why`'s words: each is refused now, and a call asked about after
+   * this is decided afresh. For an interrupt, whose turn the runtime ends without any call running.
+   */
+  endPending(why: string): void;
   /** Told every session event: the degrades it can name are read here. */
   observe(event: CopilotEvent): void;
   /** Told the session's id once the runtime has named it. */
@@ -244,6 +249,8 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
   const servers = new Map<string, readonly string[]>(options.servers.map((server) => [server, []]));
   // The offered tools the runtime says an attached server brings: never a built-in, whatever their names.
   const fromServers = new Set<string>();
+  // One for each decision still waiting, so the waiting ones can be ended without ending the session's.
+  const waiting = new Set<AbortController>();
   let sessionId = '';
   let probe: ProbeState | null = null;
   let listTools: ((server: string) => Promise<readonly string[] | null>) | null = null;
@@ -409,11 +416,25 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
       nameIfUnnamed(asked, 'was asked to run');
       const request = requestOf(raw, call, id);
       remember(id, 'awaited');
-      const outcome = await decideCall(request, signal ?? new AbortController().signal);
-      // Written once the answer is known and before the runtime is told, so a call that finishes after
-      // this is read against what it was told.
-      remember(id, outcome.kind === 'allow' ? 'allowed' : 'refused');
-      return copilotAnswerOf(outcome);
+      // The decision ends with the session's signal or with its own, which an interrupt ends.
+      const own = new AbortController();
+      const forward = (): void => own.abort(signal?.reason);
+      if (signal?.aborted === true) forward();
+      else signal?.addEventListener('abort', forward, { once: true });
+      waiting.add(own);
+      try {
+        const outcome = await decideCall(request, own.signal);
+        // Written once the answer is known and before the runtime is told, so a call that finishes after
+        // this is read against what it was told.
+        remember(id, outcome.kind === 'allow' ? 'allowed' : 'refused');
+        return copilotAnswerOf(outcome);
+      } finally {
+        waiting.delete(own);
+        signal?.removeEventListener('abort', forward);
+      }
+    },
+    endPending(why) {
+      for (const own of [...waiting]) own.abort(why);
     },
     observe(event) {
       const data = recordOf(event.data);

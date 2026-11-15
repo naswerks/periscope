@@ -463,6 +463,46 @@ test("the setters: the agent mode, the effort and the model are the runtime's ow
   await closed(run);
 });
 
+test('an interrupt ends the decision a call was waiting on, so the call is refused and never answered later as allowed; the next turn is decided as usual', async () => {
+  let release: (decision: unknown) => void = () => undefined;
+  let asked = 0;
+  const run = await started({
+    decide: () => {
+      asked += 1;
+      return asked === 1
+        ? new Promise((resolve) => (release = resolve))
+        : Promise.resolve({ behavior: 'allow' });
+    },
+    fake: {
+      calls: (prompt) => [
+        { toolName: 'powershell', toolArgs: { command: 'npm test' }, toolCallId: `call_${prompt}` },
+      ],
+    },
+  });
+  await waitFor(() => opened(run), 'the open');
+  run.process.prompt('first');
+  await waitFor(() => asked === 1, 'the decision to be asked');
+  await run.process.interrupt();
+  await waitFor(() => run.record.answers.some((one) => one.toolCallId === 'call_first'), 'the answer');
+  const first = run.record.answers.find((one) => one.toolCallId === 'call_first')?.answer;
+  assert.equal(first?.kind, 'reject');
+  assert.match(
+    first?.kind === 'reject' ? (first.feedback ?? '') : '',
+    /the turn was interrupted while this decision was outstanding/,
+  );
+  // The decider's late allow reaches nothing.
+  release({ behavior: 'allow' });
+  await waitFor(() => types(run).includes('session.idle'), 'the interrupted run');
+  assert.equal(run.record.answers.filter((one) => one.toolCallId === 'call_first').length, 1);
+  run.process.prompt('second');
+  await waitFor(() => run.record.answers.some((one) => one.toolCallId === 'call_second'), 'the next call');
+  assert.equal(
+    run.record.answers.find((one) => one.toolCallId === 'call_second')?.answer.kind,
+    'approve-once',
+  );
+  assert.equal(await closed(run), null);
+});
+
 test("close ends the turn and its background agents first, then disconnects the session, ends the runtime's tree by its pid, stops the client, keeps the session's state and removes the home", async () => {
   const run = await started();
   await waitFor(() => opened(run), 'the open');

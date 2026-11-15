@@ -375,6 +375,35 @@ test('a call that finishes while this host is still deciding it is named', async
   await deciding;
 });
 
+test('ending the waiting decisions refuses each in the words given, records it refused, and leaves the next call to be decided afresh', async () => {
+  let answer: (decision: unknown) => void = () => undefined;
+  let asked = 0;
+  const run = gate(() => {
+    asked += 1;
+    return asked === 1
+      ? new Promise((resolve) => (answer = resolve))
+      : Promise.resolve({ behavior: 'allow' });
+  });
+  run.built.preToolUse(hooked('powershell', 'call_waiting', { command: 'npm test' }));
+  const waiting = run.built.decide(request('powershell', 'call_waiting', { command: 'npm test' }));
+  await Promise.resolve();
+  run.built.endPending('the turn was interrupted while this decision was outstanding');
+  const ended = await waiting;
+  assert.equal(ended.kind, 'reject');
+  assert.match(
+    ended.kind === 'reject' ? (ended.feedback ?? '') : '',
+    /permission-decision-unavailable: the turn was interrupted while this decision was outstanding/,
+  );
+  assert.equal(run.outcomes.at(-1)?.kind, 'refused', 'the call is on record as refused, never as allowed');
+  // A late answer from the decider changes nothing, and the session still decides its next call.
+  answer({ behavior: 'allow' });
+  run.built.preToolUse(hooked('view', 'call_next'));
+  assert.deepEqual(await run.built.decide(request('view', 'call_next')), { kind: 'approve-once' });
+  // With nothing waiting, ending is nothing.
+  run.built.endPending('again');
+  assert.equal(run.outcomes.filter((outcome) => outcome.kind === 'refused').length, 1);
+});
+
 test('only the probe this gate minted is its own: another id that starts the same is a call like any other', () => {
   const run = gate(allow);
   const minted = run.built.probe();

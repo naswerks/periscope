@@ -645,6 +645,9 @@ export function startCopilotProcess(
     },
     async interrupt(): Promise<void> {
       if (closed || !opened || live === null) return;
+      // The turn's waiting decisions end with it: the runtime runs none of those calls, so none may be
+      // answered later as if it had.
+      gate?.endPending('the turn was interrupted while this decision was outstanding');
       await within(live.abort(), COPILOT_CALL_DEADLINE_MS, 'the abort').catch((error: unknown) =>
         degrade(`the turn was not aborted: ${wordsOf(error)}`),
       );
