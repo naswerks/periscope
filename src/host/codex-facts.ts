@@ -15,7 +15,9 @@
  *     `thread/tokenUsage/updated` for that turn: Codex's running total for the thread. `turn` and
  *     `turnScope` are null: Codex's `last` is one model call, not the turn, and the totals carry the
  *     spend. `inputTokens` is the input minus the cached input, floored at zero, by Codex's own split,
- *     so it counts uncached input only, as on every runtime.
+ *     so it counts uncached input only, as on every runtime. The totals are the session's own thread
+ *     alone: a sub-agent's thread feeds no total, and a task entry states no usage (below), so a
+ *     sub-agent's tokens are in no total this host sends.
  *   - `usage_sample`: each `thread/tokenUsage/updated`. The context is the last call's total, Codex's
  *     own counting rule; cached tokens are part of input there, not added to it. The cache reads are
  *     the last call's cached input.

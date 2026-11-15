@@ -220,6 +220,9 @@ frame it sends decodes unchanged.
   hold a hook, never counted as none. A session's home also holds the runtime's cache directory on
   every platform (`COPILOT_CACHE_HOME`), so off Windows the runtime's caches no longer stay in the
   operator's own.
+- Docs: [protocol.md](docs/protocol.md) says where a sub-agent's tokens are counted. A Codex
+  sub-agent's are in no total a controller is sent; a Claude task's are already inside the session's
+  `totals`, so its entry's `usage` is a part of that figure and is not added to it.
 - Fixed: a state transition always fits a frame. A cause's `detail` was unbounded, and a failure whose
   own words ran past a frame made its transition one the codec refused, so the `errored` that carried
   it never arrived. Such a detail is now cut by as much as the transition is over and says it was cut;

@@ -448,7 +448,9 @@ writes about every 30 seconds) and `task_notification`. Codex's name the call th
 end as its `summary` (a completed agent's final answer, an errored one's error). A Codex entry states no `usage`:
 a sub-agent's thread reports a token total, but one spawned with its parent's context (`fork_context`)
 counts on from the parent's running total, and nothing the host receives says which spawn did. Codex
-reports no output file for a sub-agent.
+reports no output file for a sub-agent. So a Codex sub-agent's tokens are in no total a controller is
+sent: `totals` is the session's own thread alone, and no task entry states a `usage`. They are seen
+only as that thread's `usage_sample` facts (`mainThread: false`), which are its context, not its spend.
 
 **When a `tasks` fact is sent.** A task that starts or ends, and a task whose summary or any other
 member but its usage changes, is sent at once, and every entry in that fact carries its latest usage. A
@@ -472,7 +474,8 @@ one.
 Codex's sources: `session_handle` is the thread id the opening answer names; `agent_receipt` is
 built from the opening answers, so it rides before `ready`, and sent again on a reroute, a skills
 change, an MCP server's status, and a setter applied on a `turn/start` (`source: 'host'`);
-`turn_record` is each `turn/completed`, its `totals` the newest `thread/tokenUsage/updated` and its
+`turn_record` is each `turn/completed` on the session's own thread, its `totals` the newest
+`thread/tokenUsage/updated` for that thread (a sub-agent's thread adds nothing to it) and its
 `turn` and `turnScope` null, because Codex's per-call figure is not a turn; `usage_sample` is each
 `thread/tokenUsage/updated`, the last call's total as the context; `tasks` is the running
 sub-agents, and the sub-agents settled since the turn began. Codex's usage names no model, so its
@@ -560,6 +563,9 @@ a call's context by: input, cache reads and cache writes.
   `turnScope` names: `turn` a whole turn, `step` one model step inside a turn. `turnScope` is null
   exactly when `turn` is.
 - Claude's `totals` is the result's `total_cost_usd` in `USD`, with one row per `modelUsage` key.
+  By the SDK's own types `modelUsage` holds every model call of the session, its subagents' and its
+  compactions' included, so a task's tokens are already inside `totals`: a task entry's `usage` in
+  the `tasks` fact is a part of that figure, never to be added to it.
   Claude's `turn` is the result's own `usage`, which covers the turn's main loop and names no model:
   the host files it under the model the latest `system/init` reported, as attribution, with no cost
   and the basis `unreported`. With no init seen yet, `turn` and `turnScope` are null; the host never
