@@ -131,8 +131,9 @@ something is about the daemon; the other verbs are where interactive work lives.
 - `config.json` lives beside the credentials under a closed key allowlist (`CONFIG_KEYS`: the two
   control-plane URLs, the host id, both roots and the further repositories' roots, the branch scheme,
   the workspace key, the agent home, the plugin directories, the controller's env declaration, the
-  model endpoints file, the Codex binary and home, the Qwen Code CLI and base, the pi CLI and home;
-  `PERISCOPE_CONFIG_DIR` is excluded, a file
+  model endpoints file, the Codex binary and home, the Qwen Code CLI and base, the pi CLI and home, the
+  Copilot SDK, home and token file, the opencode SDK and home, and whether subagents write progress
+  summaries; `PERISCOPE_CONFIG_DIR` is excluded, a file
   cannot move itself). `serve`, `login`, `pair` and
   `status` read the environment with the file filling its absences; the environment always wins. A
   corrupt file is fatal by name for all four. `config` itself reads the raw environment so it can

@@ -586,6 +586,26 @@ test('regression: streaming is on by default and thinking prose is not — the t
   assert.equal(fake.started[0]?.request.forwardSubagentText, false, "the SDK's own default");
 });
 
+test('the registry starts every process under its own posture: subagent summaries on unless it was built with them off, whatever a session asks', () => {
+  const byDefault = fakeAgents();
+  registryWith(byDefault.start).create({ cwd: 'C:/work' });
+  assert.deepEqual(byDefault.started[0]?.posture, { agentProgressSummaries: true });
+
+  const quiet = fakeAgents();
+  const registry = new SessionRegistry({
+    baseEnv: { PATH: 'p' },
+    homeDir: 'C:/nonexistent-home-for-tests',
+    startProcess: quiet.start,
+    agentProgressSummaries: false,
+  });
+  registry.create({ cwd: 'C:/work' });
+  registry.create({ cwd: 'C:/work', includePartialMessages: false, forwardSubagentText: true });
+  assert.deepEqual(
+    quiet.started.map((started) => started.posture),
+    [{ agentProgressSummaries: false }, { agentProgressSummaries: false }],
+  );
+});
+
 test('every streaming option a caller asks for is what is passed — none is decided here', () => {
   const fake = fakeAgents();
   const registry = registryWith(fake.start);

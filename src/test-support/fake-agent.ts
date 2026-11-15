@@ -4,11 +4,18 @@
  * the `.live.test.ts` probes; this fake proves only the package's own handling.
  */
 import { AsyncQueue } from '../core/async-queue.js';
-import type { AgentProcess, AgentProcessRequest, SDKMessage } from '../host/agent-process.js';
+import type {
+  AgentProcess,
+  AgentProcessPosture,
+  AgentProcessRequest,
+  SDKMessage,
+} from '../host/agent-process.js';
 
 /** The test's handle on one started fake process. */
 export interface FakeAgent {
   readonly request: AgentProcessRequest;
+  /** The posture the registry started the process under; null when the starter was handed none. */
+  readonly posture: AgentProcessPosture | null;
   /** Every prompt text the session queued, in order. */
   readonly prompts: string[];
   /** How many times the session interrupted the turn. */
@@ -31,7 +38,7 @@ export interface FakeAgent {
 
 export interface FakeAgents {
   /** Pass as `startProcess` to a `SessionRegistry` or `PeriscopeHost`. */
-  readonly start: (request: AgentProcessRequest) => AgentProcess;
+  readonly start: (request: AgentProcessRequest, posture?: AgentProcessPosture) => AgentProcess;
   /** Every process started so far, in start order. */
   readonly started: FakeAgent[];
 }
@@ -41,7 +48,7 @@ export const FAKE_PROMPT_CAPACITY = 16;
 
 export function fakeAgents(): FakeAgents {
   const started: FakeAgent[] = [];
-  const start = (request: AgentProcessRequest): AgentProcess => {
+  const start = (request: AgentProcessRequest, posture?: AgentProcessPosture): AgentProcess => {
     const queue = new AsyncQueue<SDKMessage>();
     const prompts: string[] = [];
     const configured: { setter: string; value: unknown }[] = [];
@@ -64,6 +71,7 @@ export function fakeAgents(): FakeAgents {
 
     const record: FakeAgent = {
       request,
+      posture: posture ?? null,
       prompts,
       interrupts: 0,
       configured,

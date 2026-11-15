@@ -443,6 +443,38 @@ test('the fatal remedy for a paired host is re-pairing, never login', () =>
     assert.deepEqual(run.exits, [1]);
   }));
 
+test("subagent progress summaries are on unless the operator's setting says off, and any other word refuses the start by name", () =>
+  inDir(async (dir) => {
+    const raw = rawEnv(dir);
+    const started = async (extra: NodeJS.ProcessEnv): Promise<Run> => {
+      const run = serve({ raw, merged: mergedEnv(raw, extra) });
+      assert.equal(run.outcome.ok, true, run.err.join('\n'));
+      run.link.deliver('handle-1', sessionNew(dir));
+      await settle();
+      assert.equal(run.agents.started.length, 1, 'the injected starter must have been used');
+      return run;
+    };
+    assert.deepEqual((await started({})).agents.started[0]?.posture, { agentProgressSummaries: true });
+    assert.deepEqual(
+      (await started({ PERISCOPE_AGENT_PROGRESS_SUMMARIES: 'on' })).agents.started[0]?.posture,
+      { agentProgressSummaries: true },
+    );
+    assert.deepEqual(
+      (await started({ PERISCOPE_AGENT_PROGRESS_SUMMARIES: 'off' })).agents.started[0]?.posture,
+      { agentProgressSummaries: false },
+    );
+    assert.deepEqual(
+      (await started({ PERISCOPE_AGENT_PROGRESS_SUMMARIES: '' })).agents.started[0]?.posture,
+      { agentProgressSummaries: true },
+      'a name exported with nothing behind it is unset',
+    );
+
+    const typo = serve({ raw, merged: mergedEnv(raw, { PERISCOPE_AGENT_PROGRESS_SUMMARIES: 'false' }) });
+    assert.match(refused(typo), /PERISCOPE_AGENT_PROGRESS_SUMMARIES must be on or off/);
+    assert.deepEqual(typo.exitCodes, [1]);
+    assert.equal(typo.link.handlers, null, 'a host whose setting cannot be read must not dial');
+  }));
+
 test('the fatal line counts the live sessions it cut', () =>
   inDir(async (dir) => {
     const raw = rawEnv(dir);

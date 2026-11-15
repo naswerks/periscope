@@ -117,6 +117,8 @@ export function configValueProblem(key: string, value: string): string | null {
     case 'PERISCOPE_OPENCODE_SDK':
     case 'PERISCOPE_OPENCODE_HOME':
       return isAbsolutePath(value) ? null : `${key} must be an absolute path — got '${value}'`;
+    case 'PERISCOPE_AGENT_PROGRESS_SUMMARIES':
+      return value === 'on' || value === 'off' ? null : `${key} must be on or off — got '${value}'`;
     case 'PERISCOPE_CODEX_BIN':
       if (!isAbsolutePath(value)) return `${key} must be an absolute path — got '${value}'`;
       return isBatchFile(value)

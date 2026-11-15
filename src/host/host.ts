@@ -1118,6 +1118,13 @@ export interface PeriscopeHostOptions {
    */
   readonly maxSessions?: number;
   /**
+   * Whether a Claude session asks for its subagents' progress summaries (a running subagent states what
+   * it is doing about every 30 seconds; each summary is one more model call on the subagent's own model).
+   * Defaults to true. An operator's own setting: no controller and no session can move it. Ignored when a
+   * `registry` is supplied, which carries its own.
+   */
+  readonly agentProgressSummaries?: boolean;
+  /**
    * Where sessions run. With a provider the controller's `cwd` is advisory: the provider decides,
    * and the session's `spawning` transition carries the directory it actually got, so the
    * controller learns where its session is rather than assuming.
@@ -1612,6 +1619,9 @@ export class PeriscopeHost {
         homeDir: options.homeDir ?? '',
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
+        ...(options.agentProgressSummaries === undefined
+          ? {}
+          : { agentProgressSummaries: options.agentProgressSummaries }),
         ...(options.codex === undefined &&
         options.qwen === undefined &&
         options.pi === undefined &&

@@ -85,7 +85,10 @@ frame it sends decodes unchanged.
   had no entry bound.
 - Added: every Claude session asks for its subagents' progress summaries (`agentProgressSummaries`): a
   running subagent states what it is doing about every 30 seconds, on its own model, and the summary
-  rides its task's entry.
+  rides its task's entry. Each summary is one more model call, so the operator can turn them off:
+  `PERISCOPE_AGENT_PROGRESS_SUMMARIES=off` in the environment or the config file (a new config-file
+  key; `on` is the default, any other word refuses start), or `agentProgressSummaries: false` on
+  `PeriscopeHost` or `SessionRegistry`. No controller and no session can set it.
 - Security: every Claude session refuses a message another session on the machine sends it
   (`crossSessionInbound: 'refuse'`). Unset, the CLI delivered one when the two sessions' modes matched,
   so a bypass-mode session elsewhere on the machine could reach a session this host runs in bypass.

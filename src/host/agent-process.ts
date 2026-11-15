@@ -713,12 +713,32 @@ export function messagesOf(source: AsyncGenerator<SDKMessage, void>): AsyncGener
 }
 
 /**
- * The SDK's `Options` for one request, and nothing else.
+ * What the host decides for every agent process it starts, beside what a session asks for. A session's
+ * request is the closed set a caller may compose; this is the operator's own posture, which no session
+ * names and no frame carries.
+ */
+export interface AgentProcessPosture {
+  /**
+   * Ask the agent for its subagents' progress summaries: a running subagent states what it is doing about
+   * every 30 seconds, and the summary rides its task's entry in the tasks fact. Each summary is one more
+   * model call, on the subagent's own model and prompt cache, so it is the operator's to turn off.
+   */
+  readonly agentProgressSummaries: boolean;
+}
+
+/** The posture a host starts with when its operator set nothing: summaries on. */
+export const DEFAULT_AGENT_PROCESS_POSTURE: AgentProcessPosture = { agentProgressSummaries: true };
+
+/**
+ * The SDK's `Options` for one request under the host's posture, and nothing else.
  *
  * Pure, so what a session starts with can be checked without starting one. Exported for that;
  * `startAgentProcess` is its only caller, and it is not part of the package's public surface.
  */
-export function composeOptions(request: AgentProcessRequest): Options {
+export function composeOptions(
+  request: AgentProcessRequest,
+  posture: AgentProcessPosture = DEFAULT_AGENT_PROCESS_POSTURE,
+): Options {
   return {
     cwd: request.cwd,
     env: request.env,
@@ -729,8 +749,9 @@ export function composeOptions(request: AgentProcessRequest): Options {
     ...(request.mcpServers === null ? {} : { mcpServers: { ...request.mcpServers } }),
     ...(request.strictMcpConfig === null ? {} : { strictMcpConfig: request.strictMcpConfig }),
     // A running subagent states what it is doing about every 30 seconds, and the summary rides its task's
-    // entry in the tasks fact. Written on the subagent's own model and prompt cache.
-    agentProgressSummaries: true,
+    // entry in the tasks fact. Written on the subagent's own model and prompt cache, so each one is spend:
+    // on unless the host's operator turned it off.
+    agentProgressSummaries: posture.agentProgressSummaries,
     // The one setting this host composes, and the only one: a message another session on this machine
     // sends is refused, whatever this session's mode. This host's own prompts arrive on stdin and are
     // not that lane. No request key reaches it (`SHADOWING_LANES` stays closed to callers).
@@ -793,13 +814,16 @@ export function thinkingControl(thinking: ThinkingConfig): {
   return { cap: THINKING_ON_CAP, display: thinking.display };
 }
 
-/** Start an agent process. The subprocess exists when this returns. */
-export function startAgentProcess(request: AgentProcessRequest): AgentProcess {
+/** Start an agent process under the host's posture. The subprocess exists when this returns. */
+export function startAgentProcess(
+  request: AgentProcessRequest,
+  posture: AgentProcessPosture = DEFAULT_AGENT_PROCESS_POSTURE,
+): AgentProcess {
   // The live prompt queue's bound. Turns the agent has not consumed wait here; a controller that
   // sends past it is refused `prompt-queue-full` and the session is untouched.
   const input = new AsyncQueue<SDKUserMessage>(MAX_PENDING_PROMPTS);
 
-  const running: Query = query({ prompt: input, options: composeOptions(request) });
+  const running: Query = query({ prompt: input, options: composeOptions(request, posture) });
   let closed = false;
 
   return {

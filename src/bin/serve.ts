@@ -35,6 +35,7 @@ import type {
   AgentCatalog,
   AgentCatalogOptions,
   AgentProcess,
+  AgentProcessPosture,
   AgentProcessRequest,
 } from '../host/agent-process.js';
 import type { EscalationTransport } from '../gate/escalate.js';
@@ -131,7 +132,7 @@ export interface ServeDeps {
   /** The effective uid, or null where the platform has none (win32). Defaults to the process's. */
   readonly getuid?: (() => number) | null;
   /** How an agent process is started. Defaults to the real one. */
-  readonly startProcess?: (request: AgentProcessRequest) => AgentProcess;
+  readonly startProcess?: (request: AgentProcessRequest, posture: AgentProcessPosture) => AgentProcess;
   /**
    * Reads the agent's model catalog for the hello. `main.ts` supplies the real one; with none, the
    * hello carries no catalog and no agent is started to read one.
@@ -194,6 +195,8 @@ interface Config {
   readonly copilot: { readonly sdk: string; readonly home: string; readonly tokenFile: string | null } | null;
   /** The opencode SDK install and its runner-owned home; both, or neither. Null = opencode is not offered. */
   readonly opencode: { readonly sdk: string; readonly home: string } | null;
+  /** Whether a Claude session asks for its subagents' progress summaries. On unless set `off`. */
+  readonly agentProgressSummaries: boolean;
 }
 
 function readConfig(env: NodeJS.ProcessEnv): Config | string {
@@ -330,6 +333,14 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
     if (problem !== null) return problem;
   }
 
+  // Subagent progress summaries are on unless the operator says off; any other word is refused, since a
+  // typo that read as on would keep spending what the operator meant to stop.
+  const summaries = nonEmpty(env['PERISCOPE_AGENT_PROGRESS_SUMMARIES']);
+  if (summaries !== null) {
+    const problem = configValueProblem('PERISCOPE_AGENT_PROGRESS_SUMMARIES', summaries);
+    if (problem !== null) return problem;
+  }
+
   const configuredHostId = env['PERISCOPE_HOST_ID'];
   return {
     controllerUrl,
@@ -357,6 +368,7 @@ function readConfig(env: NodeJS.ProcessEnv): Config | string {
         ? null
         : { sdk: copilotSdk, home: copilotHome, tokenFile: copilotTokenFile },
     opencode: opencodeSdk === null || opencodeHome === null ? null : { sdk: opencodeSdk, home: opencodeHome },
+    agentProgressSummaries: summaries !== 'off',
   };
 }
 
@@ -941,12 +953,13 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
     // here over the same base environment and home the host would have used, and the pair goes to
     // the registry alone: the host refuses the two beside a registry, where nothing would read them.
     ...(deps.startProcess === undefined
-      ? { baseEnv: raw, homeDir }
+      ? { baseEnv: raw, homeDir, agentProgressSummaries: config.agentProgressSummaries }
       : {
           registry: new SessionRegistry({
             baseEnv: raw,
             homeDir,
             startProcess: deps.startProcess,
+            agentProgressSummaries: config.agentProgressSummaries,
             ...(codex === null && qwen === null && pi === null && copilot === null && opencode === null
               ? {}
               : {

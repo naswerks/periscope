@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import type { AgentProcessRequest, SDKMessage } from './agent-process.js';
 import {
   AGENT_PROCESS_REQUEST_KEYS,
+  DEFAULT_AGENT_PROCESS_POSTURE,
   AGENT_SELECTION_OPTION_KEYS,
   CROSS_SESSION_INBOUND,
   CLI_PARITY_OPTION_KEYS,
@@ -453,8 +454,9 @@ test('regression: turning thinking on sends a positive cap, never null; turning 
   assert.deepEqual(thinkingControl({ type: 'disabled' }), { cap: 0, display: undefined });
 });
 
-test("every Claude session asks for its subagents' progress summaries and refuses another session's messages, whatever it was asked", () => {
+test("every Claude session asks for its subagents' progress summaries unless the host's operator turned them off, and refuses another session's messages, whatever it was asked", () => {
   assert.equal(CROSS_SESSION_INBOUND, 'refuse');
+  assert.deepEqual(DEFAULT_AGENT_PROCESS_POSTURE, { agentProgressSummaries: true });
   for (const asked of [
     request(),
     request({ permissionMode: 'bypassPermissions' }),
@@ -462,6 +464,10 @@ test("every Claude session asks for its subagents' progress summaries and refuse
   ]) {
     const options = composeOptions(asked);
     assert.equal(options.agentProgressSummaries, true, 'a subagent states what it is doing');
+    // The operator's switch, and nothing a session asks, turns them off; nothing else moves with it.
+    const quiet = composeOptions(asked, { agentProgressSummaries: false });
+    assert.equal(quiet.agentProgressSummaries, false);
+    assert.deepEqual({ ...quiet, agentProgressSummaries: true }, options);
     assert.deepEqual(
       options.settings,
       { crossSessionInbound: 'refuse' },
