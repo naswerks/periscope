@@ -230,13 +230,18 @@ async function decide(
     }
 
     if (settled === 'aborted') {
+      // A caller that ends a decision for a reason of its own says so in words (the runtime refused the
+      // call some other way); any other abort is the turn's.
+      const reason: unknown = signal.reason;
       return {
         kind: 'refused',
         request,
         held: held.value,
         refusal: refusal(
           'permission-decision-unavailable',
-          `the turn was cancelled while a decision for ${request.toolName} was outstanding`,
+          typeof reason === 'string' && reason !== ''
+            ? reason
+            : `the turn was cancelled while a decision for ${request.toolName} was outstanding`,
         ),
       };
     }
