@@ -77,6 +77,33 @@ interface Scratch {
   readonly skills: string;
 }
 
+/**
+ * Remove a scratch layout. A process the session ran in it may still be exiting when the session has closed
+ * (Windows refuses to remove a directory a process is in), so the removal is retried for a while; one that
+ * still fails names the directory, and never hides what the test itself found.
+ */
+async function removeScratch(dirs: Scratch): Promise<void> {
+  await rm(dirs.root, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }).catch(
+    (error: unknown) => {
+      process.stderr.write(`scratch ${dirs.root} was not removed: ${String(error)}
+`);
+    },
+  );
+}
+
+/** Wait, a bounded while, until a process is gone. */
+async function untilGone(pid: number): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 async function scratch(): Promise<Scratch> {
   const root = await tempDir('copilot-local');
   const layout = {
@@ -349,7 +376,7 @@ test(
     } finally {
       await real.close();
       await mcp.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
@@ -373,7 +400,7 @@ test(
       assert.equal(existsSync(join(dirs.work, 'refused.txt')), false);
     } finally {
       await real.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
@@ -398,7 +425,7 @@ test(
       );
     } finally {
       await real.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
@@ -439,7 +466,7 @@ test(
       await sdkSession.disconnect();
     } finally {
       await real.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
@@ -463,7 +490,7 @@ test(
       assert.equal(done.resultType, 'success');
     } finally {
       await real.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
@@ -510,7 +537,7 @@ test(
       );
     } finally {
       await real.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
@@ -549,7 +576,7 @@ test(
       );
     } finally {
       await real.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
@@ -589,7 +616,7 @@ test(
       assert.equal(existsSync(join(dirs.profile, 'patched.txt')), false);
     } finally {
       await real.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
@@ -677,7 +704,7 @@ test(
     } finally {
       await real.close();
       await stub.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
@@ -839,7 +866,7 @@ test(
       );
     } finally {
       run.proc.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
@@ -897,9 +924,12 @@ test(
         'a detached command now ends with the session: the residual the docs name is gone',
       );
     } finally {
-      if (detached !== null && alive(detached)) process.kill(detached);
+      if (detached !== null && alive(detached)) {
+        process.kill(detached);
+        await untilGone(detached);
+      }
       run.proc.close();
-      await rm(dirs.root, { recursive: true, force: true });
+      await removeScratch(dirs);
     }
   },
 );
