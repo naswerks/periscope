@@ -99,8 +99,9 @@ A session refused at its open answers on the wire ([protocol.md](protocol.md), t
 
 ## The binary
 
-`periscope` is six verbs (`src/bin/command.ts`): `serve` (the default: no arguments means `serve`),
-`login`, `pair <code>`, `config`, `status` and `help`. An unrecognised first argument is `unknown`,
+`periscope` is eight verbs (`src/bin/command.ts`): `serve` (the default: no arguments means `serve`),
+`login`, `pair <code>`, `config`, `status`, `version`, `help`, and `hook <runtime>`, which a runtime
+runs for each tool call it asks its hook about and no person runs. An unrecognised first argument is `unknown`,
 never `serve`; falling back would let a typo start a host. Every claim that the binary does not do
 something is about the daemon; the other verbs are where interactive work lives.
 
@@ -119,10 +120,13 @@ something is about the daemon; the other verbs are where interactive work lives.
   and `--label <name>`, redeems a controller-minted code for a paired credential and writes the
   controller's addresses to the config file. `config` shows or edits `config.json`. `status` prints
   the whole posture from the link record, the credentials and the settings, and never dials.
+  `version` prints the package's version. `hook <runtime>` (with `--probe`, only proves it starts)
+  reads the event a runtime hands its hook, asks the running session over its hook channel and
+  writes the runtime's answer.
 - `config.json` lives beside the credentials under a closed key allowlist (`CONFIG_KEYS`: the two
-  control-plane URLs, the host id, both roots, the branch scheme, the workspace key, the agent home,
-  the plugin directories, the Codex binary and home, the Qwen Code CLI and base, the pi CLI and
-  home;
+  control-plane URLs, the host id, both roots and the further repositories' roots, the branch scheme,
+  the workspace key, the agent home, the plugin directories, the controller's env declaration, the
+  model endpoints file, the Codex binary and home, the Qwen Code CLI and base, the pi CLI and home;
   `PERISCOPE_CONFIG_DIR` is excluded, a file
   cannot move itself). `serve`, `login`, `pair` and
   `status` read the environment with the file filling its absences; the environment always wins. A

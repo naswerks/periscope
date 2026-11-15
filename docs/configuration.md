@@ -12,10 +12,10 @@ A setting arrives one of three ways, and the order is the rule:
 2. **The config file** (`<config dir>/config.json`) fills absences. `periscope config <key> <value>`
    writes one key, `periscope config --unset <key>` removes it, `periscope config` lists the file and
    marks every value the environment is currently overriding. On Windows this is the way to set a
-   value that should outlive the shell. Only the thirteen keys marked "config-file key" below may live
+   value that should outlive the shell. Only the eighteen keys marked "config-file key" below (`CONFIG_KEYS`) may live
    in the file; a value the host would refuse at start (an `https:` controller address, a `ws:`
    decision address, a relative root) is refused by `periscope config` before it is written.
-3. **The controller, over the link** (`host_configure`) writes seven of those keys to the file; see
+3. **The controller, over the link** (`host_configure`) writes eight of those keys to the file (`WIRE_CONFIGURABLE_KEYS`); see
    [what a controller can set](#what-a-controller-can-set-over-the-link).
 
 ## The two addresses
