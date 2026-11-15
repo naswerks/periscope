@@ -578,7 +578,8 @@ over the link and without a further credential:
   `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
   `ANTHROPIC_API_KEY`, the agent CLI's session-service credentials and remote route
   (`CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`, `CLAUDE_BG_SESSION_CREDENTIAL`, `CLAUDE_CODE_REMOTE_SDK_URL`),
-  Codex's home, model route, credentials and certificate authority (the eight
+  its switch that lets dangerous `rm` commands run without a prompt in bypass mode
+  (`CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS`), Codex's home, model route, credentials and certificate authority (the eight
   names [Codex sessions](#codex-sessions) lists), Qwen Code's own variables and the model routes it
   reads (the names [Qwen Code sessions](#qwen-code-sessions) lists), pi's own variables, its
   extension's configuration and the model routes it reads (the names [pi sessions](#pi-sessions)

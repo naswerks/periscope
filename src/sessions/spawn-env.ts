@@ -80,6 +80,8 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'CLAUDE_CODE_SESSIONS_OAUTH_TOKEN',
   'CLAUDE_BG_SESSION_CREDENTIAL',
   'CLAUDE_CODE_REMOTE_SDK_URL',
+  // The agent CLI's switch that lets its dangerous `rm` commands run without a prompt in bypass mode.
+  'CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS',
   // The model route and the identity it uses: the endpoint, its token and headers, its socket, every
   // provider's base URL, region and project.
   'ANTHROPIC_*',

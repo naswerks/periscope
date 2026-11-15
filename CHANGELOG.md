@@ -33,6 +33,9 @@ frame it sends decodes unchanged.
   `CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`, `CLAUDE_BG_SESSION_CREDENTIAL` and `CLAUDE_CODE_REMOTE_SDK_URL`,
   so no controller can set them. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses the
   start, by name.
+- Security: the env floor holds `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS`, the agent CLI's
+  switch that lets its dangerous `rm` commands run without a prompt in bypass mode, so no controller
+  can set it. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares it now refuses the start, by name.
 - Added: `parentId` on every conversation item (`AgentItem`), optional: the call that spawned the agent
   whose turn the item is from. A Claude subagent's messages now fill items, each naming its spawning
   call's `tool_use` id; an item of the session's own thread names none, which reads as null, so it is

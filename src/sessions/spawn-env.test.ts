@@ -747,13 +747,14 @@ test('regression: every model-route, identity, proxy and certificate name the ag
   }
 });
 
-test('regression: the session-service credentials and the remote route the agent CLI 2.1.325 reads are beneath the floor, by exact name', () => {
+test('regression: the session-service credentials, the remote route and the rm switch the agent CLI 2.1.325 reads are beneath the floor, by exact name', () => {
   // Names from the bundled CLI's strings that 2.1.284's did not carry, each naming who the agent signs
-  // in as or where its turns go.
+  // in as, where its turns go, or whether its dangerous `rm` commands run without a prompt in bypass.
   const added = [
     'CLAUDE_CODE_SESSIONS_OAUTH_TOKEN',
     'CLAUDE_BG_SESSION_CREDENTIAL',
     'CLAUDE_CODE_REMOTE_SDK_URL',
+    'CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS',
   ];
   assert.deepEqual(envKeysBeneathFloor(added, EXTRA_ENV_FLOOR), added);
   for (const key of added) assert.ok(EXTRA_ENV_FLOOR.includes(key), `${key} is not an exact floor entry`);
