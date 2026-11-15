@@ -610,9 +610,12 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   before it disconnects the session, while the hook still has its route, so a call that arrives as the
   turn winds down is asked and refused. A turn that will not end is not disconnected while it runs: its
   process tree is ended first.
-- **A command detached on purpose outlives the session.** Closing a session ends its runtime and every
-  command its shell still runs. A command the agent detaches from its shell (on Windows,
-  `Start-Process`) is in no process tree of the session, and keeps running.
+- **A command detached on purpose outlives the session, and so does what a crashed runtime left.**
+  Closing a session ends its runtime and every command its shell still runs. A command the agent
+  detaches from its shell (on Windows, `Start-Process`) is in no process tree of the session, and keeps
+  running. A runtime that exits on its own, a crash, leaves whatever it had started: its process id is
+  gone, and may already be another process's, so the host ends no tree by it and says so on the
+  session.
 - **A keyring entry is not a file.** If you ran `copilot login` yourself on the runner, the token it
   stored in the Windows Credential Manager is outside the protected set, which holds files: a session's
   runtime never reads or writes the keyring, but a command the agent runs, as your user, can. Sign the

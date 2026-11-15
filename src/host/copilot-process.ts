@@ -306,6 +306,8 @@ export function startCopilotProcess(
   let client: CopilotClient | null = null;
   let live: CopilotSession | null = null;
   let sessionId: string | null = null;
+  // Set when the runtime's process exits on its own: there is then no turn to end and no tree to end by its id.
+  let runtimeExited: string | null = null;
   let startModel: string | null = null;
   // The open's probe call, and the hook runs and requests its events carry, so none of them rides on.
   let probeId: string | null = null;
@@ -436,6 +438,7 @@ export function startCopilotProcess(
     client = started;
     await within(started.start(), deadline, "the Copilot runtime's start");
     onCopilotRuntimeExit(started, (detail) => {
+      runtimeExited ??= detail;
       if (!closed && failure === null) failure = new Error(`the Copilot runtime exited (${detail})`);
       if (!closed) void shutDown();
     });
@@ -557,7 +560,16 @@ export function startCopilotProcess(
       // nobody was asked about; a call that arrives here instead is asked, and refused, since every
       // decision was just ended.
       let turnEnded = true;
-      if (session !== null) {
+      // A runtime that exited on its own has no turn to end, and its id names nothing of this session's
+      // any more: the system may have given the number to another process. What it had started is not
+      // reachable through it, and that is said rather than acted on.
+      const exited = runtimeExited;
+      if (exited !== null) {
+        degrade(
+          `the Copilot runtime exited on its own (${exited}), so this host ended no process tree by its id: a command or a server it had started may still be running`,
+        );
+      }
+      if (session !== null && exited === null) {
         turnEnded = await within(
           Promise.all([session.abort(), session.rpc.cancelAllBackgroundAgents()]),
           grace,
@@ -574,12 +586,12 @@ export function startCopilotProcess(
       client = null;
       // The tree, while the runtime still roots it: a command the agent left running ends with it.
       const endTree = async (): Promise<void> => {
-        const pid = stopping === null ? null : copilotRuntimePid(stopping);
+        const pid = stopping === null || exited !== null ? null : copilotRuntimePid(stopping);
         if (pid !== null) await (runtime.killTree ?? killProcessTree)(pid).catch(() => undefined);
       };
       // A turn that would not end is never disconnected while it runs: its tree goes first.
       if (!turnEnded) await endTree();
-      else if (session !== null) {
+      else if (session !== null && exited === null) {
         await within(session.disconnect(), grace, "the session's disconnect").catch((error: unknown) =>
           degrade(`the session did not disconnect: ${wordsOf(error)}`),
         );

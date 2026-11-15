@@ -400,13 +400,21 @@ export function loadCopilotSdk(install: CopilotInstall): Promise<Result<CopilotS
 }
 
 /**
- * The runtime process's id, or null. The SDK keeps the child it spawned in a member of its own, which this
- * host reads only to end the child's whole process tree after `stop()`; its presence is pinned on the real
- * runtime, so a release that renames it turns that pin red rather than leaving a tree behind silently.
+ * The running runtime process's id, or null. The SDK keeps the child it spawned in a member of its own, which
+ * this host reads only to end the child's whole process tree at close; its presence is pinned on the real
+ * runtime, so a release that renames it turns that pin red rather than leaving a tree behind silently. A
+ * child that has exited has no id to act on: the SDK keeps the member after the exit, and the system may
+ * hand the same number to a process that is nothing of this session's.
  */
 export function copilotRuntimePid(client: CopilotClient): number | null {
-  const child = (client as unknown as { cliProcess?: { pid?: unknown } | null }).cliProcess;
-  return typeof child?.pid === 'number' ? child.pid : null;
+  const child = (
+    client as unknown as {
+      cliProcess?: { pid?: unknown; exitCode?: unknown; signalCode?: unknown } | null;
+    }
+  ).cliProcess;
+  if (typeof child?.pid !== 'number') return null;
+  const exited = typeof child.exitCode === 'number' || typeof child.signalCode === 'string';
+  return exited ? null : child.pid;
 }
 
 /**

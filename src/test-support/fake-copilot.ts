@@ -366,6 +366,8 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
   class FakeClient implements CopilotClient {
     readonly cliProcess: {
       pid: number;
+      /** Null while the process runs, as a child process's is; its code once it has exited. */
+      exitCode: number | null;
       once(event: 'exit', handler: (code: unknown, signal: unknown) => void): void;
     } | null;
     readonly rpc = {
@@ -385,10 +387,18 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
           ? null
           : {
               pid,
+              exitCode: null,
               once: (_event, handler) => {
                 exitListeners.push((code) => handler(code, null));
               },
             };
+      const child = this.cliProcess;
+      if (child !== null) {
+        // The process keeps its id after it exits, as the SDK's member does, and says it has exited.
+        exitListeners.push((code) => {
+          child.exitCode = code;
+        });
+      }
     }
 
     start(): Promise<void> {

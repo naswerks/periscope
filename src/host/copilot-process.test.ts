@@ -17,7 +17,8 @@ import type { CopilotEndpointRoute } from './copilot-endpoints.js';
 import { COPILOT_PROBE_ID_PREFIX, createCopilotSessionGate } from './copilot-gate.js';
 import type { CopilotRuntimeConfig } from './copilot-process.js';
 import { copilotRequestProblem, startCopilotProcess } from './copilot-process.js';
-import type { CopilotInstall } from './copilot-sdk.js';
+import type { CopilotClient, CopilotInstall } from './copilot-sdk.js';
+import { copilotRuntimePid } from './copilot-sdk.js';
 import type { CopilotMessage } from './copilot-wire.js';
 
 const ROOT = process.platform === 'win32' ? 'C:/work/session-1' : '/work/session-1';
@@ -545,12 +546,36 @@ test('a turn that will not end is never disconnected while it runs: its tree is 
   await rm(run.base, { recursive: true, force: true });
 });
 
-test('a runtime that exits under a live session ends it, named', async () => {
+test('a runtime that exits under a live session ends it, named, and no process tree is ended by the id it had: the id may be another process by then', async () => {
   const run = await started();
   await waitFor(() => opened(run), 'the open');
   run.record.exit(3);
   const ended = await run.ended;
   assert.match(ended?.message ?? '', /the Copilot runtime exited \(exit code 3\)/);
+  assert.deepEqual(run.killed, [], 'a tree was ended by the id of a process that had already exited');
+  assert.ok(
+    run.degrades.some((detail) =>
+      /the Copilot runtime exited on its own \(exit code 3\), so this host ended no process tree by its id/.test(
+        detail,
+      ),
+    ),
+    run.degrades.join(' | '),
+  );
+  // Nothing is asked of a runtime that is gone, and the client is still stopped.
+  assert.deepEqual(
+    run.record.lifecycle.filter((step) => step !== 'start'),
+    ['forceStop'],
+  );
+  await rm(run.base, { recursive: true, force: true });
+});
+
+test('control: the id of a runtime that is still running is the one its tree is ended by', async () => {
+  const run = await started();
+  await waitFor(() => opened(run), 'the open');
+  run.process.close();
+  assert.equal(await run.ended, null);
+  assert.deepEqual(run.killed, [4242]);
+  assert.deepEqual(run.degrades, []);
   await rm(run.base, { recursive: true, force: true });
 });
 
@@ -676,4 +701,14 @@ test('an install off the pin is refused before anything starts', async () => {
   assert.match((await run.ended)?.message ?? '', /^runtime-unavailable: off the pin/);
   assert.deepEqual(run.record.clients, []);
   await rm(run.base, { recursive: true, force: true });
+});
+
+test('the runtime process id is read only from a process that is still running', () => {
+  const holding = (child: unknown): CopilotClient => ({ cliProcess: child }) as unknown as CopilotClient;
+  assert.equal(copilotRuntimePid(holding({ pid: 7, exitCode: null, signalCode: null })), 7);
+  assert.equal(copilotRuntimePid(holding({ pid: 7 })), 7);
+  assert.equal(copilotRuntimePid(holding({ pid: 7, exitCode: 1, signalCode: null })), null);
+  assert.equal(copilotRuntimePid(holding({ pid: 7, exitCode: 0, signalCode: null })), null);
+  assert.equal(copilotRuntimePid(holding({ pid: 7, exitCode: null, signalCode: 'SIGKILL' })), null);
+  assert.equal(copilotRuntimePid(holding(null)), null);
 });

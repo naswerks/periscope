@@ -635,7 +635,10 @@ the one this host decides.
 - **What it does not hold.** A command the agent detaches from its shell on purpose (on Windows,
   `Start-Process`, measured on the pinned runtime) is in no process tree of the session, so it outlives
   the session's close. A command the session's shell still runs, in the foreground or the background,
-  ends with it. A Windows Credential Manager entry an operator's own `copilot login` left on the
+  ends with it, while the runtime is there to root its tree. A runtime that exits on its own leaves what
+  it had started: the close ends a process tree only by the id of a runtime that is still running,
+  since the id of one that exited may be another process's, and the session says a tree was not ended.
+  A Windows Credential Manager entry an operator's own `copilot login` left on the
   machine is no file, so the protected set does not hold it: a session's runtime never reads or writes
   one (the SDK's `empty` mode turns the keyring off), but it is readable by any program running as the
   same user, a command the agent runs included.
