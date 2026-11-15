@@ -26,8 +26,10 @@ export const QWEN_AGENT_TOOL = 'agent';
  * cancelled the CLI writes a `result` of its own with no `parent_tool_use_id`: the error subtype, no turns
  * and no time (`error_during_execution`, `num_turns` 0, `duration_ms` 0). Such a `result` while a call is
  * open is that sub-agent's end, never the session's (`isSubagentEnd`). The session's own result with a
- * call open carries its turn's count and time, and an interrupt's ends the turn whatever it carries. Each
- * reader of a session's messages keeps its own.
+ * call open carries its turn's count and time, and an interrupt's ends the turn whatever it carries. A
+ * background sub-agent, whose call returns as it starts, writes no `result` of its own: the CLI tells its
+ * end as a `task_notification`, so a `result` with no call open is the session's. Each reader of a
+ * session's messages keeps its own.
  */
 export class QwenSpawnWatch {
   readonly #open = new Set<string>();

@@ -247,12 +247,13 @@ frame it sends decodes unchanged.
   which, and a settled agent task carries its `usage` (`tokens`, `toolUses`, `durationMs`) when the CLI
   reports all three counts. The CLI reports no summary and no output file for a task, so neither is
   stated.
-- Fixed: a failing Qwen Code sub-agent no longer ends the session's turn. When a foreground sub-agent
+- Fixed: a failing foreground Qwen Code sub-agent no longer ends the session's turn. When a foreground sub-agent
   fails or is cancelled the CLI writes a `result` of its own that names no call (the error subtype, no
   turns and no time); while the main thread's `agent` call is still open that `result` now moves none of
   the session's state, closes none of its tool entries, fills no turn item, records no `turn_record` and
   frees no queued prompt, where it errored the session and filed a zero running total. A background
-  sub-agent's, written after its call has returned, still reads as the session's turn ending.
+  sub-agent writes no `result` of its own: the 0.27.3 CLI tells its end, a failure included, as a
+  `task_notification`, which the `tasks` fact carries.
 - Changed: pi is pinned at 1.5.2 (was 1.2.0); a CLI that reports any other version, 1.2.0 included, is
   listed unavailable by name, so the operator installs `@earendil-works/pi-coding-agent@1.5.2` (Node 22.19
   or later) before a pi session runs. `contracts/pi-names.json` is the 1.5.2 release's, and it names the

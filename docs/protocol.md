@@ -489,7 +489,8 @@ lists the skills it found (`source: 'runtime'`), and again whenever an init move
 permission mode in Qwen Code's own word; `turn_record` is each `result` of the session's own (not the one
 the CLI writes when a foreground sub-agent fails or is cancelled, which carries no parent, the error
 subtype, no turns and no time while the main thread's `agent` call is still open; a background
-sub-agent's, written after its call has returned, names no call and is read as the session's), its `totals` the CLI's
+sub-agent writes no `result` of its own, and its end, a failure included, is a `task_notification`, which the
+`tasks` fact reports), its `totals` the CLI's
 running total for the session and its `turn` and `turnScope` null, a resumed or forked session's total
 including the source's tokens, with no cost and no cache writes; `usage_sample` is each answer to the
 context-usage request the host sends after each `result`; `tasks` is the background tasks the CLI
