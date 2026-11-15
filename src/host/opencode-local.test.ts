@@ -556,7 +556,7 @@ test(
       assert.deepEqual(
         offered.filter((tool) => !named.has(tool)),
         [],
-        `tools no table names: ${offered.join(', ')}`,
+        `tools no table names: ${offered.filter((tool) => !named.has(tool)).join(', ')}`,
       );
       assert.deepEqual(
         offered.filter((tool) => OPENCODE_DENIED_TOOLS.includes(tool)),
@@ -690,6 +690,20 @@ test(
       await opened(real);
       await ran(real, 'WRITE-IT now');
       assert.equal(existsSync(blocked), false, 'the refused write landed');
+      // A refusal with words lets the model go on, so the run that asked ends as a run that finished; one with
+      // no words ends the turn at the refusal, and the model is never asked again.
+      const firstEnd = real.messages.find(
+        (message) =>
+          message.kind === 'event' &&
+          message.main &&
+          /^session\.execution\.(succeeded|failed|interrupted)$/.test(message.event.type),
+      );
+      assert.equal(
+        firstEnd?.kind === 'event' ? firstEnd.event.type : null,
+        'session.execution.succeeded',
+        'the turn ended at the refusal',
+      );
+      assert.equal(stub.requests.length, 2, 'the model was not asked again after the refusal');
       const told = stub.requests
         .flatMap((request) => request.messages)
         .filter((message) => message.role === 'tool');

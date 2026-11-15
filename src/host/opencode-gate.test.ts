@@ -188,14 +188,41 @@ test('a deny reaches the model as a refusal with its words', async () => {
   });
 });
 
+/**
+ * The tools every opencode session turns off, written out here rather than read from the list the gate reads,
+ * so an entry dropped from that list is named by this test on every host, the SDK's or not.
+ */
+const TURNED_OFF = [
+  'execute',
+  'question',
+  'experimental_image_generate',
+  'browser',
+  'opencode_session_rename',
+  'opencode_session_move',
+  'opencode_worktree_create',
+  'opencode_worktree_list',
+  'opencode_models',
+  'opencode_artifact_create',
+  'opencode_artifact_read',
+  'opencode_artifact_update',
+  'opencode_artifact_delete',
+  'opencode_schedule_create',
+  'opencode_schedule_list',
+  'opencode_schedule_pause',
+  'opencode_schedule_resume',
+  'opencode_schedule_delete',
+];
+
 test('a turned-off tool is refused without asking anyone, whatever the rules the runtime holds', async () => {
   const run = gate(allow);
-  for (const action of OPENCODE_DENIED_TOOLS) {
+  for (const action of TURNED_OFF) {
     const answer = await run.built.decide(asked({ id: `per_${action}`, action }));
-    assert.equal(answer.decision, 'reject', action);
+    assert.equal(answer.decision, 'reject', `${action} is no longer refused at the gate`);
     assert.match(answer.message ?? '', /turned off/);
   }
   assert.deepEqual(run.requests, []);
+  // The list the rules, the read-back, the census and the gate read is exactly these, both ways.
+  assert.deepEqual([...OPENCODE_DENIED_TOOLS].sort(), [...TURNED_OFF].sort());
 });
 
 test("this host's own gate checks every path a request names, one at a time, and a directory request as its directory", async () => {

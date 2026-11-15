@@ -338,8 +338,15 @@ test("a write in an opencode session's further worktree flows; its operator's ch
     run.link.deliver('session-1', { kind: 'session_prompt', text: 'write both' }, 2);
     await until(() => run.link.transitions().some((one) => one.to === 'idle'), 'the run to settle');
     const answered = replies(run.record);
-    assert.equal(answered['per_call_inside_1'], 'once');
+    const words = (requestID: string): string =>
+      run.record.replies.find((reply) => reply.requestID === requestID)?.message ?? 'no words';
+    assert.equal(
+      answered['per_call_inside_1'],
+      'once',
+      `the further worktree's write was refused: ${words('per_call_inside_1')}`,
+    );
     assert.equal(answered['per_call_checkout_1'], 'reject');
+    assert.match(words('per_call_checkout_1'), /^path-escapes-root:/);
     assert.deepEqual(
       run.decided.map((one) => one.toolUseId),
       ['call_inside'],
