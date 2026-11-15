@@ -21,7 +21,7 @@
  * - spend is filed per model call, its input uncached.
  * Each skips, saying why, on a Node that cannot load the SDK (`nodeCanRunOpencode`): opencode needs Node 24.
  */
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from 'node:fs';
@@ -51,7 +51,7 @@ import type { OpencodeConnectOptions } from './opencode-relay.js';
 import { nodeCanRunOpencode, readOpencodeInstall } from './opencode-sdk.js';
 import type { OpencodeEvent } from './opencode-sdk.js';
 import type { OpencodeMessage } from './opencode-wire.js';
-import { descendantsOf, readProcTable } from './stdio-rpc.js';
+import { descendantsOf, killProcessTree, readProcTable } from './stdio-rpc.js';
 import { nodePathResolver } from './paths.js';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -196,19 +196,50 @@ function lastUser(request: StubModelRequest): string {
       : JSON.stringify(user.content);
 }
 
+/**
+ * What every test leaves running until its own cleanup ends it: each session's process tree and each server.
+ * A test that times out never reaches its own cleanup, so the file ends whatever is left once its tests are
+ * done; a process or a server left running would keep the file from ever exiting.
+ */
+const leftovers = new Set<() => Promise<void>>();
+
+after(async () => {
+  await Promise.allSettled([...leftovers].map((end) => end()));
+});
+
+/** `promise`, or `fallback` once `ms` have passed. */
+function within<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** A server closed by the file if its test never closes it. */
+function held<T extends { close(): Promise<void> }>(server: T): T {
+  const end = (): Promise<void> => within(server.close(), 5_000, undefined);
+  leftovers.add(end);
+  return server;
+}
+
 /** A stub whose script answers by marker, and says `finished` once a tool's result is back. */
-function scripted(
+async function scripted(
   steps: Readonly<Record<string, StubModelReply>>,
   fallback: StubModelReply = { text: 'plain' },
 ) {
-  return stubModel(
-    (request) => {
-      if (request.messages.at(-1)?.role === 'tool') return { text: 'finished' };
-      const user = lastUser(request);
-      for (const [marker, reply] of Object.entries(steps)) if (user.includes(marker)) return reply;
-      return fallback;
-    },
-    { usage: { prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 40 } } },
+  return held(
+    await stubModel(
+      (request) => {
+        if (request.messages.at(-1)?.role === 'tool') return { text: 'finished' };
+        const user = lastUser(request);
+        for (const [marker, reply] of Object.entries(steps)) if (user.includes(marker)) return reply;
+        return fallback;
+      },
+      { usage: { prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 40 } } },
+    ),
   );
 }
 
@@ -297,6 +328,11 @@ function start(dirs: Scratch, stub: StubModel, options: Open = {}): Real {
     options.endpoint ?? 'stub',
     gate,
   );
+  // Whatever the test does, the file ends this session's process tree once its tests are done.
+  leftovers.add(async () => {
+    proc.close();
+    if (pid !== null && alive(pid)) await killProcessTree(pid);
+  });
   const messages: OpencodeMessage[] = [];
   const ended = (async (): Promise<Error | null> => {
     try {
@@ -366,9 +402,14 @@ async function ran(real: Real, text: string): Promise<void> {
   await until(() => real.runs() > before, `the run of ${text}`);
 }
 
+/** Close the session and wait for it to end; one that has not ended within a minute is ended, and named. */
 async function closed(real: Real): Promise<Error | null> {
   real.proc.close();
-  return real.ended;
+  const ended = await within<Error | null | 'running'>(real.ended, 60_000, 'running');
+  if (ended !== 'running') return ended;
+  const pid = real.hostPid();
+  if (pid !== null && alive(pid)) await killProcessTree(pid);
+  return new Error(`the session did not end within a minute of its close (host process ${String(pid)})`);
 }
 
 /** Whether a process is still running. */
@@ -809,7 +850,7 @@ test(
   { skip, timeout: 180_000 },
   async () => {
     const dirs = await scratch();
-    const mcp = await fakeMcpHttp();
+    const mcp = held(await fakeMcpHttp());
     const stub = await scripted({
       'MCP-CALL': { toolCalls: [{ id: 'call_mcp', name: 'probe_srv_echo', arguments: { text: 'hello' } }] },
     });
@@ -969,6 +1010,13 @@ test(
       );
     });
     await new Promise<void>((resolve) => refusing.listen(0, '127.0.0.1', resolve));
+    held({
+      close: () =>
+        new Promise<void>((resolve) => {
+          refusing.closeAllConnections();
+          refusing.close(() => resolve());
+        }),
+    });
     const port = (refusing.address() as AddressInfo).port;
     const real = start(dirs, stub, {
       endpoint: 'refusing',
@@ -1022,7 +1070,12 @@ test(
       },
     );
     try {
-      await new Promise<void>((resolve) => planted.stdout.once('data', () => resolve()));
+      const up = await within(
+        new Promise<boolean>((resolve) => planted.stdout.once('data', () => resolve(true))),
+        10_000,
+        false,
+      );
+      assert.ok(up, 'control: the planted listener never said it was listening');
       assert.ok(planted.pid !== undefined);
       assert.equal(
         listenersOf([planted.pid]).length,
