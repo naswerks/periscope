@@ -24,7 +24,9 @@
  *   (`copilotReadBackProblem`), and one probe call is run through it: `view` on the session's own directory,
  *   under an id this host minted. Its hook must fire and its `hook` request reach this host, which refuses
  *   it, so nothing runs. Any other outcome refuses the open (`copilot-gate-not-active`) and no prompt is
- *   ever sent. A machine-wide policy hook is named at the open (`gate-hook-foreign`).
+ *   ever sent. A machine-wide policy hook is named at the open (`gate-hook-foreign`): the runtime is asked
+ *   which it finds, on every platform, beside this host's own read of where one sits on Windows, and a
+ *   source neither could read is named as one that may hold one.
  * - **Queue semantics.** A prompt is sent as it comes, queued behind any turn running (`enqueue`), up to
  *   `MAX_PENDING_PROMPTS` the runtime has not yet taken (`user.message`). Prompts that arrive before the open
  *   is proven are held, in order, and sent after.
@@ -48,11 +50,20 @@ import { MAX_PENDING_PROMPTS, isRuntimeDefaultPrompt } from './agent-process.js'
 import type { CopilotEndpointRoute } from './copilot-endpoints.js';
 import { copilotProvider } from './copilot-endpoints.js';
 import type { CopilotSessionGate } from './copilot-gate.js';
-import type { CopilotPostureRead, CopilotSessionHome } from './copilot-home.js';
+import type {
+  CopilotAsked,
+  CopilotPolicyLook,
+  CopilotPostureRead,
+  CopilotSessionHome,
+} from './copilot-home.js';
 import {
   carryCopilotStateIn,
   carryCopilotStateOut,
+  copilotPolicyDetail,
+  copilotPolicyDirectories,
   copilotPolicyHooks,
+  copilotRuntimePolicyLook,
+  mergeCopilotPolicyLooks,
   copilotReadBackProblem,
   copilotRuntimeEnv,
   copilotTokenProvider,
@@ -94,6 +105,8 @@ export const COPILOT_PERMISSION_MODES = ['default', 'plan'] as const;
 export const COPILOT_OPEN_DEADLINE_MS = 60_000;
 /** How long a setter, an abort or a read may take to be answered. */
 export const COPILOT_CALL_DEADLINE_MS = 30_000;
+/** How long the runtime has to say which policy hooks it finds, before the open goes on without its answer. */
+export const COPILOT_POLICY_ASK_MS = 10_000;
 /** How long each step of the close may take before the next one runs. */
 export const COPILOT_CLOSE_GRACE_MS = 10_000;
 
@@ -111,8 +124,11 @@ export interface CopilotRuntimeConfig {
   readonly readInstall?: (directory: string) => Result<CopilotInstall>;
   /** How the SDK is loaded from a checked install; the default imports it (`loadCopilotSdk`). */
   readonly loadSdk?: (install: CopilotInstall) => Promise<Result<CopilotSdk>>;
-  /** The machine-wide policy hooks present; the default reads `%ProgramData%` and the policy key. */
-  readonly policyHooks?: () => Promise<readonly string[]>;
+  /**
+   * The machine-wide policy hook sources this host reads itself; the default reads the policy directories
+   * and the policy key, on Windows. The runtime is asked for its own account beside it on every platform.
+   */
+  readonly policyHooks?: () => Promise<CopilotPolicyLook>;
   readonly killTree?: (pid: number) => Promise<void>;
   readonly closeGraceMs?: number;
   readonly openDeadlineMs?: number;
@@ -241,12 +257,34 @@ function wordsOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The machine-wide policy hooks on this host, read the default way. */
-function defaultPolicyHooks(): Promise<readonly string[]> {
+/** The machine-wide policy hook sources this host reads itself, read the default way. */
+function defaultPolicyHooks(): Promise<CopilotPolicyLook> {
   return copilotPolicyHooks({
-    programData: process.env['ProgramData'] ?? process.env['PROGRAMDATA'] ?? null,
-    registryHolds: readCopilotPolicyKey,
+    directories: copilotPolicyDirectories(),
+    ...(process.platform === 'win32' ? { registryHolds: readCopilotPolicyKey } : {}),
   });
+}
+
+/** What `ask` answered within `ms`, or why it gave no answer. Never throws. */
+async function asked(ask: () => Promise<unknown>, ms: number, what: string): Promise<CopilotAsked> {
+  try {
+    return { answer: await within(ask(), ms, what) };
+  } catch (error) {
+    return { failed: wordsOf(error) };
+  }
+}
+
+/**
+ * The runtime's own account of the policy hooks it would run: its hook discovery, less the user's and the
+ * plugins' rows, and its read of the machine's managed settings. Asked of a started client, on every
+ * platform.
+ */
+async function runtimePolicyHooks(client: CopilotClient, ms: number): Promise<CopilotPolicyLook> {
+  const [discovered, managed] = await Promise.all([
+    asked(() => client.rpc.hooks.discover({ excludeHostHooks: true }), ms, "the runtime's hook discovery"),
+    asked(() => client.rpc.managedSettings.read(), ms, "the runtime's read of the managed settings"),
+  ]);
+  return copilotRuntimePolicyLook(discovered, managed);
 }
 
 /** Read the runtime's posture: the reads `copilotReadBackProblem` holds to what was asked. */
@@ -415,16 +453,11 @@ export function startCopilotProcess(
     const env = copilotRuntimeEnv(request.env, home.env);
     // The SDK adds the home itself; the local gate reads it as the path it is.
     gate.spawnedWith({ ...env, COPILOT_HOME: home.home });
-    const policy = await (runtime.policyHooks ?? defaultPolicyHooks)();
-    gate.stateSpawnDegrades(
-      policy.length === 0
-        ? []
-        : [
-            {
-              name: 'gate-hook-foreign',
-              detail: `machine-wide Copilot policy hooks run in every session whatever its own settings say: ${policy.join(', ')}`,
-            },
-          ],
+    const onMachine = await (runtime.policyHooks ?? defaultPolicyHooks)().catch(
+      (error: unknown): CopilotPolicyLook => ({
+        found: [],
+        unread: [`this host's own look (${wordsOf(error)})`],
+      }),
     );
     if (closed) return;
 
@@ -443,6 +476,14 @@ export function startCopilotProcess(
       if (!closed && failure === null) failure = new Error(`the Copilot runtime exited (${detail})`);
       if (!closed) void shutDown();
     });
+    if (closed) return;
+    const policy = copilotPolicyDetail(
+      mergeCopilotPolicyLooks(
+        onMachine,
+        await runtimePolicyHooks(started, Math.min(deadline, COPILOT_POLICY_ASK_MS)),
+      ),
+    );
+    gate.stateSpawnDegrades(policy === null ? [] : [{ name: 'gate-hook-foreign', detail: policy }]);
     if (closed) return;
 
     const config = copilotSessionConfig(request, {

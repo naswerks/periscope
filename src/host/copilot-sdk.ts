@@ -233,6 +233,17 @@ export interface CopilotClientOptions {
   readonly connection: CopilotConnection;
 }
 
+/** One hook action the runtime finds, as its own discovery lists it. */
+export interface CopilotDiscoveredHook {
+  /** The event that runs it, `preToolUse` among them. */
+  readonly hookType: string;
+  /** The tier that brought it: `user`, `repository`, `plugin`, or `policy` for a centrally managed one. */
+  readonly origin: string;
+  /** The runtime's own label for where it sits: a file, a settings source, a plugin. */
+  readonly source?: string;
+  readonly enabled: boolean;
+}
+
 /** One client: one runtime process, one session. */
 export interface CopilotClient {
   start(): Promise<void>;
@@ -243,6 +254,20 @@ export interface CopilotClient {
   readonly rpc: {
     readonly sessions: {
       fork(params: { sessionId: string }): Promise<{ readonly sessionId: string }>;
+    };
+    readonly hooks: {
+      /**
+       * The hook actions the runtime itself finds, a centrally managed policy's among them, and in `errors`
+       * each source it could not load. With `excludeHostHooks` the user's and the plugins' rows are left out.
+       */
+      discover(params: { excludeHostHooks?: boolean }): Promise<{
+        readonly hooks: readonly CopilotDiscoveredHook[];
+        readonly errors: readonly string[];
+      }>;
+    };
+    readonly managedSettings: {
+      /** The machine's managed settings as the runtime reads them, or in `errorMessage` why it could not. */
+      read(): Promise<{ readonly settingsJson?: unknown; readonly errorMessage?: string }>;
     };
   };
 }

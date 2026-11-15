@@ -126,7 +126,7 @@ async function copilotHost(
             runtimeVersion: '1.0.112',
           }),
         loadSdk: () => Promise.resolve(ok(sdk)),
-        policyHooks: () => Promise.resolve([]),
+        policyHooks: () => Promise.resolve({ found: [], unread: [] }),
         killTree: () => Promise.resolve(),
         closeGraceMs: 20,
       },

@@ -611,7 +611,9 @@ the other runtimes ([the wire protocol](protocol.md)).
   pinned; the host still starts, and a session naming `copilot` is refused `runtime-unavailable` with
   that reason. The hello lists no models: Copilot lists its models only once signed in.
 - **The home is the runner's own.** Each session's runtime runs with a fresh home under
-  `<base>/sessions`, its caches (`LOCALAPPDATA`, `APPDATA`) pointed inside it, in the SDK's `empty`
+  `<base>/sessions`, its caches pointed inside it on every platform (`COPILOT_CACHE_HOME`, which the
+  runtime reads before the platform's own cache directory, and on Windows `LOCALAPPDATA` and `APPDATA`
+  as well), in the SDK's `empty`
   mode, signed in as nobody (`useLoggedInUser: false`), so the operator's own `~/.copilot` (its sign-in,
   its settings, its sessions) is never what a session runs from. The home is removed when the session
   closes; its state moves to `<base>/state/<session id>`, which a resume copies back.

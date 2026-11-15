@@ -737,7 +737,7 @@ every tool call meets, asks the gate about each before it runs; its opening `deg
 either lowers its level to `intercepted-with-residual`. A Copilot session is
 `intercepted-with-residual`: the runtime's pre-tool hook answers `ask` for every call and the gate
 decides the request that raises, and its opening `degrades` name `gate-hook-foreign` when a
-machine-wide policy hook is on the machine. An opencode session is `intercepted-with-residual`: its rules
+machine-wide policy hook is on the machine, or when a place one can sit could not be read. An opencode session is `intercepted-with-residual`: its rules
 ask for every action, and the gate decides every request they raise. The tier is stated, never negotiated, and the host decides
 nothing by it.
 

@@ -217,7 +217,8 @@ the decision deadline.
   session's run directory with its channel's token); pi's sign-in, MCP token and models files
   (`auth.json`, `mcp-auth.json`, `models.json`) in `~/.pi/agent`; the whole of Copilot's runner base
   (`PERISCOPE_COPILOT_HOME`: each session's home, which is its `COPILOT_HOME` and holds the
-  `LOCALAPPDATA` and `APPDATA` it starts with, and every session state kept for a resume), the
+  `COPILOT_CACHE_HOME`, `LOCALAPPDATA` and `APPDATA` it starts with, and every session state kept for a
+  resume), the
   operator's Copilot SDK install (`PERISCOPE_COPILOT_SDK`, the runtime every session starts from) and
   the token file (`PERISCOPE_COPILOT_TOKEN_FILE`); the operator's own `~/.copilot` and
   `COPILOT_HOME`, whole; the whole of opencode's runner base (`PERISCOPE_OPENCODE_HOME`: each session's
@@ -614,9 +615,11 @@ the one this host decides.
     `tool.execution_complete` and forgotten then, so an id a provider hands out again is a new call; only
     the probe id this gate minted is exempt, never an id that merely starts the same.
   - `gate-hook-foreign`: a hook this host did not install answered a request (`resolvedByHook`), or a
-    machine-wide policy hook (`%ProgramData%\GitHub\Copilot\policy.d\*.json`, or the
-    `HKLM\Software\Policies\GitHub\Copilot` key) was found at the open, which lowers the opening
-    tier.
+    machine-wide policy hook was found at the open, which lowers the opening tier. The runtime is asked
+    for the hooks it finds and the machine's managed settings (`hooks.discover`, `managedSettings.read`)
+    on every platform, and on Windows the host also reads `policy.d\*.json` under
+    `%ProgramData%\GitHub\Copilot` and the `HKLM\Software\Policies\GitHub\Copilot` key. A source
+    that could not be read is named too, as one that may hold a hook; the session opens either way.
   - `gate-unhooked-call`: a tool the model's provider ran itself (`assistant.server_tool_progress`),
     which no hook sees.
   - `gate-mode-widened`: the runtime reports a permission mode other than `manual`, or an agent mode

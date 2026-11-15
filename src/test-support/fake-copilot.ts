@@ -9,12 +9,15 @@
  * - An approved call starts and completes; a refused one completes, failed, with the handler's words.
  * - `session.start` is sent during `createSession`, before it resolves; `session.idle` ends each run.
  * - The posture reads answer what the options say, `manual` and `interactive` by default.
+ * - A client answers its hook discovery and its read of the managed settings with no session: no hook and
+ *   no managed setting by default, as the pinned runtime answers on a machine with neither.
  * Every call the adapter makes is recorded, so a test reads back what was asked.
  */
 import type {
   CopilotClient,
   CopilotClientOptions,
   CopilotConnection,
+  CopilotDiscoveredHook,
   CopilotEvent,
   CopilotPermissionAnswer,
   CopilotPreToolOutput,
@@ -75,6 +78,14 @@ export interface FakeCopilotOptions {
   readonly callDuringAbort?: FakeCopilotCall;
   /** `abort` rejects with this: the turn would not end. */
   readonly abortFailure?: string;
+  /** The hook rows the runtime's own discovery lists. */
+  readonly discoveredHooks?: readonly unknown[];
+  /** The sources the runtime's own discovery says it could not load. */
+  readonly discoveryErrors?: readonly string[];
+  /** The runtime's hook discovery rejects with this. */
+  readonly discoveryFailure?: string;
+  /** What the runtime's read of the machine's managed settings answers. */
+  readonly managedSettings?: { readonly settingsJson?: unknown; readonly errorMessage?: string };
 }
 
 /** What the fake recorded. */
@@ -92,6 +103,8 @@ export interface FakeCopilotRecord {
   readonly answers: { toolCallId: string; kind: string; answer: CopilotPermissionAnswer }[];
   readonly hookAnswers: { toolCallId: string; answer: CopilotPreToolOutput | undefined }[];
   readonly lifecycle: string[];
+  /** Each hook discovery asked of a client, by its parameters. */
+  readonly discoveries: { excludeHostHooks?: boolean }[];
   /** Exit the runtime process, as if it died. */
   exit(code: number): void;
   /** Send one event to the live session, as the runtime would. */
@@ -139,6 +152,7 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
     answers: [],
     hookAnswers: [],
     lifecycle: [],
+    discoveries: [],
     exit(code) {
       for (const listener of exitListeners.splice(0)) listener(code);
     },
@@ -376,6 +390,24 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
           record.forked.push(params.sessionId);
           return Promise.resolve({ sessionId: `${params.sessionId}-fork` });
         },
+      },
+      hooks: {
+        discover: (params: {
+          excludeHostHooks?: boolean;
+        }): ReturnType<CopilotClient['rpc']['hooks']['discover']> => {
+          record.discoveries.push(params);
+          if (options.discoveryFailure !== undefined) {
+            return Promise.reject(new Error(options.discoveryFailure));
+          }
+          return Promise.resolve({
+            hooks: (options.discoveredHooks ?? []) as readonly CopilotDiscoveredHook[],
+            errors: options.discoveryErrors ?? [],
+          });
+        },
+      },
+      managedSettings: {
+        read: (): ReturnType<CopilotClient['rpc']['managedSettings']['read']> =>
+          Promise.resolve(options.managedSettings ?? {}),
       },
     };
 

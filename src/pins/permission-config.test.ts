@@ -135,6 +135,9 @@ const MODE_MODULES = [
  *   host only reads (the mode, the approve-all grants, the allowed paths); it sets `manual` once, through
  *   the session's configuration at create. A later setter called through that namespace is a new carrier,
  *   and comes back to this pin.
+ * - The same seam declares the client RPC's `managedSettings` namespace, of which this host calls `read`
+ *   alone: what the machine's managed settings hold, asked in the look for a policy hook. It hands the
+ *   runtime no settings.
  * - The rules this host writes for an opencode session, in its configuration and at its create, are carried
  *   under `permissions`, and they are `* * ask` followed by denials alone: each sends a call to this host's
  *   gate or refuses a tool this host turns off, so none can answer one with an allow. The seam's structural
@@ -148,6 +151,7 @@ const NOT_OPTIONS: readonly { readonly file: string; readonly option: string }[]
   { file: 'host/qwen-home.ts', option: 'permissions' },
   { file: 'host/qwen-process.ts', option: 'canUseTool' },
   { file: 'host/copilot-sdk.ts', option: 'permissions' },
+  { file: 'host/copilot-sdk.ts', option: 'managedSettings' },
   { file: 'host/opencode-home.ts', option: 'permissions' },
   { file: 'host/opencode-process.ts', option: 'permissions' },
   { file: 'host/opencode-sdk.ts', option: 'permissions' },

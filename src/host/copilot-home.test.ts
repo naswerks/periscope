@@ -11,7 +11,11 @@ import {
   COPILOT_TOKEN_LIFETIME_SECONDS,
   carryCopilotStateIn,
   carryCopilotStateOut,
+  copilotPolicyDetail,
+  copilotPolicyDirectories,
   copilotPolicyHooks,
+  copilotRuntimePolicyLook,
+  mergeCopilotPolicyLooks,
   copilotCanonicalPath,
   copilotReadBackProblem,
   copilotRuntimeEnv,
@@ -262,6 +266,16 @@ test('each session has a fresh home of its own, removed whole, with its caches p
     assert.notEqual(first.value.home, second.value.home);
     assert.equal(first.value.env['LOCALAPPDATA'], join(first.value.home, 'local'));
     assert.equal(first.value.env['APPDATA'], join(first.value.home, 'roaming'));
+    // The runtime's own cache variable, which it reads on every platform, names a directory in the home too.
+    assert.equal(first.value.env['COPILOT_CACHE_HOME'], join(first.value.home, 'cache'));
+    assert.ok(existsSync(join(first.value.home, 'cache')));
+    assert.equal(
+      copilotRuntimeEnv({ COPILOT_CACHE_HOME: '/the/operators/own', PATH: 'p' }, first.value.env)[
+        'COPILOT_CACHE_HOME'
+      ],
+      join(first.value.home, 'cache'),
+      "the runtime was not started with the home's cache directory",
+    );
     assert.ok(first.value.home.startsWith(join(base, 'sessions')));
     writeFileSync(join(first.value.home, 'settings.json'), '{}');
     assert.ok(first.value.remove().ok);
@@ -302,20 +316,141 @@ test("a closed session's state is kept for a resume, and a resume of a session w
     return Promise.resolve();
   }));
 
-test('the machine-wide policy hooks are named by file and by key', () =>
+test('the machine-wide policy hooks are named by file and by key, and a source that cannot be read is kept apart from one that holds none', () =>
   withTempDir('copilot-policy', async (programData) => {
-    assert.deepEqual(await copilotPolicyHooks({ programData }), []);
     const directory = join(programData, 'GitHub', 'Copilot', 'policy.d');
+    const none = { found: [], unread: [] };
+    assert.deepEqual(await copilotPolicyHooks({ directories: [directory] }), none, 'no directory');
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'hooks.json'), '{}');
     writeFileSync(join(directory, 'notes.txt'), 'x');
-    assert.deepEqual(await copilotPolicyHooks({ programData }), [join(directory, 'hooks.json')]);
+    assert.deepEqual(await copilotPolicyHooks({ directories: [directory] }), {
+      found: [join(directory, 'hooks.json')],
+      unread: [],
+    });
+    const key = 'HKLM\\Software\\Policies\\GitHub\\Copilot';
     assert.deepEqual(
-      await copilotPolicyHooks({ programData: null, registryHolds: () => Promise.resolve(true) }),
-      ['HKLM\\Software\\Policies\\GitHub\\Copilot'],
+      await copilotPolicyHooks({ directories: [], registryHolds: () => Promise.resolve(true) }),
+      { found: [key], unread: [] },
     );
     assert.deepEqual(
-      await copilotPolicyHooks({ programData: null, registryHolds: () => Promise.resolve(null) }),
-      [],
+      await copilotPolicyHooks({ directories: [], registryHolds: () => Promise.resolve(false) }),
+      none,
+      'a key that is not there holds none',
     );
+    assert.deepEqual(
+      await copilotPolicyHooks({ directories: [], registryHolds: () => Promise.resolve(null) }),
+      { found: [], unread: [key] },
+      'a key that could not be read was counted as holding none',
+    );
+    assert.deepEqual(
+      await copilotPolicyHooks({ directories: [], registryHolds: () => Promise.reject(new Error('x')) }),
+      { found: [], unread: [key] },
+    );
+    // A path that is there and is no directory to list is not one that holds none.
+    const listed = await copilotPolicyHooks({ directories: [join(directory, 'hooks.json', 'under')] });
+    assert.deepEqual(listed.found, []);
+    assert.ok(
+      listed.unread.length === 0 || /hooks\.json/.test(listed.unread[0] ?? ''),
+      listed.unread.join(' | '),
+    );
+    // A host with nowhere to look has read every source there is.
+    assert.deepEqual(await copilotPolicyHooks({ directories: [] }), none);
   }));
+
+test('the policy directories are the one the environment names and the one the runtime falls back to, on Windows alone', () => {
+  const fallback = 'C:\\ProgramData\\GitHub\\Copilot\\policy.d';
+  assert.deepEqual(copilotPolicyDirectories({ ProgramData: 'C:\\ProgramData' }, 'win32'), [fallback]);
+  assert.deepEqual(copilotPolicyDirectories({ PROGRAMDATA: 'c:\\programdata\\' }, 'win32'), [fallback]);
+  assert.deepEqual(copilotPolicyDirectories({ ProgramData: 'D:\\Data' }, 'win32'), [
+    'D:\\Data\\GitHub\\Copilot\\policy.d',
+    fallback,
+  ]);
+  assert.deepEqual(copilotPolicyDirectories({}, 'win32'), [fallback]);
+  assert.deepEqual(copilotPolicyDirectories({ ProgramData: 'C:\\ProgramData' }, 'linux'), []);
+  assert.deepEqual(copilotPolicyDirectories({}, 'darwin'), []);
+});
+
+test("the runtime's own account is read: a policy row is a source found, and what it could not load or answer is unread", () => {
+  const nothing = { answer: { hooks: [], warnings: [], errors: [] } };
+  assert.deepEqual(copilotRuntimePolicyLook(nothing, { answer: {} }), { found: [], unread: [] });
+  assert.deepEqual(
+    copilotRuntimePolicyLook(
+      {
+        answer: {
+          hooks: [
+            { hookType: 'preToolUse', origin: 'policy', source: 'policy.d/a.json', enabled: true },
+            { hookType: 'preToolUse', origin: 'policy', source: 'policy.d/a.json', enabled: true },
+            { hookType: 'postToolUse', origin: 'policy', enabled: true },
+            { hookType: 'preToolUse', origin: 'policy', source: 'off.json', enabled: false },
+            { hookType: 'preToolUse', origin: 'plugin', source: 'a-plugin', enabled: true },
+          ],
+          errors: ['registry policy: access denied'],
+        },
+      },
+      { answer: { settingsJson: { hooks: { preToolUse: [{ type: 'command' }] } } } },
+    ),
+    {
+      found: [
+        'policy.d/a.json (preToolUse hook)',
+        'a managed policy the runtime did not name (postToolUse hook)',
+        "the machine's managed Copilot settings",
+      ],
+      unread: ['a hook source the runtime could not load (registry policy: access denied)'],
+    },
+  );
+  // A call that failed, and an answer of a shape this host cannot read, are unread: neither is none.
+  for (const [discovered, managed, unread] of [
+    [{ failed: 'timed out' }, { answer: {} }, ["the runtime's own hook discovery (timed out)"]],
+    [
+      { answer: null },
+      { answer: {} },
+      ["the runtime's own hook discovery (an answer this host cannot read)"],
+    ],
+    [
+      { answer: { hooks: 'none' } },
+      { answer: {} },
+      ["the runtime's own hook discovery (an answer this host cannot read)"],
+    ],
+    [
+      { answer: { hooks: ['a-row'] } },
+      { answer: {} },
+      ["the runtime's own hook discovery (a row this host cannot read)"],
+    ],
+    [nothing, { failed: 'no such method' }, ["the machine's managed Copilot settings (no such method)"]],
+    [nothing, { answer: 7 }, ["the machine's managed Copilot settings (an answer this host cannot read)"]],
+    [
+      nothing,
+      { answer: { errorMessage: 'not valid JSON' } },
+      ["the machine's managed Copilot settings (not valid JSON)"],
+    ],
+  ] as const) {
+    assert.deepEqual(copilotRuntimePolicyLook(discovered, managed), { found: [], unread });
+  }
+  // Control: managed settings that hold no hook are no source of one.
+  assert.deepEqual(
+    copilotRuntimePolicyLook(nothing, { answer: { settingsJson: { telemetry: false, hooks: {} } } }),
+    { found: [], unread: [] },
+  );
+});
+
+test('what a look says of the session: nothing when every source read and none holds a hook, else what was found and what could not be read', () => {
+  assert.equal(copilotPolicyDetail({ found: [], unread: [] }), null);
+  assert.equal(
+    copilotPolicyDetail({ found: ['a.json'], unread: [] }),
+    'machine-wide Copilot policy hooks run in every session whatever its own settings say: a.json',
+  );
+  assert.match(
+    copilotPolicyDetail({ found: [], unread: ['the key'] }) ?? '',
+    /^not every place a machine-wide Copilot policy hook can sit could be read, so one that runs in every session is not ruled out: the key$/,
+  );
+  assert.match(
+    copilotPolicyDetail(
+      mergeCopilotPolicyLooks(
+        { found: ['a.json'], unread: ['the key'] },
+        { found: ['a.json', 'b'], unread: ['the key'] },
+      ),
+    ) ?? '',
+    /say: a\.json, b; not every place .* is not ruled out: the key$/,
+  );
+});

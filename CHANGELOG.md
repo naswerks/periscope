@@ -192,6 +192,11 @@ frame it sends decodes unchanged.
   not hold is refused with the new reason `copilot-gate-not-active`. Mid-session the gate names
   `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call` and `gate-mode-widened` with Copilot's
   meanings ([gate.md](docs/gate.md)); a machine-wide policy hook is named `gate-hook-foreign` at the open.
+  The look asks the runtime itself which hooks it finds, on every platform, beside the host's own read
+  of the Windows policy directory and key, and a source that could not be read is named as one that may
+  hold a hook, never counted as none. A session's home also holds the runtime's cache directory on
+  every platform (`COPILOT_CACHE_HOME`), so off Windows the runtime's caches no longer stay in the
+  operator's own.
 - Added: a new degrade, `gate-tool-unnamed`. A Copilot session is offered every built-in the runtime
   has, and one the host's tables do not name reached the gate as `other`, in no family, with nothing
   said. It is now named once per tool, when the session opens or at its first call. The session opens

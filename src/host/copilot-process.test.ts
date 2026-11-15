@@ -115,7 +115,7 @@ async function started(setup: Setup = {}): Promise<Started> {
       base,
       readInstall: () => ok(install),
       loadSdk: () => Promise.resolve(ok(sdk)),
-      policyHooks: () => Promise.resolve([]),
+      policyHooks: () => Promise.resolve({ found: [], unread: [] }),
       killTree: (pid) => {
         killed.push(pid);
         record.lifecycle.push('killTree');
@@ -649,11 +649,79 @@ test('a resume copies the kept state into the fresh home first; a fork forks it 
 
 test("a machine-wide policy hook is named at the open, and lowers the session's tier", async () => {
   const run = await started({
-    runtime: { policyHooks: () => Promise.resolve(['C:/ProgramData/GitHub/Copilot/policy.d/hooks.json']) },
+    runtime: {
+      policyHooks: () =>
+        Promise.resolve({ found: ['C:/ProgramData/GitHub/Copilot/policy.d/hooks.json'], unread: [] }),
+    },
   });
   await waitFor(() => opened(run), 'the open');
   assert.deepEqual(run.tier, ['gate-hook-foreign']);
   assert.match(run.raised[0]?.detail ?? '', /policy\.d\/hooks\.json/);
+  await closed(run);
+});
+
+test('a policy hook the runtime itself lists is named at the open, where this host reads no source of its own', async () => {
+  const run = await started({
+    fake: {
+      discoveredHooks: [
+        { hookType: 'preToolUse', origin: 'policy', source: '/etc/copilot/policy.json', enabled: true },
+        { hookType: 'preToolUse', origin: 'policy', source: '/etc/copilot/off.json', enabled: false },
+        { hookType: 'sessionStart', origin: 'user', source: 'the-user', enabled: true },
+      ],
+    },
+  });
+  await waitFor(() => opened(run), 'the open');
+  assert.deepEqual(run.record.discoveries, [{ excludeHostHooks: true }]);
+  assert.deepEqual(run.tier, ['gate-hook-foreign']);
+  const detail = run.raised.find((one) => one.name === 'gate-hook-foreign')?.detail ?? '';
+  assert.match(detail, /policy hooks run in every session/);
+  assert.match(detail, /\/etc\/copilot\/policy\.json \(preToolUse hook\)/);
+  assert.doesNotMatch(
+    detail,
+    /off\.json|the-user/,
+    'a row that is turned off, or is no policy row, was named',
+  );
+  await closed(run);
+});
+
+test('a policy source that could not be read is named as one that may hold a hook, never counted as none, and the session opens', async () => {
+  for (const [what, setup, words] of [
+    [
+      'the key this host reads',
+      {
+        runtime: { policyHooks: () => Promise.resolve({ found: [], unread: ['HKLM\\Software\\Policies'] }) },
+      },
+      /is not ruled out: HKLM\\Software\\Policies/,
+    ],
+    [
+      "the runtime's discovery fails",
+      { fake: { discoveryFailure: 'method not found' } },
+      /is not ruled out: the runtime's own hook discovery \(method not found\)/,
+    ],
+    [
+      'a source the runtime could not load',
+      { fake: { discoveryErrors: ['policy.d/broken.json: unexpected token'] } },
+      /a hook source the runtime could not load \(policy\.d\/broken\.json: unexpected token\)/,
+    ],
+    [
+      'managed settings the runtime could not read',
+      { fake: { managedSettings: { errorMessage: 'the settings file is not valid' } } },
+      /the machine's managed Copilot settings \(the settings file is not valid\)/,
+    ],
+  ] as const) {
+    const run = await started(setup);
+    await waitFor(() => opened(run), `the open (${what})`);
+    assert.deepEqual(run.tier, ['gate-hook-foreign'], what);
+    assert.match(run.raised.find((one) => one.name === 'gate-hook-foreign')?.detail ?? '', words, what);
+    await closed(run);
+  }
+});
+
+test('a machine where every source reads and none holds a policy hook names nothing', async () => {
+  const run = await started({ fake: { managedSettings: { settingsJson: { telemetry: false } } } });
+  await waitFor(() => opened(run), 'the open');
+  assert.deepEqual(run.tier, []);
+  assert.equal(run.raised.filter((one) => one.name === 'gate-hook-foreign').length, 0);
   await closed(run);
 });
 

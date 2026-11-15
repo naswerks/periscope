@@ -598,7 +598,8 @@ export const REFUSAL_REASONS = [
   // The gate over a runtime whose pre-tool hook answers `ask` for every call and whose permission
   // requests this host decides (Copilot): the first is a refusal. Its degrades are the names above:
   // `gate-hook-missing` (a request the hook did not ask for, a hook that failed, a call no decision
-  // covered), `gate-hook-foreign` (a hook this host did not install decides), `gate-unhooked-call` (a
+  // covered), `gate-hook-foreign` (a hook this host did not install decides, or a place a machine-wide
+  // policy hook can sit could not be read, so one is not ruled out), `gate-unhooked-call` (a
   // provider-hosted tool ran) and `gate-mode-widened` (a mode in which the runtime approves calls itself),
   // and one of its own, the last below.
   //

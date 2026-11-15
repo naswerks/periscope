@@ -18,7 +18,9 @@
  *   and none it turns off is offered;
  * - the environment a command runs in is the one this host composed: a marker reaches it, no credential
  *   name does;
- * - a write outside the session's roots is refused before it runs, and one inside a further worktree lands.
+ * - a write outside the session's roots is refused before it runs, and one inside a further worktree lands;
+ * - before any session, the runtime says which hooks it finds and what the machine's managed settings hold,
+ *   in the shape this host reads its policy hooks from.
  * Each skips, saying why, on a host with no runtime for its platform.
  */
 import test from 'node:test';
@@ -40,7 +42,7 @@ import { tempDir } from '../test-support/temp-dir.js';
 import type { AgentProcessRequest } from './agent-process.js';
 import { COPILOT_HOOK_REASON, createCopilotSessionGate } from './copilot-gate.js';
 import type { CopilotSessionGate } from './copilot-gate.js';
-import { copilotRuntimeEnv, createCopilotSessionHome } from './copilot-home.js';
+import { copilotRuntimeEnv, copilotRuntimePolicyLook, createCopilotSessionHome } from './copilot-home.js';
 import { copilotMcpServers } from './copilot-mcp.js';
 import { copilotSessionConfig, startCopilotProcess } from './copilot-process.js';
 import type {
@@ -775,7 +777,7 @@ async function adapterOn(dirs: Scratch): Promise<{
             CopilotClient: Watched as unknown as CopilotSdk['CopilotClient'],
           },
         }),
-      policyHooks: () => Promise.resolve([]),
+      policyHooks: () => Promise.resolve({ found: [], unread: [] }),
     },
     () => undefined,
     null,
@@ -832,6 +834,53 @@ async function startedIn(
   assert.ok(Number.isInteger(pid) && pid > 0, `no pid was written to ${pidFile}`);
   return pid;
 }
+
+test(
+  'before any session, signed in as nobody, the runtime says which hooks it finds and what the managed settings hold, in the shape this host reads',
+  { skip, timeout: 120_000 },
+  async () => {
+    assert.ok(INSTALL.ok);
+    const dirs = await scratch();
+    const loadedSdk = await sdk();
+    const made = createCopilotSessionHome(dirs.base);
+    assert.ok(made.ok);
+    const client = new loadedSdk.CopilotClient({
+      mode: 'empty',
+      useLoggedInUser: false,
+      baseDirectory: made.value.home,
+      workingDirectory: dirs.work,
+      logLevel: 'error',
+      connection: loadedSdk.RuntimeConnection.forStdio({
+        path: INSTALL.value.runtime,
+        env: copilotRuntimeEnv(scratchEnv(dirs), made.value.env),
+      }),
+    });
+    await client.start();
+    try {
+      const discovered = await client.rpc.hooks.discover({ excludeHostHooks: true });
+      const managed = await client.rpc.managedSettings.read();
+      const answered: { hooks: unknown; errors: unknown } = discovered;
+      assert.ok(Array.isArray(answered.hooks), JSON.stringify(discovered));
+      assert.ok(Array.isArray(answered.errors), JSON.stringify(discovered));
+      for (const hook of discovered.hooks) {
+        assert.equal(typeof hook.hookType, 'string', JSON.stringify(hook));
+        assert.equal(typeof hook.origin, 'string', JSON.stringify(hook));
+        assert.equal(typeof hook.enabled, 'boolean', JSON.stringify(hook));
+      }
+      assert.ok(typeof managed === 'object' && managed !== null, JSON.stringify(managed));
+      // Whatever this machine's policy holds, neither answer is one the look gives up on.
+      const look = copilotRuntimePolicyLook({ answer: discovered }, { answer: managed });
+      assert.deepEqual(
+        look.unread.filter((one) => /this host cannot read/.test(one)),
+        [],
+      );
+    } finally {
+      await client.forceStop().catch(() => undefined);
+      made.value.remove();
+      await removeScratch(dirs);
+    }
+  },
+);
 
 test(
   "the adapter's open proves itself on the runtime, and its close leaves nothing of the session alive, a command its shell still runs included",

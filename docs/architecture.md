@@ -417,7 +417,8 @@ control tier is `intercepted-with-residual` ([gate.md](gate.md), the Copilot gat
   `pins/copilot-sdk-confinement.test.ts` holds the SDK to a development dependency nothing ships or
   imports.
 - The base is the runner's own (`src/host/copilot-home.ts`): `sessions/<id>` is one session's fresh
-  home, its `COPILOT_HOME` and the `LOCALAPPDATA` and `APPDATA` it starts with, removed at close; a
+  home, its `COPILOT_HOME` and the `COPILOT_CACHE_HOME`, `LOCALAPPDATA` and `APPDATA` it starts with,
+  removed at close; a
   closed session's state is moved to `state/<session id>`, and a resume copies it back first. The
   runtime's environment is the session's spawn environment less every GitHub token and `COPILOT_`
   variable. The read at start (`readCopilotRuntime`, `src/host/copilot-runtime.ts`) reads the install's

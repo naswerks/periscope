@@ -596,10 +596,18 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   model's provider would have to hand out twice in the same turn; an id handed out again later is a new
   call.
 - **What no hook sees is named.** A tool the model's provider runs itself is named
-  `gate-unhooked-call`; a machine-wide policy hook (`%ProgramData%\GitHub\Copilot\policy.d` or the
-  `HKLM\Software\Policies\GitHub\Copilot` key), which runs whatever a session's settings say, is named
-  `gate-hook-foreign` at the open; a permission or agent mode the host did not set is named
-  `gate-mode-widened`.
+  `gate-unhooked-call`; a machine-wide policy hook, which runs whatever a session's settings say, is
+  named `gate-hook-foreign` at the open; a permission or agent mode the host did not set is named
+  `gate-mode-widened`. The look for a policy hook has two parts. On every platform the runtime is asked
+  which hooks it finds and what the machine's managed settings hold, before the session is made. On
+  Windows the host also reads the two places it knows one sits (`policy.d` under
+  `%ProgramData%\GitHub\Copilot` and under `C:\ProgramData\GitHub\Copilot`, and the
+  `HKLM\Software\Policies\GitHub\Copilot` key); off Windows it knows no such place, so the runtime's
+  own answer is the whole look there. A source that could not be read (a key, a directory, a document
+  the runtime could not load, a call it did not answer) is named the same way, as one that may hold a
+  hook, and is never counted as holding none. The session opens either way. The runtime's answer was
+  measured on the pinned runtime with no policy on the machine; a policy hook in it was not, since
+  planting one means writing the machine's own policy.
 - **A built-in the host does not know is named, not refused.** The session is offered every built-in
   the runtime has, less the three turned off. One the host's tables do not name has no kind but `other`
   and no local family, so neither the write limits nor the protected set read its input: what bounds it
