@@ -729,6 +729,50 @@ test(
   },
 );
 
+test(
+  "a model's call to a server's tool starts with the server and the tool stated, which is what its item is named from; driven by a stub model",
+  { skip, timeout: 180_000 },
+  async () => {
+    const dirs = await scratch();
+    const mcp = await fakeMcpHttp();
+    const servers = copilotMcpServers({ 'probe-srv': { type: 'http', url: mcp.url } });
+    assert.ok(servers.ok);
+    const stub = await stubModel((request) =>
+      request.messages.at(-1)?.role === 'tool'
+        ? { text: 'done' }
+        : { toolCalls: [{ id: 'call_mcp', name: 'probe-srv-echo', arguments: { text: 'hi' } }] },
+    );
+    const real = await openReal(dirs, {
+      servers: servers.value,
+      model: 'stub-model',
+      provider: { type: 'openai', wireApi: 'completions', baseUrl: stub.url, apiKey: 'placeholder' },
+    });
+    try {
+      await real.session.send({ prompt: 'call the server', mode: 'enqueue' });
+      const deadline = Date.now() + 120_000;
+      const idle = (): boolean =>
+        real.events.some((event) => event.type === 'session.idle' && event.agentId === undefined);
+      while (!idle() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.ok(idle(), `the run did not end; the stub saw ${stub.requests.length} request(s)`);
+      const begun = real.events.find(
+        (event) =>
+          event.type === 'tool.execution_start' &&
+          (event.data as { toolCallId?: string }).toolCallId === 'call_mcp',
+      )?.data as { toolName?: string; mcpServerName?: string; mcpToolName?: string } | undefined;
+      assert.ok(begun !== undefined, 'the call never started');
+      assert.equal(begun.toolName, 'probe-srv-echo');
+      assert.equal(begun.mcpServerName, 'probe-srv', JSON.stringify(begun));
+      assert.equal(begun.mcpToolName, 'echo', JSON.stringify(begun));
+      assert.equal(real.requests.find((request) => request.toolUseId === 'call_mcp')?.toolKind, 'mcp');
+    } finally {
+      await real.close();
+      await stub.close();
+      await mcp.close();
+      await removeScratch(dirs);
+    }
+  },
+);
+
 /** Whether a process is still running. */
 function alive(target: number): boolean {
   try {

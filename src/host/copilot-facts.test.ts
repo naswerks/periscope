@@ -362,6 +362,49 @@ test('the fill: a run is a turn from the prompt taken to session.idle, with the 
   assert.ok(end?.kind === 'turn' && end.status === 'completed' && end.itemId === 'session-1:run:1:end');
 });
 
+test("the fill: a server's tool is named by the server and the tool its start event states, whatever the spelling it was handed knows", () => {
+  // A spelling that knows no server's tools yet, as the first call to a server finds it.
+  const fill = new CopilotItemFill('session-1', { toolName: (name) => name });
+  const calls = [
+    event('user.message', { content: 'look it up' }),
+    event('tool.execution_start', {
+      toolCallId: 'call_1',
+      toolName: 'docs-site-read-page',
+      mcpServerName: 'docs-site',
+      mcpToolName: 'read-page',
+      arguments: { page: 1 },
+    }),
+    // The configured key is the server's name where the event carries both.
+    event('tool.execution_start', {
+      toolCallId: 'call_2',
+      toolName: 'docs-site-search',
+      mcpConfigServerName: 'docs-site',
+      mcpServerName: 'Docs Site',
+      mcpToolName: 'search',
+      arguments: { query: 'x' },
+    }),
+    // Control: a call that states no server keeps the spelling it was handed.
+    event('tool.execution_start', { toolCallId: 'call_3', toolName: 'view', arguments: { path: 'a' } }),
+    event('tool.execution_start', {
+      toolCallId: 'call_4',
+      toolName: 'docs-site-search',
+      mcpServerName: 'docs-site',
+      arguments: {},
+    }),
+  ]
+    .flatMap((message) => fill.fromMessage(message))
+    .filter((item) => item.kind === 'tool_call');
+  assert.deepEqual(
+    calls.map((item) => (item.kind === 'tool_call' ? `${item.toolName}:${item.toolKind}` : '')),
+    [
+      'mcp__docs-site__read-page:mcp',
+      'mcp__docs-site__search:mcp',
+      'view:file_read',
+      'docs-site-search:other',
+    ],
+  );
+});
+
 test('the fill: a call the gate refused is blocked; a run that errored fails with the error, and an aborted one is interrupted', () => {
   const fill = new CopilotItemFill('s', {
     toolName: (name) => (name === 'nas-read' ? 'mcp__nas__read' : name),

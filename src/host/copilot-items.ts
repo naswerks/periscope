@@ -117,7 +117,11 @@ export class CopilotItemFill implements ItemFill<CopilotMessage> {
         const id = copilotWord(data['toolCallId']);
         const name = copilotWord(data['toolName']);
         if (id === null || name === null) return [];
-        const spelled = this.#toolName(name);
+        // A server's tool is named by the server and the tool the event itself states; any other call by the
+        // spelling the decision requests carry.
+        const server = copilotWord(data['mcpConfigServerName']) ?? copilotWord(data['mcpServerName']);
+        const tool = copilotWord(data['mcpToolName']);
+        const spelled = server !== null && tool !== null ? `mcp__${server}__${tool}` : this.#toolName(name);
         const input = data['arguments'];
         return [
           {

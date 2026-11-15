@@ -608,7 +608,9 @@ the one this host decides.
 - **The MCP spelling.** Copilot names a server's tool `<server>-<tool>`, and a server's name and a
   tool's may each hold a hyphen. The gate maps the name to `mcp__<server>__<tool>` by the tools each
   attached server lists: exactly one pair that spells the name maps it. None, or more than one, keeps
-  Copilot's spelling, so a controller holds the call as a stranger's. It never splits on a hyphen.
+  Copilot's spelling, so a controller holds the call as a stranger's. It never splits on a hyphen. A
+  call's item needs no list: the event that starts the call states its server and its tool, and the
+  item is named `mcp__<server>__<tool>` from those, the first call to a server included.
 - **Copilot's tools in the local gate** (`COPILOT_TOOL_FAMILIES`): `create`, `edit` and
   `str_replace_editor` through the jail, with a relative path placed where the call runs
   (`resolvesWritesAgainstCallCwd`); every command of `str_replace_editor`, its `view` included, is held
