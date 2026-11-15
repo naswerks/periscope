@@ -753,7 +753,13 @@ over the link and without a further credential:
   `ANTHROPIC_API_KEY`, the agent CLI's session-service credentials and remote route
   (`CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`, `CLAUDE_BG_SESSION_CREDENTIAL`, `CLAUDE_CODE_REMOTE_SDK_URL`),
   its switch that lets dangerous `rm` commands run without a prompt in bypass mode
-  (`CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS`), Codex's home, model route, credentials and certificate authority (the eight
+  (`CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS`), its switches that each turn off one check it
+  guards a deletion or a command with (`CLAUDE_CODE_DISABLE_SUBSTITUTION_RM_PROMPT`,
+  `CLAUDE_CODE_DISABLE_INLINE_SHELL_RM_PROMPT`, `CLAUDE_CODE_DISABLE_MOUNTED_DRIVE_RM_PROMPT`,
+  `CLAUDE_CODE_DISABLE_POWERSHELL_CMD_RM_DENY`, `CLAUDE_CODE_DISABLE_EXPORTED_VARIABLE_PROMPT`), its
+  switches that answer a workspace trust check or turn one off (`CLAUDE_CODE_SANDBOXED`,
+  `CLAUDE_BG_WORKSPACE_TRUSTED`, `CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK`), the permission rules it
+  takes from a background session's environment (`CLAUDE_BG_SESSION_PERMISSION_RULES`), Codex's home, model route, credentials and certificate authority (the eight
   names [Codex sessions](#codex-sessions) lists), Qwen Code's own variables and the model routes it
   reads (the names [Qwen Code sessions](#qwen-code-sessions) lists), pi's own variables, its
   extension's configuration and the model routes it reads (the names [pi sessions](#pi-sessions)

@@ -74,8 +74,14 @@ frame it sends decodes unchanged.
   so no controller can set them. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses the
   start, by name.
 - Security: the env floor holds `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS`, the agent CLI's
-  switch that lets its dangerous `rm` commands run without a prompt in bypass mode, so no controller
-  can set it. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares it now refuses the start, by name.
+  switch that lets its dangerous `rm` commands run without a prompt in bypass mode, and nine more of
+  its switches, each of which its own code shows turning off a prompt, a refusal or a trust check: the
+  `rm` prompts (`CLAUDE_CODE_DISABLE_SUBSTITUTION_RM_PROMPT`, `CLAUDE_CODE_DISABLE_INLINE_SHELL_RM_PROMPT`,
+  `CLAUDE_CODE_DISABLE_MOUNTED_DRIVE_RM_PROMPT`), `CLAUDE_CODE_DISABLE_POWERSHELL_CMD_RM_DENY`,
+  `CLAUDE_CODE_DISABLE_EXPORTED_VARIABLE_PROMPT`, the trust switches (`CLAUDE_CODE_SANDBOXED`,
+  `CLAUDE_BG_WORKSPACE_TRUSTED`, `CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK`) and
+  `CLAUDE_BG_SESSION_PERMISSION_RULES`. No controller can set one. A `PERISCOPE_CONTROLLER_ENV_KEYS`
+  that declares one now refuses the start, by name.
 - Added: `parentId` on every conversation item (`AgentItem`), optional: the call that spawned the agent
   whose turn the item is from. A Claude subagent's messages now fill items, each naming its spawning
   call's `tool_use` id; an item of the session's own thread names none, which reads as null, so it is

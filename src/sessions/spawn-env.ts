@@ -82,6 +82,21 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'CLAUDE_CODE_REMOTE_SDK_URL',
   // The agent CLI's switch that lets its dangerous `rm` commands run without a prompt in bypass mode.
   'CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS',
+  // Its switches that each turn off one check it guards a deletion or a command with: the prompt for an
+  // `rm` whose target is a command's output, for one inside an inline script, for one on a mounted drive;
+  // the refusal of a `cmd` deletion run through PowerShell; and the prompt for a command an allow rule
+  // covers that reads an exported variable.
+  'CLAUDE_CODE_DISABLE_SUBSTITUTION_RM_PROMPT',
+  'CLAUDE_CODE_DISABLE_INLINE_SHELL_RM_PROMPT',
+  'CLAUDE_CODE_DISABLE_MOUNTED_DRIVE_RM_PROMPT',
+  'CLAUDE_CODE_DISABLE_POWERSHELL_CMD_RM_DENY',
+  'CLAUDE_CODE_DISABLE_EXPORTED_VARIABLE_PROMPT',
+  // Its switches that answer a workspace trust check with yes, or turn one off.
+  'CLAUDE_CODE_SANDBOXED',
+  'CLAUDE_BG_WORKSPACE_TRUSTED',
+  'CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK',
+  // The permission rules, allows among them, it takes for a background session from its environment.
+  'CLAUDE_BG_SESSION_PERMISSION_RULES',
   // The model route and the identity it uses: the endpoint, its token and headers, its socket, every
   // provider's base URL, region and project.
   'ANTHROPIC_*',
