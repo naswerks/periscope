@@ -311,6 +311,30 @@ test('the degrades the session events name, each once per key', () => {
   assert.match(run.raised[2]?.detail ?? '', /call_undecided/);
 });
 
+test('a mode a sub-agent reports is said of that sub-agent, by its id, and never of the session', () => {
+  const run = gate(allow);
+  const fromAgent = (type: string, data: Record<string, unknown>): CopilotEvent => ({
+    ...event(type, data),
+    agentId: 'agent-7',
+  });
+  run.built.observe(fromAgent('session.mode_changed', { newMode: 'autopilot', previousMode: 'interactive' }));
+  run.built.observe(fromAgent('session.permissions_changed', { mode: 'allow-all', previousMode: 'manual' }));
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-mode-widened', 'gate-mode-widened'],
+  );
+  for (const one of run.raised) {
+    assert.match(one.detail, /^A sub-agent of the Copilot session \(agent-7\) reports /, one.detail);
+  }
+  // The session's own report of the same mode is a second fact, said in the session's name.
+  run.built.observe(event('session.mode_changed', { newMode: 'autopilot', previousMode: 'interactive' }));
+  assert.equal(run.raised.length, 3);
+  assert.match(run.raised[2]?.detail ?? '', /^Copilot reports agent mode autopilot/);
+  // Control: an admitted mode is nothing to name, whoever reports it.
+  run.built.observe(fromAgent('session.mode_changed', { newMode: 'plan', previousMode: 'interactive' }));
+  assert.equal(run.raised.length, 3);
+});
+
 test('a decided call that ran raises nothing', async () => {
   const run = gate(allow);
   run.built.preToolUse(hooked('view', 'call_1'));

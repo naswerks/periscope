@@ -239,6 +239,20 @@ function recordOf(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/**
+ * Whose report an event is: the session's own, or a sub-agent's. A sub-agent's events carry its id, the
+ * session-scoped kinds among them, so a mode one of them reports is said of that sub-agent and never of
+ * the session.
+ */
+function whose(event: CopilotEvent): string {
+  return named(event.agentId) ? `A sub-agent of the Copilot session (${event.agentId})` : 'Copilot';
+}
+
+/** What an event's thread adds to a degrade's key: nothing for the session's own, the sub-agent's id for one of its. */
+function threadKey(event: CopilotEvent): string {
+  return named(event.agentId) ? `@${event.agentId}` : '';
+}
+
 /** Build one Copilot session's gate. */
 export function createCopilotSessionGate(options: CopilotSessionGateOptions): CopilotSessionGate {
   const raised = new Set<string>();
@@ -504,8 +518,8 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           if (named(mode) && mode !== COPILOT_ADMITTED_PERMISSION_MODE) {
             raise(
               'gate-mode-widened',
-              `Copilot reports permission mode ${mode}, in which it approves calls itself`,
-              `permission:${mode}`,
+              `${whose(event)} reports permission mode ${mode}, in which it approves calls itself`,
+              `permission:${mode}${threadKey(event)}`,
             );
           }
           return;
@@ -515,8 +529,8 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           if (named(mode) && !COPILOT_ADMITTED_AGENT_MODES.includes(mode)) {
             raise(
               'gate-mode-widened',
-              `Copilot reports agent mode ${mode}, which this host does not admit`,
-              `agent:${mode}`,
+              `${whose(event)} reports agent mode ${mode}, which this host does not admit`,
+              `agent:${mode}${threadKey(event)}`,
             );
           }
           return;

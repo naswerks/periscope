@@ -621,7 +621,10 @@ the one this host decides.
     which no hook sees.
   - `gate-mode-widened`: the runtime reports a permission mode other than `manual`, or an agent mode
     other than `interactive` and `plan`. Measured on the pinned runtime: in `allow-all` a call still
-    asks while the hook answers `ask`.
+    asks while the hook answers `ask`. A sub-agent's events carry its id, session-scoped kinds included
+    (measured: a sub-agent's `session.model_change` arrives under its id), so a mode a sub-agent reports
+    is named as that sub-agent's, by its id, and never as the session's. No sub-agent was seen to
+    report a mode on the pinned runtime.
   - `gate-tool-unnamed`: the runtime offers the session, or the model called, a built-in none of the
     three tables names (`COPILOT_TOOL_KINDS`, `COPILOT_OTHER_TOOLS`, `COPILOT_EXCLUDED_TOOLS`). The
     session opens all the same, and each call of that tool asks like any other, as kind `other` with no
