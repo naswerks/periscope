@@ -148,7 +148,8 @@ on POSIX does not create protection on Windows.
 The local gate matches on tool name, in four families (`DEFAULT_TOOL_FAMILIES`): writes are `Write`,
 `Edit`, `MultiEdit`, `NotebookEdit`; reads are `Read`, `NotebookRead`; searches are `Grep`, `Glob`;
 shells are `Bash`, `PowerShell`, `Monitor` (a `Monitor` call that watches a socket runs no command and
-is no shell call). An MCP tool arrives as `mcp__{server}__{tool}`, matches nothing, and
+is no shell call; it reaches your controller as `web`, and no other tool's call is read that way). An
+MCP tool arrives as `mcp__{server}__{tool}`, matches nothing, and
 gets no local opinion, so the decision escalates to your controller. That is fail-closed and correct.
 
 Within the families the credential-path denial is scoped, and the scope is what to review. Writes

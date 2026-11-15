@@ -16,7 +16,13 @@ import type { DecisionRequest } from './decision.js';
 import type { GateOutcome } from './outcome.js';
 import { gateTransitions } from './outcome.js';
 import { permissionHooks } from './gate.js';
-import { localGate } from './local.js';
+import {
+  CODEX_TOOL_FAMILIES,
+  COPILOT_TOOL_FAMILIES,
+  PI_TOOL_FAMILIES,
+  QWEN_TOOL_FAMILIES,
+  localGate,
+} from './local.js';
 
 const WORKSPACE = 'C:/repo';
 const CREDENTIALS = 'C:/Users/agent/.claude';
@@ -81,6 +87,30 @@ test('regression: a Monitor command is read as a shell command, so a push it wou
   );
   // A Monitor that watches a socket runs no command: no shell opinion, and not a missing command.
   assert.equal(gate(monitor({ ws: { url: 'wss://example.invalid/events' } })), null);
+  // Only Monitor watches a socket. Any other shell tool's call that carries one and no command has
+  // nothing to classify, and is refused as the missing command it is.
+  assert.equal(
+    gate(request({ toolName: 'Bash', toolInput: { ws: { url: 'wss://example.invalid/events' } } }))?.reason,
+    'shell-command-missing',
+  );
+  for (const [families, tool] of [
+    [CODEX_TOOL_FAMILIES, 'Bash'],
+    [COPILOT_TOOL_FAMILIES, 'powershell'],
+    [QWEN_TOOL_FAMILIES, 'monitor'],
+    [PI_TOOL_FAMILIES, 'bash'],
+  ] as const) {
+    const other = localGate({
+      workspaceRoot: WORKSPACE,
+      resolve: fakeResolve,
+      protectedPaths: [CREDENTIALS],
+      toolFamilies: families,
+    });
+    assert.equal(
+      other(request({ toolName: tool, toolInput: { ws: { url: 'wss://example.invalid/events' } } }))?.reason,
+      'shell-command-missing',
+      `${tool} with a socket and no command skipped every shell check`,
+    );
+  }
   // Control: with neither a command nor a socket it is the missing command it always was.
   assert.equal(gate(monitor({}))?.reason, 'shell-command-missing');
 });

@@ -16,7 +16,13 @@ import type { EscalationTransport } from './escalate.js';
 import { escalatingDecider } from './escalate.js';
 import { permissionHooks } from './gate.js';
 import { DEFAULT_TOOL_FAMILIES } from './local.js';
-import { CLAUDE_TOOL_KINDS, claudeShellDialect, claudeToolKind, watchesSocketOnly } from './tool-kind.js';
+import {
+  CLAUDE_TOOL_KINDS,
+  claudeShellDialect,
+  claudeToolKind,
+  isSocketWatch,
+  watchesSocketOnly,
+} from './tool-kind.js';
 
 /**
  * Each input type the agent SDK's `sdk-tools.d.ts` declares, the tool name a `PreToolUse` input
@@ -103,9 +109,16 @@ test('regression: a Monitor call that runs a command is a POSIX shell call, and 
   const watches = { description: 'events', timeout_ms: 60_000, ws: { url: 'wss://example.invalid/events' } };
   assert.equal(claudeToolKind('Monitor', runs), 'shell');
   assert.equal(claudeShellDialect('Monitor', runs), 'posix');
-  assert.equal(claudeToolKind('Monitor', watches), 'other');
+  assert.equal(claudeToolKind('Monitor', watches), 'web', 'a socket to an address the model chose');
   assert.equal(claudeShellDialect('Monitor', watches), null);
-  // Control: the socket reading belongs to the input, not to the name; a Bash call is never read as one.
+  // The socket watch is Monitor's alone: the same input on another shell tool is a shell call still.
+  assert.equal(claudeToolKind('Bash', watches), 'shell');
+  assert.equal(claudeShellDialect('Bash', watches), 'posix');
+  assert.equal(claudeToolKind('PowerShell', watches), 'shell');
+  assert.equal(isSocketWatch('Monitor', watches), true);
+  assert.equal(isSocketWatch('Bash', watches), false);
+  assert.equal(isSocketWatch('monitor', watches), false, "another runtime's tool of a like name is not it");
+  // Control: a call that runs a command is a shell call whatever its name.
   assert.equal(claudeToolKind('Bash', { command: 'ls' }), 'shell');
   assert.equal(watchesSocketOnly({ command: 'ls', ws: { url: 'wss://x' } }), false);
   assert.equal(watchesSocketOnly({}), false, 'an input naming neither is no socket watch');

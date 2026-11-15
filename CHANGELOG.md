@@ -59,8 +59,10 @@ frame it sends decodes unchanged.
 - Security: Claude's `Monitor` tool is a shell tool. It runs the command its input names, so the local
   gate reads that command as it reads `Bash`'s (a push, a protected path) and a decision request names
   it `shell` with the `posix` dialect; it reached the gate as `other` and its command was never read. A
-  `Monitor` call that watches a socket runs no command and is `other`. Which shell `Monitor` runs on a
-  Windows host whose shell tool is PowerShell is not measured.
+  `Monitor` call that watches a socket runs no command and is `web`, since it opens a connection to an
+  address the model chose. Only `Monitor` is read that way: a shell call of any other tool, on any
+  runtime, that carries a `ws` and no command is refused `shell-command-missing` as before this
+  release. Which shell `Monitor` runs on a Windows host whose shell tool is PowerShell is not measured.
 - Security: the env floor holds the agent CLI's session-service credentials and remote route,
   `CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`, `CLAUDE_BG_SESSION_CREDENTIAL` and `CLAUDE_CODE_REMOTE_SDK_URL`,
   so no controller can set them. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses the

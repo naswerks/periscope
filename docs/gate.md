@@ -333,7 +333,9 @@ A decider can hold one policy per kind across runtimes; `toolName` is unchanged 
 exactly which tool it is. The map names the shell, file and web tools and every `mcp__` tool; a tool
 it does not name is `other`, whatever its input carries, and never left without a kind. Claude's
 `Monitor` runs the command its input names, so it is `shell` and in the shell family; a `Monitor` call
-that watches a socket (`ws`, no `command`) runs none and is `other`. A shell call
+that watches a socket (`ws`, no `command`) runs none and is `web`: it opens a connection to an address
+the model chose. Only `Monitor` watches a socket; any other shell tool's call with a `ws` and no command,
+on any runtime, is a shell call with no command and is refused `shell-command-missing`. A shell call
 also carries `shellDialect` (`SHELL_DIALECTS`: `posix` or `powershell`), the grammar its command runs
 in: Claude's `Bash` and `Monitor` are `posix` and its `PowerShell` is `powershell` (which shell
 `Monitor` runs on a Windows host whose shell tool is PowerShell is not measured); Qwen Code's `run_shell_command`
