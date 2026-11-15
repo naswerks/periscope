@@ -674,8 +674,10 @@ hello says so ([gate.md](docs/gate.md), the opencode gate). What holds, and what
   agent's shell's: neither holds an `OPENCODE_` variable of yours, `NODE_OPTIONS`, or any variable of
   this host's but the further worktrees' paths.
 - **Nothing of yours is what a session runs from.** Each session's server runs in a fresh home of its own
-  under `PERISCOPE_OPENCODE_HOME`, with project configuration and the `.claude` folder off, its model
-  catalogue never fetched and opencode's own hosted models never offered, so your opencode directories
+  under `PERISCOPE_OPENCODE_HOME`, with project configuration and the `.claude` folder off and its model
+  catalogue never fetched (each by an option the server is created with), no update looked for (by the
+  session's configuration) and opencode's own hosted models never offered (by the one environment
+  switch the pinned SDK reads, `OPENCODE_DISABLE_FREE_MODELS`), so your opencode directories
   (their sign-ins, their settings, their sessions) and a repository's own opencode configuration are
   never read. Your opencode directories, opencode's machine-wide directory (which every opencode process
   reads and no setting turns off), and the whole runner base are in the protected set.

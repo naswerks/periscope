@@ -47,6 +47,7 @@ import type { AgentProcess, AgentProcessRequest } from './agent-process.js';
 import type { OpencodeEndpointRoute } from './opencode-endpoints.js';
 import { OpencodeFactLift } from './opencode-facts.js';
 import { createOpencodeSessionGate } from './opencode-gate.js';
+import { OPENCODE_SWITCHES } from './opencode-home.js';
 import { startOpencodeProcess } from './opencode-process.js';
 import { connectOpencodeHost } from './opencode-relay.js';
 import type { OpencodeConnectOptions } from './opencode-relay.js';
@@ -57,6 +58,42 @@ import { descendantsOf, killProcessTree, readProcTable } from './stdio-rpc.js';
 import { nodePathResolver } from './paths.js';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
+
+/** Whether any file of the installed SDK's own packages, as JavaScript, holds `name`. */
+function sdkReads(name: string): boolean {
+  const seen = new Set<string>();
+  const holds = (directory: string, depth: number): boolean => {
+    if (depth > 12 || seen.has(directory)) return false;
+    seen.add(directory);
+    let entries: string[];
+    try {
+      entries = readdirSync(directory);
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      const path = join(directory, entry);
+      if (entry.endsWith('.js')) {
+        if (readFileSync(path, 'utf8').includes(name)) return true;
+      } else if (!entry.includes('.') && holds(path, depth + 1)) return true;
+    }
+    return false;
+  };
+  return holds(join(PACKAGE_ROOT, 'node_modules', '@opencode', 'sdk'), 0);
+}
+
+test(
+  'every switch the host process starts with is one the installed SDK reads, so none of them only looks like a setting',
+  { skip: readOpencodeInstall(PACKAGE_ROOT).ok ? false : 'no opencode SDK in the development install' },
+  () => {
+    for (const name of Object.keys(OPENCODE_SWITCHES)) {
+      assert.ok(sdkReads(name), `${name} is set for the host process and no file of the SDK reads it`);
+    }
+    // Control: the search finds nothing for a name the SDK never had.
+    assert.equal(sdkReads('OPENCODE_DISABLE_NOTHING_OF_THE_KIND'), false);
+  },
+);
+
 const NODE = nodeCanRunOpencode();
 const INSTALL = readOpencodeInstall(PACKAGE_ROOT);
 const skip =

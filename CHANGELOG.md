@@ -65,6 +65,10 @@ frame it sends decodes unchanged.
   whole line; refused, the call fails with the refusal's words and never runs. A call allowed there is
   asked about once: the requests it then raises are held to the host's own gate alone. The read-back
   admits that one plugin, by its id and its source.
+- Fixed: an opencode host process is started with the one environment switch the pinned SDK reads,
+  `OPENCODE_DISABLE_FREE_MODELS`. Four more were set that no file of the SDK reads; they did nothing and
+  are gone, and the documents say what turns each of those things off (an option the server is created
+  with, or the session's configuration).
 - Fixed: an approval an opencode session's server takes from an answer this host did not give is named
   `gate-mode-widened` when the host is still deciding that request too, and the wait ends; it was named
   only when no decision was pending. An answer sent for a request the server had already settled (one

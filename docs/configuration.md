@@ -696,9 +696,11 @@ using`), which Node 22 cannot parse, so on Node 22 the SDK cannot load at all. T
   `dist/host/opencode-host.js`, started with this host's own Node, with no shell and no window, and spoken
   to over its stdio. It opens no port. Its environment is written whole: the session's spawn environment
   without any `OPENCODE_` variable, `NODE_OPTIONS` or variable of this host's but `PERISCOPE_WORKTREE_*`,
-  its home and data, configuration, cache and state directories inside the session's home, and the switches
-  that keep opencode from fetching its model catalogue, offering its own hosted models, reading a project's
-  configuration or a `.claude` folder, or looking for an update.
+  its home and data, configuration, cache and state directories inside the session's home, and the one
+  switch the pinned SDK reads, `OPENCODE_DISABLE_FREE_MODELS`, which keeps opencode's own hosted models
+  from being offered. What keeps it from fetching its model catalogue, and from reading a project's
+  configuration or a `.claude` folder, is an option the server is created with; what keeps it from
+  looking for an update is the session's configuration.
 - **The home is the runner's own.** Each session runs with a fresh home under `<base>/sessions`, so the
   operator's own opencode directories (their sign-ins, their settings, their sessions) are never what a
   session runs from. The home is removed when the session closes; its database moves to

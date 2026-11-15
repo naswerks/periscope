@@ -208,15 +208,14 @@ export function isStrippedOpencodeVariable(name: string): boolean {
 }
 
 /**
- * The switches the host process starts with: no catalogue fetched, none of opencode's own free hosted models
- * offered, no project configuration, no `.claude` folder read, no update looked for.
+ * The one switch the host process starts with: none of opencode's own free hosted models offered. It is the
+ * only variable of its kind the pinned SDK reads. The rest of the posture is not the environment's: the
+ * catalogue is not fetched, and a project's configuration and a `.claude` folder are not read, by the options
+ * the server is created with (`opencode-host.ts`), and no update is looked for by the configuration
+ * (`opencodeConfig`).
  */
 export const OPENCODE_SWITCHES: Readonly<Record<string, string>> = {
-  OPENCODE_DISABLE_MODELS_FETCH: '1',
   OPENCODE_DISABLE_FREE_MODELS: '1',
-  OPENCODE_DISABLE_PROJECT_CONFIG: '1',
-  OPENCODE_DISABLE_CLAUDE_CODE: '1',
-  OPENCODE_DISABLE_AUTOUPDATE: '1',
 };
 
 /** `env` less every name `isStrippedOpencodeVariable` names, and less every name `over` sets, then `over`. */

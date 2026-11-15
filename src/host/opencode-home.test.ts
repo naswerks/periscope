@@ -124,6 +124,8 @@ test("the host process's environment is the spawn environment less those, inside
     ...home,
     ...OPENCODE_SWITCHES,
   });
+  // The one switch the pinned SDK reads, and no name it does not.
+  assert.deepEqual(OPENCODE_SWITCHES, { OPENCODE_DISABLE_FREE_MODELS: '1' });
   const shell = opencodeShellEnv(spawn);
   assert.deepEqual(shell, {
     PATH: 'p',
