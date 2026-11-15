@@ -219,6 +219,11 @@ frame it sends decodes unchanged.
   hold a hook, never counted as none. A session's home also holds the runtime's cache directory on
   every platform (`COPILOT_CACHE_HOME`), so off Windows the runtime's caches no longer stay in the
   operator's own.
+- Fixed: a state transition always fits a frame. A cause's `detail` was unbounded, and a failure whose
+  own words ran past a frame made its transition one the codec refused, so the `errored` that carried
+  it never arrived. Such a detail is now cut by as much as the transition is over and says it was cut;
+  a transition that fits is sent as before.
+- Fixed: a text or a word a fact carries is never cut inside a character that takes two code units.
 - Fixed, in a Copilot session:
   - a degrade past the 4096 a session's state lane keeps reaches the host's log, each time it occurs;
     it was dropped before anything heard of it;

@@ -66,6 +66,7 @@ import type {
   WorkspaceReleaseEntry,
   WorkspaceReleaseEntryResult,
 } from '../control/frames.js';
+import { fitTransition } from '../control/transition-budget.js';
 import {
   WORKSPACE_PAGE_SIZE,
   hostConfigureResult,
@@ -3606,7 +3607,7 @@ export class PeriscopeHost {
       cause: { kind: 'refusal', event: refused.reason, detail: refused.detail },
       where,
     };
-    const sent = this.#link.send(sessionKey, stateTransitionUpdate(transition));
+    const sent = this.#link.send(sessionKey, stateTransitionUpdate(fitTransition(transition)));
     if (!sent.ok) this.#report({ kind: 'refusal', refusal: sent.refusal, sessionKey });
   }
 

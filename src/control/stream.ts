@@ -76,6 +76,7 @@ import {
 } from './frames.js';
 import { fitAgentItem } from './item-budget.js';
 import { laneFor } from './stream-routing.js';
+import { fitTransition } from './transition-budget.js';
 
 /**
  * Where frames go. Structural rather than `ControllerLink` so the forwarder can be exercised with
@@ -191,7 +192,7 @@ function forwardWith<M>(options: ForwardSessionOptions<M>, binding: MessageBindi
 
   // Every transition this session records, whichever lane produced it. See this file's header.
   const dropTransitions = observer.machine.onTransition((transition) =>
-    emit(stateTransitionUpdate(transition)),
+    emit(stateTransitionUpdate(fitTransition(transition))),
   );
 
   /**

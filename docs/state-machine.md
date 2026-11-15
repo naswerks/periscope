@@ -84,7 +84,10 @@ two are not symmetric.
   `RefusalReason`; a transition that cannot name its cause does not compile.
 - `refusal` is the sixth kind because a denial and an outage cannot be told apart with five: a deny
   is `control/permission_denied`, an outage is `refusal/permission-decision-unavailable`, different
-  in kind and in event, never only in prose. `detail` is for people and is never branched on.
+  in kind and in event, never only in prose. `detail` is for people and is never branched on. It is
+  sent whole where the transition fits a frame. A transition that would not fit (a failure whose own
+  words run past a frame, most often on `errored`) has its detail cut by as much as it is over and
+  ends ` [cut to fit a frame]`, so the transition itself always arrives.
 - `agent-event` is the seventh: an event a runtime other than Claude reported in its own vocabulary,
   named `{runtime}:{native name}`. Codex's are `codex:` and the notification's method, one per
   notification `CODEX_COVERAGE` wires (`AGENT_EVENTS`); an item's kind rides `detail`, never the
