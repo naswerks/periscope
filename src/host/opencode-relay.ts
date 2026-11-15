@@ -70,6 +70,12 @@ export interface OpencodeConnectOptions {
   readonly gatedTools?: readonly string[];
   /** Decides one held call before it runs. Absent, every held call is refused. */
   readonly onHeldCall?: (call: OpencodeHeldCall) => Promise<OpencodeHeldAnswer>;
+  /** Told each call the server begins to run without holding it: the tool, the session and the call's id. */
+  readonly onBegan?: (call: {
+    readonly tool: string;
+    readonly sessionID: string;
+    readonly callId: string;
+  }) => void;
   /** The server's stream ended while the process lives, with why. */
   readonly onStreamEnd: (detail: string) => void;
   readonly onExit: (exit: ChildExit) => void;
@@ -106,6 +112,13 @@ export const connectOpencodeHost: ConnectOpencode = async (options) => {
       if (method === 'event') {
         const event = params['event'];
         if (typeof event === 'object' && event !== null && !Array.isArray(event)) options.onEvent(event);
+      } else if (method === 'began') {
+        const tool = params['tool'];
+        const sessionID = params['sessionID'];
+        const callId = params['callID'];
+        if (typeof tool === 'string' && typeof sessionID === 'string' && typeof callId === 'string') {
+          options.onBegan?.({ tool, sessionID, callId });
+        }
       } else if (method === 'stream-ended') {
         options.onStreamEnd(typeof params['detail'] === 'string' ? params['detail'] : 'with no reason given');
       }

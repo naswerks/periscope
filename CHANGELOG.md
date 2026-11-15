@@ -65,6 +65,14 @@ frame it sends decodes unchanged.
   whole line; refused, the call fails with the refusal's words and never runs. A call allowed there is
   asked about once: the requests it then raises are held to the host's own gate alone. The read-back
   admits that one plugin, by its id and its source.
+- Fixed: an opencode call that ran with no decision is named however it leaves. It was named only when
+  it succeeded; one that failed, was interrupted or was still running at the close was never named.
+  The pre-call hook now tells the host of every call the server begins, so each is named
+  `gate-hook-missing` when it leaves undecided, and a success the server states again to a resumed
+  session for a call an earlier process ran is not named as this one's.
+- Fixed: what the opencode gate keeps for a call is kept by its session and its id together. It was
+  kept by the bare call id, so a subagent's call that shared an id with one of the session's could be
+  decided on the other's input, or pass as decided when it was not.
 - Added: `outcome` on an ended `compaction` fact, optional, on protocol 20: `completed` or `failed`
   (`COMPACTION_OUTCOMES`), where the source that ended the compaction says how it came out. A failed
   compaction was reported `ended`, the same as one that worked, and the fact had no member to tell

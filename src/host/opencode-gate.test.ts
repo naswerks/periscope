@@ -250,6 +250,7 @@ test("a call allowed whole is not asked about again: what it asks afterwards is 
   assert.match(blocked.message ?? '', /credential-path-denied/);
   assert.equal(run.requests.length, 1);
   // Control: the same call id in another session, and the call once it has ended, are asked about.
+  run.built.observe(message('session.tool.called', { id: 'call_1', input: { command: 'ls' } }, 'ses_other'));
   await run.built.decide(asked({ id: 'per_4', sessionID: 'ses_other', action: 'shell', resources: ['ls'] }));
   assert.equal(run.requests.length, 2);
   run.built.observe(message('session.tool.success', { id: 'call_1', content: [] }));
@@ -438,15 +439,88 @@ test("a call the model's provider ran itself is named: gate-unhooked-call; a cal
     ['gate-unhooked-call'],
   );
   assert.match(run.raised[0]?.detail ?? '', /websearch/);
-  run.built.observe(message('session.tool.input.started', { id: 'call_bare', name: 'shell' }));
-  run.built.observe(message('session.tool.called', { id: 'call_bare', input: { command: '' } }));
+  run.built.observe(message('session.tool.input.started', { id: 'call_bare', name: 'todowrite' }));
+  run.built.observe(message('session.tool.called', { id: 'call_bare', input: {} }));
+  run.built.began({ tool: 'todowrite', sessionID: 'ses_main', callId: 'call_bare' });
   run.built.observe(message('session.tool.success', { id: 'call_bare' }));
   assert.equal(run.raised[1]?.name, 'gate-hook-missing');
-  assert.match(run.raised[1]?.detail ?? '', /call_bare \(shell\)/);
+  assert.match(run.raised[1]?.detail ?? '', /call_bare \(todowrite\) ran with no decision/);
   // Control: a call decided here ran with its request.
+  run.built.began({ tool: 'read', sessionID: 'ses_main', callId: 'call_ok' });
   await run.built.decide(asked({ id: 'per_ok', callId: 'call_ok' }));
   run.built.observe(message('session.tool.success', { id: 'call_ok' }));
   assert.equal(run.raised.length, 2);
+});
+
+test('a call that began with no decision behind it is named however it leaves: failed, interrupted, or still running at the close', () => {
+  const run = gate(allow);
+  const undecided = (): string[] =>
+    run.raised.filter((one) => one.name === 'gate-hook-missing').map((one) => one.detail);
+  run.built.began({ tool: 'todowrite', sessionID: 'ses_main', callId: 'call_failed' });
+  run.built.observe(message('session.tool.failed', { id: 'call_failed', error: { message: 'x' } }));
+  assert.match(undecided()[0] ?? '', /call_failed \(todowrite\) ran and failed with no decision/);
+
+  run.built.began({ tool: 'todowrite', sessionID: 'ses_main', callId: 'call_cut' });
+  run.built.began({ tool: 'todowrite', sessionID: 'ses_child', callId: 'call_other_session' });
+  run.built.observe(message('session.execution.interrupted', {}));
+  assert.equal(undecided().length, 2, "another session's running call was named at this one's interrupt");
+  assert.match(undecided()[1] ?? '', /call_cut \(todowrite\) was running when its turn was interrupted/);
+
+  run.built.closing();
+  assert.equal(undecided().length, 3);
+  assert.match(
+    undecided()[2] ?? '',
+    /call_other_session \(todowrite\) was still running when the session closed/,
+  );
+  // Each is said once, and a call that has left is not said again at the close.
+  run.built.closing();
+  assert.equal(undecided().length, 3);
+});
+
+test("a success for a call this process never saw begin is an earlier process's, stated again, and is not named; with no pre-call hook to tell, it is", () => {
+  const run = gate(allow);
+  run.built.observe(message('session.tool.success', { id: 'call_before', content: [] }));
+  run.built.observe(message('session.tool.failed', { id: 'call_before_failed', error: { message: 'x' } }));
+  assert.deepEqual(run.raised, [], "a call an earlier process ran was named as this one's");
+
+  const blind = gate(allow);
+  blind.built.preCallHook(false);
+  blind.built.observe(message('session.tool.input.started', { id: 'call_1', name: 'todowrite' }));
+  blind.built.observe(message('session.tool.success', { id: 'call_1', content: [] }));
+  assert.deepEqual(
+    blind.raised.map((one) => one.name),
+    ['gate-hook-missing'],
+  );
+  // A failure with nothing known to have begun names nothing: a call the runtime rejected never ran.
+  blind.built.observe(message('session.tool.failed', { id: 'call_2', error: { message: 'bad input' } }));
+  assert.equal(blind.raised.length, 1);
+});
+
+test('what is kept for a call is kept by its session and its id: a call id two sessions share is two calls', async () => {
+  const run = gate(allow);
+  // Each session announces its own input under the same id; each request is read with its own.
+  run.built.observe(message('session.tool.called', { id: 'call_1', input: { path: 'main.ts' } }));
+  run.built.observe(
+    message('session.tool.called', { id: 'call_1', input: { path: 'child.ts' } }, 'ses_child'),
+  );
+  await run.built.decide(asked({ id: 'per_main', callId: 'call_1' }));
+  assert.deepEqual(
+    run.requests[0]?.toolInput,
+    { path: 'main.ts' },
+    "one session's call was decided on another's input",
+  );
+  // The main session's call was decided; the subagent's call of the same id was not, and ran.
+  run.built.began({ tool: 'todowrite', sessionID: 'ses_child', callId: 'call_1' });
+  run.built.observe(message('session.tool.success', { id: 'call_1', content: [] }, 'ses_child'));
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-hook-missing'],
+    "a decision for one session's call hid another session's undecided call of the same id",
+  );
+  // Control: the decided one is not named.
+  run.built.began({ tool: 'read', sessionID: 'ses_main', callId: 'call_1' });
+  run.built.observe(message('session.tool.success', { id: 'call_1', content: [] }));
+  assert.equal(run.raised.length, 1);
 });
 
 test('a degrade is raised once per name and key', () => {

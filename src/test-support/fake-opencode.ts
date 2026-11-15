@@ -44,6 +44,8 @@ export interface FakeOpencodeCall {
   readonly session?: string;
   /** The model's provider ran it itself: it raises no request and the server does not run it. */
   readonly executed?: boolean;
+  /** It runs until the test lets it go on (`release`), as a call that takes a long while does. */
+  readonly waits?: boolean;
 }
 
 export interface FakeOpencodeOptions {
@@ -75,6 +77,8 @@ export interface FakeOpencodeOptions {
   readonly pid?: number | null;
   /** A call the server holds as soon as it is created, before the adapter has opened its session. */
   readonly heldAtConnect?: FakeOpencodeCall;
+  /** Handed the function that lets a call that `waits` go on. */
+  readonly release?: (resume: () => void) => void;
 }
 
 /** What the fake recorded. */
@@ -228,6 +232,9 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
         });
         return;
       }
+    } else live?.onBegan?.({ tool: call.name, sessionID: session, callId: call.id });
+    if (call.waits === true) {
+      await new Promise<void>((resolve) => options.release?.(resolve));
     }
     const requests = call.requests ?? [{ action: call.name }];
     let index = 0;

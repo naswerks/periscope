@@ -767,10 +767,16 @@ every request they raise.
 - **What the reused names mean on opencode.** Each is raised once per call, request or session:
   - `gate-unhooked-call`: a tool the model's provider ran itself (`session.tool.called` with
     `executed: true`), which raises no request.
-  - `gate-hook-missing`: a call that ran with no decision of this host's behind it
-    (`session.tool.success` for a call it decided nothing on), or, at the open, this host's pre-call
-    gate missing from the server's plugins, without which a shell line that names no command is such a
-    call.
+  - `gate-hook-missing`: a call the server began to run with no decision of this host's behind it. The
+    pre-call hook tells this host of every call the server begins (a held one by asking, any other by
+    a notification), so such a call is named however it leaves: when it succeeds, when it fails, when
+    its turn is interrupted, and at the close if it is still running. A success for a call this process
+    never saw begin is one an earlier process ran, which the server states again to a resumed session,
+    and is not named. At the open the same name says this host's pre-call gate is missing from the
+    server's plugins; then no call is known to have begun, and a call is named on its success alone, as
+    a shell line that names no command would be. What is kept for a call (its input, whether it was
+    decided, whether it runs) is kept by its session and its id together, since one server runs a
+    session and its subagents and a provider may hand two of them the same call id.
   - `gate-mode-widened`: the rules of one of the session's sessions changed after the open and are no
     longer this host's (`session.permissions`), or an answer this host never gave approved a request
     (`permission.replied`).

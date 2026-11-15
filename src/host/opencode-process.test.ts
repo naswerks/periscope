@@ -765,6 +765,40 @@ test('a call held before the open is refused when the open is not proven, and no
   assert.match((await run.ended)?.message ?? '', /opencode-gate-not-active/);
 });
 
+test('a call that ran with no request and no decision is named when it ends, and one still running is named at the close', async () => {
+  let hold: () => void = () => undefined;
+  const run = await started({
+    fake: {
+      calls: (prompt) =>
+        prompt === 'ends'
+          ? [{ id: 'call_quiet', name: 'todowrite', input: {}, requests: [] }]
+          : [{ id: 'call_stuck', name: 'todowrite', input: {}, requests: [], waits: true }],
+      release: (resume) => {
+        hold = resume;
+      },
+    },
+  });
+  try {
+    await until(() => opened(run), 'the open');
+    run.process.prompt('ends');
+    await until(() => eventsOf(run, 'session.execution.succeeded').length === 1, 'the first run');
+    assert.deepEqual(
+      run.raised.map((one) => one.name),
+      ['gate-hook-missing'],
+    );
+    assert.match(run.raised[0]?.detail ?? '', /call_quiet \(todowrite\) ran with no decision/);
+    run.process.prompt('stays');
+    await until(() => eventsOf(run, 'session.tool.called').length === 2, 'the second call');
+  } finally {
+    await closed(run);
+    hold();
+  }
+  assert.match(
+    run.raised[1]?.detail ?? '',
+    /call_stuck \(todowrite\) was still running when the session closed/,
+  );
+});
+
 test("the pre-call gate missing from the server's plugins is named at the open, and the session opens", async () => {
   const run = await started({
     fake: { plugins: [{ id: 'opencode.tool.shell', source: { type: 'builtin' } }] },

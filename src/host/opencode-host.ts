@@ -19,7 +19,8 @@
  * the `open` request named (`gatedTools`), the hook sends this host a `gate` request (the tool, the session,
  * the call's id, its input) and waits for the answer: allowed, the call runs; refused, the hook rejects with
  * the answer's words and the call fails with them, its tool never run. The hook has no deadline of its own:
- * it waits as long as this host takes to decide, and ends refused when this process's stdin ends.
+ * it waits as long as this host takes to decide, and ends refused when this process's stdin ends. A call of
+ * any other tool is not held: the hook sends a `began` notification naming it and lets it go on.
  *
  * It writes nothing to its stdout but the protocol: whatever the SDK would log goes to stderr.
  */
@@ -161,7 +162,15 @@ export function serveOpencodeHost(io: OpencodeHostIo): Promise<void> {
     id: OPENCODE_GATE_PLUGIN,
     setup: async (context) => {
       await context.tool.hook('execute.before', async (event) => {
-        if (!gatedTools.has(event.tool)) return;
+        if (!gatedTools.has(event.tool)) {
+          // Not held: this host is told the call began, and the call goes on at once.
+          send({
+            jsonrpc: '2.0',
+            method: 'began',
+            params: { tool: event.tool, sessionID: event.sessionID, callID: event.id },
+          });
+          return;
+        }
         const answer = await askGate(event);
         if (!answer.allow) throw new Error(answer.message);
       });

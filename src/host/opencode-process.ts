@@ -523,6 +523,7 @@ export function startOpencodeProcess(
       onEvent,
       gatedTools: OPENCODE_HELD_TOOLS,
       onHeldCall,
+      onBegan: (call) => gate.began(call),
       onStreamEnd: (detail) => {
         if (!closed) fail(`runtime-unavailable: the opencode server's event stream ended (${detail})`);
       },
@@ -593,6 +594,7 @@ export function startOpencodeProcess(
     });
     if (unread !== null) return refuseOpen('opencode-gate-not-active', unread);
     if (!read.plugins.some(isOpencodeGatePlugin)) {
+      gate.preCallHook(false);
       // Named, and the session opens: every call that raises a request is still decided.
       gate.raise(
         'gate-hook-missing',
@@ -633,6 +635,11 @@ export function startOpencodeProcess(
       held.length = 0;
       // A call still waiting on the open's proof ends refused: the session never opened, or is closing.
       settleProven(false);
+      try {
+        gate?.closing();
+      } catch {
+        // A degrade the gate failed to name must not stop the close.
+      }
       decisions.abort();
       const live = connection;
       connection = null;

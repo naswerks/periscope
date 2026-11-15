@@ -697,8 +697,9 @@ hello says so ([gate.md](docs/gate.md), the opencode gate). What holds, and what
   time (from a variable, a substitution, an encoded string) is your controller's to refuse, and the
   controller is shown the whole line.
 - **What runs undecided is named.** A tool the model's provider runs itself is named `gate-unhooked-call`;
-  a call that ran with no request for it, `gate-hook-missing` (the same name says, at the open, that the
-  host's pre-call gate is not among the server's plugins); rules that are no longer this host's, or an
+  a call the server began with no decision of the host's behind it, `gate-hook-missing`, whether it
+  succeeded, failed, was interrupted or was still running at the close (the same name says, at the open,
+  that the host's pre-call gate is not among the server's plugins); rules that are no longer this host's, or an
   approval it never gave, `gate-mode-widened`; a plugin that is neither the runtime's own nor the host's
   gate, loaded after the open, `gate-foreign-extension`.
 - **Tools that cannot be decided are turned off.** Code Mode's `execute`, `question`, image generation,

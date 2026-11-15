@@ -29,9 +29,16 @@
  * that session still waiting, with the same words: each such decision still pending here is ended, recorded
  * as refused, and never answered twice.
  *
+ * What is kept for a call (its announced input, whether it was decided, whether it runs) is kept by its
+ * session and its id together: one server runs the session and its subagents, and a provider may hand two of
+ * them the same call id.
+ *
  * What it names, each a degrade raised once per (name, key):
  * - `gate-unhooked-call`: a tool the model's provider ran itself (`executed: true`), which raises no request;
- * - `gate-hook-missing`: a call that ran with no request for it, such as a shell line naming no command;
+ * - `gate-hook-missing`: a call the server began to run (`began`, from its pre-call hook) that this host
+ *   decided nothing about, named when it succeeds, when it fails, when its turn is interrupted and when the
+ *   session closes with it still running. A success for a call this process never saw begin is one an earlier
+ *   process ran, stated again to a resumed session, and is not named;
  * - `gate-mode-widened`: the rules of one of the session's sessions are no longer this host's, or an answer
  *   this host never gave approved a request.
  */
@@ -182,6 +189,19 @@ export interface OpencodeSessionGate {
   useShell(shell: string): void;
   /** Spells an action as the decision requests and the items carry it. */
   toolName(action: string): string;
+  /**
+   * Told each call the server begins to run that it does not hold for an answer: the tool, the session and
+   * the call's id, from the server's pre-call hook. A call that began and ends, is interrupted or is still
+   * running at the close with no decision of this host's behind it is named.
+   */
+  began(call: { readonly tool: string; readonly sessionID: string; readonly callId: string }): void;
+  /**
+   * Told whether the server's pre-call hook is this host's to hear from. Without it no call is known to
+   * have begun, so a call that succeeds with no decision behind it is named on its success alone.
+   */
+  preCallHook(loaded: boolean): void;
+  /** Told the session is closing: every call still running with no decision behind it is named. */
+  closing(): void;
   /** Ends every decision still pending for `sessionId` (its turn was interrupted), with why. */
   endPending(sessionId: string, why: string): void;
   /** A named degrade on the session's state lane, once per (name, key). */
@@ -235,8 +255,14 @@ function sameRules(read: readonly unknown[], expected: readonly OpencodeRule[]):
 /** Build one opencode session's gate. */
 export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): OpencodeSessionGate {
   const raised = new Set<string>();
+  // One server runs every session of this host's session, a subagent's among them, and a model's provider
+  // hands out call ids: what is kept for a call is kept by its session and its id together.
+  const callKey = (session: string, id: string): string => `${session}\u0000${id}`;
   const calls = new Map<string, KnownCall>();
   const decided = new Set<string>();
+  // Each call the server began to run, with its tool's name, until it ends.
+  const running = new Map<string, { readonly session: string; readonly id: string; readonly tool: string }>();
+  let hookLoaded = true;
   const answered = new Set<string>();
   const pending = new Map<string, { readonly sessionID: string; readonly controller: AbortController }>();
   const agentOf = new Map<string, string>();
@@ -266,17 +292,38 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
     set.add(id);
   };
 
-  const known = (id: string): KnownCall => {
-    let call = calls.get(id);
+  const known = (session: string, id: string): KnownCall => {
+    const key = callKey(session, id);
+    let call = calls.get(key);
     if (call === undefined) {
       if (calls.size >= MAX_KNOWN_CALLS) {
         const oldest = calls.keys().next().value;
         if (oldest !== undefined) calls.delete(oldest);
       }
       call = { name: null, input: null };
-      calls.set(id, call);
+      calls.set(key, call);
     }
     return call;
+  };
+
+  const runs = (session: string, id: string, tool: string): void => {
+    if (running.size >= MAX_KNOWN_CALLS) {
+      const oldest = running.keys().next().value;
+      if (oldest !== undefined) running.delete(oldest);
+    }
+    running.set(callKey(session, id), { session, id, tool });
+  };
+
+  /** A call that began, by how it left, when this host decided nothing about it. */
+  const nameUndecided = (
+    call: { readonly session: string; readonly id: string; readonly tool: string | null },
+    how: string,
+  ): void => {
+    raise(
+      'gate-hook-missing',
+      `opencode call ${call.id}${call.tool === null ? '' : ` (${call.tool})`} ${how} with no decision of this host's behind it: no permission request was raised for it`,
+      callKey(call.session, call.id),
+    );
   };
 
   // The host's own gate, asked about each path the request names: a request about several files is checked
@@ -326,8 +373,6 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
   const toolName = (action: string): string =>
     isOpencodeBuiltin(action) ? action : opencodeMcpToolName(action, options.servers);
 
-  const callKey = (session: string, id: string): string => `${session}\u0000${id}`;
-
   // A shell call runs in the directory its input names, under the session's location when relative.
   const directoryOf = (toolKind: string, toolInput: unknown): string => {
     const workdir = toolKind === 'shell' ? opencodeWord(opencodeRecord(toolInput)['workdir']) : null;
@@ -362,7 +407,7 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
   const requestOf = (asked: OpencodeAsked): DecisionRequest => {
     const spelled = toolName(asked.action);
     const toolKind = opencodeToolKind(spelled);
-    const call = asked.callId === null ? undefined : calls.get(asked.callId);
+    const call = asked.callId === null ? undefined : calls.get(callKey(asked.sessionID, asked.callId));
     const announced = call?.input ?? null;
     const metadataInput = asked.metadata['input'];
     const toolInput =
@@ -389,7 +434,7 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
   return {
     runtime: OPENCODE_RUNTIME,
     async decide(asked, signal) {
-      if (asked.callId !== null) remember(decided, asked.callId);
+      if (asked.callId !== null) remember(decided, callKey(asked.sessionID, asked.callId));
       if (OPENCODE_DENIED_TOOLS.includes(asked.action)) {
         // Denied in every session's rules, so never offered; refused here as well, so rules the runtime loses
         // later cannot run one.
@@ -419,11 +464,12 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
       }
     },
     async decideHeld(held, signal) {
-      remember(decided, held.callId);
       const key = callKey(held.sessionID, held.callId);
+      remember(decided, key);
+      runs(held.sessionID, held.callId, held.tool);
       const request = heldRequestOf(held);
       // The held input is the call's own: a request the call raises afterwards is read with it.
-      known(held.callId).input = opencodeRecord(request.toolInput);
+      known(held.sessionID, held.callId).input = opencodeRecord(request.toolInput);
       const controller = new AbortController();
       const forward = (): void => controller.abort(signal?.reason);
       if (signal?.aborted === true) forward();
@@ -452,13 +498,14 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
         }
         case 'session.tool.input.started': {
           const id = opencodeWord(data['id']);
-          if (id !== null) known(id).name = opencodeWord(data['name']);
+          if (id !== null) known(opencodeWord(data['sessionID']) ?? '', id).name = opencodeWord(data['name']);
           return;
         }
         case 'session.tool.called': {
           const id = opencodeWord(data['id']);
           if (id === null) return;
-          const call = known(id);
+          const session = opencodeWord(data['sessionID']) ?? '';
+          const call = known(session, id);
           call.input = opencodeRecord(data['input']);
           // `executed` is the provider's: a call the model's provider ran itself, which the runtime does not run.
           if (data['executed'] === true) {
@@ -466,28 +513,43 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
             raise(
               'gate-unhooked-call',
               `the model's provider ran ${name} itself; no permission request is raised for a call the runtime does not run`,
-              id,
+              callKey(session, id),
             );
           }
           return;
         }
-        case 'session.tool.failed': {
-          const id = opencodeWord(data['id']);
-          const session = opencodeWord(data['sessionID']);
-          if (id !== null && session !== null) allowedHeld.delete(callKey(session, id));
-          return;
-        }
+        case 'session.tool.failed':
         case 'session.tool.success': {
           const id = opencodeWord(data['id']);
+          if (id === null) return;
+          const session = opencodeWord(data['sessionID']) ?? '';
+          const key = callKey(session, id);
+          const began = running.get(key);
+          running.delete(key);
+          allowedHeld.delete(key);
+          if (data['executed'] === true || decided.has(key)) return;
+          const tool = began?.tool ?? calls.get(key)?.name ?? null;
+          if (began !== undefined) {
+            nameUndecided(
+              { session, id, tool },
+              event.type === 'session.tool.success' ? 'ran' : 'ran and failed',
+            );
+            return;
+          }
+          // A call this process never saw begin: one an earlier process ran, whose end the server states again
+          // to a resumed session, where the pre-call hook is there to tell; and a call that ran, where it is not.
+          if (!hookLoaded && event.type === 'session.tool.success')
+            nameUndecided({ session, id, tool }, 'ran');
+          return;
+        }
+        case 'session.execution.interrupted': {
           const session = opencodeWord(data['sessionID']);
-          if (id !== null && session !== null) allowedHeld.delete(callKey(session, id));
-          if (id === null || data['executed'] === true || decided.has(id)) return;
-          const name = calls.get(id)?.name ?? null;
-          raise(
-            'gate-hook-missing',
-            `opencode ran call ${id}${name === null ? '' : ` (${name})`} with no permission request for it, so this host decided nothing; a shell line that names no command is one such call`,
-            id,
-          );
+          if (session === null) return;
+          for (const [key, call] of [...running]) {
+            if (call.session !== session) continue;
+            running.delete(key);
+            if (!decided.has(key)) nameUndecided(call, 'was running when its turn was interrupted,');
+          }
           return;
         }
         case 'session.permissions': {
@@ -537,6 +599,18 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
       shell = path;
     },
     toolName,
+    began(call) {
+      runs(call.sessionID, call.callId, call.tool);
+    },
+    preCallHook(loaded) {
+      hookLoaded = loaded;
+    },
+    closing() {
+      for (const [key, call] of [...running]) {
+        running.delete(key);
+        if (!decided.has(key)) nameUndecided(call, 'was still running when the session closed,');
+      }
+    },
     endPending(session, why) {
       for (const waiting of pending.values()) {
         if (waiting.sessionID === session) waiting.controller.abort(why);

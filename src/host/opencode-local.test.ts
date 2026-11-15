@@ -949,6 +949,19 @@ test(
         forked.requests.some((request) => request.toolUseId === 'call_fork_read'),
         "the forked session's call was never put to this host",
       );
+      // Every call of the three sessions was decided, and what the server states again to a resumed or a
+      // forked session of calls an earlier process ran is not named as a call that ran undecided here.
+      for (const [which, session] of [
+        ['the first session', first],
+        ['the resumed session', resumed],
+        ['the forked session', forked],
+      ] as const) {
+        assert.deepEqual(
+          session.raised.filter((one) => one.name === 'gate-hook-missing'),
+          [],
+          `${which} named a call as one this host decided nothing about`,
+        );
+      }
     } finally {
       await closed(forked);
       await stub.close();
