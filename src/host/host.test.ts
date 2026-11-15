@@ -824,9 +824,16 @@ test('regression: toolFamilies reaches the local gate, so an embedder-named MCP 
 const SESSION_TEMP =
   process.platform === 'win32' ? 'C:\\Users\\agent\\AppData\\Local\\Temp' : '/var/agent-temp';
 
+/**
+ * The directory the call runs in, in this platform's spelling as the temp folder is. The gate reads the
+ * rules a path is placed by from it, so a temp folder spelled for one system is named from a call running
+ * on the same one.
+ */
+const CALL_DIRECTORY = process.platform === 'win32' ? 'C:\\work' : '/work';
+
 /** One `Write` through the session's own gate, answered by the cause the host records for it. */
 async function writeThroughGate(request: AgentProcessRequest, filePath: string): Promise<void> {
-  await callHooks(request, preToolUse('Write', { file_path: filePath }));
+  await callHooks(request, { ...preToolUse('Write', { file_path: filePath }), cwd: CALL_DIRECTORY });
   await settle();
 }
 
