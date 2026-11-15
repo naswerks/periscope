@@ -11,7 +11,8 @@
  * session attached, which the open holds to be told apart in that form (`opencode-mcp.ts`), never by
  * splitting on an underscore. A name of no attached server keeps opencode's spelling, so a controller holds it
  * as a stranger's. Its input is the call's own, as the model sent it: an MCP request's `metadata.input`, else
- * the input the stream announced for the call (`session.tool.called`), else the request's resources. Each
+ * the input the stream announced for the call (`session.tool.called`), else what the request itself states: a
+ * search's pattern and the directory it searches, any other request's resources. Each
  * path the request names is checked by this host's own gate, one at a time, before anyone is asked.
  *
  * One call can ask more than once (a path outside the location asks `external_directory`, then its own
@@ -170,6 +171,24 @@ export function opencodeMcpToolName(action: string, servers: readonly string[]):
   if (found.length !== 1) return action;
   const server = found[0] ?? '';
   return `mcp__${server}__${action.slice(server.length + 1)}`;
+}
+
+/** The actions that search under a directory: their request names the pattern, and the directory beside it. */
+const SEARCH_ACTIONS: readonly string[] = ['glob', 'grep'];
+
+/**
+ * A call's input as its request states it, for a call whose input the stream never announced. A search's
+ * request names its pattern as its resource and the directory it searches in its metadata (`path`), so the
+ * input is read from both and the search is judged where it runs, never where a search that names no
+ * directory would. Any other request's resources stand in for its input.
+ */
+function unannouncedInput(asked: OpencodeAsked): Record<string, unknown> {
+  if (!SEARCH_ACTIONS.includes(asked.action)) return { resources: [...asked.resources] };
+  const path = opencodeWord(asked.metadata['path']);
+  return {
+    ...(path === null ? {} : { path }),
+    ...(asked.resources[0] === undefined ? {} : { pattern: asked.resources[0] }),
+  };
 }
 
 /** A path a request names, as the local gate reads it: a directory request's `<dir>/*` as the directory. */
@@ -426,7 +445,7 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
     const toolInput =
       typeof metadataInput === 'object' && metadataInput !== null && !Array.isArray(metadataInput)
         ? metadataInput
-        : (announced ?? { resources: [...asked.resources] });
+        : (announced ?? unannouncedInput(asked));
     const cwd = directoryOf(toolKind, toolInput);
     const child = asked.sessionID !== sessionId && sessionId !== '';
     return {

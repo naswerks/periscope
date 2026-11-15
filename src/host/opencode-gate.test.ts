@@ -278,6 +278,68 @@ test('a held call that was refused keeps no allow, and an interrupt ends one sti
   assert.match(ended.message ?? '', /the turn was interrupted/);
 });
 
+test("a search whose input the stream never announced is judged where its request says it runs, not at the session's root", async () => {
+  const secret = WINDOWS ? 'C:/Users/op/.ssh' : '/home/op/.ssh';
+  const run = gate(allow, {
+    localGate: localGate({
+      workspaceRoot: CWD,
+      resolve: nodePathResolver,
+      protectedPaths: [secret],
+      toolFamilies: OPENCODE_TOOL_FAMILIES,
+    }),
+  });
+  for (const action of ['grep', 'glob']) {
+    const refused = await run.built.decide(
+      asked({
+        id: `per_${action}`,
+        action,
+        resources: ['id_*'],
+        metadata: { root: secret, path: secret },
+        callId: `call_${action}`,
+      }),
+    );
+    assert.equal(
+      refused.decision,
+      'reject',
+      `${action} under a protected directory went past this host's gate`,
+    );
+    assert.match(refused.message ?? '', /credential-path-denied/);
+  }
+  assert.equal(run.requests.length, 0, 'the decider was asked about a search the host refuses itself');
+  // Control: a search that names no directory, and one in the session's own, are asked about, with the
+  // pattern and the directory the request stated as the input.
+  await run.built.decide(
+    asked({ id: 'per_here', action: 'grep', resources: ['TODO'], metadata: {}, callId: 'call_here' }),
+  );
+  await run.built.decide(
+    asked({
+      id: 'per_src',
+      action: 'glob',
+      resources: ['**/*.ts'],
+      metadata: { path: 'src' },
+      callId: 'call_src',
+    }),
+  );
+  assert.deepEqual(
+    run.requests.map((request) => request.toolInput),
+    [{ pattern: 'TODO' }, { path: 'src', pattern: '**/*.ts' }],
+  );
+  // An announced input is still the call's own.
+  run.built.observe(
+    message('session.tool.called', { id: 'call_said', input: { pattern: 'x', path: 'lib' } }),
+  );
+  await run.built.decide(
+    asked({
+      id: 'per_said',
+      action: 'grep',
+      resources: ['x'],
+      metadata: { path: secret },
+      callId: 'call_said',
+    }),
+  );
+  assert.deepEqual(run.requests[2]?.toolInput, { pattern: 'x', path: 'lib' });
+});
+
 test('a deny reaches the model as a refusal with its words', async () => {
   const run = gate(deny);
   assert.deepEqual(await run.built.decide(asked({ action: 'edit' })), {
