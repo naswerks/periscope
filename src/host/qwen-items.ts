@@ -22,7 +22,8 @@
  *   - `tool_result`: each user `tool_result` block, `blocked` when this host's gate refused the call,
  *     `failed` when the result is an error, `completed` otherwise.
  *   - `turn` ended: each `result`, interrupted when its error is the CLI's cancellation, failed when it is
- *     another error, completed otherwise.
+ *     another error, completed otherwise; never the `result` the CLI writes for a foreground sub-agent that
+ *     failed or was cancelled (`QwenSpawnWatch`), since the session's turn goes on.
  *   - `notice`: a retry or a model fallback the CLI runs on its own, and a chat it could not record.
  * Qwen reports no turn id, so every item's `turnId` is null. A prompt's id is the session's key with its
  * count, as the Claude fill makes it.
@@ -30,7 +31,7 @@
 import type { AgentItem, NoticeItem } from '../control/frames.js';
 import { qwenToolKind } from '../gate/tool-kind.js';
 import type { ItemFill } from '../sessions/item-fill.js';
-import { QWEN_INTERRUPTED_MESSAGE } from '../state/qwen-observer.js';
+import { QWEN_INTERRUPTED_MESSAGE, QwenSpawnWatch } from '../state/qwen-observer.js';
 import type { SDKMessage } from './agent-process.js';
 import { ClaudeItemFill } from './claude-items.js';
 import type { QwenMessage } from './qwen-wire.js';
@@ -46,6 +47,8 @@ const NOTICES: Readonly<Record<string, NoticeItem['level']>> = {
 export class QwenItemFill implements ItemFill<QwenMessage> {
   readonly #sessionKey: string;
   readonly #claude: ClaudeItemFill;
+  /** The main thread's sub-agent calls still running, to tell a sub-agent's end from the turn's. */
+  readonly #spawns = new QwenSpawnWatch();
   readonly #waiting: string[] = [];
   #prompts = 0;
   #turns = 0;
@@ -71,6 +74,12 @@ export class QwenItemFill implements ItemFill<QwenMessage> {
     }
     if (message.kind !== 'message') return [];
     const body = message.message;
+    const items = this.#fromStream(body);
+    this.#spawns.observe(body);
+    return items;
+  }
+
+  #fromStream(body: Extract<QwenMessage, { kind: 'message' }>['message']): readonly AgentItem[] {
     const key = qwenMessageKey(body);
     switch (key) {
       case 'system/init':
@@ -84,7 +93,8 @@ export class QwenItemFill implements ItemFill<QwenMessage> {
             item.kind === 'tool_call' ? { ...item, toolKind: qwenToolKind(item.toolName) } : item,
           );
       case 'result':
-        return this.#turnEnded(body);
+        // A foreground sub-agent's own end is no end of the session's turn.
+        return this.#spawns.isSubagentEnd(body) ? [] : this.#turnEnded(body);
       default:
         return key !== null && Object.hasOwn(NOTICES, key) ? this.#notice(key, body) : [];
     }

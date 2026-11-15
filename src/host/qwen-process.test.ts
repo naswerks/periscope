@@ -297,6 +297,50 @@ test('a settings file that no longer denies the tools this host turns off refuse
   assert.match(String(error?.message), /^qwen-ask-rules-not-active: .*does not deny autofix_pr/);
 });
 
+test("a foreground sub-agent's own end is no turn done: it asks no context usage, and only the session's result does", async () => {
+  // The sub-agent's end is the `result` v0.27.3 writes when a foreground sub-agent fails
+  // (`buildSubagentErrorResult`): no parent, the error subtype, no turns and no time.
+  const run = await started({
+    fake: {
+      calls: () => [{ name: 'agent', input: { prompt: 'Look.' } }],
+      during: (_call, id) => [
+        {
+          type: 'assistant',
+          uuid: 'a-sub',
+          session_id: 's1',
+          parent_tool_use_id: id,
+          message: {
+            content: [{ type: 'tool_use', id: 'sub_read', name: 'read_file', input: { file_path: 'a.ts' } }],
+          },
+        },
+        {
+          type: 'result',
+          subtype: 'error_during_execution',
+          uuid: 'r-sub',
+          session_id: 's1',
+          is_error: true,
+          duration_ms: 0,
+          duration_api_ms: 0,
+          num_turns: 0,
+          usage: { input_tokens: 0, output_tokens: 0 },
+          permission_denials: [],
+          error: { message: 'Task execution failed' },
+        },
+      ],
+    },
+  });
+  run.process.prompt('look');
+  const usageAsked = () =>
+    run.fake.cli.requests.filter((request) => request['subtype'] === 'get_context_usage').length;
+  await waitFor(
+    () => results(run.messages).some((result) => result['uuid'] === 'result-1'),
+    "the session's result",
+  );
+  await waitFor(() => usageAsked() >= 1, 'the context usage the turn asks for');
+  assert.equal(await closed(run), null);
+  assert.equal(usageAsked(), 1, "the sub-agent's end was counted as a turn done");
+});
+
 test('the settings name every built-in tool and every attached server as one to ask about, and turn every hook off', async () => {
   const run = await started({
     request: { mcpServers: { nas: { type: 'http', url: 'https://plane/mcp' } } },

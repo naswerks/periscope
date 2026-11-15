@@ -10,11 +10,64 @@
  * `working`.
  *
  * Only the main thread moves the session's state: a message a sub-agent's call produced carries the id
- * of that call (`parent_tool_use_id`) and rides its native message alone.
+ * of that call (`parent_tool_use_id`) and rides its native message alone, and so does the `result` the
+ * CLI writes when a foreground sub-agent fails or is cancelled, which names no call (`QwenSpawnWatch`).
  */
 import type { QwenMessage } from '../host/qwen-wire.js';
 import type { AgentEventName, ControlTier, SessionState, TransitionCause } from './model.js';
 import type { TransitionRequest } from './machine.js';
+
+/** The tool Qwen Code runs a sub-agent through. */
+export const QWEN_AGENT_TOOL = 'agent';
+
+/**
+ * The main thread's calls to the `agent` tool that have not returned, read from the stream in order, and
+ * what they say about a `result`. A foreground sub-agent runs inside its call, and when it fails or is
+ * cancelled the CLI writes a `result` of its own with no `parent_tool_use_id`: the error subtype, no turns
+ * and no time (`error_during_execution`, `num_turns` 0, `duration_ms` 0). Such a `result` while a call is
+ * open is that sub-agent's end, never the session's (`isSubagentEnd`). The session's own result with a
+ * call open carries its turn's count and time, and an interrupt's ends the turn whatever it carries. Each
+ * reader of a session's messages keeps its own.
+ */
+export class QwenSpawnWatch {
+  readonly #open = new Set<string>();
+
+  /** Told every stream message, in order, after reading it. */
+  observe(message: JsonRecord): void {
+    if (!mainThread(message)) return;
+    const type = message['type'];
+    if (type === 'assistant') {
+      for (const block of blocks(message)) {
+        if (
+          block['type'] === 'tool_use' &&
+          block['name'] === QWEN_AGENT_TOOL &&
+          typeof block['id'] === 'string'
+        )
+          this.#open.add(block['id']);
+      }
+    } else if (type === 'user') {
+      for (const block of blocks(message)) {
+        if (block['type'] === 'tool_result' && typeof block['tool_use_id'] === 'string')
+          this.#open.delete(block['tool_use_id']);
+      }
+    } else if (type === 'result' && !this.isSubagentEnd(message)) {
+      // The session's turn ended: no call it made is still running.
+      this.#open.clear();
+    }
+  }
+
+  /** Whether `message` is a foreground sub-agent's own end, as the class says. */
+  isSubagentEnd(message: JsonRecord): boolean {
+    if (message['type'] !== 'result' || this.#open.size === 0) return false;
+    const error = word(record(message['error'])['message']);
+    return (
+      message['subtype'] === 'error_during_execution' &&
+      message['num_turns'] === 0 &&
+      message['duration_ms'] === 0 &&
+      !(error !== null && error.startsWith(QWEN_INTERRUPTED_MESSAGE))
+    );
+  }
+}
 
 /** What the Qwen Code lane remembers across messages, per session. */
 export class QwenArmState {
@@ -22,6 +75,8 @@ export class QwenArmState {
   reported = false;
   /** The tool entries this lane opened and has not closed, by tool_use id. */
   readonly openTools = new Set<string>();
+  /** The main thread's sub-agent calls still running. */
+  readonly spawns = new QwenSpawnWatch();
 }
 
 /** What the lane reads from the machine at the moment a message arrives. */
@@ -82,6 +137,17 @@ export function qwenRequestsFor(
   if (message.kind !== 'message') return [];
 
   const body = message.message;
+  const requests = messageRequests(body, arm, view);
+  arm.spawns.observe(body);
+  return requests;
+}
+
+/** The transitions one stream message asks for, read before the sub-agent watch moves on it. */
+function messageRequests(
+  body: JsonRecord,
+  arm: QwenArmState,
+  view: QwenArmView,
+): readonly TransitionRequest[] {
   const type = word(body['type']);
   switch (type) {
     case 'system': {
@@ -124,6 +190,8 @@ export function qwenRequestsFor(
     }
 
     case 'result': {
+      // A foreground sub-agent's own end moves none of the session's state: its turn goes on.
+      if (arm.spawns.isSubagentEnd(body)) return [];
       const requests: TransitionRequest[] = [];
       // The backstop: a tool entry the turn left open is closed by the turn's end, never left ageing.
       for (const entryId of arm.openTools) {

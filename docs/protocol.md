@@ -436,7 +436,10 @@ Qwen Code's sources: `session_handle` is the session id the answer to the host's
 and again when an init names another (a resume or a fork); `agent_receipt` is composed by the host at
 that answer (`source: 'host'`, the skills it handed over), then the CLI's own once its context usage
 lists the skills it found (`source: 'runtime'`), and again whenever an init moves a member, the
-permission mode in Qwen Code's own word; `turn_record` is each `result`, its `totals` the CLI's
+permission mode in Qwen Code's own word; `turn_record` is each `result` of the session's own (not the one
+the CLI writes when a foreground sub-agent fails or is cancelled, which carries no parent, the error
+subtype, no turns and no time while the main thread's `agent` call is still open; a background
+sub-agent's, written after its call has returned, names no call and is read as the session's), its `totals` the CLI's
 running total for the session and its `turn` and `turnScope` null, a resumed or forked session's total
 including the source's tokens, with no cost and no cache writes; `usage_sample` is each answer to the
 context-usage request the host sends after each `result`; `tasks` is the background tasks the CLI

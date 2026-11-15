@@ -41,7 +41,7 @@ export const QWEN_MESSAGE_COVERAGE = {
   },
   result: {
     handling: 'wired',
-    note: "state -> idle, or errored with error.message in the detail, or interrupted on \"Operation cancelled.\"; closes any tool entry left open; turn_record with totals = usage, the session's running total (a resumed or forked session's includes the source session's tokens), turn and turnScope null, cost null and unreported, inputTokens = input_tokens - cache_read_input_tokens, Qwen's own split; a turn item; then get_context_usage. Sign-in marker: an is_error result with num_turns 0 whose error.message names the auth type or the API key, written before the session loop",
+    note: "state -> idle, or errored with error.message in the detail, or interrupted on \"Operation cancelled.\"; closes any tool entry left open; turn_record with totals = usage, the session's running total (a resumed or forked session's includes the source session's tokens), turn and turnScope null, cost null and unreported, inputTokens = input_tokens - cache_read_input_tokens, Qwen's own split; a turn item; then get_context_usage. Sign-in marker: an is_error result with num_turns 0 whose error.message names the auth type or the API key, written before the session loop. The result the CLI writes when a foreground sub-agent fails or is cancelled (no parent, error_during_execution, num_turns 0, duration_ms 0, while a main-thread agent call is open) moves nothing, fills no turn item and records no turn; a background sub-agent's, written after its call returned, is read as the session's, since it names no call",
   },
   stream_event: {
     handling: 'wired',

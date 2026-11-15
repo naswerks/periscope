@@ -9,6 +9,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { AgentFact, AgentItem, JsonObject } from '../control/frames.js';
+import { fixedTicker } from '../core/time.js';
+import { SessionStateMachine } from '../state/machine.js';
+import type { SessionState } from '../state/model.js';
+import { SessionObserver } from '../state/observer.js';
 import { QwenFactLift } from './qwen-facts.js';
 import { QwenItemFill } from './qwen-items.js';
 import type { QwenMessage } from './qwen-wire.js';
@@ -135,4 +139,131 @@ test('control: usage missing a count, or not a whole count, is never stated in p
   });
   assert.equal('usage' in (settled({ total_tokens: 10, tool_uses: 1, duration_ms: 2.5 }) ?? {}), false);
   assert.equal('usage' in (settled({ total_tokens: -1, tool_uses: 1, duration_ms: 2 }) ?? {}), false);
+});
+
+// ---------------------------------------------------------------------------
+// A foreground sub-agent's own end
+// ---------------------------------------------------------------------------
+
+/**
+ * The `result` the CLI writes when a foreground sub-agent fails or is cancelled, as v0.27.3 builds it
+ * (`buildSubagentErrorResult`, `packages/cli/src/nonInteractive/io/BaseJsonOutputAdapter.ts`): no parent,
+ * the error subtype, no turns and no time. `overrides` changes one field for a control.
+ */
+const subagentEnd = (overrides: JsonObject = {}): QwenMessage =>
+  message({
+    type: 'result',
+    subtype: 'error_during_execution',
+    uuid: 'r-sub',
+    session_id: 's1',
+    is_error: true,
+    duration_ms: 0,
+    duration_api_ms: 0,
+    num_turns: 0,
+    usage: { input_tokens: 0, output_tokens: 0 },
+    permission_denials: [],
+    error: { message: 'Task execution failed' },
+    ...overrides,
+  });
+
+const sessionEnd: QwenMessage = message({
+  type: 'result',
+  subtype: 'success',
+  uuid: 'r-main',
+  session_id: 's1',
+  is_error: false,
+  duration_ms: 900,
+  num_turns: 2,
+  usage: { input_tokens: 40, output_tokens: 9 },
+  result: 'done',
+});
+
+const turnStart = message({ type: 'system', subtype: 'init', uuid: 's1', session_id: 's1', tools: [] });
+const [spawnCall, subCall, , spawnResult] = spawnAndWork as [
+  QwenMessage,
+  QwenMessage,
+  QwenMessage,
+  QwenMessage,
+];
+
+/** What each of the session's readers made of `messages`: the states, the turns ended, the turn records. */
+function readers(messages: readonly QwenMessage[]): {
+  states: SessionState[];
+  ended: string[];
+  records: number;
+} {
+  const machine = new SessionStateMachine({
+    where: { worktree: null, branch: null, cwd: 'C:/work', unknownReason: 'not a repository' },
+    clock: () => '2000-01-01T00:00:00.000Z',
+    ticker: fixedTicker(0),
+  });
+  const observer = new SessionObserver(machine, { controlTier: { level: 'none', degrades: [] } });
+  const states: SessionState[] = [];
+  machine.onTransition((transition) => states.push(transition.to));
+  const items = new QwenItemFill('session-1', { spawnedItems: () => true });
+  const lift = new QwenFactLift({ startModel: 'qwen3-coder-plus' });
+  const ended: string[] = [];
+  let records = 0;
+  const opening: QwenMessage = {
+    kind: 'answer',
+    subtype: 'initialize',
+    request: {},
+    response: { session_id: 's1' },
+  };
+  for (const one of [opening, ...messages]) {
+    observer.observeQwenMessage(one);
+    for (const item of items.fromMessage(one)) {
+      if (item.kind === 'turn' && item.status !== 'started') ended.push(item.status);
+    }
+    records += lift.fromMessage(one).facts.filter((fact) => fact.kind === 'turn_record').length;
+  }
+  return { states, ended, records };
+}
+
+test("a foreground sub-agent's failure ends none of the session's turn, records no turn and closes no entry", () => {
+  const { states, ended, records } = readers([
+    turnStart,
+    spawnCall,
+    subCall,
+    subagentEnd(),
+    spawnResult,
+    sessionEnd,
+  ]);
+  assert.deepEqual(ended, ['completed'], "the sub-agent's end was read as the session's turn ending");
+  assert.equal(records, 1, "the sub-agent's end was recorded as a turn of the session's");
+  assert.equal(states.at(-1), 'idle');
+  assert.equal(states.includes('errored'), false, "the sub-agent's end errored the session");
+});
+
+test('control: the same result once the spawning call has returned is the session turn ending', () => {
+  const { states, ended, records } = readers([turnStart, spawnCall, subCall, spawnResult, subagentEnd()]);
+  assert.deepEqual(ended, ['failed']);
+  assert.equal(records, 1);
+  assert.equal(states.at(-1), 'errored');
+});
+
+test('control: an interrupt with the spawning call still open ends the turn interrupted', () => {
+  const interrupt = subagentEnd({ error: { message: 'Operation cancelled.' } });
+  const { states, ended } = readers([turnStart, spawnCall, subCall, interrupt]);
+  assert.deepEqual(ended, ['interrupted']);
+  assert.equal(states.at(-1), 'interrupted');
+});
+
+test("control: a session result with the spawning call open but turns of its own still ends the session's turn", () => {
+  const { states, ended, records } = readers([turnStart, spawnCall, subCall, subagentEnd({ num_turns: 1 })]);
+  assert.deepEqual(ended, ['failed']);
+  assert.equal(records, 1);
+  assert.equal(states.at(-1), 'errored');
+});
+
+test("control: a session result with the spawning call open and no turns counted, but time of its own, still ends the session's turn", () => {
+  const { states, ended, records } = readers([
+    turnStart,
+    spawnCall,
+    subCall,
+    subagentEnd({ duration_ms: 900 }),
+  ]);
+  assert.deepEqual(ended, ['failed']);
+  assert.equal(records, 1);
+  assert.equal(states.at(-1), 'errored');
 });

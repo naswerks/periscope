@@ -41,6 +41,7 @@ import { MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH } from '../control/frames.j
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import { QWEN_RUNTIME } from '../sessions/runtimes.js';
 import type { CompactionReport } from '../state/observer.js';
+import { QwenSpawnWatch } from '../state/qwen-observer.js';
 import type { QwenMessage } from './qwen-wire.js';
 import {
   AssistantMessage,
@@ -105,6 +106,8 @@ export class QwenFactLift implements FactLift<QwenMessage> {
   readonly #running = new Map<string, RunningTaskEntry>();
   readonly #settled = new Map<string, SettledTaskEntry>();
   #tasksSent = JSON.stringify([[], []]);
+  /** The main thread's sub-agent calls still running, to tell a sub-agent's end from the turn's. */
+  readonly #spawns = new QwenSpawnWatch();
 
   constructor(options: QwenFactLiftOptions = {}) {
     this.#undelivered = options.undeliveredPlugins ?? [];
@@ -117,6 +120,12 @@ export class QwenFactLift implements FactLift<QwenMessage> {
     if (message.kind === 'answer') return this.#fromAnswer(message);
     if (message.kind !== 'message') return NOTHING;
     const body = message.message;
+    const lifted = this.#fromStream(body);
+    this.#spawns.observe(body);
+    return lifted;
+  }
+
+  #fromStream(body: Extract<QwenMessage, { kind: 'message' }>['message']): LiftedFacts {
     switch (qwenMessageKey(body)) {
       case 'system/init':
         return this.#fromInit(body);
@@ -131,7 +140,8 @@ export class QwenFactLift implements FactLift<QwenMessage> {
         return NOTHING;
       }
       case 'result':
-        return this.#fromResult(body);
+        // A foreground sub-agent's own end records no turn of the session's: its counts are not the session's.
+        return this.#spawns.isSubagentEnd(body) ? NOTHING : this.#fromResult(body);
       case 'system/task_started':
         return this.#fromTaskStarted(body);
       case 'system/task_notification':
