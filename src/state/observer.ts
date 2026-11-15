@@ -711,7 +711,10 @@ interface StatusReport {
  * it has. A compaction that succeeded is closed by its boundary or its hook, as before, so its end is
  * reported with the token counts the boundary states.
  */
-function statusRequests(report: StatusReport, cause: (detail: string) => TransitionCause): TransitionRequest[] {
+function statusRequests(
+  report: StatusReport,
+  cause: (detail: string) => TransitionCause,
+): TransitionRequest[] {
   const status = report.status;
   if (status === 'requesting') {
     return [
@@ -741,10 +744,17 @@ function statusRequests(report: StatusReport, cause: (detail: string) => Transit
     },
   ];
   if (report.compact_result !== 'failed') return closed;
-  const error = typeof report.compact_error === 'string' && report.compact_error !== '' ? `: ${report.compact_error}` : '';
+  const error =
+    typeof report.compact_error === 'string' && report.compact_error !== ''
+      ? `: ${report.compact_error}`
+      : '';
   return [
     ...closed,
-    { to: 'working', entry: { op: 'close', entryId: COMPACTION_ENTRY }, cause: cause(`the compaction failed${error}`) },
+    {
+      to: 'working',
+      entry: { op: 'close', entryId: COMPACTION_ENTRY },
+      cause: cause(`the compaction failed${error}`),
+    },
   ];
 }
 
