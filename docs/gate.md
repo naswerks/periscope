@@ -591,12 +591,20 @@ the one this host decides.
   1.0.112 (SDK 1.0.34) on 2026-11-15, and nothing longer has been measured. A session whose
   `decisionTimeoutMs` is above 240,000ms is refused `gate-deadlines-inverted` at the open. The hook's
   own timeout was not reached within 130 seconds on the same pin; the hook answers at once, so that
-  timeout bounds only the fail-open residual below.
+  timeout bounds only the fail-open residual below. Everything the host does between the request and
+  its answer is inside that one deadline, the wait for a server's tool list (below) included: what the
+  wait takes comes out of the time the decision has, so a request is never held longer than
+  `decisionTimeoutMs`.
+- **Where a server's tools are learned.** At the open, from the runtime's own list of the tools it
+  offers, which names each tool's server and its name there. A server that had listed nothing by then
+  is asked when a call first names it, and that wait is the decision's own: it ends with the decision,
+  and after 10 seconds or a quarter of `decisionTimeoutMs`, whichever is shorter
+  (`COPILOT_TOOL_LIST_WAIT_MS`). A list that has not arrived by then leaves the call asked about under
+  Copilot's spelling, as a list that fails does, and is kept for the next call when it does arrive.
 - **The MCP spelling.** Copilot names a server's tool `<server>-<tool>`, and a server's name and a
   tool's may each hold a hyphen. The gate maps the name to `mcp__<server>__<tool>` by the tools each
-  attached server lists (asked of the runtime once, when a call first names the server): exactly one
-  pair that spells the name maps it. None, or more than one, keeps Copilot's spelling, so a controller
-  holds the call as a stranger's. It never splits on a hyphen.
+  attached server lists: exactly one pair that spells the name maps it. None, or more than one, keeps
+  Copilot's spelling, so a controller holds the call as a stranger's. It never splits on a hyphen.
 - **Copilot's tools in the local gate** (`COPILOT_TOOL_FAMILIES`): `create`, `edit` and
   `str_replace_editor` through the jail, with a relative path placed where the call runs
   (`resolvesWritesAgainstCallCwd`); every command of `str_replace_editor`, its `view` included, is held

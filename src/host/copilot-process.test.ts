@@ -319,6 +319,28 @@ test('control: each posture the read-back refuses ends the open by name, before 
   }
 });
 
+test("a server's tools are learned at the open from the runtime's own list, so a call to one is spelled from them and the server is asked nothing more", async () => {
+  const asked: string[] = [];
+  const run = await started({
+    request: { mcpServers: { docs: { type: 'http', url: 'http://127.0.0.1:9/mcp' } } },
+    fake: {
+      offeredTools: ['powershell', 'view'],
+      offeredServerTools: { docs: ['search', 'read-page'] },
+      calls: () => [{ toolName: 'docs-read-page', toolArgs: { page: 1 }, toolCallId: 'call_docs' }],
+    },
+    decide: (request) => {
+      asked.push(`${request.toolName}:${request.toolKind ?? ''}`);
+      return Promise.resolve({ behavior: 'allow' });
+    },
+  });
+  await waitFor(() => opened(run), 'the open');
+  run.process.prompt('go');
+  await waitFor(() => types(run).includes('session.idle'), 'the run');
+  assert.deepEqual(asked, ['mcp__docs__read-page:mcp']);
+  assert.deepEqual(run.record.listedServers, [], 'the server was asked for a list the open already held');
+  await closed(run);
+});
+
 test("a built-in the tables do not name does not refuse the open: it is named once, a server's tool is not taken for one, and its call is asked about like any other", async () => {
   const asked: string[] = [];
   const run = await started({

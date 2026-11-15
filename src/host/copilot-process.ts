@@ -314,7 +314,15 @@ async function readPosture(session: CopilotSession): Promise<CopilotPostureRead>
     offeredTools: offered.map((tool) => tool.name),
     offeredServerTools: offered.flatMap((tool) =>
       typeof tool.mcpServerName === 'string' && tool.mcpServerName !== ''
-        ? [{ name: tool.name, server: tool.mcpServerName }]
+        ? [
+            {
+              name: tool.name,
+              server: tool.mcpServerName,
+              ...(typeof tool.mcpToolName === 'string' && tool.mcpToolName !== ''
+                ? { tool: tool.mcpToolName }
+                : {}),
+            },
+          ]
         : [],
     ),
   };
@@ -532,6 +540,13 @@ export function startCopilotProcess(
       read.offeredTools,
       (read.offeredServerTools ?? []).map((tool) => tool.name),
     );
+    // Each attached server's tools, as the runtime has just listed them: a call to one is spelled from these,
+    // and the runtime is asked again only for a server that had listed none yet.
+    const brought = new Map<string, string[]>();
+    for (const tool of read.offeredServerTools ?? []) {
+      if (tool.tool !== undefined) brought.set(tool.server, [...(brought.get(tool.server) ?? []), tool.tool]);
+    }
+    for (const [server, tools] of brought) gate.serverTools(server, tools);
     gate.useToolLister(async (server) => {
       const listed = await within(
         session.rpc.mcp.listTools({ serverName: server }),

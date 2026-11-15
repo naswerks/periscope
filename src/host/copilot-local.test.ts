@@ -341,6 +341,16 @@ test(
     assert.ok(servers.ok);
     const real = await openReal(dirs, { servers: servers.value, skills: [dirs.skills] });
     try {
+      // The runtime's own list names the server each of its tools comes from, and the tool's name there:
+      // what the adapter's open learns a server's tools from.
+      let listed = await real.session.rpc.tools.getCurrentMetadata();
+      if (listed.tools === null) {
+        await real.session.rpc.tools.initializeAndValidate();
+        listed = await real.session.rpc.tools.getCurrentMetadata();
+      }
+      const echo = (listed.tools ?? []).find((tool) => tool.name === 'probe-srv-echo');
+      assert.equal(echo?.mcpServerName, 'probe-srv', JSON.stringify(listed.tools));
+      assert.equal(echo?.mcpToolName, 'echo');
       const calls: [string, unknown][] = [
         [SHELL, { command: 'echo hello', description: 'scratch', initial_wait: 120 }],
         ['view', { path: join(dirs.work, 'readme.txt') }],

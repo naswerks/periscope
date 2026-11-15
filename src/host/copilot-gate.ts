@@ -72,6 +72,13 @@ export const COPILOT_ADMITTED_AGENT_MODES: readonly string[] = ['interactive', '
  */
 export const COPILOT_MEASURED_PERMISSION_WAIT_MS = 240_000;
 
+/**
+ * The longest a decision waits to learn an attached server's tools before the call is asked about under the
+ * name the runtime gave it: this long, or a quarter of the decision's deadline when that is shorter. What
+ * the wait takes comes out of the decision's deadline, so the two together never outlast it.
+ */
+export const COPILOT_TOOL_LIST_WAIT_MS = 10_000;
+
 /** What the hook tells the runtime beside its `ask`, which the runtime carries on the request as `hookMessage`. */
 export const COPILOT_HOOK_REASON = 'this host decides every call';
 
@@ -269,19 +276,49 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
   let probe: ProbeState | null = null;
   let listTools: ((server: string) => Promise<readonly string[] | null>) | null = null;
 
-  // A name that could be an attached server's tool, for a server whose tools are not known yet: ask for them
-  // once, so the spelling is decided from what the server lists.
-  const learnServers = async (name: string): Promise<void> => {
-    if (listTools === null || isCopilotBuiltin(name)) return;
-    for (const [server, tools] of servers) {
-      if (tools.length > 0 || !name.startsWith(`${server}-`)) continue;
-      try {
-        const listed = await listTools(server);
-        if (listed !== null) servers.set(server, [...listed]);
-      } catch {
-        // An unanswered list leaves the server's tools unknown, so the name keeps Copilot's spelling.
-      }
-    }
+  // Each server whose tools are being asked for now, so one is asked once however many calls name it.
+  const asking = new Map<string, Promise<void>>();
+
+  // A name that could be an attached server's tool, for a server whose tools are not known yet: ask for them,
+  // so the spelling is decided from what the server lists. The wait is the decision's own: it ends with the
+  // decision's signal, and after `COPILOT_TOOL_LIST_WAIT_MS` or a quarter of the decision's deadline,
+  // whichever is shorter. A list that arrives later is kept for the next call. True when it waited at all.
+  const learnServers = async (name: string, signal: AbortSignal): Promise<boolean> => {
+    if (listTools === null || isCopilotBuiltin(name) || signal.aborted) return false;
+    const list = listTools;
+    const unknown = [...servers]
+      .filter(([server, tools]) => tools.length === 0 && name.startsWith(`${server}-`))
+      .map(([server]) => server);
+    if (unknown.length === 0) return false;
+    const answered = Promise.all(
+      unknown.map((server) => {
+        const running = asking.get(server);
+        if (running !== undefined) return running;
+        const one = (async (): Promise<void> => {
+          try {
+            const listed = await list(server);
+            if (listed !== null) servers.set(server, [...listed]);
+          } catch {
+            // An unanswered list leaves the server's tools unknown, so the name keeps Copilot's spelling.
+          } finally {
+            asking.delete(server);
+          }
+        })();
+        asking.set(server, one);
+        return one;
+      }),
+    );
+    await new Promise<void>((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', done);
+        resolve();
+      };
+      const timer = setTimeout(done, Math.min(COPILOT_TOOL_LIST_WAIT_MS, options.decisionTimeoutMs / 4));
+      signal.addEventListener('abort', done, { once: true });
+      void answered.then(done);
+    });
+    return true;
   };
 
   const raise = (name: RefusalReason, detail: string, key: string): void => {
@@ -303,17 +340,20 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
     answers.set(id, answer);
   };
 
-  const decideCall: CallDecision = createCallDecision({
-    decide: options.decide,
-    onOutcome: options.onOutcome,
-    sessionKey: options.sessionKey,
-    runtime: COPILOT_RUNTIME,
-    ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
-    decisionTimeoutMs: options.decisionTimeoutMs,
-    holdAfterMs: options.holdAfterMs,
-    // The rewrite lives only in the fail-open hook; the request can only approve or refuse the call asked.
-    canRewriteInput: false,
-  });
+  // The decision for a call that has already waited `spentMs` of its deadline.
+  const decisionAfter = (spentMs: number): CallDecision =>
+    createCallDecision({
+      decide: options.decide,
+      onOutcome: options.onOutcome,
+      sessionKey: options.sessionKey,
+      runtime: COPILOT_RUNTIME,
+      ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+      decisionTimeoutMs: Math.max(1, options.decisionTimeoutMs - spentMs),
+      holdAfterMs: Math.max(0, options.holdAfterMs - spentMs),
+      // The rewrite lives only in the fail-open hook; the request can only approve or refuse the call asked.
+      canRewriteInput: false,
+    });
+  const decideCall: CallDecision = decisionAfter(0);
 
   const toolName = (copilotName: string): string =>
     isCopilotBuiltin(copilotName) ? copilotName : copilotMcpToolName(copilotName, servers);
@@ -426,9 +466,6 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           feedback: `${asked} is turned off in every session this host runs: no decision request can say what it runs`,
         };
       }
-      await learnServers(asked);
-      nameIfUnnamed(asked, 'was asked to run');
-      const request = requestOf(raw, call, id);
       remember(id, 'awaited');
       // The decision ends with the session's signal or with its own, which an interrupt ends.
       const own = new AbortController();
@@ -437,7 +474,13 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
       else signal?.addEventListener('abort', forward, { once: true });
       waiting.add(own);
       try {
-        const outcome = await decideCall(request, own.signal);
+        // Learning a server's tools is part of the decision: what it takes comes out of the deadline.
+        const began = Date.now();
+        const waited = await learnServers(asked, own.signal);
+        nameIfUnnamed(asked, 'was asked to run');
+        const request = requestOf(raw, call, id);
+        const decideNow = waited ? decisionAfter(Date.now() - began) : decideCall;
+        const outcome = await decideNow(request, own.signal);
         // Written once the answer is known and before the runtime is told, so a call that finishes after
         // this is read against what it was told.
         remember(id, outcome.kind === 'allow' ? 'allowed' : 'refused');

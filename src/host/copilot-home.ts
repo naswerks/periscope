@@ -458,8 +458,15 @@ export interface CopilotPostureRead {
   readonly plugins: readonly unknown[];
   /** Every tool the runtime offers the session, by the name the model calls it by. */
   readonly offeredTools: readonly string[];
-  /** The offered tools an attached MCP server brings, each with its server. Absent: none is known to be. */
-  readonly offeredServerTools?: readonly { readonly name: string; readonly server: string }[];
+  /**
+   * The offered tools an attached MCP server brings, each with its server and, where the runtime states it,
+   * the tool's own name there. Absent: none is known to be.
+   */
+  readonly offeredServerTools?: readonly {
+    readonly name: string;
+    readonly server: string;
+    readonly tool?: string;
+  }[];
 }
 
 /** What the posture is held to. */

@@ -103,6 +103,8 @@ export interface FakeCopilotRecord {
   readonly answers: { toolCallId: string; kind: string; answer: CopilotPermissionAnswer }[];
   readonly hookAnswers: { toolCallId: string; answer: CopilotPreToolOutput | undefined }[];
   readonly lifecycle: string[];
+  /** Each server whose tool list a session was asked for. */
+  readonly listedServers: string[];
   /** Each hook discovery asked of a client, by its parameters. */
   readonly discoveries: { excludeHostHooks?: boolean }[];
   /** Exit the runtime process, as if it died. */
@@ -152,6 +154,7 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
     answers: [],
     hookAnswers: [],
     lifecycle: [],
+    listedServers: [],
     discoveries: [],
     exit(code) {
       for (const listener of exitListeners.splice(0)) listener(code);
@@ -306,10 +309,12 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
         },
       },
       mcp: {
-        listTools: (params) =>
-          Promise.resolve({
+        listTools: (params) => {
+          record.listedServers.push(params.serverName);
+          return Promise.resolve({
             tools: (options.serverTools?.[params.serverName] ?? []).map((name) => ({ name })),
-          }),
+          });
+        },
       },
       model: {
         setReasoningEffort: (params) => {

@@ -219,6 +219,63 @@ test("the gate asks the runtime for a server's tools once, when a call names it,
   assert.equal(run.built.toolName('view'), 'view', 'a built-in is never read as a server tool');
 });
 
+test("a server's tool list that never answers does not hold the decision: the wait ends inside the deadline, and the call is asked about under the name the runtime gave", async () => {
+  const run = gate(allow, ['probe-srv']);
+  let asks = 0;
+  run.built.useToolLister(() => {
+    asks += 1;
+    return new Promise(() => undefined);
+  });
+  const settledOrWaiting = async (id: string): Promise<unknown> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    run.built.preToolUse(hooked('probe-srv-echo-x', id));
+    const answer = await Promise.race([
+      run.built.decide(request('probe-srv-echo-x', id)),
+      // Inside the decision's own deadline of a second.
+      new Promise<'still waiting on the list'>((resolve) => {
+        timer = setTimeout(() => resolve('still waiting on the list'), 900);
+      }),
+    ]);
+    clearTimeout(timer);
+    return answer;
+  };
+  assert.deepEqual(await settledOrWaiting('call_1'), { kind: 'approve-once' });
+  assert.equal(run.requests[0]?.toolName, 'probe-srv-echo-x', "the runtime's own name, as when a list fails");
+  // A second call while the first list is still unanswered asks the server nothing more, and is decided too.
+  assert.deepEqual(await settledOrWaiting('call_2'), { kind: 'approve-once' });
+  assert.equal(asks, 1);
+});
+
+test("what learning a server's tools takes comes out of the decision's deadline, so the two never outlast it", async () => {
+  const run = gate(() => new Promise(() => undefined), ['probe-srv']);
+  run.built.useToolLister(() => new Promise(() => undefined));
+  run.built.preToolUse(hooked('probe-srv-echo-x', 'call_1'));
+  const answer = await run.built.decide(request('probe-srv-echo-x', 'call_1'));
+  assert.equal(answer.kind, 'reject');
+  const expired = run.outcomes.find((outcome) => outcome.kind === 'expired');
+  const left = Number(/within (\d+)ms/.exec(expired?.kind === 'expired' ? expired.detail : '')?.[1]);
+  // The gate's deadline is a second and the list was waited on for a quarter of it.
+  assert.ok(left >= 1 && left <= 800, `the decider was given ${left}ms after the wait`);
+  // Control: a call that waits on no list has the whole deadline.
+  run.built.preToolUse(hooked('view', 'call_2'));
+  await run.built.decide(request('view', 'call_2'));
+  const whole = run.outcomes.filter((outcome) => outcome.kind === 'expired').at(-1);
+  assert.match(whole?.kind === 'expired' ? whole.detail : '', /within 1000ms/);
+});
+
+test("a decision that ends while a server's tool list is awaited stops waiting at once", async () => {
+  const run = gate(allow, ['probe-srv']);
+  run.built.useToolLister(() => new Promise(() => undefined));
+  run.built.preToolUse(hooked('probe-srv-echo-x', 'call_1'));
+  const session = new AbortController();
+  const began = Date.now();
+  const deciding = run.built.decide(request('probe-srv-echo-x', 'call_1'), session.signal);
+  await Promise.resolve();
+  session.abort();
+  assert.equal((await deciding).kind, 'reject');
+  assert.ok(Date.now() - began < 200, `the wait ran on for ${Date.now() - began}ms after the decision ended`);
+});
+
 test('a built-in the tables do not name is named once and decided like any other call; a named built-in and a server tool are not', async () => {
   const run = gate(allow, ['docs']);
   run.built.toolsOffered(['view', 'powershell', 'docs-search', 'late_arrival'], ['docs-search']);

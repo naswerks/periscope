@@ -197,6 +197,11 @@ frame it sends decodes unchanged.
   hold a hook, never counted as none. A session's home also holds the runtime's cache directory on
   every platform (`COPILOT_CACHE_HOME`), so off Windows the runtime's caches no longer stay in the
   operator's own.
+- Fixed: a Copilot decision is never held past `decisionTimeoutMs`. Learning an attached server's tool
+  list, which a call's `mcp__server__tool` spelling is read from, ran before the decision's deadline
+  began and could take 30 seconds a server. The tools are now learned at the open from the runtime's
+  own list; a server that had listed none is asked inside the decision's deadline, for at most 10
+  seconds or a quarter of it, and the wait ends with the decision.
 - Added: a new degrade, `gate-tool-unnamed`. A Copilot session is offered every built-in the runtime
   has, and one the host's tables do not name reached the gate as `other`, in no family, with nothing
   said. It is now named once per tool, when the session opens or at its first call. The session opens
