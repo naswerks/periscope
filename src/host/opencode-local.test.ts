@@ -786,6 +786,16 @@ test(
     try {
       await opened(first);
       await ran(first, 'SPAWN-ONE please');
+      // A subagent runs in the background, so its own call can be asked after the run that started it ended.
+      await until(
+        () =>
+          first.requests.some((request) => request.toolUseId === 'call_sub_read') &&
+          first.messages.some(
+            (message) =>
+              message.kind === 'event' && message.event.type === 'permission.asked' && !message.main,
+          ),
+        "the subagent's call",
+      );
       const spawnRequest = first.requests.find((request) => request.toolUseId === 'call_spawn');
       assert.equal(spawnRequest?.toolName, 'subagent');
       assert.equal(spawnRequest?.toolKind, 'other');
