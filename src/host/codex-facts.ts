@@ -179,6 +179,7 @@ export class CodexFactLift implements FactLift<CodexMessage> {
         trigger: report.trigger,
         tokensBefore: report.tokensBefore,
         tokensAfter: report.tokensAfter,
+        ...(report.outcome === undefined ? {} : { outcome: report.outcome }),
       },
     ];
   }

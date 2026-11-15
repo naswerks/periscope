@@ -122,6 +122,7 @@ export class PiFactLift implements FactLift<PiMessage> {
         trigger: report.trigger,
         tokensBefore: report.tokensBefore,
         tokensAfter: report.tokensAfter,
+        ...(report.outcome === undefined ? {} : { outcome: report.outcome }),
       },
     ];
   }

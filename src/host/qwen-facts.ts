@@ -171,6 +171,7 @@ export class QwenFactLift implements FactLift<QwenMessage> {
         trigger: report.trigger,
         tokensBefore: report.tokensBefore,
         tokensAfter: report.tokensAfter,
+        ...(report.outcome === undefined ? {} : { outcome: report.outcome }),
       },
     ];
   }

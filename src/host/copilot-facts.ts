@@ -133,6 +133,7 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
         trigger: report.trigger,
         tokensBefore: report.tokensBefore,
         tokensAfter: report.tokensAfter,
+        ...(report.outcome === undefined ? {} : { outcome: report.outcome }),
       },
     ];
   }

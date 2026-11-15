@@ -7,6 +7,9 @@ import assert from 'node:assert/strict';
 
 import { fixedClock, fixedTicker } from '../core/time.js';
 import type { HookInput, SDKMessage } from '../host/agent-process.js';
+import type { CopilotMessage } from '../host/copilot-wire.js';
+import type { OpencodeMessage } from '../host/opencode-wire.js';
+import type { PiMessage } from '../host/pi-wire.js';
 import type { SessionTransition, TransitionWhere } from './model.js';
 import { SessionStateMachine } from './machine.js';
 import type { CompactionReport } from './observer.js';
@@ -72,7 +75,7 @@ test('the boundary closes it with the trigger and both token counts it carries',
   observer.observeMessage(boundary);
   assert.deepEqual(reports, [
     { status: 'started', trigger: null, tokensBefore: null, tokensAfter: null },
-    { status: 'ended', trigger: 'auto', tokensBefore: 180000, tokensAfter: 21000 },
+    { status: 'ended', trigger: 'auto', tokensBefore: 180000, tokensAfter: 21000, outcome: 'completed' },
   ]);
 });
 
@@ -83,7 +86,7 @@ test('control: the hook closing it carries only the trigger, and a later boundar
   observer.observeMessage(boundary);
   assert.deepEqual(reports, [
     { status: 'started', trigger: 'manual', tokensBefore: null, tokensAfter: null },
-    { status: 'ended', trigger: 'manual', tokensBefore: null, tokensAfter: null },
+    { status: 'ended', trigger: 'manual', tokensBefore: null, tokensAfter: null, outcome: 'completed' },
   ]);
 });
 
@@ -144,11 +147,80 @@ test('regression: a failed compaction ends the compaction, so its end is reporte
     ['started', 'ended', 'started'],
     'a failed compaction left its entry open, so its end went unreported and the next start was suppressed',
   );
-  assert.deepEqual(reports[1], { status: 'ended', trigger: null, tokensBefore: null, tokensAfter: null });
+  assert.deepEqual(
+    reports[1],
+    { status: 'ended', trigger: null, tokensBefore: null, tokensAfter: null, outcome: 'failed' },
+    'a compaction that failed is reported as ended like one that worked',
+  );
+  assert.equal(reports[0]?.outcome, undefined, 'a start says nothing of how the compaction comes out');
   assert.ok(
     timeline.includes('transition:system/status'),
     'the end is recorded as the status message that stated it',
   );
+});
+
+test("each other runtime's end says how the compaction came out, where the runtime states it", () => {
+  const outcomes = (feed: (observer: SessionObserver) => void): (string | undefined)[] => {
+    const { observer, reports } = watched();
+    feed(observer);
+    return reports.map((report) => `${report.status}:${report.outcome ?? 'unstated'}`);
+  };
+  const copilot = (type: string, data: Record<string, unknown>): CopilotMessage => ({
+    kind: 'event',
+    event: { id: `e-${type}`, parentId: null, timestamp: '2026-08-03T12:00:00.000Z', type, data },
+  });
+  for (const [success, said] of [
+    [false, 'failed'],
+    [true, 'completed'],
+    [undefined, 'unstated'],
+  ] as const) {
+    assert.deepEqual(
+      outcomes((observer) => {
+        observer.observeCopilotMessage(copilot('session.compaction_start', { trigger: 'threshold' }));
+        observer.observeCopilotMessage(
+          copilot('session.compaction_complete', { ...(success === undefined ? {} : { success }) }),
+        );
+      }),
+      ['started:unstated', `ended:${said}`],
+      `Copilot, success ${String(success)}`,
+    );
+  }
+  const pi = (body: Record<string, unknown>): PiMessage => ({ kind: 'event', event: body as never });
+  for (const [end, said] of [
+    [{ aborted: true }, 'failed'],
+    [{ aborted: false, errorMessage: 'too big' }, 'failed'],
+    [{ aborted: false, result: { tokensBefore: 10 } }, 'completed'],
+    [{ aborted: false }, 'unstated'],
+  ] as const) {
+    assert.deepEqual(
+      outcomes((observer) => {
+        observer.observePiMessage(pi({ type: 'compaction_start', reason: 'threshold' }));
+        observer.observePiMessage(pi({ type: 'compaction_end', reason: 'threshold', ...end }));
+      }),
+      ['started:unstated', `ended:${said}`],
+      `pi, ${JSON.stringify(end)}`,
+    );
+  }
+  const opencode = (type: string): OpencodeMessage => ({
+    kind: 'event',
+    event: { id: `evt-${type}`, type, data: { sessionID: 'ses_a', reason: 'auto' } },
+    session: 'ses_a',
+    main: true,
+    spawnedBy: null,
+  });
+  for (const [type, said] of [
+    ['session.compaction.failed', 'failed'],
+    ['session.compaction.ended', 'completed'],
+  ] as const) {
+    assert.deepEqual(
+      outcomes((observer) => {
+        observer.observeOpencodeMessage(opencode('session.compaction.started'));
+        observer.observeOpencodeMessage(opencode(type));
+      }),
+      ['started:unstated', `ended:${said}`],
+      `opencode, ${type}`,
+    );
+  }
 });
 
 test('control: a null status that states no outcome closes the request and leaves an open compaction open', () => {
@@ -171,6 +243,6 @@ test('a compaction that succeeded reports exactly one ended, with the counts its
   observer.observeHook(postCompact);
   assert.deepEqual(reports, [
     { status: 'started', trigger: 'manual', tokensBefore: null, tokensAfter: null },
-    { status: 'ended', trigger: 'auto', tokensBefore: 180000, tokensAfter: 21000 },
+    { status: 'ended', trigger: 'auto', tokensBefore: 180000, tokensAfter: 21000, outcome: 'completed' },
   ]);
 });

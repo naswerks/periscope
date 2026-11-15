@@ -575,6 +575,28 @@ test('a compaction report becomes a compaction fact, figures as reported', () =>
   ]);
 });
 
+test("a compaction's fact says how it came out where its report does, and carries no such member where it does not", () => {
+  const ended = { status: 'ended', trigger: null, tokensBefore: null, tokensAfter: null } as const;
+  const [failed] = new ClaudeFactLift().fromCompaction({ ...ended, outcome: 'failed' });
+  assert.ok(failed?.kind === 'compaction');
+  assert.equal(failed.outcome, 'failed');
+  const [unstated] = new ClaudeFactLift().fromCompaction(ended);
+  assert.ok(unstated?.kind === 'compaction');
+  assert.equal(Object.hasOwn(unstated, 'outcome'), false);
+  // The member crosses the wire, and a word this host does not declare is not sent.
+  const frame = (fact: unknown): string =>
+    JSON.stringify({
+      frame: 'session',
+      sessionId: 's-1',
+      seq: 1,
+      at: '2000-01-01T00:00:00.000Z',
+      payload: { kind: 'session_update', body: { update: 'agent_facts', fact, sourceId: null } },
+    });
+  const read = decode(frame(failed));
+  assert.ok(read.ok, read.ok ? '' : read.refusal.detail);
+  assert.match(JSON.stringify(read.ok ? read.value : null), /"outcome":"failed"/);
+});
+
 test('a message that carries no fact yields nothing', () => {
   const lifted = new ClaudeFactLift().fromMessage(
     message({ type: 'user', uuid: 'u', message: { content: [] } }),

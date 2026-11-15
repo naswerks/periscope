@@ -387,6 +387,11 @@ export const COMPACTION_STATUSES = ['started', 'ended'] as const;
 export type CompactionStatus = (typeof COMPACTION_STATUSES)[number];
 
 /** Who asked for a compaction: a person (`manual`) or the runtime on its own (`auto`). */
+/** How an ended compaction came out, where its source says. */
+export const COMPACTION_OUTCOMES = ['completed', 'failed'] as const;
+
+export type CompactionOutcome = (typeof COMPACTION_OUTCOMES)[number];
+
 export const COMPACTION_TRIGGERS = ['manual', 'auto'] as const;
 
 export type CompactionTrigger = (typeof COMPACTION_TRIGGERS)[number];
@@ -603,6 +608,11 @@ export interface CompactionFact {
   readonly trigger: CompactionTrigger | null;
   readonly tokensBefore: number | null;
   readonly tokensAfter: number | null;
+  /**
+   * On an `ended` fact, whether the compaction completed or failed, where the source that ended it says.
+   * Absent on a `started` fact, from a source that states neither, and from a host that predates the member.
+   */
+  readonly outcome?: CompactionOutcome;
 }
 
 /** One fact, tagged by `kind`. */

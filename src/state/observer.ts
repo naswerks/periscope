@@ -65,6 +65,12 @@ export interface CompactionReport {
   readonly tokensBefore: number | null;
   readonly tokensAfter: number | null;
   /**
+   * On `ended`, whether the compaction completed or failed, where the source that ended it says: the
+   * status message states its result, and a boundary or the hook after a compaction means it completed.
+   * Absent on `started`, and from a source that states neither.
+   */
+  readonly outcome?: 'completed' | 'failed';
+  /**
    * The native id of what reported the compaction, where the source has one: a Codex compaction is
    * an item, and its fact names the item. Absent for Claude, whose sources are hooks and messages.
    */
@@ -265,6 +271,7 @@ export class SessionObserver {
         trigger: outcome.compaction.trigger,
         tokensBefore: outcome.compaction.tokensBefore,
         tokensAfter: null,
+        ...(outcome.compaction.outcome === undefined ? {} : { outcome: outcome.compaction.outcome }),
       };
       for (const listener of this.#compactionListeners) listener(report);
     }
@@ -285,12 +292,13 @@ export class SessionObserver {
     if (outcome.requests.some((request) => request.to === 'ready')) this.#reported = true;
     const recorded = outcome.requests.map((request) => this.#machine.record(request));
     if (outcome.compaction !== null) {
-      // Copilot states the trigger, the tokens before and, at the end, the tokens after.
+      // Copilot states the trigger, the tokens before and, at the end, the tokens after and its success.
       const report: CompactionReport = {
         status: outcome.compaction.status,
         trigger: outcome.compaction.trigger,
         tokensBefore: outcome.compaction.tokensBefore,
         tokensAfter: outcome.compaction.tokensAfter,
+        ...(outcome.compaction.outcome === undefined ? {} : { outcome: outcome.compaction.outcome }),
       };
       for (const listener of this.#compactionListeners) listener(report);
     }
@@ -311,12 +319,13 @@ export class SessionObserver {
     if (outcome.requests.some((request) => request.to === 'ready')) this.#reported = true;
     const recorded = outcome.requests.map((request) => this.#machine.record(request));
     if (outcome.compaction !== null) {
-      // opencode states the trigger and no token figures.
+      // opencode states the trigger and no token figures; its end is one of two events, by how it came out.
       const report: CompactionReport = {
         status: outcome.compaction.status,
         trigger: outcome.compaction.trigger,
         tokensBefore: null,
         tokensAfter: null,
+        ...(outcome.compaction.outcome === undefined ? {} : { outcome: outcome.compaction.outcome }),
       };
       for (const listener of this.#compactionListeners) listener(report);
     }
@@ -327,7 +336,11 @@ export class SessionObserver {
   #reportCompaction(wasCompacting: boolean, figures: CompactionFigures): void {
     const compacting = this.#isOpen(COMPACTION_ENTRY);
     if (compacting === wasCompacting) return;
-    const report: CompactionReport = { status: compacting ? 'started' : 'ended', ...figures };
+    // An outcome is an end's: a source that opens the compaction says nothing of how it comes out.
+    const { outcome, ...stated } = figures;
+    const report: CompactionReport = compacting
+      ? { status: 'started', ...stated }
+      : { status: 'ended', ...stated, ...(outcome === undefined ? {} : { outcome }) };
     for (const listener of this.#compactionListeners) listener(report);
   }
 
@@ -734,7 +747,17 @@ const elicitationEntry = (elicitationId: string | undefined, server: string): st
 /** What a compaction-source message states about the compaction, or null for any other message. */
 function messageCompactionFigures(message: SDKMessage): CompactionFigures | null {
   if (message.type === 'system' && message.subtype === 'status') {
-    return { trigger: null, tokensBefore: null, tokensAfter: null };
+    const result = (message as { compact_result?: unknown }).compact_result;
+    return {
+      trigger: null,
+      tokensBefore: null,
+      tokensAfter: null,
+      ...(result === 'failed'
+        ? { outcome: 'failed' as const }
+        : result === 'success'
+          ? { outcome: 'completed' as const }
+          : {}),
+    };
   }
   if (message.type === 'system' && message.subtype === 'compact_boundary') {
     const metadata = message.compact_metadata;
@@ -742,6 +765,8 @@ function messageCompactionFigures(message: SDKMessage): CompactionFigures | null
       trigger: metadata.trigger,
       tokensBefore: metadata.pre_tokens,
       tokensAfter: metadata.post_tokens ?? null,
+      // A boundary is written only by a compaction that produced its summary.
+      outcome: 'completed',
     };
   }
   return null;
@@ -749,8 +774,12 @@ function messageCompactionFigures(message: SDKMessage): CompactionFigures | null
 
 /** What a compaction hook states about the compaction, or null for any other hook. */
 function hookCompactionFigures(input: HookInput): CompactionFigures | null {
-  if (input.hook_event_name === 'PreCompact' || input.hook_event_name === 'PostCompact') {
+  if (input.hook_event_name === 'PreCompact') {
     return { trigger: input.trigger, tokensBefore: null, tokensAfter: null };
+  }
+  if (input.hook_event_name === 'PostCompact') {
+    // The hook after a compaction carries the summary it produced.
+    return { trigger: input.trigger, tokensBefore: null, tokensAfter: null, outcome: 'completed' };
   }
   return null;
 }

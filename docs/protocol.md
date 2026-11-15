@@ -436,7 +436,7 @@ The message still rides; a consumer that wants it whole still has it.
 | `turn_record`    | `totals` and `turn`, each a `SpendFacts`, with `turnScope`, `numTurns`, `durationMs`                                       | each `result`                                                                                          |
 | `usage_sample`   | `contextTokens`, `contextWindow`, `cacheTtl`, `cacheReadTokens` and `mainThread` for one model call                        | each main-thread `assistant` call, once per API message id                                             |
 | `tasks`          | `running`: every task running now, whole, and `settled`: the tasks ended since the turn began; each fact replaces the last | `background_tasks_changed` and the task edges, composed; `task_notification`; from v20 `task_progress` |
-| `compaction`     | `status` (`started`, `ended`), `trigger`, `tokensBefore`, `tokensAfter`                                                    | the observer's compaction entry opening and closing                                                    |
+| `compaction`     | `status` (`started`, `ended`), `trigger`, `tokensBefore`, `tokensAfter`, `outcome` (optional, v20)                         | the observer's compaction entry opening and closing                                                    |
 
 From v20 a `tasks` entry, running or settled, may also carry what the runtime reported of the task: the
 call that started it (`toolUseId`), its latest `summary`, its `usage` (`tokens`, `toolUses`,
@@ -606,8 +606,15 @@ when no effort will be sent; Codex's thread answer always states it.
 closes, with what the source that moved it stated: the compaction hooks state the trigger, the
 `compact_boundary` message the trigger and both token counts, the status message nothing. A Claude
 compaction that fails ends at the status message that says so (`compact_result: 'failed'`), since no
-boundary follows it, so its `ended` states nothing; the fact has no member saying whether a compaction
-succeeded.
+boundary follows it, so its `ended` states no trigger and no counts.
+
+From v20 an `ended` fact carries `outcome`, optional: `completed` or `failed`, where the source that
+ended the compaction says how it came out. On Claude a boundary or the hook after a compaction is
+`completed` and a status message stating `compact_result: 'failed'` is `failed`; Copilot states its
+`success`; pi is `failed` for a compaction it aborted or that ends with an error and `completed` for
+one that ends with its result; opencode ends a compaction with one of two events, by how it came out.
+Codex states neither, and its fact carries no `outcome`. A `started` fact never carries it. A
+controller that negotiated an older version reads the fact as before and ignores the member.
 
 **Whole numbers.** `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
 `reasoningTokens`, `contextTokens`, `contextWindow`, `numTurns`, `durationMs`, `tokensBefore` and

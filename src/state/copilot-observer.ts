@@ -46,6 +46,8 @@ export interface CopilotArmOutcome {
     readonly trigger: 'manual' | 'auto';
     readonly tokensBefore: number | null;
     readonly tokensAfter: number | null;
+    /** On `ended`, where the runtime states whether the compaction succeeded. */
+    readonly outcome?: 'completed' | 'failed';
   } | null;
 }
 
@@ -221,6 +223,11 @@ export function copilotRequestsFor(
           trigger: triggerOf(data['trigger']),
           tokensBefore: copilotCount(data['preCompactionTokens']),
           tokensAfter: copilotCount(data['postCompactionTokens']),
+          ...(data['success'] === false
+            ? { outcome: 'failed' as const }
+            : data['success'] === true
+              ? { outcome: 'completed' as const }
+              : {}),
         },
       };
     }

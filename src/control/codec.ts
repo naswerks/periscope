@@ -26,6 +26,7 @@ import type {
 } from './frames.js';
 import {
   CACHE_TTLS,
+  COMPACTION_OUTCOMES,
   COMPACTION_STATUSES,
   COMPACTION_TRIGGERS,
   COST_BASES,
@@ -398,6 +399,7 @@ const FACT_SCHEMAS: Readonly<Record<AgentFact['kind'], z.ZodType>> = {
     trigger: factWordSchema.nullable().optional(),
     tokensBefore: z.number().int().nonnegative().nullable().optional(),
     tokensAfter: z.number().int().nonnegative().nullable().optional(),
+    outcome: factWordSchema.nullable().optional(),
   }),
 };
 
@@ -1206,7 +1208,8 @@ function undeclaredFactWord(frame: Frame): UndeclaredWord | null {
     case 'compaction':
       return (
         wordOutside('fact.status', members['status'], COMPACTION_STATUSES) ??
-        wordOutside('fact.trigger', members['trigger'], COMPACTION_TRIGGERS)
+        wordOutside('fact.trigger', members['trigger'], COMPACTION_TRIGGERS) ??
+        wordOutside('fact.outcome', members['outcome'], COMPACTION_OUTCOMES)
       );
     default:
       return null;

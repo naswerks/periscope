@@ -791,6 +791,25 @@ const AUTHORED = {
       name: 'session_update.agent-facts-compaction',
       frame: session(agentFactsUpdate(FACT_COMPACTION, null, AT)),
     },
+    // The member protocol 20 adds to an ended compaction: how it came out.
+    {
+      name: 'session_update.agent-facts-compaction-failed',
+      frame: session(
+        agentFactsUpdate(
+          {
+            kind: 'compaction',
+            runtime: 'claude',
+            status: 'ended',
+            trigger: null,
+            tokensBefore: null,
+            tokensAfter: null,
+            outcome: 'failed',
+          },
+          null,
+          AT,
+        ),
+      ),
+    },
     // The members protocol 16 adds to facts, each stated.
     {
       name: 'session_update.agent-facts-agent-receipt-effort-reported',

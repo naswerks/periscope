@@ -56,6 +56,11 @@ frame it sends decodes unchanged.
 - Added: `LocalGateOptions.localNames` and `LocalGateOptions.realPath` (and the same two on
   `JailOptions`), with `machineNames` and `canonicalPath` exported to fill them: the names this machine
   answers to as a file server, and a path as the file system names it. `PeriscopeHost` passes both.
+- Added: `outcome` on an ended `compaction` fact, optional, on protocol 20: `completed` or `failed`
+  (`COMPACTION_OUTCOMES`), where the source that ended the compaction says how it came out. A failed
+  compaction was reported `ended`, the same as one that worked, and the fact had no member to tell
+  them apart. Claude, Copilot, pi and opencode state it; Codex states neither and its fact carries no
+  `outcome`. A controller on an older version ignores the member.
 - Security: Claude's `Artifact` tool is in a family of the local gate. It publishes the local files its
   input names and saves the files it fetches, and it was in no family, so a credential file could be
   named as the page, as an upload or as the place a fetched file is saved and no local check read the

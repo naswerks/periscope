@@ -193,6 +193,7 @@ test("a compaction's fact follows the transition that recorded it, and names no 
     trigger: 'auto',
     tokensBefore: 100,
     tokensAfter: 10,
+    outcome: 'completed',
   });
 });
 

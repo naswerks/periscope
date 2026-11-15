@@ -41,7 +41,12 @@ export interface OpencodeArmView {
 export interface OpencodeArmOutcome {
   readonly requests: readonly TransitionRequest[];
   /** Set when the message moved the compaction entry: which way, and why. */
-  readonly compaction: { readonly status: 'started' | 'ended'; readonly trigger: 'manual' | 'auto' } | null;
+  readonly compaction: {
+    readonly status: 'started' | 'ended';
+    readonly trigger: 'manual' | 'auto';
+    /** On `ended`: which of the runtime's two end events closed it. */
+    readonly outcome?: 'completed' | 'failed';
+  } | null;
 }
 
 const NOTHING: OpencodeArmOutcome = { requests: [], compaction: null };
@@ -231,7 +236,11 @@ export function opencodeRequestsFor(
             ),
           },
         ],
-        compaction: { status: 'ended', trigger: triggerOf(data['reason']) },
+        compaction: {
+          status: 'ended',
+          trigger: triggerOf(data['reason']),
+          outcome: event.type === 'session.compaction.failed' ? 'failed' : 'completed',
+        },
       };
     }
 
