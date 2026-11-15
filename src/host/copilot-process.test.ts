@@ -794,7 +794,7 @@ test('a machine where every source reads and none holds a policy hook names noth
   await closed(run);
 });
 
-test("R2: with a token file and an endpoint key configured, neither value is in the runtime's environment; both ride the SDK's pipe", async () => {
+test("with a token file and an endpoint key configured, neither value is in the runtime's environment; both ride the SDK's pipe", async () => {
   const route: CopilotEndpointRoute = {
     name: 'byok',
     wireApi: 'openai-chat',

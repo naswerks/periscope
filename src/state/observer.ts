@@ -797,7 +797,7 @@ interface StatusReport {
  * A null status that says a compaction failed (`compact_result: 'failed'`) closes the compaction entry
  * as well as the request: a failed compaction is followed by no boundary and, as the SDK's types read,
  * by no `PostCompact` (whose input carries the summary a compaction produced), so this is the only exit
- * it has. A compaction that succeeded is closed by its boundary or its hook, as before, so its end is
+ * it has. A compaction that succeeded is closed by its boundary or its hook, so its end is
  * reported with the token counts the boundary states.
  */
 function statusRequests(

@@ -93,11 +93,7 @@ test("a sub-agent's thread fills items naming the call that spawned it; the sess
     ['own-turn:completed', null],
   ]);
   for (const item of items.filter((one) => one.parentId === undefined)) {
-    assert.equal(
-      'parentId' in item,
-      false,
-      `${item.itemId}: an own item states no parent, as 1.10.0 sent it`,
-    );
+    assert.equal('parentId' in item, false, `${item.itemId}: an own item states no parent`);
   }
 });
 

@@ -5,9 +5,9 @@
  * What each item is read from, on the main thread and in a subagent's turn alike: a message a
  * subagent's turn produced carries `parent_tool_use_id`, the call that spawned it, and each item it fills
  * names that call as its `parentId`; an item of the session's own thread names none, which reads as null,
- * so it is the item 1.10.0 sent, byte for byte. A link below
+ * so it is the item a link at protocol 19 reads, byte for byte. A link below
  * protocol 20 cannot read an item's parent, so on one a subagent's message fills no item and rides its
- * native `agent_message` alone, as it did before (`spawnedItems`).
+ * native `agent_message` alone (`spawnedItems`).
  *   - `turn` started and `user_text`: `UserPromptSubmit`, whose `prompt` is the prompt as the agent took
  *     it, at the moment its turn starts. A prompt sent while a turn runs is not marked started early.
  *   - `agent_text`: each assistant `text` block. Claude marks no text as a turn's answer, so `final` is

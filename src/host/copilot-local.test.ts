@@ -339,7 +339,7 @@ function routeOf(real: Real, id: string): { hooked: boolean; kinds: string[] } {
 }
 
 test(
-  "Q1 and Q2: the hook fires and asks for a shell, a read, a write, an MCP tool and a skill, and the request is the hook's, decided here",
+  "the hook fires and asks for a shell, a read, a write, an MCP tool and a skill, and the request is the hook's, decided here",
   { skip, timeout: 120_000 },
   async () => {
     const dirs = await scratch();
@@ -425,7 +425,7 @@ test(
 );
 
 test(
-  'Q3: in allow-all a call still asks while the hook answers ask, and the gate names the mode',
+  'in allow-all a call still asks while the hook answers ask, and the gate names the mode',
   { skip, timeout: 120_000 },
   async () => {
     const dirs = await scratch();
@@ -490,7 +490,7 @@ test(
 );
 
 test(
-  'Q4 and the untrusted directory: no session-start hook at create, and tools run in a directory the runtime has never seen',
+  'an untrusted directory: no session-start hook at create, and tools run in a directory the runtime has never seen',
   { skip, timeout: 120_000 },
   async () => {
     const dirs = await scratch();
@@ -514,7 +514,7 @@ test(
 );
 
 test(
-  'the census: every built-in the runtime names has a kind, is named other, or is turned off; none turned off is offered (R3)',
+  'the census: every built-in the runtime names has a kind, is named other, or is turned off; none turned off is offered',
   { skip, timeout: 120_000 },
   async () => {
     const dirs = await scratch();
@@ -538,7 +538,7 @@ test(
         names.filter((name) => !known(name) || name === dropped),
         [dropped],
       );
-      // R3: the tools turned off are the runtime's own, and the session offers none of them.
+      // The tools turned off are the runtime's own, and the session offers none of them.
       // The shell's input tool is the runtime's own name for it, whether or not it describes it for a session.
       const excludedHere = COPILOT_EXCLUDED_TOOLS.filter((name) => names.includes(name));
       assert.ok(
@@ -659,7 +659,7 @@ test(
 );
 
 test(
-  "H3-24: a sub-agent's call asks this host through the hook, as the session's own calls do; driven by a stub model, not a model",
+  "a sub-agent's call asks this host through the hook, as the session's own calls do; driven by a stub model, not a model",
   { skip, timeout: 180_000 },
   async () => {
     const dirs = await scratch();

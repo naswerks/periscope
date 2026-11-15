@@ -141,7 +141,11 @@ test("a subagent's message fills items whose parent is the spawning call, and a 
   const main = fill.fromMessage(assistant('a-3', [{ type: 'text', text: 'outer' }]));
   assert.equal(main.length, 1);
   assert.equal(main[0]?.parentId ?? null, null, "a main-thread item's parent is null");
-  assert.equal('parentId' in (main[0] ?? {}), false, 'and it names none, so it is the item 1.10.0 sent');
+  assert.equal(
+    'parentId' in (main[0] ?? {}),
+    false,
+    'and it names none, so it is the item a link at protocol 19 reads',
+  );
   // Control: an empty parent id is no parent, as the SDK sends it on the main thread.
   const empty = fill.fromMessage(assistant('a-4', [{ type: 'text', text: 'outer' }], ''));
   assert.equal('parentId' in (empty[0] ?? {}), false);

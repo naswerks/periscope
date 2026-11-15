@@ -18,6 +18,15 @@ import type { SourceFile } from './walk.js';
 /** Ledger ids, as they are written: a short sequence tag, a dash, a number. */
 const LEDGER_ID = /\b(?:HR|PI|FC|FX|RWS|E1|E2|DF|C1|D1|CK|L|R)-\d+\b/i;
 
+/**
+ * A tracker's short id used as a label: a capital letter or two and a number. It leads a test name or a
+ * comment before its colon (`R1: ...`, `Q1 and Q2: ...`, `H3-24: ...`), closes one in brackets
+ * (`... (R3)`), or names a constant (`const R1`). A constant that starts with `V` is left alone: a
+ * protocol version's decoder is named that way (`V19`).
+ */
+const LABEL_ID =
+  /(?:['"`]|\/\/ ?|\/\*\*? ?|^\s*\* ?)[A-Z]{1,2}\d{1,2}(?:-\d+)?(?::| and [^:'"`]{1,40}:)|\([A-Z]{1,2}\d{1,2}(?:-\d+)?\)|\bconst [A-UW-Z]\d{1,2}\b/;
+
 /** A path into a numbered session archive. */
 const SESSION_PATH = /\bsessions\/\d\d-/;
 
@@ -32,6 +41,7 @@ const FOREIGN_RECEIPT = /\b[0-9a-f]{7,40}\b[^\n]{0,80}\b(?:PR #\d+|workflow run 
 
 const PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
   ['ledger id', LEDGER_ID],
+  ['tracker id used as a label', LABEL_ID],
   ['session archive path', SESSION_PATH],
   ['numbered tracker row', NUMBERED_ROW],
   ['a commit cited with its pull request or run', FOREIGN_RECEIPT],
@@ -102,6 +112,19 @@ test('control: the provenance patterns match the shapes they exist to catch', ()
     assert.match(offender, LEDGER_ID, `the ledger pattern missed: ${offender}`);
   }
   for (const offender of [
+    "test('R1: every path holding a credential is in the protected set', () => {",
+    'test("R2: with a token file configured, the value is in no environment", async () => {',
+    '  "Q1 and Q2: the hook fires and asks for a shell and a read",',
+    "  'Q4 and the untrusted directory: no session-start hook at create',",
+    '  "H3-24: a sub-agent\'s call asks this host through the hook",',
+    "test('the read-back and the session config share one list (R3)', () => {",
+    '      // R3: the tools turned off are never offered.',
+    '/** R1: every path holding a credential or a record, each named. */',
+    'const R1 = {',
+  ]) {
+    assert.match(offender, LABEL_ID, `the label pattern missed: ${offender}`);
+  }
+  for (const offender of [
     'the CI run on commit 49297fe0 (PR #52)',
     'ciGreen at 9c5d3f87, workflow run 34629960526',
   ]) {
@@ -133,6 +156,11 @@ test('control: the provenance patterns match the shapes they exist to catch', ()
     '  // the second phase of the handshake',
     '  // sessions/ is the directory the SDK keeps transcripts in',
     '  // a Uint8Array-16 window',
+    "test('H1 and H2 headings render as titles', () => {",
+    "  const key = 'P256: the curve';",
+    '  const ES256 = alg();',
+    '  const V19 = decoderOf(19);',
+    '  // a (UTF8) label and a (v2) one',
   ]) {
     for (const [what, pattern] of PATTERNS) {
       assert.doesNotMatch(legitimate, pattern, `the ${what} pattern fired on: ${legitimate}`);

@@ -71,7 +71,7 @@ export const COPILOT_ADMITTED_AGENT_MODES: readonly string[] = ['interactive', '
 
 /**
  * How long a permission request was measured to wait on this host with no runtime-side timeout: 240 seconds,
- * on runtime 1.0.112 (SDK 1.0.34), 2026-11-15. A deadline longer than that is not known to win, so a session
+ * on runtime 1.0.112 (SDK 1.0.34). A deadline longer than that is not known to win, so a session
  * asking for one is refused (`copilotDeadlineOrderRefusal`).
  */
 export const COPILOT_MEASURED_PERMISSION_WAIT_MS = 240_000;

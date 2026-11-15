@@ -275,8 +275,8 @@ release, in order:
    a stub model; and nothing alive after close. A red here is a property the gate depends on that moved:
    stop and decide it before anything else.
 7. Measure what the docs state as measured: how long the runtime holds a permission request
-   (`COPILOT_MEASURED_PERMISSION_WAIT_MS`), and move the constant and its date only to a longer wait that
-   was measured.
+   (`COPILOT_MEASURED_PERMISSION_WAIT_MS`), and move the constant, and the date `docs/gate.md` gives
+   the measurement, only to a longer wait that was measured.
 8. Move the versions in `README.md`'s and `SECURITY.md`'s tables, `docs/configuration.md`'s install line
    and `CHANGELOG.md`, then `npm run contracts:update` and the whole gate.
 9. Run the live probe (§ Live probes) with the new SDK installed into a directory of its own.

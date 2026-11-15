@@ -31,9 +31,9 @@ const PROGRAM_DATA = win ? 'C:\\ProgramData' : '/unused';
 const env = { USERPROFILE: HOME, HOME, ProgramData: PROGRAM_DATA };
 const options = { opencodeHome: BASE, opencodeSdk: SDK };
 
-/** R1: every opencode path holding a credential or a record, each named. */
+/** Every opencode path holding a credential or a record, each named. */
 const SESSION_HOME = join(BASE, 'sessions', '0f1e2d3c');
-const R1 = {
+const HELD_PATHS = {
   "a session's home": SESSION_HOME,
   "a live session's database": join(SESSION_HOME, 'data', 'session.db'),
   "a session's configuration": join(SESSION_HOME, 'opencode-config', 'opencode.json'),
@@ -75,14 +75,14 @@ function gateWith(protectedPaths: readonly string[]) {
   };
 }
 
-/** The R1 entries `decide` does not refuse a `read` of, by name. */
+/** The held paths `decide` does not refuse a `read` of, by name. */
 function unprotected(decide: ReturnType<typeof gateWith>): string[] {
-  return Object.entries(R1)
+  return Object.entries(HELD_PATHS)
     .filter(([, path]) => decide('read', { path }) !== 'credential-path-denied')
     .map(([name]) => name);
 }
 
-test('R1: every opencode path holding a credential or a record is in the protected set before the first session, each named', () => {
+test('every opencode path holding a credential or a record is in the protected set before the first session, each named', () => {
   assert.deepEqual(unprotected(gateWith(credentialPaths(env, options))), []);
   const fromEnv = credentialPaths({ ...env, PERISCOPE_OPENCODE_HOME: BASE, PERISCOPE_OPENCODE_SDK: SDK });
   assert.deepEqual(unprotected(gateWith(fromEnv)), [], 'the paths named by the environment');

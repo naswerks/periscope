@@ -23,9 +23,9 @@ const ROOT = win ? 'C:\\work\\session-1' : '/work/session-1';
 const env = { USERPROFILE: HOME, HOME };
 const options = { copilotHome: BASE, copilotSdk: SDK, copilotTokenFile: TOKEN };
 
-/** R1: every Copilot path holding a credential or a record, each named, under the base unless named apart. */
+/** Every Copilot path holding a credential or a record, each named, under the base unless named apart. */
 const SESSION_HOME = join(BASE, 'sessions', '0f1e2d3c');
-const R1 = {
+const HELD_PATHS = {
   'the token file': TOKEN,
   "a session's COPILOT_HOME": SESSION_HOME,
   "a session's LOCALAPPDATA": join(SESSION_HOME, 'local'),
@@ -67,14 +67,14 @@ function gateWith(protectedPaths: readonly string[]) {
   };
 }
 
-/** The R1 entries `decide` does not refuse a `view` of, by name. */
+/** The held paths `decide` does not refuse a `view` of, by name. */
 function unprotected(decide: ReturnType<typeof gateWith>): string[] {
-  return Object.entries(R1)
+  return Object.entries(HELD_PATHS)
     .filter(([, path]) => decide('view', { path }) !== 'credential-path-denied')
     .map(([name]) => name);
 }
 
-test('R1: every Copilot path holding a credential or a record is in the protected set before the first session, each named', () => {
+test('every Copilot path holding a credential or a record is in the protected set before the first session, each named', () => {
   assert.deepEqual(unprotected(gateWith(credentialPaths(env, options))), []);
   const fromEnv = credentialPaths({
     ...env,

@@ -154,7 +154,7 @@ test('regression: a root handed over in another spelling of the place the runtim
     return Promise.resolve();
   }));
 
-test('the read-back and the session config share one list of turned-off tools (R3)', () => {
+test('the read-back and the session config share one list of turned-off tools', () => {
   for (const tool of COPILOT_EXCLUDED_TOOLS) {
     assert.match(
       copilotReadBackProblem({ ...clean, offeredTools: [tool] }, expected) ?? '',
