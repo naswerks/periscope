@@ -669,6 +669,16 @@ test('a resume copies the kept state into the fresh home first; a fork forks it 
   await rm(missing.base, { recursive: true, force: true });
 });
 
+test("the open names the model the session's own start named, never one a sub-agent's start named", async () => {
+  const run = await started({
+    fake: { selectedModel: 'the-sessions-model', subAgentStartModel: 'a-sub-agents' },
+  });
+  await waitFor(() => opened(run), 'the open');
+  const open = run.messages.find((message) => message.kind === 'opened');
+  assert.equal(open?.kind === 'opened' ? open.model : null, 'the-sessions-model');
+  await closed(run);
+});
+
 test("a machine-wide policy hook is named at the open, and lowers the session's tier", async () => {
   const run = await started({
     runtime: {

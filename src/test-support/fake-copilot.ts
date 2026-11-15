@@ -78,6 +78,8 @@ export interface FakeCopilotOptions {
   readonly callDuringAbort?: FakeCopilotCall;
   /** `abort` rejects with this: the turn would not end. */
   readonly abortFailure?: string;
+  /** A sub-agent's own start, sent after the session's while it is created: the model it names. */
+  readonly subAgentStartModel?: string;
   /** The hook rows the runtime's own discovery lists. */
   readonly discoveredHooks?: readonly unknown[];
   /** The sources the runtime's own discovery says it could not load. */
@@ -466,6 +468,14 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
         startTime: '2026-11-15T00:00:00.000Z',
         version: 1,
       });
+      if (options.subAgentStartModel !== undefined) {
+        emitTo(
+          config,
+          'session.start',
+          { sessionId: id, selectedModel: options.subAgentStartModel },
+          { agentId: 'agent-1' },
+        );
+      }
       return Promise.resolve(sessionOf(config, id));
     }
 

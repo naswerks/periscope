@@ -431,7 +431,8 @@ export function startCopilotProcess(
       // A degrade the gate failed to name must not stop the event reaching the session.
     }
     if (isProbeEvent(event)) return;
-    if (event.type === 'session.start' || event.type === 'session.resume') {
+    // The session's own start names its model; a sub-agent's start is the sub-agent's.
+    if ((event.type === 'session.start' || event.type === 'session.resume') && isCopilotMainThread(event)) {
       startModel = copilotWord(copilotData(event)['selectedModel']) ?? startModel;
     }
     if (event.type === 'user.message' && isCopilotMainThread(event)) {

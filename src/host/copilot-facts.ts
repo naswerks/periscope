@@ -72,6 +72,12 @@ export interface CopilotFactLiftOptions {
   readonly handedOverSkills?: readonly string[];
 }
 
+/** What one sub-agent's own events said of it. */
+interface AgentRegisters {
+  model: string | null;
+  lastCacheRead: number | null;
+}
+
 export class CopilotFactLift implements FactLift<CopilotMessage> {
   readonly #undelivered: readonly ReceiptPluginError[];
   #handle: string | null = null;
@@ -89,6 +95,12 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
   #receiptSent = '';
   /** The last model call's cache reads, for the next usage sample. */
   #lastCacheRead: number | null = null;
+  /**
+   * What each sub-agent's own events said of it, by its id: its model, and its last model call's cache
+   * reads. A sub-agent's events carry the session-scoped kinds too, and none of them moves a register of
+   * the session's.
+   */
+  readonly #agents = new Map<string, AgentRegisters>();
   /** Whether a run is running, so the settled tasks start over with the next one. */
   #running = false;
   readonly #tasks = new Map<string, RunningTaskEntry>();
@@ -125,12 +137,32 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
     ];
   }
 
+  /** The registers of the sub-agent an event belongs to; null for the session's own event. */
+  #agentOf(event: CopilotEvent): AgentRegisters | null {
+    if (isCopilotMainThread(event)) return null;
+    const id = copilotWord(event.agentId) ?? copilotSpawnedBy(event) ?? '';
+    const known = this.#agents.get(id);
+    if (known !== undefined) return known;
+    if (this.#agents.size >= MAX_FACT_LIST_ENTRIES) {
+      const oldest = this.#agents.keys().next().value;
+      if (oldest !== undefined) this.#agents.delete(oldest);
+    }
+    const made: AgentRegisters = { model: null, lastCacheRead: null };
+    this.#agents.set(id, made);
+    return made;
+  }
+
   #fromEvent(event: CopilotEvent): LiftedFacts {
     const data = copilotData(event);
     const main = isCopilotMainThread(event);
+    const agent = this.#agentOf(event);
     switch (event.type) {
       case 'session.start':
       case 'session.resume': {
+        if (agent !== null) {
+          agent.model = copilotWord(data['selectedModel']) ?? agent.model;
+          return NOTHING;
+        }
         this.#model = copilotWord(data['selectedModel']) ?? this.#model;
         if (Object.hasOwn(data, 'reasoningEffort')) {
           this.#effort = copilotWord(data['reasoningEffort']);
@@ -139,6 +171,10 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
         return facts(this.#receiptIfChanged());
       }
       case 'session.model_change': {
+        if (agent !== null) {
+          agent.model = copilotWord(data['newModel']) ?? agent.model;
+          return NOTHING;
+        }
         this.#model = copilotWord(data['newModel']) ?? this.#model;
         if (Object.hasOwn(data, 'reasoningEffort')) {
           this.#effort = copilotWord(data['reasoningEffort']);
@@ -147,10 +183,12 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
         return facts(this.#receiptIfChanged());
       }
       case 'session.mode_changed': {
+        if (!main) return NOTHING;
         this.#agentMode = copilotWord(data['newMode']) ?? this.#agentMode;
         return facts(this.#receiptIfChanged());
       }
       case 'session.skills_loaded': {
+        if (!main) return NOTHING;
         const skills = Array.isArray(data['skills']) ? data['skills'] : [];
         this.#skills = bounded(
           skills
@@ -163,6 +201,7 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
         return facts(this.#receiptIfChanged());
       }
       case 'session.mcp_servers_loaded': {
+        if (!main) return NOTHING;
         const servers = Array.isArray(data['servers']) ? data['servers'] : [];
         this.#servers = new Map();
         for (const server of servers.map((one) => copilotRecord(one))) {
@@ -174,26 +213,29 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
       }
       case 'session.mcp_server_status_changed': {
         const name = copilotWord(data['serverName']);
-        if (name === null) return NOTHING;
+        if (name === null || !main) return NOTHING;
         this.#servers.set(name, copilotWord(data['status']) ?? 'unknown');
         this.#serversReported = true;
         return facts(this.#receiptIfChanged());
       }
       case 'assistant.usage':
-        return this.#fromUsage(data);
-      case 'session.usage_info':
+        return this.#fromUsage(data, agent);
+      case 'session.usage_info': {
+        // A sub-agent's sample is filed under its own model where it named one, and its own cache reads.
+        const model = agent === null ? this.#model : (agent.model ?? this.#model);
         return facts([
           {
             kind: 'usage_sample',
             runtime: COPILOT_RUNTIME,
-            model: this.#model === null ? null : text(this.#model),
+            model: model === null ? null : text(model),
             contextTokens: copilotCount(data['currentTokens']),
             contextWindow: copilotCount(data['tokenLimit']),
             cacheTtl: null,
             mainThread: main,
-            cacheReadTokens: this.#lastCacheRead,
+            cacheReadTokens: agent === null ? this.#lastCacheRead : agent.lastCacheRead,
           },
         ]);
+      }
       case 'session.shutdown':
         return this.#fromShutdown(data);
       case 'user.message':
@@ -216,10 +258,11 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
     }
   }
 
-  #fromUsage(data: Readonly<Record<string, unknown>>): LiftedFacts {
-    const model = copilotWord(data['model']) ?? this.#model;
+  #fromUsage(data: Readonly<Record<string, unknown>>, agent: AgentRegisters | null): LiftedFacts {
+    const model = copilotWord(data['model']) ?? agent?.model ?? this.#model;
     const cacheRead = copilotCount(data['cacheReadTokens']);
-    this.#lastCacheRead = cacheRead;
+    if (agent === null) this.#lastCacheRead = cacheRead;
+    else agent.lastCacheRead = cacheRead;
     if (model === null) return NOTHING;
     const row: ModelSpendFact = {
       model: text(model),

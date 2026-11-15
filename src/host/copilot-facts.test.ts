@@ -99,6 +99,54 @@ test("the open names the session's handle and the runtime's receipt; a receipt i
   assert.deepEqual(failed[0].mcpServers, [{ name: 'nas', status: 'failed' }]);
 });
 
+test("a sub-agent's own events move none of the session's registers: its model, its mode, its lists and its cache reads stay its own", () => {
+  const lift = new CopilotFactLift({ handedOverSkills: ['review'] });
+  lift.fromMessage(event('session.start', { selectedModel: 'gpt-5-mini', reasoningEffort: 'medium' }));
+  lift.fromMessage(opened);
+  lift.fromMessage(event('assistant.usage', { model: 'gpt-5-mini', inputTokens: 100, cacheReadTokens: 40 }));
+  const sub = { agentId: 'agent-7' };
+  for (const [type, data] of [
+    ['session.start', { selectedModel: 'small-model', reasoningEffort: 'low' }],
+    ['session.resume', { selectedModel: 'small-model' }],
+    ['session.model_change', { newModel: 'small-model', reasoningEffort: 'low' }],
+    ['session.mode_changed', { newMode: 'autopilot', previousMode: 'interactive' }],
+    ['session.skills_loaded', { skills: [{ name: 'other', enabled: true }] }],
+    ['session.mcp_servers_loaded', { servers: [{ name: 'theirs', status: 'connected' }] }],
+    ['session.mcp_server_status_changed', { serverName: 'theirs', status: 'failed' }],
+  ] as const) {
+    assert.deepEqual(lift.fromMessage(event(type, data, sub)).facts, [], `${type} of a sub-agent`);
+  }
+  // The sub-agent's model call is filed under the sub-agent's own model, and its cache reads are its own.
+  const step = lift.fromMessage(event('assistant.usage', { inputTokens: 50, cacheReadTokens: 7 }, sub));
+  assert.ok(step.facts[0]?.kind === 'turn_record');
+  assert.equal(step.facts[0].turn?.byModel[0]?.model, 'small-model');
+  const theirs = lift.fromMessage(event('session.usage_info', { currentTokens: 9, tokenLimit: 100 }, sub));
+  assert.ok(theirs.facts[0]?.kind === 'usage_sample');
+  assert.equal(theirs.facts[0].model, 'small-model');
+  assert.equal(theirs.facts[0].mainThread, false);
+  assert.equal(theirs.facts[0].cacheReadTokens, 7);
+  // The session's own next sample and receipt are what the session's own events left them.
+  const own = lift.fromMessage(event('session.usage_info', { currentTokens: 500, tokenLimit: 1000 }));
+  assert.ok(own.facts[0]?.kind === 'usage_sample');
+  assert.equal(own.facts[0].model, 'gpt-5-mini');
+  assert.equal(own.facts[0].mainThread, true);
+  assert.equal(own.facts[0].cacheReadTokens, 40);
+  const moved = lift.fromMessage(event('session.mode_changed', { newMode: 'plan' })).facts;
+  assert.ok(moved[0]?.kind === 'agent_receipt');
+  assert.equal(moved[0].model, 'gpt-5-mini');
+  assert.equal(moved[0].effort, 'medium');
+  assert.equal(moved[0].permissionMode, 'plan');
+  assert.deepEqual(moved[0].skills, ['review']);
+  assert.equal(moved[0].mcpServers, null, 'no server list of the session was ever reported');
+  // Control: a sub-agent that named no model is filed under the session's, as the session's own calls are.
+  const other = lift.fromMessage(
+    event('session.usage_info', { currentTokens: 1, tokenLimit: 2 }, { agentId: 'agent-8' }),
+  );
+  assert.ok(other.facts[0]?.kind === 'usage_sample');
+  assert.equal(other.facts[0].model, 'gpt-5-mini');
+  assert.equal(other.facts[0].cacheReadTokens, null);
+});
+
 test("each model call is one step's spend, unpriced, its input counted without the cache reads; the shutdown files the totals", () => {
   const lift = new CopilotFactLift();
   lift.fromMessage(opened);
