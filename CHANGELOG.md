@@ -65,6 +65,11 @@ frame it sends decodes unchanged.
   whole line; refused, the call fails with the refusal's words and never runs. A call allowed there is
   asked about once: the requests it then raises are held to the host's own gate alone. The read-back
   admits that one plugin, by its id and its source.
+- Fixed: an approval an opencode session's server takes from an answer this host did not give is named
+  `gate-mode-widened` when the host is still deciding that request too, and the wait ends; it was named
+  only when no decision was pending. An answer sent for a request the server had already settled (one
+  refused with another, or dropped with an interrupt) is no longer reported as an answer that was not
+  delivered.
 - Fixed: the close of an opencode session ends what its commands started. The server's own close ends
   its shells and not their children, and the host process then exits by itself, so on Windows a process
   a background command had started was under nothing a tree kill could find, and outlived the session.

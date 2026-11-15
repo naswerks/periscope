@@ -744,7 +744,10 @@ every request they raise.
 - **A request refused with another.** When this host refuses one request, opencode refuses every other
   request of the same session still waiting, with the same words. Each such decision still pending here is
   ended, recorded as refused (`permission-decision-unavailable`, with the words the runtime refused it
-  with), and never answered twice.
+  with), and never answered twice. The runtime also drops a session's waiting requests with its
+  interrupt (measured on the pinned SDK: an answer sent afterwards finds no request). In each case the
+  request was settled by the runtime before this host answered, so the answer that finds it gone is not
+  reported as one that failed to arrive; an answer of this host's own that the server refuses still is.
 - **Proven before the first prompt** (`opencodeReadBackProblem`, and the open in
   `src/host/opencode-process.ts`). Once the server's plugins are active, the server is read back: the
   session's rules are exactly this host's; every agent's rules end with them; no approval is saved; every
@@ -804,7 +807,10 @@ every request they raise.
     session and its subagents and a provider may hand two of them the same call id.
   - `gate-mode-widened`: the rules of one of the session's sessions changed after the open and are no
     longer this host's (`session.permissions`), or an answer this host never gave approved a request
-    (`permission.replied`).
+    (`permission.replied`): one it had answered nothing about, or one it was still deciding, whose
+    wait then ends, since nothing it decides can stop a call already approved. On the pinned SDK a
+    session's rules are published only when something sets them (`Session.setPermissions`); a
+    subagent's creation publishes none, so a subagent starting is no change of rules.
   - `gate-foreign-extension`: a plugin that is neither the runtime's own nor this host's pre-call gate
     loaded after the open (`plugin.updated`, after which the plugins are read again).
 - **What it does not hold.**

@@ -13,6 +13,8 @@
  *   (`permission.asked`), and waits forever for the answer. A refused request fails the call with the words,
  *   and refuses every other request of its session still waiting, as the server does; an approved call
  *   succeeds.
+ * - An interrupt of a session drops the requests it still waits on, with no reply stated; an answer sent for
+ *   one afterwards is refused as naming no request, as the server refuses it.
  * - A run ends with its text, one model call's usage (`session.step.ended`) and `session.execution.succeeded`.
  * Every call the adapter makes is recorded, so a test reads back what was asked.
  */
@@ -286,6 +288,7 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
       index += 1;
       const requestID = `per_${call.id}_${index}`;
       const answer = await ask(session, requestID, call, request);
+      if (answer.decision === 'interrupted') return;
       send('permission.replied', { sessionID: session, requestID, reply: answer.decision });
       if (answer.decision === 'reject') {
         // The server refuses every other request of the session still waiting, with the same words.
@@ -421,8 +424,15 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
         run(sessionID, text, inbox);
         return { id: inbox };
       }
-      case 'session.interrupt':
+      case 'session.interrupt': {
+        // The server drops a session's waiting requests with its interrupt: nothing says they were replied to.
+        for (const [id, entry] of [...waiting]) {
+          if (entry.session !== sessionID) continue;
+          waiting.delete(id);
+          entry.settle('interrupted');
+        }
         return { interrupted: true };
+      }
       case 'session.switchAgent': {
         const session = sessions.get(sessionID);
         if (session !== undefined && typeof input['agent'] === 'string') session.agent = input['agent'];

@@ -419,6 +419,10 @@ export function startOpencodeProcess(
         requestID: asked.id,
         decision: answer.decision,
         ...(answer.message === undefined ? {} : { message: answer.message }),
+      }).catch((error: unknown) => {
+        // The runtime settled this request itself before this host answered: an answer that finds the
+        // request gone was never owed. One it still holds has now been refused.
+        if (answer.settledByRuntime !== true) throw error;
       });
     })().catch((error: unknown) => {
       // A request the runtime already settled (refused with another, or its session ended) cannot be

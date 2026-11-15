@@ -40,7 +40,12 @@
  *   session closes with it still running. A success for a call this process never saw begin is one an earlier
  *   process ran, stated again to a resumed session, and is not named;
  * - `gate-mode-widened`: the rules of one of the session's sessions are no longer this host's, or an answer
- *   this host never gave approved a request.
+ *   this host never gave approved a request, one it had answered nothing about or one it was still deciding
+ *   (whose wait then ends).
+ *
+ * A request the runtime settled while this host was deciding it (refused with another, dropped with an
+ * interrupt, approved by another's answer) is answered for with `settledByRuntime`, so the reply that finds
+ * it gone is not reported as an answer that failed to arrive.
  */
 import type { RefusalReason } from '../core/refusal.js';
 import type { CallDecision } from '../gate/call-decision.js';
@@ -94,6 +99,12 @@ export interface OpencodeHeld {
 export interface OpencodeAnswer {
   readonly decision: 'once' | 'reject';
   readonly message?: string;
+  /**
+   * Set when the runtime settled the request before this host answered: it refused it together with
+   * another of the session's, dropped it with an interrupt, or took an answer this host did not give. The
+   * request may be there no longer, so an answer that finds it gone is no failure to deliver one.
+   */
+  readonly settledByRuntime?: true;
 }
 
 /** How many calls' announced inputs one session keeps. */
@@ -265,6 +276,8 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
   let hookLoaded = true;
   const answered = new Set<string>();
   const pending = new Map<string, { readonly sessionID: string; readonly controller: AbortController }>();
+  // The requests the runtime settled while this host was still deciding them, until each is answered for.
+  const settledByRuntime = new Set<string>();
   const agentOf = new Map<string, string>();
   const ruleset = opencodeRuleset();
   const resourcesOf = new WeakMap<DecisionRequest, OpencodeAsked>();
@@ -456,9 +469,12 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
         asked.callId !== null && allowedHeld.has(callKey(asked.sessionID, asked.callId));
       try {
         const outcome = await (wholeCallAllowed ? decideFollowUp : decideCall)(request, controller.signal);
-        return opencodeAnswerOf(outcome);
+        return settledByRuntime.delete(asked.id)
+          ? { ...opencodeAnswerOf(outcome), settledByRuntime: true }
+          : opencodeAnswerOf(outcome);
       } finally {
         pending.delete(asked.id);
+        settledByRuntime.delete(asked.id);
         signal?.removeEventListener('abort', forward);
         remember(answered, asked.id);
       }
@@ -571,12 +587,27 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
           const waiting = pending.get(requestId);
           if (reply === 'reject' && waiting !== undefined) {
             // Another request of the session was refused, and the runtime refused this one with it.
+            remember(settledByRuntime, requestId);
             waiting.controller.abort(
               'the runtime refused this request together with another of the same session that was refused; the call did not run',
             );
             return;
           }
-          if (reply !== 'reject' && !answered.has(requestId) && waiting === undefined) {
+          if (reply !== 'reject' && waiting !== undefined) {
+            // The request this host is still deciding was approved by an answer it did not give: said, and
+            // the wait ended, since nothing this host decides now can stop the call.
+            raise(
+              'gate-mode-widened',
+              `an answer this host never gave approved request ${requestId} while this host was still deciding it (${reply ?? 'no reply named'})`,
+              `reply:${requestId}`,
+            );
+            remember(settledByRuntime, requestId);
+            waiting.controller.abort(
+              'the runtime took an answer this host did not give for this request, so this host decided nothing about it',
+            );
+            return;
+          }
+          if (reply !== 'reject' && !answered.has(requestId)) {
             raise(
               'gate-mode-widened',
               `an answer this host never gave approved request ${requestId} (${reply ?? 'no reply named'})`,
@@ -612,8 +643,11 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
       }
     },
     endPending(session, why) {
-      for (const waiting of pending.values()) {
-        if (waiting.sessionID === session) waiting.controller.abort(why);
+      for (const [id, waiting] of pending) {
+        if (waiting.sessionID !== session) continue;
+        // The runtime drops a session's waiting requests with its interrupt.
+        remember(settledByRuntime, id);
+        waiting.controller.abort(why);
       }
     },
     raise,

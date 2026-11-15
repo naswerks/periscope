@@ -832,6 +832,13 @@ test(
       await real.proc.interrupt();
       await until(() => ended !== null && childEnded(), "the subagent's run and its decision to end");
       assert.match(String(ended), /the turn was interrupted/);
+      // The runtime drops a request with its session's interrupt: this host answers no request that is
+      // no longer there, and reports no answer as undelivered.
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(
+        real.degrades.filter((detail) => /permission answer was not delivered/.test(detail)),
+        [],
+      );
     } finally {
       await closed(real);
       await stub.close();

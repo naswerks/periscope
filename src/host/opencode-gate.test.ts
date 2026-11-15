@@ -386,6 +386,7 @@ test('a request the runtime refused together with another is ended here, refused
     'permission-decision-unavailable',
   );
   assert.equal(run.raised.length, 0, 'a batch refusal is no widening');
+  assert.equal(answer.settledByRuntime, true, 'the answer does not say the runtime had settled the request');
 });
 
 test('an interrupt ends every decision still pending for its session, and no other', async () => {
@@ -394,7 +395,9 @@ test('an interrupt ends every decision still pending for its session, and no oth
   const theirs = run.built.decide(asked({ id: 'per_theirs', sessionID: 'ses_child', callId: 'call_2' }));
   await new Promise((resolve) => setImmediate(resolve));
   run.built.endPending('ses_main', 'the turn was interrupted while this decision was outstanding');
-  assert.match((await mine).message ?? '', /the turn was interrupted/);
+  const ended = await mine;
+  assert.match(ended.message ?? '', /the turn was interrupted/);
+  assert.equal(ended.settledByRuntime, true, 'the runtime drops a request with its interrupt');
   let settled = false;
   void theirs.then(() => {
     settled = true;
@@ -413,6 +416,33 @@ test('an approval this host never gave is named: gate-mode-widened; a reply to o
   run.built.observe(message('permission.replied', { requestID: 'per_stranger', reply: 'always' }));
   assert.equal(run.raised[0]?.name, 'gate-mode-widened');
   assert.match(run.raised[0]?.detail ?? '', /never gave approved request per_stranger \(always\)/);
+  // Control: an answer this host gave is told apart by its `settledByRuntime` being absent.
+  assert.equal((await run.built.decide(asked({ id: 'per_plain' }))).settledByRuntime, undefined);
+});
+
+test('an approval this host never gave, for a request it is still deciding, is named and ends the wait', async () => {
+  const run = gate(() => new Promise(() => undefined));
+  const deciding = run.built.decide(asked({ id: 'per_deciding' }));
+  await new Promise((resolve) => setImmediate(resolve));
+  run.built.observe(message('permission.replied', { requestID: 'per_deciding', reply: 'once' }));
+  const answer = await deciding;
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-mode-widened'],
+    'an approval given over a pending decision was not named',
+  );
+  assert.match(
+    run.raised[0]?.detail ?? '',
+    /approved request per_deciding while this host was still deciding it \(once\)/,
+  );
+  assert.equal(answer.decision, 'reject');
+  assert.match(answer.message ?? '', /took an answer this host did not give/);
+  assert.equal(answer.settledByRuntime, true);
+  // The reply that follows this host's own answer to another request is still not named.
+  const mine = gate(allow);
+  await mine.built.decide(asked({ id: 'per_mine' }));
+  mine.built.observe(message('permission.replied', { requestID: 'per_mine', reply: 'once' }));
+  assert.deepEqual(mine.raised, []);
 });
 
 test("rules that are no longer this host's are named: gate-mode-widened; the same rules are not", () => {

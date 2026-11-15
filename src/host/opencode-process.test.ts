@@ -661,6 +661,14 @@ test('an interrupt reaches the server, and a decision still pending for the sess
     assert.equal(run.record.of('session.interrupt').length, 1);
     await until(() => run.record.replies.length === 1, 'the ended decision');
     assert.equal(run.record.replies[0]?.decision, 'reject');
+    // The server dropped the request with the interrupt, so the answer found it gone: nothing failed to
+    // arrive, and nothing is said.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(
+      run.degrades,
+      [],
+      'an answer to a request the runtime had dropped was reported undelivered',
+    );
     release();
   } finally {
     await closed(run);
@@ -668,7 +676,20 @@ test('an interrupt reaches the server, and a decision still pending for the sess
 });
 
 test("an interrupt reaches each subagent with a run under way, and ends the decisions the session's subagents wait on", async () => {
-  const run = await started({ decide: () => new Promise(() => undefined) });
+  const ended: string[] = [];
+  const run = await started({
+    decide: (_request, signal) =>
+      new Promise((resolve) => {
+        signal.addEventListener(
+          'abort',
+          () => {
+            ended.push(String(signal.reason));
+            resolve({ behavior: 'deny', message: 'ended' });
+          },
+          { once: true },
+        );
+      }),
+  });
   try {
     await until(() => opened(run), 'the open');
     const child = run.record.spawn('call_spawn');
@@ -692,7 +713,16 @@ test("an interrupt reaches each subagent with a run under way, and ends the deci
       ['ses_main', child].sort(),
       'the interrupt reached the session alone, or a subagent that was not running',
     );
-    assert.equal((await pending).decision, 'reject', "the subagent's decision outlived the interrupt");
+    // The server drops the subagent's request with the interrupt, and this host's decision ends with it.
+    assert.equal((await pending).decision, 'interrupted');
+    await until(() => ended.length === 1, "the subagent's decision to end");
+    assert.match(
+      ended[0] ?? '',
+      /the turn was interrupted/,
+      "the subagent's decision outlived the interrupt",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(run.degrades, []);
     // A subagent whose run has ended is not interrupted again.
     run.record.emit('session.execution.interrupted', { sessionID: child });
     await run.process.interrupt();
@@ -977,6 +1007,18 @@ test("a line of the host process's that was dropped is named on the session, onc
       ['rpc-line-too-large'],
     );
     assert.equal(run.degrades.filter((detail) => /^rpc-line-too-large: /.test(detail)).length, 2);
+  } finally {
+    await closed(run);
+  }
+});
+
+test("control: an answer of this host's own that the server refuses is still reported", async () => {
+  const run = await started({ fake: { failing: { 'permission.reply': 'the server is busy' } } });
+  try {
+    await until(() => opened(run), 'the open');
+    void run.record.ask({ id: 'per_1', sessionID: 'ses_main', action: 'read', resources: ['a.ts'] });
+    await until(() => run.degrades.length === 1, 'the undelivered answer');
+    assert.match(run.degrades[0] ?? '', /a permission answer was not delivered: .*the server is busy/);
   } finally {
     await closed(run);
   }
