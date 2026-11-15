@@ -111,6 +111,12 @@ export function qwenAskRules(servers: readonly string[]): string[] {
  */
 export const QWEN_DENIED_TOOLS = ['autofix_pr'] as const;
 
+/**
+ * The tools the CLI registers only in code mode, which every session's settings keep off
+ * (`tools.codeModeOnly: false`), so no session is offered one.
+ */
+export const QWEN_CODE_MODE_TOOLS = ['exec'] as const;
+
 /** The settings a session's CLI loads as its system scope. Pure. */
 export function qwenSystemSettings(input: QwenSettingsInput): JsonObject {
   const auth = input.auth;

@@ -555,14 +555,20 @@ export const REFUSAL_REASONS = [
   'gate-sandbox-absent',
 
   // The gate over a runtime that asks this host about every call its own rules send to ask (Qwen
-  // Code's `can_use_tool`), where the host writes those rules for each session. The first is a refusal;
-  // the others are degrades, raised on the session's state lane and never stopping it.
+  // Code's `can_use_tool`), where the host writes those rules for each session. The first is a refusal
+  // at the open and of one call, and a degrade beside; the others are degrades, raised on the session's
+  // state lane and never stopping it.
   //
   //   qwen-ask-rules-not-active    Refused: the open ends because the settings this host wrote for the
   //                                session, the rules that send every built-in tool to ask, did not read
   //                                back whole before the first prompt, or the runtime would not load
   //                                them. Without them a read the runtime allows by default runs
   //                                undecided, past the protected set. The detail says what is missing.
+  //                                Also a degrade, in a session that opened: the runtime's first list of
+  //                                tools names one the settings turn off (a tool they deny, or the one
+  //                                it registers only in code mode), so that part of them is not in
+  //                                force. The session goes on. And the refusal of one call: the runtime
+  //                                asked about a call to a tool the settings deny.
   //   gate-tool-unruled            The runtime listed a tool no ask rule names, so a call to it the
   //                                runtime allows by default runs without asking this host. Raised once
   //                                per tool, when the runtime first lists its tools.

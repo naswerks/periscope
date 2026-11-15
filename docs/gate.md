@@ -454,6 +454,13 @@ is the settings file this host writes for each session (`src/host/qwen-home.ts`)
   tool turned off, it keeps code mode off, and its hooks are off. Anything else refuses the open `qwen-ask-rules-not-active`, and
   no process starts.
   `QWEN_CODE_SAFE_MODE`, which would drop every rule, is removed from the CLI's environment.
+- **What the CLI registered is read from its first list of tools.** The read-back reads the file this
+  host wrote, so it cannot say what the CLI made of it. The first `system/init` lists the tools the CLI
+  registered, and the host holds that list to the settings: a tool they deny (`QWEN_DENIED_TOOLS`), or
+  `exec` while code mode is off, that is listed all the same is named `qwen-ask-rules-not-active` on
+  the session's state lane, once a tool. The session opens and goes on. A call to a tool the settings
+  deny is refused `qwen-ask-rules-not-active` before anyone is asked; a call to `exec` is asked about
+  like any other.
 - **One decision per call** (`src/host/qwen-gate.ts`). A `can_use_tool` request becomes a
   `DecisionRequest` (`toolName`, `tool_use_id`, the input, the session id, the call's own directory
   where the input names one, `toolKind`, `shellDialect`) and goes through the same call decision as

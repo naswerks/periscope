@@ -15,6 +15,13 @@ controller is refused at the handshake by name. Every member version 20 adds is 
 payload kind: a version-19 controller reads each as an unknown key on a kind it already reads, and every
 frame it sends decodes unchanged.
 
+- Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
+  The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
+  what the CLI then registered. The first list of tools the CLI sends is now read for the tools the
+  settings deny (`autofix_pr`) and the one the CLI registers only in code mode (`exec`): one listed all
+  the same is named `qwen-ask-rules-not-active` on the session's state lane, once a tool, and the
+  session opens and goes on. A call to a tool the settings deny is refused by that name before anyone
+  is asked; a call to `exec` is asked about like any other.
 - Changed: the agent SDK is `@anthropic-ai/claude-agent-sdk` 0.3.325, pinned exactly, bundling Claude
   Code 2.1.325 (was 0.3.284 and 2.1.284). The hello's catalog is the one the new CLI offers. Its one new
   message, `system/session_writes_lost` (the CLI could not save transcript lines or its own

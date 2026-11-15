@@ -453,7 +453,11 @@ writes send every call to ask, and the paths that can still run undecided are na
   a push (a deny outranks every scope's rules, and the tool is then never offered). It also keeps code
   mode off, so the CLI never registers `exec`, whose script makes tool calls of its own. The host reads it
   back through the environment the CLI will start with before anything runs, and an open whose file
-  does not read back that way is refused `qwen-ask-rules-not-active`. `QWEN_CODE_SAFE_MODE`, which
+  does not read back that way is refused `qwen-ask-rules-not-active`. The file read back is the one
+  the host wrote; what the CLI registered is read from the first list of tools it sends, and a tool the
+  settings turn off that is listed all the same (`autofix_pr`, or `exec`) is named by the same reason on
+  the session's state lane, the session going on, and a call to `autofix_pr` is refused before anyone
+  is asked. `QWEN_CODE_SAFE_MODE`, which
   drops every rule, is removed from the CLI's environment.
 - **An allow runs the call as asked.** The CLI does not run a rewritten input, so an allow that
   carries one is refused (`permission-decision-unrecognised`). At its own deadline, set past the

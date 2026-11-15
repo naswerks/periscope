@@ -105,7 +105,7 @@ import { QWEN_PINNED_VERSION } from './qwen-binary.js';
 import { qwenEndpointEnv, qwenEndpointRoutes } from './qwen-endpoints.js';
 import { QwenFactLift } from './qwen-facts.js';
 import { createQwenSessionGate, qwenDeadlineOrderRefusal } from './qwen-gate.js';
-import { qwenAskRules } from './qwen-home.js';
+import { QWEN_CODE_MODE_TOOLS, QWEN_DENIED_TOOLS, qwenAskRules } from './qwen-home.js';
 import { QwenItemFill } from './qwen-items.js';
 import { qwenMcpServers } from './qwen-mcp.js';
 import { qwenHandedOverSkills, qwenSkillDirectories } from './qwen-pack.js';
@@ -645,6 +645,8 @@ function composeQwenSession(
     decisionTimeoutMs,
     holdAfterMs: options.gate?.holdAfterMs ?? DEFAULT_HOLD_AFTER_MS,
     askRules: qwenAskRules(Object.keys(options.request?.mcpServers ?? {})),
+    deniedTools: QWEN_DENIED_TOOLS,
+    codeModeTools: QWEN_CODE_MODE_TOOLS,
     onOutcome: (outcome) => {
       recordGateOutcome(machine, outcome);
       if (outcome.kind === 'deny' || outcome.kind === 'refused' || outcome.kind === 'expired') {

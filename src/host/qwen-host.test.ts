@@ -28,7 +28,7 @@ import { ok } from '../core/result.js';
 import type { Result } from '../core/result.js';
 import type { DecisionRequest } from '../gate/decision.js';
 import type { SessionTransition } from '../state/model.js';
-import { fakeQwen } from '../test-support/fake-qwen.js';
+import { FAKE_QWEN_LISTED_TOOLS, fakeQwen } from '../test-support/fake-qwen.js';
 import type { FakeQwen, FakeQwenOptions } from '../test-support/fake-qwen.js';
 import { tempDir } from '../test-support/temp-dir.js';
 import type { WorkspaceProvider } from '../workspace/provider.js';
@@ -285,6 +285,80 @@ async function subAgentItemsAt(version: number): Promise<[string, string | null]
     await stopped(run);
   }
 }
+
+test("a Qwen Code that registered tools the session's settings turn off is named on the session's state lane, a call to the denied one is refused, and the session opens and goes on", async () => {
+  const run = await qwenHost({
+    fake: {
+      tools: [...FAKE_QWEN_LISTED_TOOLS, 'autofix_pr', 'exec'],
+      calls: () => [
+        { name: 'autofix_pr', input: { helper: 'push' } },
+        { name: 'read_file', input: { file_path: 'notes.txt' } },
+      ],
+    },
+  });
+  try {
+    run.link.deliver('handle-1', opening());
+    await until(() => run.link.transitions().some((transition) => transition.to === 'ready'), 'ready');
+    run.link.deliver('handle-1', { kind: 'session_prompt', text: 'fix it' }, 2);
+    await until(
+      () => run.link.transitions().some((transition) => transition.to === 'idle'),
+      'the turn to end',
+    );
+
+    const named = run.link
+      .transitions()
+      .filter((one) => one.cause.kind === 'refusal' && one.cause.event === 'qwen-ask-rules-not-active')
+      .map((one) => one.cause.detail ?? '');
+    assert.ok(
+      named.some((detail) => /lists the tool autofix_pr, which this session's settings deny/.test(detail)),
+      named.join(' | '),
+    );
+    assert.ok(
+      named.some((detail) => /lists the tool exec, which it registers only in code mode/.test(detail)),
+      named.join(' | '),
+    );
+    // The denied tool's call never ran and nobody was asked; the next call was decided and ran.
+    assert.deepEqual(
+      run.decided.map((request) => request.toolName),
+      ['read_file'],
+    );
+    assert.deepEqual(
+      run.fake.cli.ran.map((call) => call.toolName),
+      ['read_file'],
+    );
+    const refusedAnswer = run.fake.cli.decided.find(
+      (one) => one.request['tool_name'] === 'autofix_pr',
+    )?.answer;
+    assert.equal(refusedAnswer?.['behavior'], 'deny');
+    const words = refusedAnswer?.['message'];
+    assert.match(typeof words === 'string' ? words : '', /^qwen-ask-rules-not-active: /);
+    // The session opened and its turn ended as any other does.
+    assert.ok(!run.link.transitions().some((transition) => transition.to === 'errored'));
+  } finally {
+    await stopped(run);
+  }
+});
+
+test("control: a Qwen Code that lists the tools the session's settings leave on names nothing", async () => {
+  const run = await qwenHost({
+    fake: { calls: () => [{ name: 'read_file', input: { file_path: 'notes.txt' } }] },
+  });
+  try {
+    run.link.deliver('handle-1', opening());
+    await until(() => run.link.transitions().some((transition) => transition.to === 'ready'), 'ready');
+    run.link.deliver('handle-1', { kind: 'session_prompt', text: 'look' }, 2);
+    await until(
+      () => run.link.transitions().some((transition) => transition.to === 'idle'),
+      'the turn to end',
+    );
+    assert.deepEqual(
+      run.link.transitions().filter((one) => one.cause.kind === 'refusal'),
+      [],
+    );
+  } finally {
+    await stopped(run);
+  }
+});
 
 test("a controller on protocol 19 is sent no Qwen Code sub-agent's item, which it would read as the session's own; one on 20 is sent each naming its spawn", async () => {
   assert.deepEqual(await subAgentItemsAt(19), [
