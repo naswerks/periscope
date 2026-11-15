@@ -592,7 +592,10 @@ function composeQwenSession(
   const inverted = qwenDeadlineOrderRefusal(decisionTimeoutMs);
   if (inverted !== null) return refuse<ComposedSession>('gate-deadlines-inverted', inverted);
 
-  const items = new QwenItemFill(options.sessionKey);
+  // A sub-agent's message fills items only on a link that carries an item's parent.
+  const items = new QwenItemFill(options.sessionKey, {
+    spawnedItems: () => itemParentsAtLinkVersion(options.linkVersion?.() ?? null),
+  });
   const gate = createQwenSessionGate({
     sessionKey: options.sessionKey,
     cwd: options.cwd,

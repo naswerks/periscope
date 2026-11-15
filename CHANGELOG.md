@@ -40,8 +40,7 @@ frame it sends decodes unchanged.
   whose turn the item is from. A Claude subagent's messages now fill items, each naming its spawning
   call's `tool_use` id; an item of the session's own thread names none, which reads as null, so it is
   the item 1.10.0 sent. A link negotiated below 20 is sent no subagent's item, since its controller
-  reads no parent: there they ride `agent_message` alone, as before. Qwen Code's subagents fill no item
-  yet.
+  reads no parent: there they ride `agent_message` alone, as before.
 - Added: what a task reported of itself, on each `tasks` entry, running or settled (`TaskReport`, all
   optional): the call that started it (`toolUseId`), its latest `summary`, its `usage` (`TaskUsage`:
   `tokens`, `toolUses`, `durationMs`) and its `outputFile`, each stated only where the runtime reported
@@ -99,6 +98,13 @@ frame it sends decodes unchanged.
   recognises as a push. A deny outranks every scope's ask and allow, so no repository's rule turns it back
   on, and the read-back refuses the open `qwen-ask-rules-not-active` when the deny is missing. Turning it
   back on is a later release's change to `QWEN_DENIED_TOOLS`.
+- Added: a Qwen Code sub-agent's tool calls and their results, the only messages of a sub-agent the CLI
+  writes, fill conversation items, each naming its spawning call's `tool_use` id as its `parentId`; a link
+  negotiated below 20 is sent none of them.
+- Added: a Qwen Code `tasks` entry names the call that started its task (`toolUseId`) where the CLI says
+  which, and a settled agent task carries its `usage` (`tokens`, `toolUses`, `durationMs`) when the CLI
+  reports all three counts. The CLI reports no summary and no output file for a task, so neither is
+  stated.
 - Fixed: `scripts/derive-qwen-names.mjs` also reads the service modules the CLI's stream-json path
   imports, so the contract keeps `ui_log`, which the 0.27.3 CLI still emits from its mod session there.
 

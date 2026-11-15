@@ -4,9 +4,13 @@
  *
  * Qwen Code's assistant and user messages are shaped like Claude's, so their content blocks are read by
  * the Claude fill (`ClaudeItemFill`), and this fill is the guard around it: it hands that fill only the
- * two message kinds, from the main thread, whose blocks carry the members it reads; it reads every tool
- * call's kind by Qwen's own map, never Claude's; and it reads everything else itself, from members Qwen
- * fills. What each item is read from:
+ * two message kinds whose blocks carry the members it reads; it reads every tool call's kind by Qwen's own
+ * map, never Claude's; and it reads everything else itself, from members Qwen fills. A sub-agent's
+ * message carries the call that spawned it (`parent_tool_use_id`): when the fill is told a sub-agent's
+ * items are wanted (`spawnedItems`, which the host composes from the link's protocol), the Claude fill
+ * names that call as each item's `parentId`, and otherwise the message fills nothing and rides its native
+ * message alone. Qwen writes a sub-agent's tool calls and their results, never its text, so those are the
+ * items a sub-agent fills. What each item is read from:
  *   - `turn` started and `user_text`: the CLI never echoes a prompt, so each prompt this host wrote is
  *     held, in order, and marked started at the next main-thread `system/init`, where the CLI takes the
  *     next queued prompt. The CLI runs its queued prompts before anything else it queues, so the order
@@ -46,11 +50,13 @@ export class QwenItemFill implements ItemFill<QwenMessage> {
   #prompts = 0;
   #turns = 0;
 
-  /** `sessionKey` is the periscope session's own key: what a prompt's item id is made from. */
-  constructor(sessionKey: string) {
+  /**
+   * `sessionKey` is the periscope session's own key: what a prompt's item id is made from. `spawnedItems`
+   * says whether a sub-agent's message fills items now; absent, it does not.
+   */
+  constructor(sessionKey: string, options: { readonly spawnedItems?: () => boolean } = {}) {
     this.#sessionKey = sessionKey;
-    // A sub-agent's message fills no item here: this fill names no item's parent yet.
-    this.#claude = new ClaudeItemFill(sessionKey, { spawnedItems: () => false });
+    this.#claude = new ClaudeItemFill(sessionKey, { spawnedItems: options.spawnedItems ?? (() => false) });
   }
 
   /** This host's gate refused the call `toolUseId`, so its result is `blocked`. */
@@ -71,7 +77,7 @@ export class QwenItemFill implements ItemFill<QwenMessage> {
         return this.#turnStarted();
       case 'assistant':
       case 'user':
-        // The Claude fill reads these two kinds' blocks; a sub-agent's message it is told to leave alone.
+        // The Claude fill reads these two kinds' blocks, and a sub-agent's only when its items are wanted.
         return this.#claude
           .fromMessage(body as unknown as SDKMessage)
           .map((item) =>

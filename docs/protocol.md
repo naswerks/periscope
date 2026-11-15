@@ -440,7 +440,9 @@ permission mode in Qwen Code's own word; `turn_record` is each `result`, its `to
 running total for the session and its `turn` and `turnScope` null, a resumed or forked session's total
 including the source's tokens, with no cost and no cache writes; `usage_sample` is each answer to the
 context-usage request the host sends after each `result`; `tasks` is the background tasks the CLI
-reports started and settled. `inputTokens` is the CLI's input less its cached input, floored at zero.
+reports started and settled, each naming the call that started it (`toolUseId`) where the CLI says which,
+and a settled agent task carrying its `usage` when the CLI reports all three counts (it reports no summary
+and no output file). `inputTokens` is the CLI's input less its cached input, floored at zero.
 
 pi's sources: `session_handle` is the session id the answer to the host's `get_state` names;
 `agent_receipt` is pi's own (`source: 'runtime'`) once the session opens: the model and thinking
@@ -601,8 +603,9 @@ carry `parentId` (below):
   controller reads no parent and would fold them into the main conversation; they ride
   `agent_message`, and the subagent's call and result in the main conversation are items. Claude's
   subagents fill items at 20, and so does a Codex sub-agent's thread, its turns apart from the session's
-  own (a sub-agent's turn ending moves none of the session's state); a Qwen Code subagent's messages
-  fill none.
+  own (a sub-agent's turn ending moves none of the session's state), and so do a Qwen Code
+  subagent's tool calls and their results, the only messages of a subagent the CLI writes, each naming
+  its spawning call's `tool_use` id.
 
 Claude's items come from `UserPromptSubmit` (the turn's start and its prompt), each assistant
 `text`, `thinking`, `redacted_thinking` and `tool_use` block, each `tool_result` block, each `result`

@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs';
 import type { ChildProcess } from 'node:child_process';
 
 import type { JsonObject } from '../control/frames.js';
+import { QWEN_PINNED_VERSION } from '../host/qwen-binary.js';
 import { QWEN_NAMES } from '../host/qwen-names.js';
 import type { FakeChild } from './fake-child.js';
 import { fakeChild, spawnerFor } from './fake-child.js';
@@ -40,6 +41,11 @@ export interface FakeQwenOptions {
   readonly mode?: string;
   /** The calls a turn makes, by its prompt. */
   readonly calls?: (prompt: string) => readonly FakeQwenCall[];
+  /**
+   * The messages the CLI writes while an allowed call runs, before its result: a foreground sub-agent's,
+   * for a call to `agent`. Given the call and its id.
+   */
+  readonly during?: (call: FakeQwenCall, id: string) => readonly JsonObject[];
   /** The usage each model call adds to the session's running total. */
   readonly usage?: { readonly input: number; readonly output: number; readonly cacheRead: number };
   /** The status each MCP server the session attached reports. Defaults to connected. */
@@ -277,7 +283,7 @@ export class FakeQwenCli {
       model: this.#model,
       permission_mode: this.#options.mode ?? this.#mode,
       slash_commands: [],
-      qwen_code_version: '0.25.1',
+      qwen_code_version: QWEN_PINNED_VERSION,
       agents: [],
     });
     for (const call of this.#options.calls?.(prompt) ?? []) {
@@ -322,6 +328,7 @@ export class FakeQwenCli {
       }
       if (this.#interrupted) break;
       if (allowed) this.ran.push({ toolName: call.name, toolUseId: id, asked, input: call.input });
+      if (allowed) for (const message of this.#options.during?.(call, id) ?? []) this.#emit(message);
       this.#emit({
         type: 'user',
         uuid: `user-${this.#nextCall}`,

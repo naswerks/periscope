@@ -33,11 +33,11 @@ const NEVER_SENT = 'this host never sends it';
 export const QWEN_MESSAGE_COVERAGE = {
   user: {
     handling: 'wired',
-    note: "each tool_result block closes its tool entry and fills a tool_result item (blocked when this host refused the call, failed on is_error, else completed); the prompt itself is never echoed, so the user_text item is this host's own prompt",
+    note: "each tool_result block closes its tool entry and fills a tool_result item (blocked when this host refused the call, failed on is_error, else completed), a sub-agent's naming its spawning call (parent_tool_use_id) on a link that carries an item's parent; the prompt itself is never echoed, so the user_text item is this host's own prompt",
   },
   assistant: {
     handling: 'wired',
-    note: "text, thinking and tool_use blocks fill agent_text, thinking and tool_call items; a tool_use block opens a tool entry; message.model moves the model register; one model call's usage rides on one of the call's messages and is not summed",
+    note: "text, thinking and tool_use blocks fill agent_text, thinking and tool_call items, a sub-agent's naming its spawning call (parent_tool_use_id) on a link that carries an item's parent; a main-thread tool_use block opens a tool entry; message.model moves the model register; one model call's usage rides on one of the call's messages and is not summed",
   },
   result: {
     handling: 'wired',

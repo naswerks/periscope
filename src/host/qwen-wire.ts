@@ -170,6 +170,8 @@ export const TaskNotification = L({
   task_id: text,
   tool_use_id: text.nullable().optional(),
   status: text,
+  /** An agent task's counts, when the CLI reports them; read as a whole only by the lift. */
+  usage: z.unknown().optional(),
 });
 
 /** `value` read as `schema`, or null. */

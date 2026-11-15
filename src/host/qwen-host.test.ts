@@ -17,6 +17,7 @@ import type {
 } from '../control/frames.js';
 import {
   readAgentFacts,
+  readAgentItem,
   readAgentMessage,
   readStateTransition,
   sessionNew,
@@ -233,6 +234,69 @@ test('a Qwen Code session on the wire: handle and receipt, ready at its tier, a 
   assert.ok(natives.some((message) => message['type'] === 'result'));
   assert.ok(natives.some((message) => message['type'] === 'control_request'));
   await stopped(run);
+});
+
+/** A Qwen Code sub-agent's call during a turn, on a link at `version`: each item sent, as `[itemId, parentId]`. */
+async function subAgentItemsAt(version: number): Promise<[string, string | null][]> {
+  // The sub-agent's messages are shaped as the CLI's stream-json path writes them at v0.27.3: each carries
+  // the spawning call as its `parent_tool_use_id` (`processSubagentToolCall`, `emitToolResult`).
+  const run = await qwenHost({
+    fake: {
+      calls: () => [{ name: 'agent', input: { prompt: 'Look.' } }],
+      during: (_call, id) => [
+        {
+          type: 'assistant',
+          uuid: 'a-sub',
+          session_id: 's1',
+          parent_tool_use_id: id,
+          message: {
+            content: [{ type: 'tool_use', id: 'sub_read', name: 'read_file', input: { file_path: 'a.ts' } }],
+          },
+        },
+        {
+          type: 'user',
+          uuid: 'u-sub',
+          session_id: 's1',
+          parent_tool_use_id: id,
+          message: { content: [{ type: 'tool_result', tool_use_id: 'sub_read', content: 'text' }] },
+        },
+      ],
+    },
+  });
+  run.link.negotiatedVersion = version;
+  try {
+    run.link.deliver('handle-1', opening());
+    await until(() => run.link.transitions().some((transition) => transition.to === 'ready'), 'ready');
+    run.link.deliver('handle-1', { kind: 'session_prompt', text: 'look' }, 2);
+    await until(
+      () => run.link.transitions().some((transition) => transition.to === 'idle'),
+      'the turn to end',
+    );
+    return run.link.bodies().flatMap(({ body }) => {
+      const read = readAgentItem(body);
+      return read === null ||
+        read.item.kind === 'turn' ||
+        read.item.kind === 'user_text' ||
+        read.item.kind === 'agent_text'
+        ? []
+        : [[read.item.itemId, read.item.parentId ?? null]];
+    });
+  } finally {
+    await stopped(run);
+  }
+}
+
+test("a controller on protocol 19 is sent no Qwen Code sub-agent's item, which it would read as the session's own; one on 20 is sent each naming its spawn", async () => {
+  assert.deepEqual(await subAgentItemsAt(19), [
+    ['call_1', null],
+    ['call_1:result', null],
+  ]);
+  assert.deepEqual(await subAgentItemsAt(20), [
+    ['call_1', null],
+    ['sub_read', 'call_1'],
+    ['sub_read:result', 'call_1'],
+    ['call_1:result', null],
+  ]);
 });
 
 test("regression: the session's settings file named through its own variable is refused in each shell's spelling; the shared runtime directory is not", async () => {
