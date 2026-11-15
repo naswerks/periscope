@@ -33,6 +33,8 @@ import type { PiMessage } from '../host/pi-wire.js';
 import { PiArmState, piRequestsFor } from './pi-observer.js';
 import type { CopilotMessage } from '../host/copilot-wire.js';
 import { CopilotArmState, copilotRequestsFor } from './copilot-observer.js';
+import type { OpencodeMessage } from '../host/opencode-wire.js';
+import { OpencodeArmState, opencodeRequestsFor } from './opencode-observer.js';
 
 /**
  * How this observer keys a permission entry. `PermissionRequest` carries no tool_use_id — see below.
@@ -106,6 +108,8 @@ export class SessionObserver {
   readonly #pi = new PiArmState();
   /** What the Copilot lane remembers; untouched on any other session. */
   readonly #copilot = new CopilotArmState();
+  /** What the opencode lane remembers; untouched on any other session. */
+  readonly #opencode = new OpencodeArmState();
 
   constructor(machine: SessionStateMachine, options: SessionObserverOptions = {}) {
     this.#machine = machine;
@@ -287,6 +291,32 @@ export class SessionObserver {
         trigger: outcome.compaction.trigger,
         tokensBefore: outcome.compaction.tokensBefore,
         tokensAfter: outcome.compaction.tokensAfter,
+      };
+      for (const listener of this.#compactionListeners) listener(report);
+    }
+    return recorded;
+  }
+
+  /**
+   * Every message an opencode process yields: opencode's lane, translated by `opencode-observer.ts` and
+   * recorded here, so its first `ready` carries the tier and its compaction is reported like any other.
+   * Returns what it recorded.
+   */
+  observeOpencodeMessage(message: OpencodeMessage): Result<SessionTransition>[] {
+    const outcome = opencodeRequestsFor(message, this.#opencode, {
+      state: this.#machine.state,
+      controlTier: this.#controlTier,
+      isOpen: (entryId) => this.#isOpen(entryId),
+    });
+    if (outcome.requests.some((request) => request.to === 'ready')) this.#reported = true;
+    const recorded = outcome.requests.map((request) => this.#machine.record(request));
+    if (outcome.compaction !== null) {
+      // opencode states the trigger and no token figures.
+      const report: CompactionReport = {
+        status: outcome.compaction.status,
+        trigger: outcome.compaction.trigger,
+        tokensBefore: null,
+        tokensAfter: null,
       };
       for (const listener of this.#compactionListeners) listener(report);
     }

@@ -17,6 +17,7 @@ import { CodexFactLift } from '../host/codex-facts.js';
 import { QwenFactLift } from '../host/qwen-facts.js';
 import { PiFactLift } from '../host/pi-facts.js';
 import { CopilotFactLift } from '../host/copilot-facts.js';
+import { OpencodeFactLift } from '../host/opencode-facts.js';
 import type { CompactionReport } from '../state/observer.js';
 
 /** What one message carries: facts for the update lane and fragments for the delta lane, in order. */
@@ -43,6 +44,7 @@ export const FACT_LIFTS: Readonly<Record<string, () => FactLift<never>>> = {
   'qwen-code': () => new QwenFactLift(),
   pi: () => new PiFactLift(),
   copilot: () => new CopilotFactLift(),
+  opencode: () => new OpencodeFactLift(),
 };
 
 /** A new lift for one session on `runtime`, or null for a runtime with no lift: it then reports no facts. */
