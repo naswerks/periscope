@@ -296,6 +296,75 @@ test("the conversation's items: a run, a prompt, the answer, its reasoning, a ca
   assert.equal(end.detail, 'api: gave up');
 });
 
+test("the fill keeps a call by its session and its id: a refusal and a tool's name do not cross to another session's call of the same id", () => {
+  const fill = new OpencodeItemFill('session-1', { spawnedItems: () => true });
+  const child = (type: string, data: Record<string, unknown>): OpencodeMessage => ({
+    kind: 'event',
+    event: { id: `evt_child_${type}`, type, data: { sessionID: 'ses_child', ...data } },
+    session: 'ses_child',
+    main: false,
+    spawnedBy: 'call_spawn',
+  });
+  // The session's own call and a subagent's call share the id the provider handed out.
+  fill.fromMessage(event('session.tool.input.started', { id: 'call_1', name: 'edit' }));
+  fill.fromMessage(child('session.tool.input.started', { id: 'call_1', name: 'read' }));
+  fill.gateBlocked('call_1');
+  const items = [
+    event('session.tool.called', { id: 'call_1', input: { path: 'a.ts' } }),
+    child('session.tool.called', { id: 'call_1', input: { path: 'b.ts' } }),
+    event('session.tool.failed', { id: 'call_1', error: { message: 'refused' } }),
+    child('session.tool.success', { id: 'call_1', content: [{ type: 'text', text: 'read' }] }),
+  ].flatMap((message) => fill.fromMessage(message));
+  assert.deepEqual(
+    items.map((item) =>
+      item.kind === 'tool_call'
+        ? `${item.toolName}${item.parentId === undefined ? '' : ' of the subagent'}`
+        : item.kind === 'tool_result'
+          ? `${item.status}${item.parentId === undefined ? '' : ' of the subagent'}`
+          : item.kind,
+    ),
+    ['edit', 'read of the subagent', 'blocked', 'completed of the subagent'],
+  );
+  // The subagent's own refusal is the subagent's.
+  fill.gateBlocked('call_2', 'ses_child');
+  fill.fromMessage(event('session.tool.input.started', { id: 'call_2', name: 'read' }));
+  const [own] = fill.fromMessage(event('session.tool.success', { id: 'call_2', content: [] }));
+  assert.ok(own?.kind === 'tool_result' && own.status === 'completed');
+  const [theirs] = fill.fromMessage(child('session.tool.failed', { id: 'call_2', error: { message: 'x' } }));
+  assert.ok(theirs?.kind === 'tool_result' && theirs.status === 'blocked');
+});
+
+test('the fill forgets a call when it ends, whether or not its items are filled: an id handed out again is a new call', () => {
+  let wanted = false;
+  const fill = new OpencodeItemFill('session-1', { spawnedItems: () => wanted });
+  const child = (type: string, data: Record<string, unknown>): OpencodeMessage => ({
+    kind: 'event',
+    event: { id: `evt_child_${type}`, type, data: { sessionID: 'ses_child', ...data } },
+    session: 'ses_child',
+    main: false,
+    spawnedBy: 'call_spawn',
+  });
+  // A subagent's call is refused while its items are not wanted: nothing is filled for it.
+  fill.fromMessage(child('session.tool.input.started', { id: 'call_1', name: 'edit' }));
+  fill.gateBlocked('call_1', 'ses_child');
+  assert.deepEqual(
+    fill.fromMessage(child('session.tool.failed', { id: 'call_1', error: { message: 'x' } })),
+    [],
+  );
+  // The provider hands the same id out again, and this time the subagent's items are wanted.
+  wanted = true;
+  const call = fill.fromMessage(child('session.tool.called', { id: 'call_1', input: {} }));
+  assert.ok(call[0]?.kind === 'tool_call');
+  assert.equal(call[0].toolName, 'tool', "the earlier call's name was kept for a later call of the same id");
+  const [result] = fill.fromMessage(child('session.tool.success', { id: 'call_1', content: [] }));
+  assert.ok(result?.kind === 'tool_result');
+  assert.equal(
+    result.status,
+    'completed',
+    "the earlier call's refusal was kept for a later call of the same id",
+  );
+});
+
 test("a subagent's items are filled only where they are wanted, under the call that started it", () => {
   const child = { session: 'ses_c', spawnedBy: 'call_t' };
   const quiet = new OpencodeItemFill('key');

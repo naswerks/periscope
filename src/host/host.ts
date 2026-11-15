@@ -889,7 +889,7 @@ function composeOpencodeSession(
     onOutcome: (outcome) => {
       recordGateOutcome(machine, outcome);
       if (outcome.kind === 'deny' || outcome.kind === 'refused' || outcome.kind === 'expired') {
-        items.gateBlocked(outcome.request.toolUseId);
+        items.gateBlocked(outcome.request.toolUseId, outcome.request.agentId ?? null);
       }
       options.onOutcome?.(outcome);
     },

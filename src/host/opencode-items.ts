@@ -41,12 +41,22 @@ function contentText(value: unknown): string | null {
   return texts.length === 0 ? null : texts.join('\n');
 }
 
+/** What a call is kept under: its session and its id together. */
+function callKey(session: string, id: string): string {
+  return `${session}\u0000${id}`;
+}
+
 export class OpencodeItemFill implements ItemFill<OpencodeMessage> {
   readonly #sessionKey: string;
   readonly #spawnedItems: () => boolean;
   readonly #toolName: (name: string) => string;
+  /**
+   * The calls this host's gate refused, and each call's tool name from its input's start. Both are kept by
+   * the call's session and its id together, since one server runs a session and its subagents and a provider
+   * may hand two of them the same id, and both are forgotten when the call ends, whether or not its items
+   * are filled.
+   */
   readonly #blocked = new Set<string>();
-  /** Each call's tool name, from its input's start, by call id. */
   readonly #names = new Map<string, string>();
   #runs = 0;
   #notices = 0;
@@ -59,20 +69,33 @@ export class OpencodeItemFill implements ItemFill<OpencodeMessage> {
     this.#toolName = options.toolName ?? ((name) => name);
   }
 
-  /** This host's gate refused the call `toolUseId`, so its result is `blocked`. */
-  gateBlocked(toolUseId: string): void {
-    this.#blocked.add(toolUseId);
+  /**
+   * This host's gate refused the call `toolUseId`, so its result is `blocked`. `session` is the subagent's
+   * session the call ran in; null, or absent, for the session's own.
+   */
+  gateBlocked(toolUseId: string, session: string | null = null): void {
+    this.#blocked.add(callKey(session ?? '', toolUseId));
   }
 
   fromMessage(message: OpencodeMessage): readonly AgentItem[] {
     if (message.kind !== 'event') return [];
     const event = message.event;
     const data = opencodeData(event);
+    // The session a call is kept under: the session's own as the empty name, a subagent's by its id.
+    const scope = message.main ? '' : (message.session ?? '');
     if (event.type === 'session.tool.input.started') {
       const id = opencodeWord(data['id']);
       const name = opencodeWord(data['name']);
-      if (id !== null && name !== null) this.#names.set(id, name);
+      if (id !== null && name !== null) this.#names.set(callKey(scope, id), name);
       return [];
+    }
+    // A call that has ended is forgotten here, before anything decides whether its items are filled.
+    const ended = event.type === 'session.tool.success' || event.type === 'session.tool.failed';
+    const endedKey = ended ? callKey(scope, opencodeWord(data['id']) ?? '') : null;
+    const wasBlocked = endedKey !== null && this.#blocked.has(endedKey);
+    if (endedKey !== null) {
+      this.#blocked.delete(endedKey);
+      this.#names.delete(endedKey);
     }
     if (!message.main && (message.spawnedBy === null || !this.#spawnedItems())) return [];
     if (message.session === null) return [];
@@ -159,7 +182,7 @@ export class OpencodeItemFill implements ItemFill<OpencodeMessage> {
       case 'session.tool.called': {
         const id = opencodeWord(data['id']);
         if (id === null) return [];
-        const name = this.#names.get(id) ?? 'tool';
+        const name = this.#names.get(callKey(scope, id)) ?? 'tool';
         const spelled = this.#toolName(name);
         const input = data['input'];
         return [
@@ -183,7 +206,6 @@ export class OpencodeItemFill implements ItemFill<OpencodeMessage> {
       case 'session.tool.failed': {
         const id = opencodeWord(data['id']);
         if (id === null) return [];
-        this.#names.delete(id);
         const failed = event.type === 'session.tool.failed';
         const output = contentText(data['content']) ?? (failed ? opencodeErrorWords(data['error']) : null);
         return [
@@ -193,7 +215,7 @@ export class OpencodeItemFill implements ItemFill<OpencodeMessage> {
             turnId: null,
             ...parent,
             toolUseId: id,
-            status: this.#blocked.has(id) ? 'blocked' : failed ? 'failed' : 'completed',
+            status: wasBlocked ? 'blocked' : failed ? 'failed' : 'completed',
             output,
             exitCode: null,
             durationMs: null,
