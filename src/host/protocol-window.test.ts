@@ -1933,3 +1933,100 @@ test('a controller on protocol 19 reads the hello of a host serving several repo
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+test('a controller on protocol 19 decodes every vector protocol 20 adds that a host sends: an item naming its parent, and what a task entry reports', () => {
+  const corpus = fileURLToPath(new URL('../../contracts/wire-vectors/', import.meta.url));
+  const added = readdirSync(corpus).filter((file) =>
+    /^session_update\.(agent-item-parent|agent-facts-tasks-reported|agent-facts-tasks-summary-non-bmp-at-bound)\.json$/.test(
+      file,
+    ),
+  );
+  assert.equal(added.length, 3, `the vectors this reads: ${added.join(', ')}`);
+  for (const file of added) {
+    const wire = (JSON.parse(readFileSync(`${corpus}${file}`, 'utf8')) as { wire: string }).wire;
+    const read = V19.safeParse(JSON.parse(wire));
+    assert.ok(read.success, `${file}: ${read.success ? '' : JSON.stringify(read.error.issues)}`);
+  }
+});
+
+/** A Claude session's subagent message, on a link welcomed at `version`: the items the peer received for it. */
+async function subagentItemsAt(version: number): Promise<Record<string, unknown>[]> {
+  const peer = await peerOn({ welcomeVersion: version, ack: true });
+  const cwd = await tempDir('protocol-window');
+  const agents = fakeAgents();
+  const host = new PeriscopeHost({
+    controllerUrl: peer.url,
+    hostId: 'host-1',
+    decide: allow,
+    protectedPaths: [],
+    registry: new SessionRegistry({ baseEnv: {}, homeDir: cwd, startProcess: agents.start }),
+  });
+  try {
+    host.start();
+    await waitFor(() => host.link.negotiatedVersion === version, `the welcome at ${version}`, TIMEOUT_MS);
+    peer.send('session-1', 1, sessionNew(cwd));
+    await waitFor(() => agents.started.length === 1, 'the session to start', TIMEOUT_MS);
+    const agent = agents.started[0]!;
+    agent.emit(initMessage('agent-1'));
+    agent.emit({
+      type: 'assistant',
+      uuid: 'inner-1',
+      session_id: 'agent-1',
+      parent_tool_use_id: 'toolu_task',
+      message: {
+        id: 'msg-inner-1',
+        model: 'model-id-1',
+        content: [{ type: 'text', text: 'inside' }],
+        usage: {},
+      },
+    } as unknown as SDKMessage);
+    agent.emit({
+      type: 'assistant',
+      uuid: 'outer-1',
+      session_id: 'agent-1',
+      parent_tool_use_id: null,
+      message: {
+        id: 'msg-outer-1',
+        model: 'model-id-1',
+        content: [{ type: 'text', text: 'outside' }],
+        usage: {},
+      },
+    } as unknown as SDKMessage);
+    const items = (): Record<string, unknown>[] =>
+      sentFrames(peer.raw)
+        .filter((one) => one.sessionId === 'session-1' && bodyOf(one)['update'] === 'agent_item')
+        .map((one) => bodyOf(one)['item'] as Record<string, unknown>);
+    // The main-thread message follows the subagent's, so once its item has arrived every item has.
+    await waitFor(
+      () => items().some((item) => item['itemId'] === 'outer-1:0'),
+      'the main-thread item',
+      TIMEOUT_MS,
+    );
+    for (const one of sentFrames(peer.raw).filter((sent) => V19_KINDS.includes(sent.kind))) {
+      const read = V19.safeParse(JSON.parse(one.raw));
+      assert.ok(read.success, read.success ? '' : JSON.stringify(read.error.issues));
+    }
+    return items();
+  } finally {
+    host.stop();
+    await peer.close();
+    await rm(cwd, { recursive: true, force: true });
+  }
+}
+
+test("a controller on protocol 19 is sent no subagent's item, which it would read as the session's own; one on 20 is sent it naming its parent", async () => {
+  const at19 = await subagentItemsAt(19);
+  assert.deepEqual(
+    at19.map((item) => [item['itemId'], item['parentId'] ?? null]),
+    [['outer-1:0', null]],
+    'a controller at 19 reads no parent, so a subagent item would land in the main conversation',
+  );
+  const at20 = await subagentItemsAt(20);
+  assert.deepEqual(
+    at20.map((item) => [item['itemId'], item['parentId'] ?? null]),
+    [
+      ['inner-1:0', 'toolu_task'],
+      ['outer-1:0', null],
+    ],
+  );
+});

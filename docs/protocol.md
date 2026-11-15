@@ -90,8 +90,9 @@ A hello with no range does not decode: `protocolRange` is a declared member ther
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
 `[19, 20]`. Version 20 adds, every member optional:
 
-- `parentId` on every conversation item: the call that spawned the agent whose turn the item is from,
-  null on the session's own thread ([The conversation item stream](#the-conversation-item-stream));
+- `parentId` on a conversation item: the call that spawned the agent whose turn the item is from; an
+  item of the session's own thread names none, which reads as null, so it is the item version 19 carried
+  ([The conversation item stream](#the-conversation-item-stream));
 - on each entry of a `tasks` fact, running or settled: the spawning call (`toolUseId`), the task's own
   `summary`, its `usage` and the `outputFile` its output is written to ([The fact layer](#the-fact-layer)).
 
@@ -402,14 +403,21 @@ them into typed members and puts each on the update lane as an `agent_facts` bod
 `{ update: 'agent_facts', fact, sourceId?, observedAt? }`, right behind the message it came from.
 The message still rides; a consumer that wants it whole still has it.
 
-| `fact.kind`      | What it states                                                                                                             | Claude's source                                                              |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `session_handle` | `handle`: the runtime's own resumable id                                                                                   | `system/init.session_id`, when it first appears or changes                   |
-| `agent_receipt`  | the version, model, approval mode, effort, skills, plugins, plugin errors and MCP servers                                  | `system/init`, when any member differs from the last receipt                 |
-| `turn_record`    | `totals` and `turn`, each a `SpendFacts`, with `turnScope`, `numTurns`, `durationMs`                                       | each `result`                                                                |
-| `usage_sample`   | `contextTokens`, `contextWindow`, `cacheTtl`, `cacheReadTokens` and `mainThread` for one model call                        | each main-thread `assistant` call, once per API message id                   |
-| `tasks`          | `running`: every task running now, whole, and `settled`: the tasks ended since the turn began; each fact replaces the last | `background_tasks_changed` and the task edges, composed; `task_notification` |
-| `compaction`     | `status` (`started`, `ended`), `trigger`, `tokensBefore`, `tokensAfter`                                                    | the observer's compaction entry opening and closing                          |
+| `fact.kind`      | What it states                                                                                                             | Claude's source                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `session_handle` | `handle`: the runtime's own resumable id                                                                                   | `system/init.session_id`, when it first appears or changes                                             |
+| `agent_receipt`  | the version, model, approval mode, effort, skills, plugins, plugin errors and MCP servers                                  | `system/init`, when any member differs from the last receipt                                           |
+| `turn_record`    | `totals` and `turn`, each a `SpendFacts`, with `turnScope`, `numTurns`, `durationMs`                                       | each `result`                                                                                          |
+| `usage_sample`   | `contextTokens`, `contextWindow`, `cacheTtl`, `cacheReadTokens` and `mainThread` for one model call                        | each main-thread `assistant` call, once per API message id                                             |
+| `tasks`          | `running`: every task running now, whole, and `settled`: the tasks ended since the turn began; each fact replaces the last | `background_tasks_changed` and the task edges, composed; `task_notification`; from v20 `task_progress` |
+| `compaction`     | `status` (`started`, `ended`), `trigger`, `tokensBefore`, `tokensAfter`                                                    | the observer's compaction entry opening and closing                                                    |
+
+From v20 a `tasks` entry, running or settled, may also carry what the runtime reported of the task: the
+call that started it (`toolUseId`), its latest `summary`, its `usage` (`tokens`, `toolUses`,
+`durationMs`) and the `outputFile` its output is written to (a path only). Each is stated only where the
+runtime reported it, so an absent one reads as null, and each text is held to `MAX_FACT_TEXT_LENGTH`, as
+the codec holds it. Claude's come from `task_started`, `task_progress` (the summary a running subagent
+writes about every 30 seconds) and `task_notification`.
 
 Codex's sources: `session_handle` is the thread id the opening answer names; `agent_receipt` is
 built from the opening answers, so it rides before `ready`, and sent again on a reroute, a skills
@@ -549,7 +557,8 @@ consumer folds every runtime's conversation with one reader; the native message 
 an addition: every other frame a session sends is the same with them or without them
 (`src/host/claude-wire-replay.test.ts` holds Claude's recorded wire both ways).
 
-An item is tagged by `kind`, and every item carries `itemId`, `turnId` and `truncated`:
+An item is tagged by `kind`, and every item carries `itemId`, `turnId` and `truncated`, and from v20 may
+carry `parentId` (below):
 
 | `item.kind`   | Its members                                                                                                            |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -581,9 +590,12 @@ An item is tagged by `kind`, and every item carries `itemId`, `turnId` and `trun
 - **The budget.** An item takes at most `MAX_AGENT_ITEM_BYTES` as JSON. A text member past it is cut
   at a character and the item says so in `truncated`; a tool call's `input` past it is left out whole
   (`input: null`, `truncated: true`), never cut. The codec refuses an item past the budget.
-- **The main thread.** Items state the session's own conversation. A subagent's (Claude) or a
-  sub-agent thread's (Codex) messages ride `agent_message` and fill no item; its call and result in
-  the main conversation do.
+- **The parent.** From v20 an item a subagent's turn produced names `parentId`, the call that
+  spawned the subagent (Claude's `tool_use` id); an item of the session's own thread names none,
+  which reads as null. On a link negotiated below 20 a subagent's messages fill no item, since such a
+  controller reads no parent and would fold them into the main conversation; they ride
+  `agent_message`, and the subagent's call and result in the main conversation are items. Claude's
+  subagents fill items at 20; a Codex sub-agent thread's and a Qwen Code subagent's messages fill none.
 
 Claude's items come from `UserPromptSubmit` (the turn's start and its prompt), each assistant
 `text`, `thinking`, `redacted_thinking` and `tool_use` block, each `tool_result` block, each `result`

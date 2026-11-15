@@ -120,12 +120,31 @@ const NOT_OPTIONS: readonly { readonly file: string; readonly option: string }[]
   { file: 'host/qwen-process.ts', option: 'canUseTool' },
 ];
 
+/**
+ * The one `settings` the package composes: a Claude session's, in `composeOptions`, an object literal
+ * whose only key is `crossSessionInbound`, set to the host's constant. The key refuses a message another
+ * session on the machine sends, so it can only close a lane; no request key reaches it. The allowance is
+ * the literal's shape: a second key, a spread, a value from anywhere else or a second site is a violation
+ * like any other.
+ */
+const INBOUND_ONLY = /^\s*settings: \{ crossSessionInbound: CROSS_SESSION_INBOUND \},$/;
+const INBOUND_MODULE = 'host/agent-process.ts';
+
+/** Whether `line` of the module at `path` is the inbound allowance. */
+const inboundAllowed = (path: string, line: string): boolean =>
+  path === INBOUND_MODULE && INBOUND_ONLY.test(line);
+
 test('regression: nothing in this package sets an option that could answer a permission before the gate does', () => {
   const violations: string[] = [];
+  const inboundSites: string[] = [];
   for (const file of sourceFiles()) {
     file.text.split('\n').forEach((line, index) => {
       const hit = SETS.exec(line);
       if (hit !== null && NOT_OPTIONS.some((one) => one.file === file.path && one.option === hit[1])) return;
+      if (hit?.[1] === 'settings' && inboundAllowed(file.path, line)) {
+        inboundSites.push(`${file.path}:${index + 1}`);
+        return;
+      }
       if (hit !== null) violations.push(`${file.path}:${index + 1} sets "${hit[1]}"`);
     });
   }
@@ -135,6 +154,26 @@ test('regression: nothing in this package sets an option that could answer a per
     [],
     `an option that shadows the gate is being set:\n  ${violations.join('\n  ')}`,
   );
+  assert.equal(
+    inboundSites.length,
+    1,
+    `the inbound setting is allowed at exactly one site; found ${inboundSites.length}: ${inboundSites.join(', ')}`,
+  );
+});
+
+test('control: the inbound allowance matches its one shape and nothing wider', () => {
+  const allowed = '    settings: { crossSessionInbound: CROSS_SESSION_INBOUND },';
+  assert.equal(inboundAllowed(INBOUND_MODULE, allowed), true);
+  assert.equal(inboundAllowed('host/host.ts', allowed), false, 'the allowance is held to its one module');
+  for (const wider of [
+    "    settings: { crossSessionInbound: 'accept' },",
+    '    settings: { crossSessionInbound: CROSS_SESSION_INBOUND, permissions: { allow: [] } },',
+    '    settings: { ...request.settings, crossSessionInbound: CROSS_SESSION_INBOUND },',
+    '    settings: request.settings,',
+  ]) {
+    assert.equal(inboundAllowed(INBOUND_MODULE, wider), false, `the allowance admits: ${wider}`);
+    assert.equal(SETS.exec(wider)?.[1], 'settings', `the scan does not see: ${wider}`);
+  }
 });
 
 test('regression: permissionMode travels only through the wire, reader and process path, never a settings file or a rule list', () => {

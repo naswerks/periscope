@@ -49,7 +49,8 @@ export class QwenItemFill implements ItemFill<QwenMessage> {
   /** `sessionKey` is the periscope session's own key: what a prompt's item id is made from. */
   constructor(sessionKey: string) {
     this.#sessionKey = sessionKey;
-    this.#claude = new ClaudeItemFill(sessionKey);
+    // A sub-agent's message fills no item here: this fill names no item's parent yet.
+    this.#claude = new ClaudeItemFill(sessionKey, { spawnedItems: () => false });
   }
 
   /** This host's gate refused the call `toolUseId`, so its result is `blocked`. */
@@ -70,7 +71,7 @@ export class QwenItemFill implements ItemFill<QwenMessage> {
         return this.#turnStarted();
       case 'assistant':
       case 'user':
-        // The Claude fill reads these two kinds' blocks; a sub-agent's message it leaves alone itself.
+        // The Claude fill reads these two kinds' blocks; a sub-agent's message it is told to leave alone.
         return this.#claude
           .fromMessage(body as unknown as SDKMessage)
           .map((item) =>

@@ -15,6 +15,7 @@ import type { AgentProcessRequest, SDKMessage } from './agent-process.js';
 import {
   AGENT_PROCESS_REQUEST_KEYS,
   AGENT_SELECTION_OPTION_KEYS,
+  CROSS_SESSION_INBOUND,
   CLI_PARITY_OPTION_KEYS,
   PERSISTENCE_OPTION_KEYS,
   SHADOWING_LANES,
@@ -450,4 +451,21 @@ test('regression: turning thinking on sends a positive cap, never null; turning 
   });
   assert.deepEqual(thinkingControl({ type: 'adaptive' }), { cap: THINKING_ON_CAP, display: undefined });
   assert.deepEqual(thinkingControl({ type: 'disabled' }), { cap: 0, display: undefined });
+});
+
+test("every Claude session asks for its subagents' progress summaries and refuses another session's messages, whatever it was asked", () => {
+  assert.equal(CROSS_SESSION_INBOUND, 'refuse');
+  for (const asked of [
+    request(),
+    request({ permissionMode: 'bypassPermissions' }),
+    request({ permissionMode: 'default', settingSources: ['user', 'project', 'local'] }),
+  ]) {
+    const options = composeOptions(asked);
+    assert.equal(options.agentProgressSummaries, true, 'a subagent states what it is doing');
+    assert.deepEqual(
+      options.settings,
+      { crossSessionInbound: 'refuse' },
+      "the one setting composed refuses another session's messages, and carries nothing else",
+    );
+  }
 });

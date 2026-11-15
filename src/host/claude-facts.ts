@@ -19,7 +19,10 @@
  *     cache reads the call reported.
  *   - `tasks`: the running set, composed from the level message and the task edges, and the tasks
  *     settled since the turn began, from each `task_notification`'s status; the next turn's init
- *     clears them.
+ *     clears them. Each entry carries what the task messages reported of it and nothing else: the
+ *     call that started it (`task_started`, `task_progress`, `task_notification`), its latest summary
+ *     and usage (`task_progress`, `task_notification`) and its output file (`task_notification`).
+ *     Every text is cut at its bound (`factText`).
  *   - `compaction`: the observer's report, not a message.
  * And one fragment per `content_block_delta` that carries text, thinking or a tool's arguments.
  */
@@ -34,10 +37,13 @@ import type {
   RunningTaskEntry,
   SettledTaskEntry,
   SpendFacts,
+  TaskReport,
   TaskSettlement,
+  TaskUsage,
   TurnRecordFact,
   UsageSampleFact,
 } from '../control/frames.js';
+import { factText } from '../control/fact-text.js';
 import { DEFAULT_RUNTIME, TASK_SETTLEMENTS } from '../control/frames.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import type { CompactionReport } from '../state/observer.js';
@@ -105,6 +111,8 @@ export class ClaudeFactLift implements FactLift {
   #edges: readonly RunningTaskEntry[] = [];
   /** The tasks settled since the turn began, each with how it ended. */
   #settled: readonly SettledTaskEntry[] = [];
+  /** What the task messages reported of each task beyond its id, type and description, by task id. */
+  readonly #reports = new Map<string, TaskReport>();
   /** The tasks fact last sent, as its key: none yet reads as nothing running and nothing settled. */
   #running = tasksKey([], []);
 
@@ -133,6 +141,7 @@ export class ClaudeFactLift implements FactLift {
           .filter((task): task is RunningTaskEntry => task !== null);
         this.#tasksIfChanged(facts);
       } else if (message.subtype === 'task_started') {
+        this.#report(message.task_id, { toolUseId: message.tool_use_id });
         const started = runningTask(message.task_id, message.task_type, message.description);
         if (
           started !== null &&
@@ -143,7 +152,20 @@ export class ClaudeFactLift implements FactLift {
           this.#edges = [...this.#edges, started];
           this.#tasksIfChanged(facts);
         }
+      } else if (message.subtype === 'task_progress') {
+        this.#report(message.task_id, {
+          toolUseId: message.tool_use_id,
+          summary: message.summary,
+          usage: message.usage,
+        });
+        this.#tasksIfChanged(facts);
       } else if (message.subtype === 'task_notification') {
+        this.#report(message.task_id, {
+          toolUseId: message.tool_use_id,
+          summary: message.summary,
+          usage: message.usage,
+          outputFile: message.output_file,
+        });
         this.#settle(message.task_id, message.status);
         this.#edges = this.#edges.filter((edge) => edge.taskId !== message.task_id);
         this.#tasksIfChanged(facts);
@@ -265,8 +287,34 @@ export class ClaudeFactLift implements FactLift {
       taskId,
       type: started === undefined || started.type === '' ? null : started.type,
       status: status as TaskSettlement,
+      ...this.#reports.get(taskId),
     };
     this.#settled = [...this.#settled.filter((task) => task.taskId !== taskId), entry];
+    this.#reports.delete(taskId);
+  }
+
+  /**
+   * What one task message reported of task `taskId`, kept for its entries: each member the message
+   * carried replaces the one kept, and a member it did not carry leaves the kept one as it was. Text is
+   * cut at its bound, and a usage that is not three whole counts is not kept.
+   */
+  #report(
+    taskId: string,
+    reported: { toolUseId?: unknown; summary?: unknown; usage?: unknown; outputFile?: unknown },
+  ): void {
+    if (typeof taskId !== 'string' || taskId === '') return;
+    const kept = this.#reports.get(taskId) ?? {};
+    const toolUseId = textOrNull(reported.toolUseId);
+    const summary = textOrNull(reported.summary);
+    const usage = taskUsageOf(reported.usage);
+    const outputFile = textOrNull(reported.outputFile);
+    this.#reports.set(taskId, {
+      ...kept,
+      ...(toolUseId === null ? {} : { toolUseId: factText(toolUseId) }),
+      ...(summary === null ? {} : { summary: factText(summary) }),
+      ...(usage === null ? {} : { usage }),
+      ...(outputFile === null ? {} : { outputFile: factText(outputFile) }),
+    });
   }
 
   /**
@@ -275,7 +323,9 @@ export class ClaudeFactLift implements FactLift {
    */
   #tasksIfChanged(facts: AgentFact[]): void {
     const listed = new Set(this.#level.map((task) => task.taskId));
-    const running = [...this.#level, ...this.#edges.filter((edge) => !listed.has(edge.taskId))];
+    const running = [...this.#level, ...this.#edges.filter((edge) => !listed.has(edge.taskId))].map(
+      (task) => ({ ...task, ...this.#reports.get(task.taskId) }),
+    );
     const written = tasksKey(running, this.#settled);
     if (written === this.#running) return;
     this.#running = written;
@@ -445,14 +495,26 @@ function withoutSelector(id: string): string {
   return open > 0 ? id.slice(0, open) : id;
 }
 
-/** One running task, or null for an entry with no id. */
+/** One running task, or null for an entry with no id. Its description is cut at its bound. */
 function runningTask(taskId: unknown, type: unknown, description: unknown): RunningTaskEntry | null {
   if (typeof taskId !== 'string' || taskId.trim() === '') return null;
   return {
     taskId,
     type: typeof type === 'string' ? type : '',
-    description: typeof description === 'string' ? description : null,
+    description: typeof description === 'string' ? factText(description) : null,
   };
+}
+
+/** A task message's usage as the wire carries it, or null unless it states three whole counts. */
+function taskUsageOf(usage: unknown): TaskUsage | null {
+  if (typeof usage !== 'object' || usage === null) return null;
+  const counts = usage as { total_tokens?: unknown; tool_uses?: unknown; duration_ms?: unknown };
+  const tokens = wholeOrNull(counts.total_tokens);
+  const toolUses = wholeOrNull(counts.tool_uses);
+  const durationMs = wholeOrNull(counts.duration_ms);
+  return tokens === null || toolUses === null || durationMs === null
+    ? null
+    : { tokens, toolUses, durationMs };
 }
 
 /** The fragment a streamed content delta carries, or null for every other stream event. */

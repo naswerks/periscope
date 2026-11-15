@@ -9,6 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { AgentFact, ModelSpendFact } from '../control/frames.js';
+import { MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
 import type { SDKMessage } from './agent-process.js';
 import { ClaudeFactLift, costBasisOf, rolledUpBasis } from './claude-facts.js';
 
@@ -637,4 +638,121 @@ test('effortReported tells an init that stated no effort from one that carried n
   const absent = only(factsOf(new ClaudeFactLift(), silent), 'agent_receipt')[0];
   assert.equal(absent?.effort, null);
   assert.equal(absent?.effortReported, false, 'the init carried no effort: its null says nothing');
+});
+
+// ---------------------------------------------------------------------------
+// what a task reported of itself
+// ---------------------------------------------------------------------------
+
+const progressed = (taskId: string, over: Record<string, unknown> = {}): SDKMessage =>
+  message({
+    type: 'system',
+    subtype: 'task_progress',
+    uuid: `progress-${taskId}`,
+    task_id: taskId,
+    description: `task ${taskId}`,
+    usage: { total_tokens: 1200, tool_uses: 3, duration_ms: 4500 },
+    ...over,
+  });
+
+const lastRunning = (facts: readonly AgentFact[]): readonly unknown[] =>
+  only(facts, 'tasks').at(-1)?.running ?? [];
+
+test('a running task carries the call that started it, and its latest summary and usage as the task messages report them', () => {
+  const lift = new ClaudeFactLift();
+  factsOf(lift, started('agent-1', 'local_agent', { tool_use_id: 'toolu_task' }));
+  const first = factsOf(lift, progressed('agent-1', { summary: 'reading the store' }));
+  assert.deepEqual(lastRunning(first), [
+    {
+      taskId: 'agent-1',
+      type: 'local_agent',
+      description: 'task agent-1',
+      toolUseId: 'toolu_task',
+      summary: 'reading the store',
+      usage: { tokens: 1200, toolUses: 3, durationMs: 4500 },
+    },
+  ]);
+  const later = factsOf(
+    lift,
+    progressed('agent-1', { usage: { total_tokens: 2400, tool_uses: 5, duration_ms: 9000 } }),
+  );
+  assert.deepEqual(
+    lastRunning(later),
+    [
+      {
+        taskId: 'agent-1',
+        type: 'local_agent',
+        description: 'task agent-1',
+        toolUseId: 'toolu_task',
+        summary: 'reading the store',
+        usage: { tokens: 2400, toolUses: 5, durationMs: 9000 },
+      },
+    ],
+    'a progress message with no summary keeps the last one, and its usage replaces the last',
+  );
+});
+
+test('a settled task carries what its notification reported: the call, the summary, the usage and the output file', () => {
+  const lift = new ClaudeFactLift();
+  factsOf(lift, init(), started('agent-1', 'local_agent', { tool_use_id: 'toolu_task' }));
+  const done = message({
+    type: 'system',
+    subtype: 'task_notification',
+    uuid: 'done-agent-1',
+    task_id: 'agent-1',
+    tool_use_id: 'toolu_task',
+    status: 'completed',
+    summary: 'mapped the store',
+    output_file: '/tmp/tasks/agent-1.output',
+    usage: { total_tokens: 3000, tool_uses: 7, duration_ms: 12000 },
+  });
+  assert.deepEqual(settledOf(factsOf(lift, done)), [
+    [
+      {
+        taskId: 'agent-1',
+        type: 'local_agent',
+        status: 'completed',
+        toolUseId: 'toolu_task',
+        summary: 'mapped the store',
+        usage: { tokens: 3000, toolUses: 7, durationMs: 12000 },
+        outputFile: '/tmp/tasks/agent-1.output',
+      },
+    ],
+  ]);
+});
+
+test('control: a member no task message carried is absent, never guessed, and a usage that is not three whole counts is not kept', () => {
+  const lift = new ClaudeFactLift();
+  const listed = factsOf(lift, level([{ task_id: 'bash-1', task_type: 'local_bash', description: 'suite' }]));
+  assert.deepEqual(lastRunning(listed), [{ taskId: 'bash-1', type: 'local_bash', description: 'suite' }]);
+  const partial = factsOf(lift, progressed('bash-1', { usage: { total_tokens: 10, tool_uses: 1 } }));
+  assert.deepEqual(
+    only(partial, 'tasks'),
+    [],
+    'a usage missing a count states nothing, and a tasks fact that states nothing new is not sent',
+  );
+});
+
+test('every text a task entry carries is cut at its bound, the description among them', () => {
+  const long = 'x'.repeat(MAX_FACT_TEXT_LENGTH + 10);
+  const lift = new ClaudeFactLift();
+  factsOf(lift, started('agent-1', 'local_agent', { description: long }));
+  const [entry] = lastRunning(factsOf(lift, progressed('agent-1', { summary: long }))) as {
+    description: string;
+    summary: string;
+  }[];
+  assert.equal(entry?.description.length, MAX_FACT_TEXT_LENGTH);
+  assert.equal(entry?.summary.length, MAX_FACT_TEXT_LENGTH);
+  const done = message({
+    type: 'system',
+    subtype: 'task_notification',
+    uuid: 'done-agent-1',
+    task_id: 'agent-1',
+    status: 'completed',
+    summary: long,
+    output_file: long,
+  });
+  const [settled] = (settledOf(factsOf(lift, done))[0] ?? []) as { summary: string; outputFile: string }[];
+  assert.equal(settled?.summary.length, MAX_FACT_TEXT_LENGTH);
+  assert.equal(settled?.outputFile.length, MAX_FACT_TEXT_LENGTH);
 });

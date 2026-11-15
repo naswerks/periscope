@@ -311,7 +311,7 @@ export const MESSAGE_COVERAGE = {
   },
   'system/task_progress': {
     handling: 'declined',
-    note: "periodic progress for a running task. High volume, and the entry's own age is the number that matters.",
+    note: "periodic progress for a running task. High volume, and the entry's own age is the number that matters for the machine. The fact lift reads it, and nothing here does: the task's summary and usage ride its entry in the `tasks` fact.",
   },
   'system/background_tasks_changed': {
     handling: 'declined',

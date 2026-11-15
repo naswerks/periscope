@@ -1,0 +1,55 @@
+{
+  "expect": {
+    "decode": "ok"
+  },
+  "frame": {
+    "frame": "session",
+    "sessionId": "session-1",
+    "seq": 1,
+    "at": "2000-01-01T00:00:00.000Z",
+    "payload": {
+      "kind": "session_update",
+      "body": {
+        "update": "agent_facts",
+        "fact": {
+          "kind": "tasks",
+          "runtime": "claude",
+          "running": [
+            {
+              "taskId": "agent-1",
+              "type": "local_agent",
+              "description": "map the store",
+              "toolUseId": "toolu_task",
+              "summary": "reading the store",
+              "usage": {
+                "tokens": 1200,
+                "toolUses": 3,
+                "durationMs": 4500
+              }
+            }
+          ],
+          "settled": [
+            {
+              "taskId": "bash-1",
+              "type": "local_bash",
+              "status": "completed",
+              "toolUseId": "toolu_bash",
+              "summary": "the suite passed",
+              "usage": {
+                "tokens": 0,
+                "toolUses": 0,
+                "durationMs": 61000
+              },
+              "outputFile": "/tmp/tasks/bash-1.output"
+            }
+          ]
+        },
+        "sourceId": "message-uuid-4",
+        "observedAt": "2000-01-01T00:00:00.000Z"
+      }
+    }
+  },
+  "name": "session_update.agent-facts-tasks-reported",
+  "protocolVersion": 20,
+  "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"session_update\",\"body\":{\"update\":\"agent_facts\",\"fact\":{\"kind\":\"tasks\",\"runtime\":\"claude\",\"running\":[{\"taskId\":\"agent-1\",\"type\":\"local_agent\",\"description\":\"map the store\",\"toolUseId\":\"toolu_task\",\"summary\":\"reading the store\",\"usage\":{\"tokens\":1200,\"toolUses\":3,\"durationMs\":4500}}],\"settled\":[{\"taskId\":\"bash-1\",\"type\":\"local_bash\",\"status\":\"completed\",\"toolUseId\":\"toolu_bash\",\"summary\":\"the suite passed\",\"usage\":{\"tokens\":0,\"toolUses\":0,\"durationMs\":61000},\"outputFile\":\"/tmp/tasks/bash-1.output\"}]},\"sourceId\":\"message-uuid-4\",\"observedAt\":\"2000-01-01T00:00:00.000Z\"}}}"
+}

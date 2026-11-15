@@ -185,10 +185,14 @@ test('the wire file carries the request, every lane and the gate: messages, fact
 /** The fact members a Claude session's facts carry beside the members the base wire holds. */
 const ADDED_FACT_MEMBERS: readonly string[] = ['effortReported', 'cacheReadTokens', 'settled'];
 
+/** The members a tasks fact's running entries carry beside the ones the base wire holds. */
+const ADDED_TASK_MEMBERS: readonly string[] = ['toolUseId', 'summary', 'usage', 'outputFile'];
+
 /**
- * The wire without its additions: every `agent_item` frame left out, every added fact member removed,
- * and a tasks fact that then restates the running set before it left out (its only news was a
- * settlement); the frames that remain are numbered again from one. Every other line is as it was.
+ * The wire without its additions: every `agent_item` frame left out, every added fact member and every
+ * member a running entry gained removed, and a tasks fact that then restates the running set before it
+ * left out (its only news was a settlement, a summary or a usage); the frames that remain are numbered
+ * again from one. Every other line is as it was.
  */
 function withoutAdditions(text: string): string {
   const out: string[] = [];
@@ -207,6 +211,9 @@ function withoutAdditions(text: string): string {
     if (body?.['update'] === 'agent_facts') {
       const fact = body['fact'] as Frame;
       for (const member of ADDED_FACT_MEMBERS) delete fact[member];
+      for (const entry of (fact['running'] as Frame[] | undefined) ?? []) {
+        for (const member of ADDED_TASK_MEMBERS) delete entry[member];
+      }
       if (fact['kind'] === 'tasks') {
         const key = JSON.stringify(fact);
         if (key === lastTasks) continue;
@@ -238,30 +245,49 @@ test('control: the base comparison can fail: a member added to an agent message 
   assert.notEqual(withoutAdditions(moved), readFileSync(BASE_FILE, 'utf8'));
 });
 
-test("the recording's items: one per main-thread block, result and compaction, nothing for a subagent", async () => {
+test("the recording's items: one per block, result and compaction, a subagent's naming the call that spawned it", async () => {
   const items = (await recorded)
     .split('\n')
     .filter((line) => line.includes('"update":"agent_item"'))
     .map(
-      (line) => ((JSON.parse(line) as Frame)['payload'] as { body: { item: { kind: string } } }).body.item,
+      (line) =>
+        ((JSON.parse(line) as Frame)['payload'] as { body: { item: { kind: string; parentId?: string } } })
+          .body.item,
     );
-  const count = (kind: string): number => items.filter((item) => item.kind === kind).length;
-  const main = FRAMES.filter(
-    (frame) => frame['parent_tool_use_id'] === null || frame['parent_tool_use_id'] === undefined,
-  );
-  const blocks = (type: string, role: string): number =>
-    main
-      .filter((frame) => frame['type'] === role)
+  const parentOf = (frame: Frame): string | null =>
+    typeof frame['parent_tool_use_id'] === 'string' && frame['parent_tool_use_id'] !== ''
+      ? frame['parent_tool_use_id']
+      : null;
+  const count = (kind: string, parent: string | null): number =>
+    items.filter((item) => item.kind === kind && (item.parentId ?? null) === parent).length;
+  const blocks = (type: string, role: string, parent: string | null): number =>
+    FRAMES.filter((frame) => frame['type'] === role && parentOf(frame) === parent)
       .flatMap((frame) => {
         const content = (frame['message'] as { content?: unknown } | undefined)?.content;
         return Array.isArray(content) ? (content as { type?: unknown }[]) : [];
       })
       .filter((block) => block.type === type).length;
-  assert.equal(count('agent_text'), blocks('text', 'assistant'));
-  assert.equal(count('thinking'), blocks('thinking', 'assistant') + blocks('redacted_thinking', 'assistant'));
-  assert.equal(count('tool_call'), blocks('tool_use', 'assistant'));
-  assert.equal(count('tool_result'), blocks('tool_result', 'user'));
-  assert.equal(count('turn'), FRAMES.filter((frame) => frame['type'] === 'result').length);
-  assert.equal(count('notice'), FRAMES.filter((frame) => frame['subtype'] === 'compact_boundary').length);
-  assert.equal(count('user_text'), 0, 'the recording sends no prompt through the hook');
+  const parents = [null, ...new Set(FRAMES.map(parentOf).filter((parent) => parent !== null))];
+  assert.ok(parents.length > 1, 'the recording holds a subagent turn, so the parents below are read');
+  for (const parent of parents) {
+    const where = parent === null ? 'the main thread' : `the subagent of ${parent}`;
+    assert.equal(count('agent_text', parent), blocks('text', 'assistant', parent), where);
+    assert.equal(
+      count('thinking', parent),
+      blocks('thinking', 'assistant', parent) + blocks('redacted_thinking', 'assistant', parent),
+      where,
+    );
+    assert.equal(count('tool_call', parent), blocks('tool_use', 'assistant', parent), where);
+    assert.equal(count('tool_result', parent), blocks('tool_result', 'user', parent), where);
+  }
+  assert.equal(count('turn', null), FRAMES.filter((frame) => frame['type'] === 'result').length);
+  assert.equal(
+    count('notice', null),
+    FRAMES.filter((frame) => frame['subtype'] === 'compact_boundary').length,
+  );
+  assert.equal(
+    items.filter((item) => item.kind === 'user_text').length,
+    0,
+    'the recording sends no prompt through the hook',
+  );
 });

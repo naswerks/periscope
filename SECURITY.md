@@ -35,6 +35,12 @@ reaches the controller as `session-configure-failed`, measured on Claude Code 2.
 agent session ([gate.md](docs/gate.md)). So bypass is chosen when a session opens, never added to a
 running session that did not start in it.
 
+Every Claude session refuses a message another session on this machine sends it
+(`crossSessionInbound: 'refuse'`, the one setting the host composes, which no controller can change).
+Left unset, the CLI delivers such a message when the two sessions' permission modes match, so a
+bypass-mode session the operator runs elsewhere on the machine could reach a session this host runs in
+bypass. The host's own prompts arrive on the agent's input and are not that lane.
+
 The interactive prompt asks a human sitting at the terminal. That is a fine control when someone is
 sitting there. Periscope exists for the case where nobody is, so the question has to be answered by
 something that is still awake at 3am, and the options are _a stricter gate_ or _no gate_.

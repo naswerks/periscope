@@ -291,6 +291,13 @@ export interface ComposeSessionOptions {
    * @internal
    */
   readonly spawnedWith?: (env: Readonly<Record<string, string | undefined>>) => void;
+  /**
+   * The protocol the link negotiated, read as each item is composed; null before the first handshake,
+   * and absent on a session no link carries. A spawned agent's items are composed only on a link that
+   * carries an item's parent (`itemParentsAtLinkVersion`).
+   * @internal
+   */
+  readonly linkVersion?: () => number | null;
 }
 
 /** One composed session: the handle, its machine, and how to take the wiring back down. */
@@ -392,7 +399,12 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
 
   // The conversation items: read from the session's messages, with the prompt its hook reports and the
   // calls this host's gate refused, which end in a `blocked` result.
-  const items = runtime === DEFAULT_RUNTIME ? new ClaudeItemFill(options.sessionKey) : null;
+  const items =
+    runtime === DEFAULT_RUNTIME
+      ? new ClaudeItemFill(options.sessionKey, {
+          spawnedItems: () => itemParentsAtLinkVersion(options.linkVersion?.() ?? null),
+        })
+      : null;
 
   // The gate records every outcome on the machine. That emission is what makes a deny, an outage and
   // an expiry visible off-box at all, so it is unconditional and the embedder's listener is extra.
@@ -2139,6 +2151,7 @@ export class PeriscopeHost {
       sessionKey,
       cwd,
       sink: this.#link,
+      linkVersion: () => this.#link.negotiatedVersion ?? null,
       // A Qwen Code session's shell calls name `cmd`, a word a controller below protocol 17 does not
       // read; its decider is sent none for it there, and the local gate still reads it.
       decide:
@@ -3263,6 +3276,20 @@ export function decideAtLinkVersion(decide: Decider, version: () => number | nul
     const { shellDialect: _dialect, ...older } = request;
     return decide(older, signal);
   };
+}
+
+/** The first protocol an item may name the call that spawned the agent whose turn it is from. */
+const FIRST_PROTOCOL_CARRYING_ITEM_PARENT = 20;
+
+/**
+ * Whether a link at `version` is sent a spawned agent's items: at 20 or above, and before the first
+ * handshake, as on a link that negotiates nothing. Below 20 an item's `parentId` is read as nothing, so a
+ * spawned agent's item would read as the session's own; such a link is sent none, as version 19 was.
+ *
+ * The version is read when the item is composed, and a frame retained for replay keeps that shape.
+ */
+export function itemParentsAtLinkVersion(version: number | null): boolean {
+  return version === null || version >= FIRST_PROTOCOL_CARRYING_ITEM_PARENT;
 }
 
 /** The first protocol a `repository_read_result` may carry `nextOffset` at. */

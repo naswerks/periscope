@@ -33,6 +33,25 @@ frame it sends decodes unchanged.
   `CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`, `CLAUDE_BG_SESSION_CREDENTIAL` and `CLAUDE_CODE_REMOTE_SDK_URL`,
   so no controller can set them. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses the
   start, by name.
+- Added: `parentId` on every conversation item (`AgentItem`), optional: the call that spawned the agent
+  whose turn the item is from. A Claude subagent's messages now fill items, each naming its spawning
+  call's `tool_use` id; an item of the session's own thread names none, which reads as null, so it is
+  the item 1.10.0 sent. A link negotiated below 20 is sent no subagent's item, since its controller
+  reads no parent: there they ride `agent_message` alone, as before. Codex's and Qwen Code's subagents
+  fill no item yet.
+- Added: what a task reported of itself, on each `tasks` entry, running or settled (`TaskReport`, all
+  optional): the call that started it (`toolUseId`), its latest `summary`, its `usage` (`TaskUsage`:
+  `tokens`, `toolUses`, `durationMs`) and its `outputFile`, each stated only where the runtime reported
+  it. Claude's are read from `task_started`, `task_progress` and `task_notification`; every text a
+  Claude entry carries, its `description` included, is now cut at `MAX_FACT_TEXT_LENGTH`, on a code
+  point boundary, where an over-long description made a frame the codec refused.
+- Added: every Claude session asks for its subagents' progress summaries (`agentProgressSummaries`): a
+  running subagent states what it is doing about every 30 seconds, on its own model, and the summary
+  rides its task's entry.
+- Security: every Claude session refuses a message another session on the machine sends it
+  (`crossSessionInbound: 'refuse'`). Unset, the CLI delivered one when the two sessions' modes matched,
+  so a bypass-mode session elsewhere on the machine could reach a session this host runs in bypass.
+  This host's own prompts are not that lane.
 - Fixed: a Claude compaction that fails ends. The status message that says so
   (`compact_result: 'failed'`) closes the compaction entry, so the `compaction` fact reports `ended`
   and the next compaction reports `started`; the entry stayed open, no `ended` was sent and the next

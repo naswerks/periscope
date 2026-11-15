@@ -36,6 +36,7 @@ import {
   MAX_AGENT_ENTRIES,
   MAX_AGENT_ITEM_BYTES,
   MAX_ENDPOINTS,
+  MAX_FACT_TEXT_LENGTH,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_MIN,
@@ -518,6 +519,36 @@ const FACT_TASKS: TasksFact = {
   ],
 };
 
+/** A tasks fact whose entries state every member protocol 20 adds. */
+const FACT_TASKS_REPORTED: TasksFact = {
+  kind: 'tasks',
+  runtime: 'claude',
+  running: [
+    {
+      taskId: 'agent-1',
+      type: 'local_agent',
+      description: 'map the store',
+      toolUseId: 'toolu_task',
+      summary: 'reading the store',
+      usage: { tokens: 1200, toolUses: 3, durationMs: 4500 },
+    },
+  ],
+  settled: [
+    {
+      taskId: 'bash-1',
+      type: 'local_bash',
+      status: 'completed',
+      toolUseId: 'toolu_bash',
+      summary: 'the suite passed',
+      usage: { tokens: 0, toolUses: 0, durationMs: 61000 },
+      outputFile: '/tmp/tasks/bash-1.output',
+    },
+  ],
+};
+
+/** A character outside the Basic Multilingual Plane: one code point, two UTF-16 code units. */
+const NON_BMP = '\u{20000}';
+
 const FACT_COMPACTION: CompactionFact = {
   kind: 'compaction',
   runtime: 'claude',
@@ -757,6 +788,39 @@ const AUTHORED = {
     },
     { name: 'session_update.agent-item-plan', frame: session(agentItemUpdate('codex', ITEM_PLAN, AT)) },
     { name: 'session_update.agent-item-notice', frame: session(agentItemUpdate('codex', ITEM_NOTICE, AT)) },
+    // The members protocol 20 adds: an item naming the call that spawned the agent whose turn it is from,
+    // and the tasks entries' reports, each stated.
+    {
+      name: 'session_update.agent-item-parent',
+      frame: session(agentItemUpdate('claude', { ...ITEM_AGENT_TEXT, parentId: 'toolu_task' }, AT)),
+    },
+    {
+      name: 'session_update.agent-facts-tasks-reported',
+      frame: session(agentFactsUpdate(FACT_TASKS_REPORTED, 'message-uuid-4', AT)),
+    },
+    // A summary at the bound made of characters outside the BMP: 1000 code points, 2000 UTF-16 code units.
+    // It decodes, so the codec's bound counts code points; its twin one past the bound is refused.
+    {
+      name: 'session_update.agent-facts-tasks-summary-non-bmp-at-bound',
+      frame: session(
+        agentFactsUpdate(
+          {
+            kind: 'tasks',
+            runtime: 'claude',
+            running: [
+              {
+                taskId: 'agent-1',
+                type: 'local_agent',
+                description: null,
+                summary: NON_BMP.repeat(MAX_FACT_TEXT_LENGTH),
+              },
+            ],
+          },
+          null,
+          AT,
+        ),
+      ),
+    },
     {
       name: 'session_update.state-transition-control-tier',
       frame: session(stateTransitionUpdate(TRANSITION_READY_WITH_TIER)),
@@ -2272,6 +2336,54 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
     }),
     expect: refused('frame-malformed'),
   },
+  // The well-formed twin is `session_update.agent-item-parent`; only the parent's length differs.
+  {
+    name: 'refused.agent-item-parent-past-bound',
+    wire: sessionWire({
+      kind: 'session_update',
+      body: {
+        update: 'agent_item',
+        runtime: 'claude',
+        item: { ...ITEM_AGENT_TEXT, parentId: 'x'.repeat(MAX_FACT_TEXT_LENGTH + 1) },
+        observedAt: AT,
+      },
+    }),
+    expect: refused('frame-malformed'),
+  },
+  // The well-formed twin of each below is `session_update.agent-facts-tasks-reported`; one member differs.
+  ...(
+    [
+      [
+        'refused.agent-facts-task-tool-use-id-past-bound',
+        { toolUseId: 'x'.repeat(MAX_FACT_TEXT_LENGTH + 1) },
+      ],
+      ['refused.agent-facts-task-summary-past-bound', { summary: 'x'.repeat(MAX_FACT_TEXT_LENGTH + 1) }],
+      [
+        'refused.agent-facts-task-summary-non-bmp-past-bound',
+        { summary: NON_BMP.repeat(MAX_FACT_TEXT_LENGTH + 1) },
+      ],
+      [
+        'refused.agent-facts-task-output-file-past-bound',
+        { outputFile: 'x'.repeat(MAX_FACT_TEXT_LENGTH + 1) },
+      ],
+      [
+        'refused.agent-facts-task-usage-fraction',
+        { usage: { tokens: 1200.5, toolUses: 3, durationMs: 4500 } },
+      ],
+    ] as const
+  ).map(([name, member]) => ({
+    name,
+    wire: sessionWire({
+      kind: 'session_update',
+      body: {
+        update: 'agent_facts',
+        fact: { ...FACT_TASKS_REPORTED, running: [{ ...FACT_TASKS_REPORTED.running[0], ...member }] },
+        sourceId: 'message-uuid-4',
+        observedAt: AT,
+      },
+    }),
+    expect: refused('frame-malformed'),
+  })),
   // The well-formed twin is `session_update.agent-facts-usage-sample`; only the count differs.
   {
     name: 'refused.malformed-agent-facts',

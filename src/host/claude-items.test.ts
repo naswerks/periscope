@@ -109,8 +109,46 @@ test("an assistant message's blocks: text, thinking and a tool call, each an ite
   ]);
 });
 
-test("control: a subagent's messages fill no item, and neither does a replayed or a plain-text user message", () => {
+test("a subagent's message fills items whose parent is the spawning call, and a main-thread message's items name none", () => {
   const fill = new ClaudeItemFill('handle-1');
+  const inner = fill.fromMessage(
+    assistant(
+      'a-2',
+      [
+        { type: 'text', text: 'inner' },
+        { type: 'tool_use', id: 'toolu_inner', name: 'Read', input: { file_path: '/w/a.ts' } },
+      ],
+      'toolu_task',
+    ),
+  );
+  assert.deepEqual(
+    inner.map((item) => [item.kind, item.parentId]),
+    [
+      ['agent_text', 'toolu_task'],
+      ['tool_call', 'toolu_task'],
+    ],
+    "a subagent's items name the call that spawned it",
+  );
+  const result = fill.fromMessage(
+    user('u-0', [{ type: 'tool_result', tool_use_id: 'toolu_inner', content: 'x' }], {
+      parent_tool_use_id: 'toolu_task',
+    }),
+  );
+  assert.deepEqual(
+    result.map((item) => [item.kind, item.parentId]),
+    [['tool_result', 'toolu_task']],
+  );
+  const main = fill.fromMessage(assistant('a-3', [{ type: 'text', text: 'outer' }]));
+  assert.equal(main.length, 1);
+  assert.equal(main[0]?.parentId ?? null, null, "a main-thread item's parent is null");
+  assert.equal('parentId' in (main[0] ?? {}), false, 'and it names none, so it is the item 1.10.0 sent');
+  // Control: an empty parent id is no parent, as the SDK sends it on the main thread.
+  const empty = fill.fromMessage(assistant('a-4', [{ type: 'text', text: 'outer' }], ''));
+  assert.equal('parentId' in (empty[0] ?? {}), false);
+});
+
+test("control: on a link that cannot read an item's parent a subagent's messages fill no item, and a replayed or a plain-text user message fills none anywhere", () => {
+  const fill = new ClaudeItemFill('handle-1', { spawnedItems: () => false });
   assert.deepEqual(fill.fromMessage(assistant('a-2', [{ type: 'text', text: 'inner' }], 'toolu_task')), []);
   assert.deepEqual(
     fill.fromMessage(
