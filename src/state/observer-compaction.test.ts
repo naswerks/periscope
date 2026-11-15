@@ -116,3 +116,61 @@ test('the report adds nothing to the record: the transitions are the ones the so
     events,
   );
 });
+
+const failedStatus = message({
+  type: 'system',
+  subtype: 'status',
+  status: null,
+  compact_result: 'failed',
+  compact_error: 'the conversation could not be summarized',
+  uuid: 's-3',
+});
+const succeededStatus = message({
+  type: 'system',
+  subtype: 'status',
+  status: null,
+  compact_result: 'success',
+  uuid: 's-4',
+});
+const plainEnd = message({ type: 'system', subtype: 'status', status: null, uuid: 's-5' });
+
+test('regression: a failed compaction ends the compaction, so its end is reported and the next compaction reports started', () => {
+  const { observer, timeline, reports } = watched();
+  observer.observeMessage(compacting);
+  observer.observeMessage(failedStatus);
+  observer.observeMessage(compacting);
+  assert.deepEqual(
+    reports.map((report) => report.status),
+    ['started', 'ended', 'started'],
+    'a failed compaction left its entry open, so its end went unreported and the next start was suppressed',
+  );
+  assert.deepEqual(reports[1], { status: 'ended', trigger: null, tokensBefore: null, tokensAfter: null });
+  assert.ok(
+    timeline.includes('transition:system/status'),
+    'the end is recorded as the status message that stated it',
+  );
+});
+
+test('control: a null status that states no outcome closes the request and leaves an open compaction open', () => {
+  const { observer, reports } = watched();
+  observer.observeMessage(compacting);
+  observer.observeMessage(plainEnd);
+  observer.observeMessage(compacting);
+  assert.deepEqual(
+    reports.map((report) => report.status),
+    ['started'],
+    'only the outcome a status states ends a compaction',
+  );
+});
+
+test('a compaction that succeeded reports exactly one ended, with the counts its boundary states, whichever exits follow', () => {
+  const { observer, reports } = watched();
+  observer.observeHook(preCompact);
+  observer.observeMessage(succeededStatus);
+  observer.observeMessage(boundary);
+  observer.observeHook(postCompact);
+  assert.deepEqual(reports, [
+    { status: 'started', trigger: 'manual', tokensBefore: null, tokensAfter: null },
+    { status: 'ended', trigger: 'auto', tokensBefore: 180000, tokensAfter: 21000 },
+  ]);
+});

@@ -302,7 +302,7 @@ export class SessionObserver {
     }
 
     if (message.type === 'system' && message.subtype === 'status') {
-      return statusRequests(message.status, (detail) => cause('system/status', detail));
+      return statusRequests(message, (detail) => cause('system/status', detail));
     }
 
     if (message.type === 'system' && message.subtype === 'session_state_changed') {
@@ -695,13 +695,24 @@ function hookCompactionFigures(input: HookInput): CompactionFigures | null {
   return null;
 }
 
+/** What a status message states: the SDK's status, and on the one that ends a compaction, its outcome. */
+interface StatusReport {
+  readonly status: 'compacting' | 'requesting' | null;
+  readonly compact_result?: 'success' | 'failed';
+  readonly compact_error?: string;
+}
+
 /**
  * `SDKStatus` -> the request/compaction lanes. Null is the exit, not an absence of information.
+ *
+ * A null status that says a compaction failed (`compact_result: 'failed'`) closes the compaction entry
+ * as well as the request: a failed compaction is followed by no boundary and, as the SDK's types read,
+ * by no `PostCompact` (whose input carries the summary a compaction produced), so this is the only exit
+ * it has. A compaction that succeeded is closed by its boundary or its hook, as before, so its end is
+ * reported with the token counts the boundary states.
  */
-function statusRequests(
-  status: 'compacting' | 'requesting' | null,
-  cause: (detail: string) => TransitionCause,
-): TransitionRequest[] {
+function statusRequests(report: StatusReport, cause: (detail: string) => TransitionCause): TransitionRequest[] {
+  const status = report.status;
   if (status === 'requesting') {
     return [
       {
@@ -722,12 +733,18 @@ function statusRequests(
     ];
   }
 
-  return [
+  const closed: TransitionRequest[] = [
     {
       to: 'working',
       entry: { op: 'close', entryId: REQUEST_ENTRY },
       cause: cause('the model request finished'),
     },
+  ];
+  if (report.compact_result !== 'failed') return closed;
+  const error = typeof report.compact_error === 'string' && report.compact_error !== '' ? `: ${report.compact_error}` : '';
+  return [
+    ...closed,
+    { to: 'working', entry: { op: 'close', entryId: COMPACTION_ENTRY }, cause: cause(`the compaction failed${error}`) },
   ];
 }
 

@@ -507,7 +507,10 @@ when no effort will be sent; Codex's thread answer always states it.
 
 `compaction` reports `started` when the observer's compaction entry opens and `ended` when it
 closes, with what the source that moved it stated: the compaction hooks state the trigger, the
-`compact_boundary` message the trigger and both token counts, the status message nothing.
+`compact_boundary` message the trigger and both token counts, the status message nothing. A Claude
+compaction that fails ends at the status message that says so (`compact_result: 'failed'`), since no
+boundary follows it, so its `ended` states nothing; the fact has no member saying whether a compaction
+succeeded.
 
 **Whole numbers.** `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
 `reasoningTokens`, `contextTokens`, `contextWindow`, `numTurns`, `durationMs`, `tokensBefore` and
