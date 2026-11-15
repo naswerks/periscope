@@ -21,7 +21,11 @@
  * - `permissions.deny`: the tools this host turns off (`QWEN_DENIED_TOOLS`), which no scope's allow or ask
  *   rule can turn back on;
  * - `disableAllHooks`, so no settings hook can decide a call or rewrite one;
- * - usage statistics off, the code-mode tool off, and the skill directories the session takes;
+ * - `tools.codeModeOnly: false`, so the CLI never registers `exec`, the tool that runs a script whose
+ *   own tool calls this host has not been shown to decide one by one. The CLI registers it only in code
+ *   mode, which it takes from this setting alone, and the system scope's `false` replaces any other
+ *   scope's `true`;
+ * - usage statistics off, and the skill directories the session takes;
  * - the endpoint's auth (`security.auth`) and providers, when the session names one.
  *
  * Before the first prompt the file is read back and held to the list (`readBackQwenSettings`); a file
@@ -196,8 +200,8 @@ export function createQwenSessionHome(base: string, input: QwenSettingsInput): R
 /**
  * Why the session's settings would not send every built-in call to ask, or null when they would: the
  * file reads as JSON, its ask rules name every rule the home was written with, it denies every tool this
- * host turns off, its hooks are off, and the environment the CLI starts with names that file as its
- * system scope.
+ * host turns off, it keeps code mode off, its hooks are off, and the environment the CLI starts with
+ * names that file as its system scope.
  */
 export function readBackQwenSettings(
   session: Pick<QwenSessionHome, 'settingsFile' | 'askRules'>,
@@ -232,6 +236,14 @@ export function readBackQwenSettings(
   );
   const undenied = QWEN_DENIED_TOOLS.filter((tool) => !denied.has(tool));
   if (undenied.length > 0) return `${session.settingsFile} does not deny ${undenied.join(', ')}`;
+  const tools = document['tools'];
+  if (
+    typeof tools !== 'object' ||
+    tools === null ||
+    (tools as Record<string, unknown>)['codeModeOnly'] !== false
+  ) {
+    return `${session.settingsFile} does not keep code mode off`;
+  }
   if (document['disableAllHooks'] !== true) return `${session.settingsFile} does not turn every hook off`;
   return null;
 }

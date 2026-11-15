@@ -409,7 +409,8 @@ writes send every call to ask, and the paths that can still run undecided are na
   tool of the pinned release and every attached MCP server, with every hook off, and denies the one
   tool this host turns off: `autofix_pr`, whose pull-request helpers push a branch or post a reply under
   a decision request that names only the tool and a helper, which no reading of a command recognises as
-  a push (a deny outranks every scope's rules, and the tool is then never offered). The host reads it
+  a push (a deny outranks every scope's rules, and the tool is then never offered). It also keeps code
+  mode off, so the CLI never registers `exec`, whose script makes tool calls of its own. The host reads it
   back through the environment the CLI will start with before anything runs, and an open whose file
   does not read back that way is refused `qwen-ask-rules-not-active`. `QWEN_CODE_SAFE_MODE`, which
   drops every rule, is removed from the CLI's environment.

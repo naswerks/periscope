@@ -40,6 +40,15 @@ test('the settings deny every tool this host turns off, the pull-request helper 
   }
 });
 
+test('the settings keep code mode off, so the CLI never registers exec, whose script makes tool calls of its own', () => {
+  const settings = qwenSystemSettings(input) as { tools?: { codeModeOnly?: unknown } };
+  assert.equal(settings.tools?.codeModeOnly, false, 'code mode on registers exec');
+  assert.ok(
+    QWEN_NAMES.tools.includes('exec'),
+    `exec is no tool of ${QWEN_NAMES.release}: read again what keeps it out of a session`,
+  );
+});
+
 test("an endpoint's auth rides the settings, and an Anthropic endpoint lists a provider per model", () => {
   const openai = qwenSystemSettings({
     ...input,
@@ -126,6 +135,29 @@ test('control: the read-back refuses a missing rule, hooks left on, a file that 
       readBackQwenSettings(home, { ...home.env, QWEN_CODE_SYSTEM_SETTINGS_PATH: 'C:/elsewhere.json' }) ?? '',
       /does not name .* as its system settings/,
     );
+    home.remove();
+  });
+});
+
+test('control: the read-back refuses a file that turns code mode on, or that leaves it to another scope', async () => {
+  await withTempDir('qwen-home', async (base) => {
+    const written = createQwenSessionHome(base, input);
+    assert.ok(written.ok);
+    const home = written.value;
+    const withTools = (tools: unknown) => (path: string) => {
+      const settings = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+      if (tools === undefined) delete settings['tools'];
+      else settings['tools'] = tools;
+      return JSON.stringify(settings);
+    };
+    for (const tools of [{ codeModeOnly: true }, {}, undefined]) {
+      assert.match(
+        readBackQwenSettings(home, home.env, withTools(tools)) ?? '',
+        /does not keep code mode off/,
+        `tools ${JSON.stringify(tools)} read back as held`,
+      );
+    }
+    assert.equal(readBackQwenSettings(home, home.env, withTools({ codeModeOnly: false })), null);
     home.remove();
   });
 });

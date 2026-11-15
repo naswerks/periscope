@@ -398,9 +398,16 @@ is the settings file this host writes for each session (`src/host/qwen-home.ts`)
   each scope's rules into one list per kind and weighs a deny before any ask or allow, so no repository's
   rule turns it back on, and a tool a whole-tool deny names is never registered. Turning it back on is a
   later release's change to that list, once a decision request can say what such a call publishes.
+- **Code mode stays off, so `exec` is never a session's tool.** `exec` runs a JavaScript script whose own
+  tool calls the CLI schedules as calls of their own; that each of them reaches this host's decision is
+  not shown. The CLI registers `exec` only in code mode (`registerExecIfEnabled`,
+  `packages/core/src/config/config.ts` at 0.27.3), and takes code mode from `tools.codeModeOnly === true`
+  in its merged settings alone (`packages/cli/src/config/config.ts`). The session's settings set it
+  `false` at the system scope, merged last, so no repository's `true` turns it on. Turning it on is a
+  later release's change, once each call a script makes is shown to ask this host as its own call.
 - **Read back before the CLI starts.** The host reads the file back through the environment the CLI
   will start with: the environment names it, it parses, its ask rules cover every name, it denies every
-  tool turned off, and its hooks are off. Anything else refuses the open `qwen-ask-rules-not-active`, and
+  tool turned off, it keeps code mode off, and its hooks are off. Anything else refuses the open `qwen-ask-rules-not-active`, and
   no process starts.
   `QWEN_CODE_SAFE_MODE`, which would drop every rule, is removed from the CLI's environment.
 - **One decision per call** (`src/host/qwen-gate.ts`). A `can_use_tool` request becomes a

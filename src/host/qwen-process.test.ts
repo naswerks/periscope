@@ -297,6 +297,31 @@ test('a settings file that no longer denies the tools this host turns off refuse
   assert.match(String(error?.message), /^qwen-ask-rules-not-active: .*does not deny autofix_pr/);
 });
 
+test('a settings file that turns code mode on refuses the open qwen-ask-rules-not-active and starts nothing', async () => {
+  const run = await started({
+    runtime: {
+      readSettings: (path) => {
+        const read = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+        read['tools'] = { codeModeOnly: true };
+        return JSON.stringify(read);
+      },
+    },
+  });
+  run.process.prompt('never sent');
+  // Whichever comes first, the refusal or the CLI's spawn, is the answer: a spawn is code mode not held off.
+  let error: Error | null | undefined;
+  void run.ended.then((ended) => {
+    error = ended;
+  });
+  await waitFor(
+    () => error !== undefined || run.fake.child.spawned !== null,
+    'the open to be refused or the CLI spawned',
+  );
+  if (run.fake.child.spawned !== null) await closed(run);
+  assert.equal(run.fake.child.spawned, null, 'the CLI was started though its settings turn code mode on');
+  assert.match(String(error?.message), /^qwen-ask-rules-not-active: .*does not keep code mode off/);
+});
+
 test("a foreground sub-agent's own end is no turn done: it asks no context usage, and only the session's result does", async () => {
   // The sub-agent's end is the `result` v0.27.3 writes when a foreground sub-agent fails
   // (`buildSubagentErrorResult`): no parent, the error subtype, no turns and no time.

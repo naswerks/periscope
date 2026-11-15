@@ -98,6 +98,10 @@ frame it sends decodes unchanged.
   recognises as a push. A deny outranks every scope's ask and allow, so no repository's rule turns it back
   on, and the read-back refuses the open `qwen-ask-rules-not-active` when the deny is missing. Turning it
   back on is a later release's change to `QWEN_DENIED_TOOLS`.
+- Security: the read-back of a Qwen Code session's settings also refuses the open
+  `qwen-ask-rules-not-active` when they do not keep code mode off (`tools.codeModeOnly: false`). Code mode
+  is the only way the 0.27.3 CLI registers `exec`, whose script makes tool calls of its own, so no session
+  is offered it.
 - Added: a Qwen Code sub-agent's tool calls and their results, the only messages of a sub-agent the CLI
   writes, fill conversation items, each naming its spawning call's `tool_use` id as its `parentId`; a link
   negotiated below 20 is sent none of them.
