@@ -144,6 +144,76 @@ The SDK is pinned exactly, and a bump is a minor release. In order:
 5. `npm run contracts:update`, then update the version table in `README.md` and `SECURITY.md`.
 6. Run the live probes above and bring the documents into line with what they print.
 
+## Moving a pinned binary
+
+Codex, Qwen Code and pi are binaries the operator installs, each pinned exactly
+(`CODEX_PINNED_VERSION` in `src/host/codex-binary.ts`, `QWEN_PINNED_VERSION` in `qwen-binary.ts`,
+`PI_PINNED_VERSION` in `pi-binary.ts`); a binary at any other version is listed unavailable. A move is a
+minor release, one binary at a time, in order:
+
+1. Pick the release: the newest that has been out a few days, and not deprecated (`npm view <package> time
+--json` and `npm view <package>@<version> deprecated`, for `@openai/codex`, `@qwen-code/qwen-code` and
+   `@earendil-works/pi-coding-agent`).
+2. Clone the upstream repository at the old tag and at the new one, anywhere outside this checkout. A
+   shallow clone carrying the blobs under 1 MB is enough (`git clone --depth=1 --filter=blob:limit=1m
+--no-checkout --branch <tag> <url> <dir>`): the scripts read the tag with `git show`, and no install or
+   build is needed. Codex tags its releases `rust-v<version>`, Qwen Code and pi `v<version>`.
+3. Run the derive script against the old tag first: `node scripts/derive-codex-names.mjs <clone> <tag>`,
+   `derive-qwen-names.mjs` or `derive-pi-names.mjs`. It must write the committed contract
+   (`contracts/codex-protocol-names.json`, `qwen-code-names.json`, `pi-names.json`) byte for byte. If it
+   does not, the script has drifted from the source and the diff in the next step would be its own; fix
+   the script first. Codex's script needs Node 23.8 or later (`zlib.zstdDecompressSync`). Qwen Code's
+   reads the system subtypes from the stream-json path's own files and from the service modules they
+   import, because a service the path drives (the mod session) writes on it too.
+4. Run it against the new tag and read the contract's diff: every notification, request, item kind, event,
+   control request and tool the release added, renamed or dropped. That list is the work.
+5. Move the constant. Every test that names the pinned version reads the constant; the version tests keep
+   the old number as the one refused by name. Move the version in `README.md`'s and `SECURITY.md`'s
+   tables, `docs/configuration.md`'s install line and the start line it quotes, the derive script's usage
+   example, and `CHANGELOG.md`.
+6. Give every name the release added its coverage row (`src/state/codex-coverage.ts`, `qwen-coverage.ts`,
+   `pi-coverage.ts`), wired or declined with its reason, and remove the row of every name it dropped; the
+   coverage pins (`src/pins/codex-coverage.test.ts`, `qwen-coverage.test.ts`, `pi-coverage.test.ts`) fail
+   until each is placed. A stable Codex notification declined there is opted out at `initialize`.
+7. Give every tool the release added its kind (`CODEX_TOOL_KINDS`, `QWEN_TOOL_KINDS`, `PI_TOOL_KINDS` in
+   `src/gate/tool-kind.ts`) and, where it reads or writes a path or runs a command, its family
+   (`src/gate/local.ts`), or state it `other` by name: the census in `src/gate/qwen-local.test.ts` and
+   `pi-local.test.ts` names every tool of the release. A Qwen Code tool gets its ask rule from the contract
+   (`qwenAskRules`); a tool the local gate cannot read the effect of, such as one that publishes under a
+   name no reading of a command recognises, is denied in the session's settings (`QWEN_DENIED_TOOLS`).
+8. Read the files each gate stands on at both tags, and carry what moved into the adapter and its tests.
+   Each residual stays a named degrade; a new one is named, never absorbed.
+   - Codex: the `PreToolUse` hook's input and output schemas
+     (`codex-rs/hooks/schema/generated/pre-tool-use.command.*.schema.json`), what the hook's `cwd` is
+     (`codex-rs/hooks/src/events/pre_tool_use.rs` and `common.rs`), hook trust and the Windows command
+     line (`codex-rs/hooks/src/engine/discovery.rs`, `config_rules.rs`), the approval kinds and requests
+     (`CommandExecutionApprovalKind` and the `*RequestApproval*` types under
+     `codex-rs/app-server-protocol/schema/typescript/v2/`), every key the runner's home pins under
+     `--strict-config` (`codex-rs/core/config.schema.json`), and the collaboration and sub-agent items
+     (`ThreadItem.ts`).
+   - Qwen Code: the settings scopes, their merge order and the rule lists' merge
+     (`packages/cli/src/config/settings.ts`, `settingsSchema.ts`), how a deny, an ask and an allow are
+     weighed (`packages/core/src/permissions/permission-manager.ts`), the approval modes, the
+     `can_use_tool` request (`packages/cli/src/nonInteractive/control/controllers/permissionController.ts`),
+     each new tool's source under `packages/core/src/tools/`, the results the stream writes, a
+     sub-agent's included (`packages/cli/src/nonInteractive/io/BaseJsonOutputAdapter.ts`), and the
+     Windows shell (`packages/core/src/utils/shell-utils.ts`).
+   - pi: the extension `tool_call` event, its block and its rewrite
+     (`packages/coding-agent/src/core/extensions/types.ts`, `runner.ts`, `loader.ts`), the launch flags
+     and project trust (`packages/coding-agent/src/cli/args.ts`, `src/core/project-trust.ts`), the
+     built-in tools' schemas (`src/core/tools/`), the RPC types (`src/modes/rpc/rpc-types.ts`), and how
+     bash is found on Windows (`src/utils/shell.ts`).
+9. Write any test of a new shape from the upstream source at the new tag, and say in the test which file
+   it read. A shape only a live run can confirm is named for the probes below.
+10. `npm run contracts:update` if a wire vector or the public API moved, then the whole gate (§ Build and
+    test, then `npm run typecheck:examples`, `check:drift`, `check:publish`).
+11. Run the binary's live probes from a plain terminal, with the new version installed (§ Live probes):
+    Codex `src/host/codex-names.live.test.ts` (`PERISCOPE_CODEX_BIN`) and `codex-gate.live.test.ts`
+    (`PERISCOPE_CODEX_HOME`, signed in, beside it); Qwen Code `src/host/qwen.live.test.ts`
+    (`PERISCOPE_QWEN_BIN` and an endpoint); pi `src/host/pi-names.live.test.ts` (`PERISCOPE_PI_BIN`) and
+    `pi.live.test.ts` (and an endpoint). Each runs as `npm run build && PERISCOPE_LIVE=1 node --test
+dist/host/<probe>.js`, and the variables each needs are in its header.
+
 ## Boundaries the pins enforce
 
 - Only `src/host/` may import `node:fs`, `node:child_process`, `node:os`, or the Agent SDK.
