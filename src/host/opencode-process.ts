@@ -60,6 +60,7 @@ import {
   opencodeReadBackProblem,
   opencodeRuleset,
   opencodeShellEnv,
+  sweepOpencodeHomes,
 } from './opencode-home.js';
 import { opencodeMcpServers } from './opencode-mcp.js';
 import { opencodeSkillDirectories } from './opencode-pack.js';
@@ -557,6 +558,8 @@ export function startOpencodeProcess(
     const install = (runtime.readInstall ?? readOpencodeInstall)(runtime.sdk);
     if (!install.ok) return fail(`${install.refusal.reason}: ${install.refusal.detail}`);
 
+    // A home a host left behind when it did not close it is cleared now, its database kept for a resume.
+    for (const problem of sweepOpencodeHomes(runtime.base).problems) degrade(problem);
     const made = createOpencodeSessionHome(runtime.base);
     if (!made.ok) return fail(`${made.refusal.reason}: ${made.refusal.detail}`);
     home = made.value;
@@ -656,6 +659,7 @@ export function startOpencodeProcess(
     const id = opencodeWord(info['id']);
     if (id === null) return fail('runtime-unavailable: the opencode server named no session');
     sessionId = id;
+    home.holds(id);
     agent = opencodeWord(info['agent']) ?? agent;
     gate.identify(id);
     await call('session.environment', { sessionID: id, variables: opencodeShellEnv(request.env) }, deadline);

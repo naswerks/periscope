@@ -704,7 +704,11 @@ using`), which Node 22 cannot parse, so on Node 22 the SDK cannot load at all. T
 - **The home is the runner's own.** Each session runs with a fresh home under `<base>/sessions`, so the
   operator's own opencode directories (their sign-ins, their settings, their sessions) are never what a
   session runs from. The home is removed when the session closes; its database moves to
-  `<base>/state/<session id>`, which a resume copies back.
+  `<base>/state/<session id>`, which a resume copies back. A host that does not close a session (it
+  crashed, or was killed) leaves the home behind. Each home says which process made it and which
+  session it holds (`owner.json`), and the next opencode session to open clears every home whose
+  process is gone: its database is kept for a resume first, then the home is removed. A home whose
+  process is still there is another live session's and is left alone.
 - **Endpoints.** An opencode session reaches a model only through an endpoint whose `runtimes` name
   `opencode`, over `openai-chat`: the session's one provider, `endpoint-<name>`, and the only one its
   configuration allows. The key is read when the session opens and crosses into the host process with the

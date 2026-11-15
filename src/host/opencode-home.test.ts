@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -19,6 +19,7 @@ import {
   opencodeReadBackProblem,
   opencodeRuleset,
   opencodeShellEnv,
+  sweepOpencodeHomes,
 } from './opencode-home.js';
 import type { OpencodePostureRead } from './opencode-home.js';
 
@@ -82,6 +83,64 @@ test("a closing session's database is kept by its id, and a resume carries it in
   } finally {
     await rm(base, { recursive: true, force: true });
   }
+});
+
+test("a session home a host left behind is cleared at the next open: its database kept for a resume, the home removed, and a live session's home left alone", async () => {
+  const base = await tempDir('opencode-sweep');
+  const made = (): { home: string; database: string } => {
+    const one = createOpencodeSessionHome(base);
+    assert.ok(one.ok);
+    return { home: one.value.home, database: one.value.database };
+  };
+  const own = (home: string, owner: Record<string, unknown>): void =>
+    writeFileSync(join(home, 'owner.json'), JSON.stringify(owner));
+
+  // A home made by this process says so, and names its session once it is told.
+  const live = createOpencodeSessionHome(base);
+  assert.ok(live.ok);
+  assert.deepEqual(JSON.parse(readFileSync(join(live.value.home, 'owner.json'), 'utf8')), {
+    pid: process.pid,
+  });
+  live.value.holds('ses_live');
+  assert.deepEqual(JSON.parse(readFileSync(join(live.value.home, 'owner.json'), 'utf8')), {
+    pid: process.pid,
+    session: 'ses_live',
+  });
+
+  // Three homes a host that is gone left: one holding a session, one that never opened one, and one whose
+  // session id names no directory.
+  const crashed = made();
+  writeFileSync(crashed.database, 'the database');
+  writeFileSync(`${crashed.database}-wal`, 'its log');
+  own(crashed.home, { pid: 111, session: 'ses_crashed' });
+  const unopened = made();
+  own(unopened.home, { pid: 111 });
+  const unkeepable = made();
+  writeFileSync(unkeepable.database, 'the database');
+  own(unkeepable.home, { pid: 111, session: '../escape' });
+  // A directory nobody marked, and a home with a file that is not an owner's, are not this host's to judge.
+  const unmarked = made();
+  rmSync(join(unmarked.home, 'owner.json'));
+  const unreadable = made();
+  writeFileSync(join(unreadable.home, 'owner.json'), 'not json');
+
+  const swept = sweepOpencodeHomes(base, (pid) => pid === process.pid);
+  assert.deepEqual(swept.kept, ['ses_crashed']);
+  assert.deepEqual([...swept.removed].sort(), [crashed.home, unopened.home].sort());
+  assert.equal(readFileSync(join(base, 'state', 'ses_crashed', 'session.db'), 'utf8'), 'the database');
+  assert.equal(readFileSync(join(base, 'state', 'ses_crashed', 'session.db-wal'), 'utf8'), 'its log');
+  assert.equal(existsSync(crashed.home), false);
+  assert.equal(existsSync(unopened.home), false);
+  assert.equal(existsSync(live.value.home), true, "a live session's home was swept");
+  assert.equal(existsSync(unmarked.home), true);
+  assert.equal(existsSync(unreadable.home), true);
+  // A database that could not be kept leaves its home where it is, and says so.
+  assert.equal(existsSync(unkeepable.home), true, 'a home was removed with a database that was not kept');
+  assert.equal(swept.problems.length, 1);
+  assert.match(swept.problems[0] ?? '', /was not cleared: the session id \.\.\/escape names no directory/);
+  // A base with no sessions directory sweeps nothing.
+  assert.deepEqual(sweepOpencodeHomes(join(base, 'absent')), { kept: [], removed: [], problems: [] });
+  await rm(base, { recursive: true, force: true });
 });
 
 test("the variables this host never hands an opencode session: opencode's, Node's preload and this host's own but the further worktrees' paths, in any case", () => {

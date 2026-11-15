@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -1019,6 +1019,32 @@ test("control: an answer of this host's own that the server refuses is still rep
     void run.record.ask({ id: 'per_1', sessionID: 'ses_main', action: 'read', resources: ['a.ts'] });
     await until(() => run.degrades.length === 1, 'the undelivered answer');
     assert.match(run.degrades[0] ?? '', /a permission answer was not delivered: .*the server is busy/);
+  } finally {
+    await closed(run);
+  }
+});
+
+test('an open clears a session home a host that is gone left behind, keeps its database for a resume, and marks its own home with its session', async () => {
+  let left = '';
+  const run = await started({
+    before: (base) => {
+      left = join(base, 'sessions', 'left-behind');
+      mkdirSync(join(left, 'data'), { recursive: true });
+      writeFileSync(join(left, 'data', 'session.db'), 'the earlier database');
+      // No process has this id: the host that made the home is gone.
+      writeFileSync(join(left, 'owner.json'), JSON.stringify({ pid: 2_147_483_646, session: 'ses_earlier' }));
+    },
+  });
+  try {
+    await until(() => opened(run), 'the open');
+    assert.equal(existsSync(left), false, 'the home a host left behind is still there');
+    assert.ok(existsSync(join(run.base, 'state', 'ses_earlier', 'session.db')));
+    const [home] = readdirSync(join(run.base, 'sessions'));
+    assert.deepEqual(JSON.parse(readFileSync(join(run.base, 'sessions', home ?? '', 'owner.json'), 'utf8')), {
+      pid: process.pid,
+      session: 'ses_main',
+    });
+    assert.deepEqual(run.degrades, []);
   } finally {
     await closed(run);
   }

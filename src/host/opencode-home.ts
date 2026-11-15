@@ -27,7 +27,15 @@
  * the posture this host created it in, or a refusal naming what differs.
  */
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 import type { Result } from '../core/result.js';
@@ -55,7 +63,15 @@ export interface OpencodeSessionHome {
   readonly env: Readonly<Record<string, string>>;
   /** Removes the home. Idempotent; a failure is the caller's to report. */
   remove(): Result<void>;
+  /** Told the session the home's database holds, once the server has named it, for a later sweep. */
+  holds(sessionId: string): void;
 }
+
+/**
+ * The file in a session's home that says whose it is: the process that made it and, once known, the session
+ * its database holds. A home whose process is gone was left by a host that did not close it.
+ */
+export const OPENCODE_HOME_OWNER_FILE = 'owner.json';
 
 /** The files a session's database is, as SQLite keeps it: the database and its write-ahead log. */
 export const OPENCODE_DATABASE_FILES: readonly string[] = ['session.db', 'session.db-wal', 'session.db-shm'];
@@ -102,9 +118,17 @@ export function createOpencodeSessionHome(base: string): Result<OpencodeSessionH
       );
     }
   };
+  const own = (session: string | null): void => {
+    writeFileSync(
+      join(home, OPENCODE_HOME_OWNER_FILE),
+      JSON.stringify({ pid: process.pid, ...(session === null ? {} : { session }) }),
+      { mode: 0o600 },
+    );
+  };
   try {
     for (const directory of Object.values(directories))
       mkdirSync(directory, { recursive: true, mode: 0o700 });
+    own(null);
   } catch (error) {
     remove();
     return refuse(
@@ -127,7 +151,84 @@ export function createOpencodeSessionHome(base: string): Result<OpencodeSessionH
       XDG_STATE_HOME: directories.state,
     },
     remove,
+    holds: (sessionId) => {
+      try {
+        own(sessionId);
+      } catch {
+        // A home that could not be marked is swept as one that holds no session.
+      }
+    },
   });
+}
+
+/** Whether a process is still there. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // Not permitted to signal it is still a process that exists.
+    return (error as { code?: unknown }).code === 'EPERM';
+  }
+}
+
+/**
+ * Clear the session homes a host left behind when it did not close them (it crashed, or was killed): each
+ * home whose owner file names a process that is gone. Its database is kept for a resume first, where the
+ * file names the session it holds; then the home is removed. A home whose process is still there is another
+ * live session's and is left alone, and so is a directory with no owner file this host can read. Returns
+ * what could not be done, in words.
+ */
+export function sweepOpencodeHomes(
+  base: string,
+  alive: (pid: number) => boolean = processAlive,
+): {
+  readonly kept: readonly string[];
+  readonly removed: readonly string[];
+  readonly problems: readonly string[];
+} {
+  const kept: string[] = [];
+  const removed: string[] = [];
+  const problems: string[] = [];
+  const sessions = join(base, 'sessions');
+  let entries: string[];
+  try {
+    entries = readdirSync(sessions);
+  } catch {
+    return { kept, removed, problems };
+  }
+  for (const entry of entries) {
+    const home = join(sessions, entry);
+    let owner: { pid?: unknown; session?: unknown };
+    try {
+      owner = JSON.parse(readFileSync(join(home, OPENCODE_HOME_OWNER_FILE), 'utf8')) as typeof owner;
+    } catch {
+      continue;
+    }
+    if (typeof owner.pid !== 'number' || alive(owner.pid)) continue;
+    if (typeof owner.session === 'string') {
+      const carried = carryOpencodeStateOut(
+        base,
+        join(home, 'data', OPENCODE_DATABASE_FILES[0] ?? 'session.db'),
+        owner.session,
+      );
+      if (carried.ok) kept.push(owner.session);
+      else {
+        // The database could not be kept: the home is left, so nothing of the session is lost to the sweep.
+        problems.push(`a session home a host left behind was not cleared: ${carried.refusal.detail}`);
+        continue;
+      }
+    }
+    try {
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      removed.push(home);
+    } catch (error) {
+      problems.push(
+        `the session home ${home}, which a host left behind, could not be removed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return { kept, removed, problems };
 }
 
 /** Whether `id` can name a directory: no separator, no parent step, nothing a path could read twice. */
