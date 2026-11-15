@@ -145,10 +145,15 @@ on POSIX does not create protection on Windows.
 
 ### 3. The gate has no opinion about MCP tools you register, or about built-in tools outside its families
 
-The local gate matches on tool name, in four families (`DEFAULT_TOOL_FAMILIES`): writes are `Write`,
+The local gate matches on tool name, in five families (`DEFAULT_TOOL_FAMILIES`): writes are `Write`,
 `Edit`, `MultiEdit`, `NotebookEdit`; reads are `Read`, `NotebookRead`; searches are `Grep`, `Glob`;
 shells are `Bash`, `PowerShell`, `Monitor` (a `Monitor` call that watches a socket runs no command and
-is no shell call; it reaches your controller as `web`, and no other tool's call is read that way). An
+is no shell call; it reaches your controller as `web`, and no other tool's call is read that way);
+and `Artifact` publishes. A publishing tool hands a service the local files its input names and saves
+the files it fetches (`file_path`, each of `file_paths`, each source in `files`, `root`, `out_dir`):
+each of those paths is held to the protected set and to nothing else, so it may read and save anywhere
+a read may go, and a call naming none has no local opinion. Whether the content may leave the machine
+is your controller's decision, as for every call. An
 MCP tool arrives as `mcp__{server}__{tool}`, matches nothing, and
 gets no local opinion, so the decision escalates to your controller. That is fail-closed and correct.
 

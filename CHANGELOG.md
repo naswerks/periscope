@@ -56,6 +56,12 @@ frame it sends decodes unchanged.
 - Added: `LocalGateOptions.localNames` and `LocalGateOptions.realPath` (and the same two on
   `JailOptions`), with `machineNames` and `canonicalPath` exported to fill them: the names this machine
   answers to as a file server, and a path as the file system names it. `PeriscopeHost` passes both.
+- Security: Claude's `Artifact` tool is in a family of the local gate. It publishes the local files its
+  input names and saves the files it fetches, and it was in no family, so a credential file could be
+  named as the page, as an upload or as the place a fetched file is saved and no local check read the
+  path. Every path its input names is now held to the protected set, and to nothing else: the write
+  limits do not bound it. `ToolFamilies` gains the optional `publish` family for an embedder's own
+  such tools.
 - Security: Claude's `Monitor` tool is a shell tool. It runs the command its input names, so the local
   gate reads that command as it reads `Bash`'s (a push, a protected path) and a decision request names
   it `shell` with the `posix` dialect; it reached the gate as `other` and its command was never read. A

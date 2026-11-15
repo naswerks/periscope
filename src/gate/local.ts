@@ -66,6 +66,13 @@ export interface ToolFamilies {
    * listed as `changes[].path`. Every file is a write. Absent: the default family.
    */
   readonly patch?: readonly string[];
+  /**
+   * Tools that hand local files to a service, or save what a service returns, by the paths their input
+   * names: `file_path`, each of `file_paths`, each source in `files`, `root` and `out_dir`. Each path is
+   * held to the protected set and to nothing else, as a read is: such a tool may read and save anywhere
+   * but in credential material. A call that names no path has no local opinion. Absent: none.
+   */
+  readonly publish?: readonly string[];
 }
 
 /**
@@ -83,6 +90,8 @@ export const DEFAULT_TOOL_FAMILIES: ToolFamilies = {
   // instead names no command and is not a shell call (`isSocketWatch`).
   shell: ['Bash', 'PowerShell', 'Monitor'],
   search: ['Grep', 'Glob'],
+  // `Artifact` publishes the local files its input names and saves the files it fetches.
+  publish: ['Artifact'],
 };
 
 /**
@@ -253,6 +262,7 @@ export function localGate(options: LocalGateOptions): LocalGate {
   const shellTools = new Set(families.shell);
   const searchTools = new Set(families.search ?? DEFAULT_TOOL_FAMILIES.search);
   const patchTools = new Set(families.patch ?? []);
+  const publishTools = new Set(families.publish ?? []);
   const readsShellDialect = options.readsShellDialect ?? false;
   const checksShellDirectory = options.checksShellDirectory ?? false;
   const checksShellCwd = options.checksShellCwd ?? false;
@@ -339,6 +349,16 @@ export function localGate(options: LocalGateOptions): LocalGate {
       return checkSearch(request.toolInput, at(request, resolvesAgainstCallCwd));
     }
 
+    if (publishTools.has(request.toolName)) {
+      // Each path is placed where the call runs, and only the protected set can refuse it.
+      const placed = at(request, true);
+      for (const path of publishedPaths(request.toolInput)) {
+        const refused = checkReadPath(path, placed);
+        if (refused?.reason === 'credential-path-denied') return refused;
+      }
+      return null;
+    }
+
     // No opinion. The surrounding gate asks whoever it was going to ask.
     return null;
   };
@@ -373,6 +393,40 @@ function checkPatch(request: DecisionRequest, jail: JailOptions): Refusal | null
     if (refused !== null) return refused;
   }
   return null;
+}
+
+/**
+ * The local paths a publishing call's input names: the page or file it sends (`file_path`), each further
+ * file (`file_paths`), each source in `files` (a list of `{ path }`, or a map whose values are a path or
+ * `{ from }`), the directory relative sources are read from (`root`) and the directory a fetched file is
+ * saved into (`out_dir`). A relative source is read under `root` where the input names one. A source that
+ * is another published file, and a member of any other shape, names no local path.
+ */
+export function publishedPaths(toolInput: unknown): string[] {
+  if (typeof toolInput !== 'object' || toolInput === null || Array.isArray(toolInput)) return [];
+  const input = toolInput as Record<string, unknown>;
+  const named = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
+  const paths: string[] = [];
+  for (const key of ['file_path', 'out_dir', 'root']) if (named(input[key])) paths.push(input[key]);
+  const further = input['file_paths'];
+  if (Array.isArray(further)) for (const one of further as unknown[]) if (named(one)) paths.push(one);
+  const root = named(input['root']) ? input['root'] : null;
+  const underRoot = (source: string): string =>
+    root === null || isAbsolutePath(source) || /^[~\\/]|^[A-Za-z]:/.test(source)
+      ? source
+      : `${root.replace(/[\\/]+$/, '')}/${source}`;
+  const files = input['files'];
+  const sources: unknown[] = Array.isArray(files)
+    ? (files as unknown[]).map((entry) =>
+        typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>)['path'] : entry,
+      )
+    : typeof files === 'object' && files !== null
+      ? Object.values(files as Record<string, unknown>).map((entry) =>
+          typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>)['from'] : entry,
+        )
+      : [];
+  for (const source of sources) if (named(source)) paths.push(underRoot(source));
+  return paths;
 }
 
 /** The files a patch call's input names, or null when it names none. */

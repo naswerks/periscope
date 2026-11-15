@@ -59,7 +59,7 @@ gate: interface JailOptions { readonly home?: string; readonly localNames?: read
 gate: interface LocalGateOptions { readonly checksShellCwd?: boolean; readonly checksShellDirectory?: boolean; readonly home?: string; readonly localNames?: readonly string[]; readonly protectedPaths: readonly string[]; readonly readsShellDialect?: boolean; readonly realPath?: PathResolver; readonly resolve: PathResolver; readonly resolvesAgainstCallCwd?: boolean; readonly resolvesWritesAgainstCallCwd?: boolean; readonly toolFamilies?: ToolFamilies; readonly workspaceRoot: string; readonly writeRoots?: readonly string[] }
 gate: interface ParsedCommand { readonly hasInterpreter: boolean; readonly invocations: readonly Invocation[]; readonly scannable: string }
 gate: interface PermissionGateOptions { readonly decide: Decider; readonly decisionTimeoutMs?: number; readonly grantOnAllow?: boolean; readonly holdAfterMs?: number; readonly localGate?: LocalGate; readonly matcherTimeoutSeconds?: number; readonly onDegrade?: (degrade: { readonly name: RefusalReason; readonly detail: string; }) => void; readonly onOutcome: OutcomeListener; readonly runtime?: string; readonly sessionKey: string }
-gate: interface ToolFamilies { readonly patch?: readonly string[]; readonly read: readonly string[]; readonly search?: readonly string[]; readonly shell: readonly string[]; readonly write: readonly string[] }
+gate: interface ToolFamilies { readonly patch?: readonly string[]; readonly publish?: readonly string[]; readonly read: readonly string[]; readonly search?: readonly string[]; readonly shell: readonly string[]; readonly write: readonly string[] }
 gate: type CallDecision = { (request: DecisionRequest | null, signal: AbortSignal): Promise<TerminalOutcome> }
 gate: type Decider = { (request: DecisionRequest, signal: AbortSignal): Promise<unknown> }
 gate: type Decision = { readonly behavior: "allow"; readonly updatedInput?: Record<string, unknown>; } | { readonly behavior: "deny"; readonly message: string; readonly interrupt?: boolean; }
@@ -702,7 +702,7 @@ index: interface ToolCall { readonly arguments: JsonObject; readonly identity: T
 index: interface ToolCallIdentity { readonly sessionId: string }
 index: interface ToolCallItem { readonly input: JsonObject; readonly itemId: string; readonly kind: "tool_call"; readonly parentId?: string; readonly toolKind: "shell" | "file_read" | "file_write" | "file_edit" | "mcp" | "web" | "other"; readonly toolName: string; readonly toolUseId: string; readonly truncated: boolean; readonly turnId: string }
 index: interface ToolDescriptor { readonly description: string; readonly inputSchema: JsonSchemaObject; readonly name: string }
-index: interface ToolFamilies { readonly patch?: readonly string[]; readonly read: readonly string[]; readonly search?: readonly string[]; readonly shell: readonly string[]; readonly write: readonly string[] }
+index: interface ToolFamilies { readonly patch?: readonly string[]; readonly publish?: readonly string[]; readonly read: readonly string[]; readonly search?: readonly string[]; readonly shell: readonly string[]; readonly write: readonly string[] }
 index: interface ToolPlan { readonly description: string; readonly handler: (args: unknown) => Promise<ToolResult>; readonly name: string; readonly shape: ZodRawShape }
 index: interface ToolResponse { readonly isError?: boolean; readonly text: string }
 index: interface ToolResult { readonly content: { type: "text"; text: string; }[]; readonly isError?: boolean }

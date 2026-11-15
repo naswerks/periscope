@@ -115,6 +115,57 @@ test('regression: a Monitor command is read as a shell command, so a push it wou
   assert.equal(gate(monitor({}))?.reason, 'shell-command-missing');
 });
 
+test('a publishing tool may read and save anywhere but in credential material: every path its input names is held to the protected set alone', () => {
+  const artifact = (toolInput: Record<string, unknown>): DecisionRequest =>
+    request({ toolName: 'Artifact', toolInput });
+  const secret = `${CREDENTIALS}/.credentials.json`;
+  for (const [what, toolInput] of [
+    ['the page it publishes', { file_path: secret }],
+    [
+      'a file it uploads',
+      { url: 'https://example.invalid/a', asset: true, file_paths: ['C:/work/a.png', secret] },
+    ],
+    ['a supporting file, by its source', { file_path: 'C:/work/page.html', files: { 'data.json': secret } }],
+    [
+      'a supporting file, by its from',
+      { file_path: 'C:/work/page.html', files: { 'a.js': { from: secret } } },
+    ],
+    ['a supporting file in a list', { file_path: 'C:/work/page.html', files: [{ path: secret }] }],
+    [
+      'a relative source under a protected root',
+      { file_path: 'C:/work/page.html', root: CREDENTIALS, files: { 'a.json': '.credentials.json' } },
+    ],
+    [
+      'the directory a fetched file is saved into',
+      { action: 'read', path: 'index.html', out_dir: CREDENTIALS },
+    ],
+  ] as const) {
+    assert.equal(gate(artifact(toolInput))?.reason, 'credential-path-denied', what);
+  }
+  // Control: none of these names a protected path, and the workspace does not bound them.
+  for (const toolInput of [
+    { file_path: 'C:/elsewhere/page.html' },
+    { file_path: 'C:/work/page.html', files: { 'a.js': 'assets/a.js', gone: null } },
+    {
+      file_path: 'C:/work/page.html',
+      files: { 'a.js': { artifact: 'https://example.invalid/b', path: 'a.js' } },
+    },
+    { action: 'read', path: 'index.html', out_dir: 'C:/elsewhere/saved' },
+    { action: 'list' },
+    {},
+  ]) {
+    assert.equal(gate(artifact(toolInput)), null, JSON.stringify(toolInput));
+  }
+  // A family that names no such tool gives a call of that name no opinion.
+  const without = localGate({
+    workspaceRoot: WORKSPACE,
+    resolve: fakeResolve,
+    protectedPaths: [CREDENTIALS],
+    toolFamilies: CODEX_TOOL_FAMILIES,
+  });
+  assert.equal(without(artifact({ file_path: secret })), null);
+});
+
 test('a write outside the workspace refuses', () => {
   const found = gate(request({ toolName: 'Write', toolInput: { file_path: 'C:/elsewhere/x.txt' } }));
   assert.equal(found?.reason, 'path-escapes-root');
