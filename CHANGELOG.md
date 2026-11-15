@@ -21,9 +21,10 @@ frame it sends decodes unchanged.
   configuration because the disk was full), rides the update lane and moves no state. Its one new
   built-in tool, `OfferChromeSetup`, names no path and runs no command, and is `other`. No hook event
   was added.
-- Changed: `@anthropic-ai/sdk`, which only the agent SDK's type definitions read, is `^1.8.0` (was
-  `^0.129.0`); the agent SDK asks for `>=0.93.0`. Version 1 is published under the Apache-2.0 licence
-  and brings `@opentelemetry/api` with it.
+- Changed: `@anthropic-ai/sdk`, which only the agent SDK's type definitions read, is `>=0.93.0` (was
+  `^0.129.0`): the range the agent SDK's own manifest asks, so a consumer on either major installs. This
+  package's lockfile resolves 1.8.0, which is published under the Apache-2.0 licence and brings
+  `@opentelemetry/api` with it.
 - Security: the local gate places a path a tool names where the operating system puts it, then checks
   it. On Windows a path with one leading separator (`\Users\x`, `/Users/x`) is rooted at the drive the
   call runs on and `C:name` on that drive is beneath the call's directory; on every system `~` is the
