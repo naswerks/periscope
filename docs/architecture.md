@@ -433,8 +433,10 @@ control tier is `intercepted-with-residual` ([gate.md](gate.md), the Copilot gat
   interrupt is `abort`. A GitHub token rides the session's token provider and an endpoint's key its
   provider, both over the SDK's pipe. A request member Copilot cannot honour (Claude's settings tiers,
   its hooks and spawner, a store, a replacing system prompt, a permission mode other than `default` and
-  `plan`, thinking off) is refused `request-key-unsupported`, naming it. Close disconnects the session,
-  ends the runtime's process tree, stops the client, keeps the state and removes the home.
+  `plan`, thinking off) is refused `request-key-unsupported`, naming it. Close ends every waiting
+  decision, then the turn and its background sub-agents while the hook still has its route, then
+  disconnects the session, ends the runtime's process tree, stops the client, keeps the state and
+  removes the home.
 - The gate (`createCopilotSessionGate`, `src/host/copilot-gate.ts`) records each call the hook
   announces and decides its `hook` request through the per-call decision every runtime shares
   (`createCallDecision`), with `canRewriteInput: false`. It spells an MCP tool from the tools its server

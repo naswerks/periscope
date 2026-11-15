@@ -117,6 +117,7 @@ async function started(setup: Setup = {}): Promise<Started> {
       policyHooks: () => Promise.resolve([]),
       killTree: (pid) => {
         killed.push(pid);
+        record.lifecycle.push('killTree');
         return Promise.resolve();
       },
       closeGraceMs: 200,
@@ -461,7 +462,7 @@ test("the setters: the agent mode, the effort and the model are the runtime's ow
   await closed(run);
 });
 
-test("close disconnects the session, ends the runtime's tree by its pid, stops the client, keeps the session's state and removes the home", async () => {
+test("close ends the turn and its background agents first, then disconnects the session, ends the runtime's tree by its pid, stops the client, keeps the session's state and removes the home", async () => {
   const run = await started();
   await waitFor(() => opened(run), 'the open');
   const home = run.record.clients[0]?.baseDirectory ?? '';
@@ -470,10 +471,77 @@ test("close disconnects the session, ends the runtime's tree by its pid, stops t
   writeFileSync(join(state, 'events.jsonl'), '{}\n');
   run.process.close();
   assert.equal(await run.ended, null);
-  assert.deepEqual(run.record.lifecycle.slice(-2), ['disconnect', 'forceStop']);
+  assert.deepEqual(run.record.lifecycle.slice(-5), [
+    'abort',
+    'cancelAllBackgroundAgents',
+    'disconnect',
+    'killTree',
+    'forceStop',
+  ]);
   assert.deepEqual(run.killed, [4242]);
   assert.equal(existsSync(home), false);
   assert.ok(existsSync(join(run.base, 'state', 'copilot-session-1', 'events.jsonl')));
+  await rm(run.base, { recursive: true, force: true });
+});
+
+test('a call that arrives while the session closes is asked of this host and refused: the turn is ended before the session is disconnected, so no call runs unasked', async () => {
+  const run = await started({
+    fake: {
+      callDuringAbort: {
+        toolName: 'create',
+        toolArgs: { path: 'late.txt', file_text: 'x' },
+        toolCallId: 'call_late',
+      },
+    },
+  });
+  await waitFor(() => opened(run), 'the open');
+  run.process.close();
+  assert.equal(await run.ended, null);
+  const late = run.record.answers.find((one) => one.toolCallId === 'call_late');
+  assert.equal(late?.kind, 'hook', 'the call reached this host through the hook, which still had its route');
+  assert.equal(late?.answer.kind, 'reject');
+  assert.match(
+    late?.answer.kind === 'reject' ? (late.answer.feedback ?? '') : '',
+    /permission-decision-unavailable/,
+  );
+  const finished = run.messages.flatMap((message) =>
+    message.kind === 'event' && message.event.type === 'tool.execution_complete' ? [message.event.data] : [],
+  );
+  assert.deepEqual(
+    finished.map((data) => (data as { toolCallId?: unknown; success?: unknown }).success),
+    [false],
+    'the call did not run, though the decider would have allowed it',
+  );
+  assert.ok(
+    run.record.lifecycle.indexOf('abort') < run.record.lifecycle.indexOf('disconnect'),
+    run.record.lifecycle.join(', '),
+  );
+  assert.deepEqual(
+    run.raised.filter((one) => one.name === 'gate-hook-missing'),
+    [],
+    'nothing ran undecided',
+  );
+  await rm(run.base, { recursive: true, force: true });
+});
+
+test('a turn that will not end is never disconnected while it runs: its tree is ended first, and the session is not detached', async () => {
+  const run = await started({ fake: { abortFailure: 'the runtime did not answer' } });
+  await waitFor(() => opened(run), 'the open');
+  run.process.close();
+  assert.equal(await run.ended, null);
+  assert.deepEqual(run.record.lifecycle.slice(-4), [
+    'abort',
+    'cancelAllBackgroundAgents',
+    'killTree',
+    'forceStop',
+  ]);
+  assert.equal(run.record.lifecycle.includes('disconnect'), false);
+  assert.ok(
+    run.degrades.some((detail) =>
+      /the turn was not ended before the close: the runtime did not answer/.test(detail),
+    ),
+    run.degrades.join(' | '),
+  );
   await rm(run.base, { recursive: true, force: true });
 });
 

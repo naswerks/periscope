@@ -31,8 +31,12 @@
  *   is Copilot's agent mode: `default` is `interactive` and `plan` is `plan`; nothing else is ever sent, and
  *   the permission mode stays `manual`. Copilot has no thinking switch, so a request to turn thinking off is
  *   refused by name.
- * - **Close.** The session is disconnected, the runtime's process tree ended by its pid, the client
- *   stopped, the session's state moved out of the home for a later resume, and the home removed.
+ * - **Close.** Every decision still waiting is ended, then the turn and its background sub-agents are
+ *   ended while the hook and the permission handler still have their route, so a call that arrives as the
+ *   turn winds down is refused here and never runs unasked. Only then is the session disconnected, the
+ *   runtime's process tree ended by its pid, the client stopped, the session's state moved out of the home
+ *   for a later resume, and the home removed. A turn that would not end is never disconnected while it
+ *   runs: its tree is ended first.
  */
 import type { RefusalReason } from '../core/refusal.js';
 import { AsyncQueue } from '../core/async-queue.js';
@@ -548,17 +552,40 @@ export function startCopilotProcess(
       decisions.abort();
       const session = live;
       live = null;
+      // The turn ends first, while the hook and the handler still have their route. The runtime lets a call
+      // proceed when its hook has none, so a session disconnected under a running turn could run a call
+      // nobody was asked about; a call that arrives here instead is asked, and refused, since every
+      // decision was just ended.
+      let turnEnded = true;
       if (session !== null) {
-        await within(session.disconnect(), grace, "the session's disconnect").catch((error: unknown) =>
-          degrade(`the session did not disconnect: ${wordsOf(error)}`),
+        turnEnded = await within(
+          Promise.all([session.abort(), session.rpc.cancelAllBackgroundAgents()]),
+          grace,
+          "the turn's end",
+        ).then(
+          () => true,
+          (error: unknown) => {
+            degrade(`the turn was not ended before the close: ${wordsOf(error)}`);
+            return false;
+          },
         );
       }
       const stopping = client;
       client = null;
-      if (stopping !== null) {
-        // The tree first, while the runtime still roots it: a command the agent left running ends with it.
-        const pid = copilotRuntimePid(stopping);
+      // The tree, while the runtime still roots it: a command the agent left running ends with it.
+      const endTree = async (): Promise<void> => {
+        const pid = stopping === null ? null : copilotRuntimePid(stopping);
         if (pid !== null) await (runtime.killTree ?? killProcessTree)(pid).catch(() => undefined);
+      };
+      // A turn that would not end is never disconnected while it runs: its tree goes first.
+      if (!turnEnded) await endTree();
+      else if (session !== null) {
+        await within(session.disconnect(), grace, "the session's disconnect").catch((error: unknown) =>
+          degrade(`the session did not disconnect: ${wordsOf(error)}`),
+        );
+      }
+      if (stopping !== null) {
+        if (turnEnded) await endTree();
         await within(stopping.forceStop(), grace, "the client's stop").catch((error: unknown) =>
           degrade(`the Copilot client did not stop: ${wordsOf(error)}`),
         );

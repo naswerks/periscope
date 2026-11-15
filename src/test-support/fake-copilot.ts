@@ -71,6 +71,10 @@ export interface FakeCopilotOptions {
   readonly createFailure?: string;
   /** The runtime process's id, as the SDK's private member holds it; null for none. */
   readonly pid?: number | null;
+  /** A call the turn still makes while it is being aborted, through the hook and the request as any other. */
+  readonly callDuringAbort?: FakeCopilotCall;
+  /** `abort` rejects with this: the turn would not end. */
+  readonly abortFailure?: string;
 }
 
 /** What the fake recorded. */
@@ -299,6 +303,10 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
           return Promise.resolve({});
         },
       },
+      cancelAllBackgroundAgents: () => {
+        record.lifecycle.push('cancelAllBackgroundAgents');
+        return Promise.resolve({ cancelledCount: 0 });
+      },
     };
     return {
       sessionId,
@@ -336,9 +344,12 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
         })();
         return 'message-1';
       },
-      abort() {
+      async abort() {
         record.lifecycle.push('abort');
-        return Promise.resolve();
+        if (options.abortFailure !== undefined) throw new Error(options.abortFailure);
+        if (options.callDuringAbort !== undefined) {
+          await runCall(config, sessionId, options.callDuringAbort, false);
+        }
       },
       setModel(model) {
         record.models.push(model);

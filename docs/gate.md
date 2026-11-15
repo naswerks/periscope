@@ -624,6 +624,14 @@ the one this host decides.
     session opens all the same, and each call of that tool asks like any other, as kind `other` with no
     local family; the name is said once per tool, at the open or at its first call, so the tables can
     learn it. A tool the runtime lists as an attached server's is never taken for one.
+- **The close.** The runtime lets a call proceed when its hook has no route, and a disconnected session's
+  hook has none. So the close ends every waiting decision, then ends the turn (`abort`) and its
+  background sub-agents (`cancelAllBackgroundAgents`), and only then disconnects the session, ends the
+  runtime's process tree and stops the client. A call that arrives while the turn winds down is asked
+  through the hook as any other and refused, since its decision is already ended. A turn that does not
+  end within the close's grace is never disconnected while it runs: its process tree is ended first.
+  That the runtime would run a disconnected turn's call was not measured: the order rests on the SDK's
+  own account of its hook.
 - **What it does not hold.** A command the agent detaches from its shell on purpose (on Windows,
   `Start-Process`, measured on the pinned runtime) is in no process tree of the session, so it outlives
   the session's close. A command the session's shell still runs, in the foreground or the background,

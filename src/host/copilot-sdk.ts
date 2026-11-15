@@ -200,6 +200,8 @@ export interface CopilotSessionRpc {
   readonly model: {
     setReasoningEffort(params: { reasoningEffort: string }): Promise<unknown>;
   };
+  /** Ends every sub-agent the session still runs in the background; the session's own turn is `abort`'s. */
+  cancelAllBackgroundAgents(): Promise<unknown>;
 }
 
 /** A started session, as this host drives it. */

@@ -606,6 +606,10 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
 - **Three tools are turned off.** `write_powershell` and `write_bash`, which type into a shell already
   running, and `manage_schedule`, which runs a prompt later outside your queue, are never offered, and a
   call of one is refused.
+- **No call runs unasked while a session closes.** The close ends the turn and its background sub-agents
+  before it disconnects the session, while the hook still has its route, so a call that arrives as the
+  turn winds down is asked and refused. A turn that will not end is not disconnected while it runs: its
+  process tree is ended first.
 - **A command detached on purpose outlives the session.** Closing a session ends its runtime and every
   command its shell still runs. A command the agent detaches from its shell (on Windows,
   `Start-Process`) is in no process tree of the session, and keeps running.
