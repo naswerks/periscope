@@ -293,6 +293,106 @@ export function copilotShellDialect(toolName: string): ShellDialect | null {
   return Object.hasOwn(COPILOT_SHELL_DIALECTS, toolName) ? (COPILOT_SHELL_DIALECTS[toolName] ?? null) : null;
 }
 
+/**
+ * opencode's permission actions, read as tool kinds: the action a permission request names, which is what a
+ * decision request carries as the tool's name. `shell` runs a command; `edit` writes a path (the `write`,
+ * `edit` and `patch` tools all ask it, once per call, naming each file, and `opencode_worktree_remove` asks it
+ * naming the worktree it deletes); `read` reads one; `glob` and `grep` read under one; `webfetch` fetches a
+ * URL and `websearch` searches the web. The tools that ask as `edit` are named here as well, by their own
+ * names, which the conversation's items carry. Every MCP tool reaches this host as `mcp__{server}__{tool}`
+ * (`opencode-gate.ts` spells it) and is `mcp` by that prefix. Every other action is `other`, and is named in
+ * `OPENCODE_OTHER_TOOLS`.
+ */
+export const OPENCODE_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
+  shell: 'shell',
+  edit: 'file_edit',
+  write: 'file_edit',
+  patch: 'file_edit',
+  opencode_worktree_remove: 'file_edit',
+  read: 'file_read',
+  glob: 'file_read',
+  grep: 'file_read',
+  webfetch: 'web',
+  websearch: 'web',
+};
+
+/**
+ * The actions of the pinned opencode release that ask and are `other` by name: `external_directory`, asked
+ * first for any path outside the session's location (the directory a call goes to); `subagent`, the start of
+ * another session under this one; `skill`, a skill's instructions read; `todowrite`, the session's own list;
+ * the MCP resource tools; and the MCP event watch. Together with `OPENCODE_TOOL_KINDS` and
+ * `OPENCODE_DENIED_TOOLS` it names every tool the runtime offers a session (`opencode-local.test.ts` holds
+ * them to the runtime's own list).
+ */
+export const OPENCODE_OTHER_TOOLS: readonly string[] = [
+  'external_directory',
+  'subagent',
+  'skill',
+  'todowrite',
+  'opencode_list_mcp_resources',
+  'opencode_read_mcp_resource',
+  'opencode_watch_mcp_event',
+];
+
+/**
+ * The tools of the pinned opencode release that offer a call the gate cannot decide, by the action that
+ * turns each off: every session is created with each denied, so the runtime never offers it, the open is
+ * refused if it does, and a request naming one is refused by this host's gate without asking anyone.
+ *
+ * - `execute` (Code Mode) runs a program whose tool calls share its own call id; denied, every tool is
+ *   offered directly and each call keeps its own id in the record.
+ * - `question` waits on a form with no timeout; an agent asks through the controller's MCP server instead.
+ * - `experimental_image_generate` writes its image under a name it chooses after the call was asked.
+ * - `browser` is every browser tool's action; the browser's own plugin writes allow rules into the session
+ *   when a browser attaches.
+ * - The `opencode_` session and worktree tools other than `opencode_worktree_remove`, and `opencode_models`,
+ *   run without asking at all: a worktree created, a session moved or renamed, the model catalogue read.
+ * - The artifact and schedule tools run without asking at all, and a schedule runs a prompt later, outside
+ *   the queue a controller sends prompts into. Both are off unless a feature flag turns them on.
+ *
+ * Lifting one is a later release's change to this list, once a decision request can say what such a call
+ * does.
+ */
+export const OPENCODE_DENIED_TOOLS: readonly string[] = [
+  'execute',
+  'question',
+  'experimental_image_generate',
+  'browser',
+  'opencode_session_rename',
+  'opencode_session_move',
+  'opencode_worktree_create',
+  'opencode_worktree_list',
+  'opencode_models',
+  'opencode_artifact_create',
+  'opencode_artifact_read',
+  'opencode_artifact_update',
+  'opencode_artifact_delete',
+  'opencode_schedule_create',
+  'opencode_schedule_list',
+  'opencode_schedule_pause',
+  'opencode_schedule_resume',
+  'opencode_schedule_delete',
+];
+
+/** The kind of the opencode action named `action`: its row in the table, `mcp` by prefix, else `other`. */
+export function opencodeToolKind(action: string): ToolKind {
+  if (Object.hasOwn(OPENCODE_TOOL_KINDS, action)) return OPENCODE_TOOL_KINDS[action] ?? 'other';
+  if (action.startsWith(MCP_TOOL_PREFIX)) return 'mcp';
+  return 'other';
+}
+
+/**
+ * The grammar opencode's `shell` tool runs a command in, by the shell this host names in the session's
+ * configuration: PowerShell for `pwsh` and `powershell`, `cmd.exe` for `cmd`, and a POSIX shell for every
+ * other (`bash`, `sh`, `zsh`, Git Bash). Read from the shell's file name, so the word says what runs.
+ */
+export function opencodeShellDialect(shell: string): ShellDialect {
+  const name = (shell.split(/[\\/]/).pop() ?? shell).toLowerCase().replace(/\.exe$/, '');
+  if (name === 'pwsh' || name === 'powershell') return 'powershell';
+  if (name === 'cmd') return 'cmd';
+  return 'posix';
+}
+
 /** A variable read as Windows reads it, without regard to the case of its name. */
 function envValue(env: Readonly<Record<string, string | undefined>>, name: string): string | undefined {
   const exact = env[name];

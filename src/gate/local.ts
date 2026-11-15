@@ -139,6 +139,21 @@ export const COPILOT_TOOL_FAMILIES: ToolFamilies = {
   patch: ['apply_patch'],
 };
 
+/**
+ * The actions opencode's permission requests name: `shell` runs a command; `edit` writes the path it names
+ * (the tools that ask it are named beside it, so a request by either spelling is jailed as a write);
+ * `read` reads the path it names, and `external_directory` reads where a call outside the session's location
+ * goes (the directory it names); `glob` and `grep` read under theirs. The opencode gate checks each path a
+ * request names (`opencode-gate.ts`), so one request about several files is checked file by file. Every
+ * other opencode action has no local family and is asked about like any call this gate has no opinion on.
+ */
+export const OPENCODE_TOOL_FAMILIES: ToolFamilies = {
+  write: ['edit', 'write', 'patch', 'opencode_worktree_remove'],
+  read: ['read', 'external_directory'],
+  shell: ['shell'],
+  search: ['glob', 'grep'],
+};
+
 export interface LocalGateOptions {
   /** The session's own directory: writes may land inside it, and a relative path is placed against it. */
   readonly workspaceRoot: string | null;
