@@ -86,8 +86,9 @@ everything as arguments, so it is checkable without a socket or a process, and r
   - Every configure answer and later hello keep the catalog, though the file they are rebuilt from
     has none.
   - With `codex`, the same wait covers Codex's read (`readCodexRuntime`), with `qwen`, Qwen
-    Code's (`readQwenRuntime`), and with `pi`, pi's (`readPiRuntime`); the runtimes list names Claude
-    first, then Codex, then Qwen Code, then pi. An entry that would push the list past its byte budget rides
+    Code's (`readQwenRuntime`), with `pi`, pi's (`readPiRuntime`), and with `copilot`, Copilot's
+    (`readCopilotRuntime`); the runtimes list names Claude first, then Codex, then Qwen Code, then pi,
+    then Copilot. An entry that would push the list past its byte budget rides
     with `models: []` and a `runtime-catalog` event, so one runtime's catalog never empties
     another's.
 - Each session's hooks are the observation hooks, the gate, then `modelSwitchHooks`, which answers
@@ -113,9 +114,11 @@ something is about the daemon; the other verbs are where interactive work lives.
   model catalog (bounded at 20 seconds, one `[agent]` line saying what the hello carries) and, with
   `PERISCOPE_CODEX_BIN` and `PERISCOPE_CODEX_HOME` set, Codex's (bounded at 20 seconds, one
   `[codex]` line), with `PERISCOPE_QWEN_BIN` and `PERISCOPE_QWEN_HOME` set, Qwen Code's (one
-  `[qwen-code]` line), and with `PERISCOPE_PI_BIN` and `PERISCOPE_PI_HOME` set, pi's (one `[pi]`
-  line), then dials, and writes the link's state to `link-state.json` beside the credentials on every
-  transition. One of the two keys of any of the three without the other refuses start by name.
+  `[qwen-code]` line), with `PERISCOPE_PI_BIN` and `PERISCOPE_PI_HOME` set, pi's (one `[pi]`
+  line), and with `PERISCOPE_COPILOT_SDK` and `PERISCOPE_COPILOT_HOME` set, Copilot's (one `[copilot]`
+  line, read from the install's files alone), then dials, and writes the link's state to
+  `link-state.json` beside the credentials on every transition. One of the two keys of any of the four
+  without the other refuses start by name.
 - `login` runs the sign-in and writes the token cache. `pair <code>`, with `--controller <origin>`
   and `--label <name>`, redeems a controller-minted code for a paired credential and writes the
   controller's addresses to the config file. `config` shows or edits `config.json`. `status` prints
@@ -394,6 +397,64 @@ periscope's extension, which asks the host about every tool call before it runs.
   holds a row for each (`pins/pi-coverage.test.ts`), and a live test holds the snapshot to the
   installed package.
 
+## Copilot
+
+A session naming `runtime: "copilot"` runs one GitHub Copilot runtime, started and driven through
+`@github/copilot-sdk`, which the operator installs into a directory of the runner's own; this package
+never depends on it. Copilot is offered only when the operator sets `PERISCOPE_COPILOT_SDK` and
+`PERISCOPE_COPILOT_HOME` ([configuration.md](configuration.md)). Its gate joins the runtime's pre-tool
+hook, which answers `ask` for every call, to its permission request, which this host decides. Its
+control tier is `intercepted-with-residual` ([gate.md](gate.md), the Copilot gate).
+
+- The seam (`src/host/copilot-sdk.ts`) is the one file that names the SDK. It checks the operator's
+  install against the pin (`COPILOT_SDK_PINNED_VERSION`, and the runtime that release pins), imports it
+  from that directory by path when a session opens, and declares the structural types the rest of the
+  adapter uses, so no declaration this package ships names the SDK. `pins/copilot-sdk-shape.test.ts`
+  holds those types to the SDK's own at the pinned version, and
+  `pins/copilot-sdk-confinement.test.ts` holds the SDK to a development dependency nothing ships or
+  imports.
+- The base is the runner's own (`src/host/copilot-home.ts`): `sessions/<id>` is one session's fresh
+  home, its `COPILOT_HOME` and the `LOCALAPPDATA` and `APPDATA` it starts with, removed at close; a
+  closed session's state is moved to `state/<session id>`, and a resume copies it back first. The
+  runtime's environment is the session's spawn environment less every GitHub token and `COPILOT_`
+  variable. The read at start (`readCopilotRuntime`, `src/host/copilot-runtime.ts`) reads the install's
+  files and starts nothing.
+- The process (`startCopilotProcess`, `src/host/copilot-process.ts`) is an
+  `AgentProcess<CopilotMessage>`. The open runs in order: the install is checked and the SDK loaded,
+  the home made (and a kept state copied in), the client started in `empty` mode signed in as nobody,
+  the session created (or resumed, or forked and resumed) in the `manual` permission mode with
+  discovery off, the agent mode set for a plan open, the posture read back (`copilotReadBackProblem`),
+  and one probe call run through the hook and the request; only then is the session ready and the first
+  prompt sent. A prompt is `send` in `enqueue` mode, held until the open and bounded in the host. The
+  model and effort setters are the session's own calls, the permission mode is the agent mode, and an
+  interrupt is `abort`. A GitHub token rides the session's token provider and an endpoint's key its
+  provider, both over the SDK's pipe. A request member Copilot cannot honour (Claude's settings tiers,
+  its hooks and spawner, a store, a replacing system prompt, a permission mode other than `default` and
+  `plan`, thinking off) is refused `request-key-unsupported`, naming it. Close disconnects the session,
+  ends the runtime's process tree, stops the client, keeps the state and removes the home.
+- The gate (`createCopilotSessionGate`, `src/host/copilot-gate.ts`) records each call the hook
+  announces and decides its `hook` request through the per-call decision every runtime shares
+  (`createCallDecision`), with `canRewriteInput: false`. It spells an MCP tool from the tools its server
+  lists, and reads the session's events for the degrades it names. A `powershell` call is read as
+  `powershell` and a `bash` call as `posix` (`copilotShellDialect`, `src/gate/tool-kind.ts`).
+- A session's plugin directories reach Copilot as skill directories, each directory's `skills/`
+  (`copilotSkillDirectories`, `src/host/copilot-pack.ts`). Its MCP servers ride the session's request
+  (`copilotMcpServers`, `src/host/copilot-mcp.ts`). A named endpoint is the session's provider
+  (`src/host/copilot-endpoints.ts`). `ENDPOINT_ROUTED_RUNTIMES` is Claude, Codex, Qwen Code, pi and
+  Copilot.
+- Its messages ride as the runtime sent them (`COPILOT_MESSAGE_BINDING`): each session event is an
+  `agent_message` with `runtime: "copilot"`, a streamed delta on the delta lane; the open and the
+  probe's events are not forwarded. The observer arm (`src/state/copilot-observer.ts`) records the
+  transitions they cause under `agent-event` events (`AGENT_EVENTS`: `copilot:` and the event's type),
+  `CopilotFactLift` (`src/host/copilot-facts.ts`) lifts the facts, and `CopilotItemFill`
+  (`src/host/copilot-items.ts`) fills the conversation items, one turn from the prompt the runtime takes
+  to `session.idle`.
+- What the pinned release declares is pinned name by name. `contracts/copilot-names.json`, regenerated
+  by `scripts/derive-copilot-names.mjs` from an install of the release, holds every session event;
+  `COPILOT_COVERAGE` (`src/state/copilot-coverage.ts`) holds a row for each
+  (`pins/copilot-coverage.test.ts`). The built-in tools are held to the runtime's own list on each host
+  that runs it (`host/copilot-local.test.ts`), with no model call.
+
 ## The read-only door
 
 `src/host/repository-read.ts` is the door through which the binary serves a controller the text of
@@ -404,7 +465,8 @@ whatever the root is, on the lexical resolution and again on the real path: the 
 (`credentialPaths`, the files the gate keeps from the agent) refuses `credential-path-denied`, and the
 agents' session records (`agentTranscriptPaths`: Claude Code's `projects` under every agent home the
 protected set names; Codex's rollouts, prompt history and thread database; Qwen Code's `projects` and
-`tmp`; pi's `sessions`; under the operator's homes and the ones the runner runs each runtime from)
+`tmp`; pi's `sessions`; Copilot's session states; under the operator's homes and the ones the runner
+runs each runtime from)
 refuse `transcripts-not-served`, so a root pointed at an agent's home or the user's home reads
 neither. A listing of a directory that holds one names everything else and leaves it out; a protected file in a listed directory is still named, and refused when read. The bulk
 lane applies the same two fences, through the same helpers, to the file an embedder's resolver names

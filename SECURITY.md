@@ -526,6 +526,58 @@ does not:
   `--version`, and lists any other version unavailable. It never installs or updates pi, never runs a
   batch file, and starts pi with its version check and telemetry off.
 
+## Copilot sessions
+
+Copilot is offered only when you set `PERISCOPE_COPILOT_SDK` and `PERISCOPE_COPILOT_HOME`
+([configuration](docs/configuration.md#copilot)). Each session's runtime is started through the GitHub
+Copilot SDK you installed, and its gate joins the runtime's two halves: its pre-tool hook answers `ask`
+for every call, and the permission request that raises asks the same gate as a Claude call (the local
+refusals above, then your controller). Its control tier is `intercepted-with-residual`, and the hello
+says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does not:
+
+- **The SDK and its runtime are yours, not this package's.** periscope never installs `@github/copilot-sdk`
+  and never depends on it; you install the pinned version into a directory of the runner's own, and
+  the runtime it carries is a closed binary under the GitHub Copilot CLI License. The host checks the
+  install's versions and files at start, starts the runtime by its path inside that install, and lists
+  any other install unavailable. The whole directory is in the protected set, so a session cannot
+  replace the runtime the next one starts.
+- **No credential is in the runtime's environment.** The runtime hands its whole environment to every
+  command the agent runs, so the host strips `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
+  `GITHUB_ENTERPRISE_TOKEN` and every `COPILOT_` variable from it. Your GitHub token is read from
+  `PERISCOPE_COPILOT_TOKEN_FILE` when the runtime asks for one, and handed over the SDK's own pipe; an
+  endpoint's key rides the session's request the same way. Neither is ever on a command line.
+- **Nothing of yours is what a session runs from.** Each session's runtime runs in a fresh home of its
+  own under `PERISCOPE_COPILOT_HOME`, signed in as nobody until the token is handed over, with config
+  discovery and custom instructions off, so your `~/.copilot` (its sign-in, its settings, its sessions)
+  and a repository's own Copilot configuration are never read. Your `~/.copilot` and `COPILOT_HOME`, and
+  the whole runner base, are in the protected set.
+- **Proven before the first prompt.** The host reads the runtime back (the `manual` permission mode, the
+  agent mode asked for, no approve-all grant, no approved path, only the session's own directories, no
+  plugin, none of the tools it turns off) and runs one probe call through the hook and the request. A
+  runtime that is not as the host started it refuses the open `copilot-gate-not-active`.
+- **The hook fails open; the gate does not depend on it alone.** A pre-tool hook that throws or times
+  out lets a call proceed in the runtime. The host's hook does no I/O and answers at once, and a call
+  that ran with no decision, a request the hook did not raise, or a hook the runtime reports as failed
+  is named `gate-hook-missing`. A permission request this host did not raise through the hook is
+  refused, never decided.
+- **What no hook sees is named.** A tool the model's provider runs itself is named
+  `gate-unhooked-call`; a machine-wide policy hook (`%ProgramData%\GitHub\Copilot\policy.d` or the
+  `HKLM\Software\Policies\GitHub\Copilot` key), which runs whatever a session's settings say, is named
+  `gate-hook-foreign` at the open; a permission or agent mode the host did not set is named
+  `gate-mode-widened`.
+- **Three tools are turned off.** `write_powershell` and `write_bash`, which type into a shell already
+  running, and `manage_schedule`, which runs a prompt later outside your queue, are never offered, and a
+  call of one is refused.
+- **A command detached on purpose outlives the session.** Closing a session ends its runtime and every
+  command its shell still runs. A command the agent detaches from its shell (on Windows,
+  `Start-Process`) is in no process tree of the session, and keeps running.
+- **A keyring entry is not a file.** If you ran `copilot login` yourself on the runner, the token it
+  stored in the Windows Credential Manager is outside the protected set, which holds files: a session's
+  runtime never reads or writes the keyring, but a command the agent runs, as your user, can. Sign the
+  runner's Copilot sessions in with `PERISCOPE_COPILOT_TOKEN_FILE` instead, and remove that entry.
+- **The runtime's route and identity are beneath the floor.** `COPILOT_*` is in `EXTRA_ENV_FLOOR`, so
+  no controller can move a Copilot session's home, swap its runtime or hand it a credential.
+
 ## The outbound-only posture
 
 There is no inbound port anywhere in this package. Periscope dials out to your controller over a
@@ -664,14 +716,16 @@ stops being true.
 
 ## Versions this was tested against
 
-|                                  |                                                              |
-| -------------------------------- | ------------------------------------------------------------ |
-| `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret                        |
-| Bundled Claude Code CLI          | **2.1.325**                                                  |
-| Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows |
-| Codex app-server                 | **0.169.0**, pinned; any other version is listed unavailable |
-| Qwen Code CLI                    | **0.27.3**, pinned; any other version is listed unavailable  |
-| pi                               | **1.5.2**, pinned; any other version is listed unavailable   |
+|                                  |                                                                   |
+| -------------------------------- | ----------------------------------------------------------------- |
+| `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret                             |
+| Bundled Claude Code CLI          | **2.1.325**                                                       |
+| Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows      |
+| Codex app-server                 | **0.169.0**, pinned; any other version is listed unavailable      |
+| Qwen Code CLI                    | **0.27.3**, pinned; any other version is listed unavailable       |
+| pi                               | **1.5.2**, pinned; any other version is listed unavailable        |
+| `@github/copilot-sdk`            | **1.0.34**, your install, pinned; any other is listed unavailable |
+| Copilot runtime                  | **1.0.112**, the one that SDK pins                                |
 
 The SDK is pre-1.0 and its surface moves without semver protection, so a SHA-256 of the installed
 type definitions is kept in `contracts/sdk.sha256` and a CI job fails on any drift between the installed

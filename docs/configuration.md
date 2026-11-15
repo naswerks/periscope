@@ -12,7 +12,7 @@ A setting arrives one of three ways, and the order is the rule:
 2. **The config file** (`<config dir>/config.json`) fills absences. `periscope config <key> <value>`
    writes one key, `periscope config --unset <key>` removes it, `periscope config` lists the file and
    marks every value the environment is currently overriding. On Windows this is the way to set a
-   value that should outlive the shell. Only the eighteen keys marked "config-file key" below (`CONFIG_KEYS`) may live
+   value that should outlive the shell. Only the twenty-one keys marked "config-file key" below (`CONFIG_KEYS`) may live
    in the file; a value the host would refuse at start (an `https:` controller address, a `ws:`
    decision address, a relative root) is refused by `periscope config` before it is written.
 3. **The controller, over the link** (`host_configure`) writes eight of those keys to the file (`WIRE_CONFIGURABLE_KEYS`); see
@@ -104,6 +104,9 @@ session's tools may write.
 | `PERISCOPE_QWEN_HOME`                | The base every Qwen Code session's home is made beneath, by absolute path: the runner's own, never the operator's `~/.qwen`. Created when absent. Each session runs from `<base>/sessions/<id>`, made at its open and removed at its close, and every session shares `<base>/runtime`, where the CLI keeps the chats a resume reads. `<base>/sessions` joins the gate's protected set. Set with `PERISCOPE_QWEN_BIN`. Config-file key; never settable over the link.                                                                                                                                      |
 | `PERISCOPE_PI_BIN`                   | The pi CLI sessions naming `pi` run, by absolute path: the npm package's `dist/bundle/cli.js`, which runs under this Node. A batch file (`.cmd`, `.bat`) is refused, because it runs only through a shell. Set with `PERISCOPE_PI_HOME` or not at all; one without the other refuses start. Read at start ([pi](#pi)). Config-file key; never settable over the link.                                                                                                                                                                                                                                     |
 | `PERISCOPE_PI_HOME`                  | The base pi runs from, by absolute path: the runner's own, never the operator's `~/.pi`. Created when absent. `<base>/agent` is pi's agent home, `<base>/sessions` the store of every session's file, and `<base>/run/<id>` one session's run directory, made at its open and removed at its close. The whole base joins the gate's protected set. Set with `PERISCOPE_PI_BIN`. Config-file key; never settable over the link.                                                                                                                                                                            |
+| `PERISCOPE_COPILOT_SDK`              | The directory the GitHub Copilot SDK is installed into, by absolute path: an `npm install --prefix` target of the operator's own, holding `@github/copilot-sdk` at the pinned version and its runtime for this platform. A session's runtime is started from it by path. Set with `PERISCOPE_COPILOT_HOME` or not at all; one without the other refuses start. Read at start ([Copilot](#copilot)). The whole directory joins the gate's protected set. Config-file key; never settable over the link.                                                                                                    |
+| `PERISCOPE_COPILOT_HOME`             | The base every Copilot session's home is made beneath, by absolute path: the runner's own, never the operator's `~/.copilot`. Created when absent. Each session runs from `<base>/sessions/<id>`, made at its open and removed at its close, and a closed session's state is kept in `<base>/state/<session id>` for a resume. The whole base joins the gate's protected set. Set with `PERISCOPE_COPILOT_SDK`. Config-file key; never settable over the link.                                                                                                                                            |
+| `PERISCOPE_COPILOT_TOKEN_FILE`       | A file holding the GitHub token Copilot sessions sign in with, by absolute path. Read when the runtime asks for a token, never at start, so a rotated token is taken without a restart; it reaches the runtime over the SDK's own pipe, never in its environment. Unset, a session not on a model endpoint opens and its first turn fails on the runtime's own words. Set only with the two keys above. The file joins the gate's protected set. Config-file key; never settable over the link.                                                                                                           |
 | `PERISCOPE_CODEX_ENDPOINT_KEY`       | Never read from this host's own environment, and not a config-file key: the host sets it, in the app-server environment of a Codex session opened on a [model endpoint](#model-endpoints), to that endpoint's credential, and the session's provider reads its key from it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                        |
 | `PERISCOPE_HOOK_CHANNEL`             | Never read from this host's own environment, and not a config-file key: the host sets it, in a Codex session's app-server environment, to the address of that session's hook channel (a named pipe on Windows, a Unix socket elsewhere), and `periscope hook codex` reads it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                      |
 | `PERISCOPE_HOOK_TOKEN`               | Never read from this host's own environment, and not a config-file key: the host sets it, in a Codex session's app-server environment, to that session's random token for its hook channel, and `periscope hook codex` presents it and verifies the host's answer by it. Kept out of the agent's shell, and beneath the env floor, so no controller can set it.                                                                                                                                                                                                                                           |
@@ -130,8 +133,10 @@ The agent CLI's token cache and configuration file in `CLAUDE_CONFIG_DIR`, when 
 the model endpoints file and every credential file it names, and `auth.json` and `.credentials.json`
 in `PERISCOPE_CODEX_HOME` and in `<user home>/.codex`, and the session homes beneath
 `PERISCOPE_QWEN_HOME`, Qwen Code's sign-in, token and settings files in `<user home>/.qwen` and in an
-operator's own `QWEN_HOME`, `<user home>/.env`, the whole of `PERISCOPE_PI_HOME`, and pi's sign-in, MCP
-token and models files in `<user home>/.pi/agent`; the full set is listed in [the gate](gate.md).
+operator's own `QWEN_HOME`, `<user home>/.env`, the whole of `PERISCOPE_PI_HOME`, pi's sign-in, MCP
+token and models files in `<user home>/.pi/agent`, the whole of `PERISCOPE_COPILOT_HOME`,
+`PERISCOPE_COPILOT_SDK` and `PERISCOPE_COPILOT_TOKEN_FILE`, and the operator's own `<user home>/.copilot`
+and `COPILOT_HOME`; the full set is listed in [the gate](gate.md).
 
 ## What a controller can set over the link
 
@@ -151,12 +156,13 @@ the model endpoints file (`PERISCOPE_MODEL_ENDPOINTS`): a controller able to poi
 choose where a session's model calls go, and with which credential. Nor are the Codex binary and
 home (`PERISCOPE_CODEX_BIN`, `PERISCOPE_CODEX_HOME`): a controller able to point them elsewhere would
 choose what runs as a session, and whose sign-in it runs under; and the Qwen Code CLI and base
-(`PERISCOPE_QWEN_BIN`, `PERISCOPE_QWEN_HOME`) and the pi CLI and home (`PERISCOPE_PI_BIN`,
-`PERISCOPE_PI_HOME`), for the same reason. A controller can also list one directory or read one
+(`PERISCOPE_QWEN_BIN`, `PERISCOPE_QWEN_HOME`), the pi CLI and home (`PERISCOPE_PI_BIN`,
+`PERISCOPE_PI_HOME`) and Copilot's SDK, home and token file (`PERISCOPE_COPILOT_SDK`,
+`PERISCOPE_COPILOT_HOME`, `PERISCOPE_COPILOT_TOKEN_FILE`), for the same reason. A controller can also list one directory or read one
 text file under the repository root (`repository_list` / `repository_read`: the head of any file,
 and its first 512 KiB a page at a time), jailed to that root, to the protected set and away from the
 agents' session records (Claude Code's `projects`, Codex's rollouts and history, Qwen Code's `projects`
-and `tmp`, pi's `sessions`, under every home of each the host knows), bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
+and `tmp`, pi's `sessions`, Copilot's session states, under every home of each the host knows), bounded, and text-only; and read a text file inside a workspace this host provisioned, a page at
 a time, by the workspace's key (`workspace_read`), under the same jail and protected set. [The wire
 protocol](protocol.md) states the three doors.
 
@@ -578,6 +584,81 @@ lines on stdin and stdout, and the hello's `agents` lists pi after Claude, Codex
   catalogue's rates, never a bill. They cover every entry of the session's file, compacted history and
   failed retries included, so a total can exceed what the visible conversation used.
 
+## Copilot
+
+A host offers GitHub Copilot beside Claude when `PERISCOPE_COPILOT_SDK` and `PERISCOPE_COPILOT_HOME` are
+both set. Then a `session_new` naming `runtime: "copilot"` runs one Copilot runtime for the session,
+started and driven through the SDK the operator installed, and the hello's `agents` lists Copilot after
+the other runtimes ([the wire protocol](protocol.md)).
+
+- **The SDK is the operator's install, at the pinned version.** This release runs `@github/copilot-sdk`
+  1.0.34 (`COPILOT_SDK_PINNED_VERSION`), which pins the Copilot runtime 1.0.112. periscope never
+  installs it and never depends on it. Install it into a directory of the runner's own
+  (`npm install --prefix <directory> @github/copilot-sdk@1.0.34`) and point `PERISCOPE_COPILOT_SDK` at
+  that directory. The SDK carries the runtime as a closed binary under the GitHub Copilot CLI License,
+  one platform package per platform; npm installs the one for the machine. At start the host reads the
+  install's files, starting nothing: an install that is absent, of another version, pinning another
+  runtime, or missing this platform's runtime is listed unavailable with what it found and what is
+  pinned; the host still starts, and a session naming `copilot` is refused `runtime-unavailable` with
+  that reason. The hello lists no models: Copilot lists its models only once signed in.
+- **The home is the runner's own.** Each session's runtime runs with a fresh home under
+  `<base>/sessions`, its caches (`LOCALAPPDATA`, `APPDATA`) pointed inside it, in the SDK's `empty`
+  mode, signed in as nobody (`useLoggedInUser: false`), so the operator's own `~/.copilot` (its sign-in,
+  its settings, its sessions) is never what a session runs from. The home is removed when the session
+  closes; its state moves to `<base>/state/<session id>`, which a resume copies back.
+- **The sign-in.** A session signs in with the token in `PERISCOPE_COPILOT_TOKEN_FILE`, read each time
+  the runtime asks and handed over the SDK's own pipe. The token is said to last eight hours, the
+  lifetime the SDK gives production tokens, and the runtime asks again before then; a file that is
+  empty or gone when it asks refuses the session's open, since the runtime never falls back to another
+  sign-in. No token is ever placed in the runtime's
+  environment, which every command the agent runs inherits: the host strips `GH_TOKEN`, `GITHUB_TOKEN`,
+  `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` and every `COPILOT_` variable from it. A session with
+  no token and no endpoint opens, and its first turn fails on the runtime's own words (`No GitHub OAuth
+token or Copilot HMAC key provided`).
+- **Endpoints.** An endpoint whose `runtimes` name `copilot`, over any of the three wire APIs, is the
+  session's own provider (bring your own key): its address and key ride the session's request over the
+  SDK's pipe, never the runtime's environment or a command line, and the session needs no GitHub
+  sign-in. An endpoint's own `env` is set nowhere for a Copilot session, and an endpoint only Copilot
+  reaches reports it among its ignored members.
+- **Nothing is discovered.** A session's runtime reads no configuration, custom instructions, MCP
+  servers or skills of a workspace's or the user's: the session is created with discovery off, its
+  skills are the plugin directories' alone and its servers the ones it attaches.
+- **The open.** Before any prompt the host reads the runtime back: its permission mode is `manual`, its
+  agent mode `interactive` (or `plan` for a session opened in plan mode), no approve-all grant of any
+  kind, no path approved for the session, every directory it allows the session's own, a further
+  worktree, the temp folder or inside its home, no plugin, and none of the tools this host turns off
+  offered. Then one probe call runs through it, under an id the host minted: the pre-tool hook must
+  fire and its request reach the host, which refuses it, so nothing runs. Anything else refuses the
+  open `copilot-gate-not-active`, naming what differed. A machine-wide policy hook
+  (`%ProgramData%\GitHub\Copilot\policy.d\*.json`, or the `HKLM\Software\Policies\GitHub\Copilot`
+  key) is named at the open (`gate-hook-foreign`) and lowers the session's tier.
+- **Its control tier is `intercepted-with-residual`.** The runtime's pre-tool hook answers `ask` for
+  every call, and the permission request that raises is decided by the session's gate, the same gate a
+  Claude call meets. The residual paths are named as they occur ([gate.md](gate.md), the Copilot gate;
+  [SECURITY.md](../SECURITY.md)).
+- **The deadlines.** A Copilot session waits for each decision for its `decisionTimeoutMs`, which may
+  be at most 240,000ms (`COPILOT_MEASURED_PERMISSION_WAIT_MS`): the runtime was measured holding a
+  permission request that long with no timeout of its own, and no longer wait has been measured. A
+  session asking for more is refused `gate-deadlines-inverted`.
+- **Modes, effort, thinking.** A session takes `default` (Copilot's `interactive` agent mode) or
+  `plan`; the permission mode is always `manual`. Its effort is one of `low`, `medium`, `high`,
+  `xhigh` and `max`, as the model takes it. Copilot has no thinking switch, so a session asking to turn
+  thinking off is refused.
+- **Resume and fork.** A resume names a session whose state this host kept; any other is refused
+  `request-key-unsupported` naming `resume`. A fork forks that state into a new session.
+- **The shell.** Copilot runs its `powershell` tool on Windows and its `bash` tool elsewhere. The gate
+  reads each in its own grammar.
+- **Plugins.** The configured plugin directories and a session's own `plugins` reach Copilot as skill
+  directories: each directory's `skills/`, its skills listed by their bare names. A directory without
+  one is named in the session's receipt.
+- **MCP servers.** A session's servers ride its request over the SDK's pipe: an HTTP server's headers
+  beside its URL, and a stdio server's command. Copilot names their tools `<server>-<tool>`; the host
+  names them `mcp__<server>__<tool>` by the tools each server lists, and asks about them like every
+  other call. An SSE server is refused `mcp-descriptor-invalid`.
+- **Spend.** Copilot reports each model call's tokens, filed as that step's figure, and at the
+  session's end its totals per model. Neither is priced: Copilot's cost is a multiplier and its credit
+  totals a unit of its own, so the cost is stated as not reported.
+
 ## What the host prints
 
 Every line of output is `<ISO timestamp> [channel] message`, with a detail after a dash when there
@@ -603,7 +684,8 @@ periscope's hook was written to the runner's home and answered its probe. A host
 prints `[qwen-code] qwen-code 0.27.3, 0 model(s) in the hello, control tier intercepted-with-residual`,
 or `[qwen-code] qwen-code is listed unavailable` with the reason. A host offering pi prints `[pi] pi
 1.5.2, 3 model(s) in the hello, control tier intercepted`, or `[pi] pi is listed unavailable` with the
-reason.
+reason. A host offering Copilot prints `[copilot] copilot 1.0.112, 0 model(s) in the hello, control tier
+intercepted-with-residual`, or `[copilot] copilot is listed unavailable` with the reason.
 
 A paired host prints `[credential] paired as <hostId> - the paired credential is presented on every
 dial` instead; a host on a signed-in token prints its first `[credential]` line (`cache-hit`,
@@ -659,7 +741,11 @@ With the reason on stderr and a non-zero exit, when:
   pinned version, a base that cannot be created) does not refuse start: it is listed unavailable;
 - one of `PERISCOPE_PI_BIN` and `PERISCOPE_PI_HOME` is set without the other, either is not an
   absolute path, or the CLI is a batch file. A pi that is set up but cannot run (absent, off its pinned
-  version, a home that cannot be written) does not refuse start: it is listed unavailable.
+  version, a home that cannot be written) does not refuse start: it is listed unavailable;
+- one of `PERISCOPE_COPILOT_SDK` and `PERISCOPE_COPILOT_HOME` is set without the other,
+  `PERISCOPE_COPILOT_TOKEN_FILE` is set without them, or any of the three is not an absolute path. A
+  Copilot that is set up but cannot run (no install, another version, no runtime for the platform, a
+  base that cannot be created) does not refuse start: it is listed unavailable.
 
 After start-up, one link event is fatal: `credential_rejected`. The controller or its identity
 provider has refused the host's material, so the process stops its sessions, prints the remedy

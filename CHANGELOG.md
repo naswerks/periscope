@@ -123,6 +123,54 @@ frame it sends decodes unchanged.
   same events, commands, records, dialogs, deltas and tools as 1.2.0's.
 - Fixed: `scripts/derive-qwen-names.mjs` also reads the service modules the CLI's stream-json path
   imports, so the contract keeps `ui_log`, which the 0.27.3 CLI still emits from its mod session there.
+- Added: GitHub Copilot as a fifth runtime. With `PERISCOPE_COPILOT_SDK` (a directory the operator
+  installed `@github/copilot-sdk` 1.0.34 into, which pins the Copilot runtime 1.0.112) and
+  `PERISCOPE_COPILOT_HOME` (a base of the runner's own) set, the hello's `agents` lists `copilot` after pi,
+  at `intercepted-with-residual`, with its runtime and SDK versions, the permission modes `default` and
+  `plan`, the efforts `low` to `max` and no thinking switch; its pack row is `bare`, `per-session`. A
+  `session_new` naming `runtime: "copilot"` runs one Copilot runtime for the session, in a fresh home under
+  the base, signed in as nobody until the host hands it a token. The read at start reads the install's
+  files and starts nothing; an install that is absent, off the pin or missing this platform's runtime is
+  listed unavailable with the reason.
+- Added: the SDK is the operator's, never this package's. It is a development dependency at exactly
+  1.0.34, for its types and the tests, and the published package neither carries nor resolves it: a
+  session imports it from the operator's directory by path when it opens. `src/host/copilot-sdk.ts` is
+  the one module that names it; its structural types are held to the SDK's own by a pin.
+- Added: the Copilot gate joins the runtime's two halves. Its pre-tool hook answers `ask` for every
+  call, at once, and the `hook` permission request that raises is decided by the gate every runtime
+  shares, with one-time answers only and no input rewrite. A sub-agent's call takes the same route.
+  Before the first prompt the runtime is read back (the `manual` permission mode, the agent mode asked
+  for, no approve-all grant, no approved path, only the session's own directories, no plugin, none of
+  the tools turned off) and one probe call is run through the hook and the request; an open that does
+  not hold is refused with the new reason `copilot-gate-not-active`. Mid-session the gate names
+  `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call` and `gate-mode-widened` with Copilot's
+  meanings ([gate.md](docs/gate.md)); a machine-wide policy hook is named `gate-hook-foreign` at the open.
+- Added: `write_powershell`, `write_bash` and `manage_schedule` are turned off in every Copilot session:
+  left out of its tools, read back absent at the open, and refused at the gate.
+- Added: a Copilot session's `decisionTimeoutMs` may be at most 240,000ms, the wait the runtime was
+  measured holding a permission request with no timeout of its own; a longer one is refused
+  `gate-deadlines-inverted`.
+- Added: `PERISCOPE_COPILOT_SDK`, `PERISCOPE_COPILOT_HOME` and `PERISCOPE_COPILOT_TOKEN_FILE`, config-file
+  keys never settable over the link. The token is read from the file when the runtime asks for it and
+  handed over the SDK's pipe; an endpoint whose `runtimes` name `copilot` is the session's own provider,
+  its key in the session's request. Neither is ever in the runtime's environment, from which every GitHub
+  token variable and every `COPILOT_` variable are stripped.
+- Added: Copilot's session events are covered name by name. `contracts/copilot-names.json`, derived by
+  `scripts/derive-copilot-names.mjs` from an install of the release, lists the 158 events SDK 1.0.34
+  declares; `COPILOT_COVERAGE` wires or declines each, and `AGENT_EVENTS` gains the 31 `copilot:` names its
+  wired rows cause. A Copilot session's events ride as `agent_message` with `runtime: "copilot"`; its
+  facts (`session_handle`, `agent_receipt`, a `turn_record` per model call and its totals at the end,
+  unpriced, `usage_sample`, `tasks` for its sub-agents, `compaction`) and its items are lifted from them.
+- Changed: the protected set gains the whole of `PERISCOPE_COPILOT_HOME`, `PERISCOPE_COPILOT_SDK` and
+  `PERISCOPE_COPILOT_TOKEN_FILE`, and the operator's own `~/.copilot` and `COPILOT_HOME`; the agents'
+  records gain Copilot's session states. `credentialPaths` and `agentTranscriptPaths` take the new
+  options.
+- Changed: `EXTRA_ENV_FLOOR` gains `COPILOT_*`.
+- Changed: a search tool that names its roots in a `paths` list (Copilot's `grep` and `glob`) is read as
+  searching under each of them, and a patch tool whose whole input is the patch (Copilot's
+  `apply_patch`) is held to the files the patch names.
+- Changed: an endpoint only Copilot reaches reports its `env` among its ignored members: Copilot reads
+  its provider from the session, and the variables would reach the agent's shell.
 
 ## [1.10.0] - 2026-11-11
 

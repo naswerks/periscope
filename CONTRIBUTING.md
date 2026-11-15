@@ -120,6 +120,18 @@ shows the gate's allow is enough; run it before tagging a release that moves whe
 npm run build && PERISCOPE_LIVE=1 node --test dist/host/further-writes.live.test.js
 ```
 
+`src/host/copilot.live.test.ts` holds Copilot under the gate against the SDK an operator installed,
+signed in with a token file, on a real model: every call of a Copilot session asks this host (a read, a
+refused write that does not run, an MCP call, a sub-agent's read), silence holds to the decision deadline,
+an approved command's environment names no credential, and nothing the shell still runs outlives the
+close. Run it before tagging any release that moves the Copilot SDK; the variables it needs are in its
+header:
+
+```sh
+npm install --prefix <sdk directory> @github/copilot-sdk@1.0.34
+npm run build && PERISCOPE_LIVE=1 PERISCOPE_COPILOT_SDK=<sdk directory> PERISCOPE_COPILOT_TOKEN_FILE=<token file> PERISCOPE_COPILOT_MODEL=<model> node --test dist/host/copilot.live.test.js
+```
+
 `src/host/mid-turn-delivery.live.test.ts` records what the agent does with a message pushed on its input
 while a turn runs: one plain, as this host sends every prompt, and two naming another session as their
 origin, under the session's refusal of other sessions' messages. It asserts what Claude Code 2.1.284 did
@@ -214,9 +226,48 @@ minor release, one binary at a time, in order:
     `pi.live.test.ts` (and an endpoint). Each runs as `npm run build && PERISCOPE_LIVE=1 node --test
 dist/host/<probe>.js`, and the variables each needs are in its header.
 
+## Moving the Copilot SDK
+
+`@github/copilot-sdk` is the operator's install, never a dependency of this package: a development
+dependency at exactly the pinned version (`COPILOT_SDK_PINNED_VERSION` in `src/host/copilot-sdk.ts`), for
+its types and the tests. Each SDK release pins one Copilot runtime (`copilotRuntime.version` in its
+manifest; `COPILOT_RUNTIME_PINNED_VERSION`), so a move is the SDK and its runtime together, a minor
+release, in order:
+
+1. Pick the release: the newest that has been out a few days, and not deprecated (`npm view
+@github/copilot-sdk time --json`, `npm view @github/copilot-sdk@<version> deprecated`), and read its
+   manifest's `copilotRuntime.version`.
+2. Run the derive script against the install you have first: `node scripts/derive-copilot-names.mjs .`
+   must write `contracts/copilot-names.json` byte for byte. If it does not, the script has drifted from
+   the SDK's declarations; fix it first.
+3. Move the development dependency (`npm install --save-dev --save-exact @github/copilot-sdk@<version>`)
+   and both constants, then run the derive script again and read the contract's diff: every session event
+   the release added, renamed or dropped. That list is the work.
+4. `npm run build`. `src/pins/copilot-sdk-shape.test.ts` holds the seam's structural types to the SDK's
+   own: a member renamed, a parameter narrowed or an export dropped fails the build there, by line. Fix
+   the seam, never the pin.
+5. Give every event the release added its row in `src/state/copilot-coverage.ts`, wired or declined with
+   its reason, and remove the row of every event it dropped; `pins/copilot-coverage.test.ts` names each
+   one missing or invented.
+6. Run `src/host/copilot-local.test.ts`. It starts the new runtime with no model and no credential and
+   holds what the gate leans on: the hook asks for a shell, a read, a write, an MCP tool and a skill, and
+   the request is the hook's; `allow-all` still asks while the hook does; the session-start hook is not
+   called at create; the census of built-in tools against `COPILOT_TOOL_KINDS`, `COPILOT_OTHER_TOOLS` and
+   `COPILOT_EXCLUDED_TOOLS`; the open's read-back and probe; a sub-agent's call through the hook, driven by
+   a stub model; and nothing alive after close. A red here is a property the gate depends on that moved:
+   stop and decide it before anything else.
+7. Measure what the docs state as measured: how long the runtime holds a permission request
+   (`COPILOT_MEASURED_PERMISSION_WAIT_MS`), and move the constant and its date only to a longer wait that
+   was measured.
+8. Move the versions in `README.md`'s and `SECURITY.md`'s tables, `docs/configuration.md`'s install line
+   and `CHANGELOG.md`, then `npm run contracts:update` and the whole gate.
+9. Run the live probe (§ Live probes) with the new SDK installed into a directory of its own.
+
 ## Boundaries the pins enforce
 
 - Only `src/host/` may import `node:fs`, `node:child_process`, `node:os`, or the Agent SDK.
+- Nothing imports the Copilot SDK: `src/host/copilot-sdk.ts` loads it from the operator's install by
+  path, and a test imports its types alone. It is a development dependency, never a dependency.
 - `src/core/` imports nothing outside itself.
 - `@naswerks/periscope/protocol` reaches no file under `src/host/` and no Node builtin.
 - No comment or string carries an emoji, a tracking id from some other project, or a citation of a

@@ -169,7 +169,7 @@ the decision deadline.
   `.git/config`, where `core.hooksPath` or `core.sshCommand` runs code in every worktree), and `send-pack`
   with the rest of the publishing plumbing.
 - Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
-  roots (above), with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome, piHome })` as the protected set and the home directory
+  roots (above), with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome, piHome, copilotHome, copilotSdk, copilotTokenFile })` as the protected set and the home directory
   the shell scan expands from `homeDirectory(env)`, and the session's spawn environment its path
   variables are read from. That set, stated once (`src/host/paths.ts`): the
   host's own config directory (`PERISCOPE_CONFIG_DIR` or `~/.periscope`, which holds the token
@@ -187,8 +187,13 @@ the decision deadline.
   in an operator's own `QWEN_HOME`; `~/.env`, which Qwen Code loads into its own environment
   whatever its home; the whole of pi's runner home (`PERISCOPE_PI_HOME`: its agent home with the
   sign-in and the endpoints' keys, the session store every pi session's file is kept in, and each
-  session's run directory with its channel's token); and pi's sign-in, MCP token and models files
-  (`auth.json`, `mcp-auth.json`, `models.json`) in `~/.pi/agent`. The rest of the CLI's home (its settings, skills and tool output) is the agent's to
+  session's run directory with its channel's token); pi's sign-in, MCP token and models files
+  (`auth.json`, `mcp-auth.json`, `models.json`) in `~/.pi/agent`; the whole of Copilot's runner base
+  (`PERISCOPE_COPILOT_HOME`: each session's home, which is its `COPILOT_HOME` and holds the
+  `LOCALAPPDATA` and `APPDATA` it starts with, and every session state kept for a resume), the
+  operator's Copilot SDK install (`PERISCOPE_COPILOT_SDK`, the runtime every session starts from) and
+  the token file (`PERISCOPE_COPILOT_TOKEN_FILE`); and the operator's own `~/.copilot` and
+  `COPILOT_HOME`, whole. The rest of the CLI's home (its settings, skills and tool output) is the agent's to
   read, and so is the rest of the operator's own `~/.codex` and the runner home's rollouts and state,
   and the Qwen Code base's shared `runtime` directory, where the chats a resume reads are kept.
   The host's own cache location derives from the same function, so the two cannot disagree about
@@ -503,6 +508,88 @@ it is loaded, that it is the last handler a call meets, and that nothing else is
 
 pi is advertised at `intercepted` (`CONTROL_TIERS`); a session with either degrade known at its open
 opens at `intercepted-with-residual`.
+
+## The Copilot gate
+
+Copilot has two places a call can be stopped, and neither holds on its own. Its pre-tool hook is called
+for every tool call, but it fails open: a hook that throws, times out or has no route lets the call
+proceed. Its permission service fails closed, waiting on silence and refusing on a failed answer, but it
+asks only where its own rules say to ask. So the gate joins them (`src/host/copilot-gate.ts`): the hook
+answers `ask` for every call, at once and with no I/O, and the permission request that answer raises is
+the one this host decides.
+
+- **One decision per call.** The hook records the call by its id (`toolCallId`) and answers `ask`. The
+  `hook` permission request that follows names the same id, and the host reads the pair as a
+  `DecisionRequest`: the tool's name in this host's spelling, the call id, the input, the directory the
+  call runs in, the sub-agent that made it, `toolKind`, `shellDialect`, through the same call decision as
+  a Claude call (the local gate, then the decider, with the session's deadline and hold). The answer is
+  one call approved, or refused with the outcome's words, which the model reads. Nothing broader is ever
+  sent: no approval for the session, for a location or for good. An allow that rewrites the input is
+  refused: the rewrite would live only in the fail-open hook (`canRewriteInput: false`).
+- **Sub-agents' calls take the same route.** A call a sub-agent makes fires the same hook and raises
+  the same request, naming the call that spawned it; it is decided like the session's own. Shown
+  against the pinned runtime driven by a stub model on a loopback port (`copilot-local.test.ts`), and by
+  the release's live probe against a real model.
+- **Proven before the first prompt** (`copilotReadBackProblem`, `src/host/copilot-home.ts`, and the
+  probe in `src/host/copilot-process.ts`). The session is created in the `manual` permission mode with
+  discovery off, and read back: the mode applied and still `manual`; the agent mode `interactive`, or
+  `plan` for a plan open; no approve-all grant (`active`, `autoApproval`, a stored approval, a runtime
+  override, or a baseline for tools, paths or URLs); no path approved for the session; every directory
+  it allows the session's own, a further worktree, the temp folder, or inside its own home; no plugin;
+  none of the tools below offered. Then one probe call runs through the session: `view` on the
+  session's own directory, under an id the host minted. Its hook must fire and its `hook` request reach
+  the host, which refuses it without asking anyone, so nothing runs. Anything else refuses the open
+  `copilot-gate-not-active`, naming what differed.
+- **The tools turned off** (`COPILOT_EXCLUDED_TOOLS`). Each is left out of the session's tools, the
+  open is refused if the runtime offers it anyway, and a call of it that reaches the gate is refused
+  without asking anyone:
+  - `write_powershell` and `write_bash` type input into a shell already running. A call carries text a
+    running program reads, never a command any reading of a command can see. Turning one back on needs
+    a decision request that can say what the running program does with the text.
+  - `manage_schedule` schedules a prompt to run later, outside the queue a controller sends prompts
+    into. Turning it back on needs the schedule to be a controller's, on the wire.
+- **The deadline is held to what was measured** (`copilotDeadlineOrderRefusal`). The runtime holds a
+  permission request with no timeout of its own: one was measured waiting 240 seconds on runtime
+  1.0.112 (SDK 1.0.34) on 2026-11-15, and nothing longer has been measured. A session whose
+  `decisionTimeoutMs` is above 240,000ms is refused `gate-deadlines-inverted` at the open. The hook's
+  own timeout was not reached within 130 seconds on the same pin; the hook answers at once, so that
+  timeout bounds only the fail-open residual below.
+- **The MCP spelling.** Copilot names a server's tool `<server>-<tool>`, and a server's name and a
+  tool's may each hold a hyphen. The gate maps the name to `mcp__<server>__<tool>` by the tools each
+  attached server lists (asked of the runtime once, when a call first names the server): exactly one
+  pair that spells the name maps it. None, or more than one, keeps Copilot's spelling, so a controller
+  holds the call as a stranger's. It never splits on a hyphen.
+- **Copilot's tools in the local gate** (`COPILOT_TOOL_FAMILIES`): `create`, `edit` and
+  `str_replace_editor` through the jail, with a relative path placed where the call runs
+  (`resolvesWritesAgainstCallCwd`); every command of `str_replace_editor`, its `view` included, is held
+  as a write; `view` through the protected set; `powershell` and `bash` through the shell rules, read
+  in their own grammars (`powershell` and `posix`); `grep` and `glob` through the protected set, each
+  entry of their `paths` list a root; `apply_patch` through the jail, by the files its patch names. The
+  runtime's own home is in the environment the local gate reads, so `$env:COPILOT_HOME` is read as the
+  protected path it is.
+- **What the reused names mean on Copilot.** Each is raised once per call, request or mode:
+  - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the
+    hook did not ask; the request is refused, never decided), a `hook` request whose call no hook
+    announced, a pre-tool hook the runtime reports as failed (after which it lets the call proceed), or
+    a tool that ran with no decision from this host for its call.
+  - `gate-hook-foreign`: a hook this host did not install answered a request (`resolvedByHook`), or a
+    machine-wide policy hook (`%ProgramData%\GitHub\Copilot\policy.d\*.json`, or the
+    `HKLM\Software\Policies\GitHub\Copilot` key) was found at the open, which lowers the opening
+    tier.
+  - `gate-unhooked-call`: a tool the model's provider ran itself (`assistant.server_tool_progress`),
+    which no hook sees.
+  - `gate-mode-widened`: the runtime reports a permission mode other than `manual`, or an agent mode
+    other than `interactive` and `plan`. Measured on the pinned runtime: in `allow-all` a call still
+    asks while the hook answers `ask`.
+- **What it does not hold.** A command the agent detaches from its shell on purpose (on Windows,
+  `Start-Process`, measured on the pinned runtime) is in no process tree of the session, so it outlives
+  the session's close. A command the session's shell still runs, in the foreground or the background,
+  ends with it. A Windows Credential Manager entry an operator's own `copilot login` left on the
+  machine is no file, so the protected set does not hold it: a session's runtime never reads or writes
+  one (the SDK's `empty` mode turns the keyring off), but it is readable by any program running as the
+  same user, a command the agent runs included.
+
+Copilot is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
 
 ## What is deliberately not covered
 
