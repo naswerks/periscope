@@ -120,6 +120,16 @@ shows the gate's allow is enough; run it before tagging a release that moves whe
 npm run build && PERISCOPE_LIVE=1 node --test dist/host/further-writes.live.test.js
 ```
 
+`src/host/mid-turn-delivery.live.test.ts` records what the agent does with a message pushed on its input
+while a turn runs: one plain, as this host sends every prompt, and two naming another session as their
+origin, under the session's refusal of other sessions' messages. It asserts what Claude Code 2.1.284 did
+(each lands inside its turn, the model reads it, the transcript keeps no other session as its origin), so
+a red is a change to record. Run it after every agent SDK bump:
+
+```sh
+npm run build && PERISCOPE_LIVE=1 node --test dist/host/mid-turn-delivery.live.test.js
+```
+
 ## Moving the agent SDK
 
 The SDK is pinned exactly, and a bump is a minor release. In order:

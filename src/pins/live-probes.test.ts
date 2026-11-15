@@ -30,6 +30,7 @@ const CLAIMED_PROPERTIES = [
   'workspace trust is explicit',
   'survives resume with its context',
   'a write the gate allows outside its own directory lands',
+  'a message pushed mid-turn lands at the next tool round',
 ];
 
 /** A workspace created under the OS temp directory, and a `mkdtempSync` that is not. */
