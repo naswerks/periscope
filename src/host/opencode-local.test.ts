@@ -1321,6 +1321,58 @@ test(
 );
 
 test(
+  "the close ends a process a background command started and still waits on: the shell's own child, not the shell alone",
+  { skip, timeout: 180_000 },
+  async () => {
+    const dirs = await scratch();
+    const pidFile = join(dirs.tmp, 'grandchild.pid');
+    // The shell starts a process of its own and waits on it, so the process is the shell's child, under the
+    // host process, for as long as the shell lives.
+    const command = WINDOWS
+      ? `$p = Start-Process -FilePath ping -ArgumentList '-n','120','127.0.0.1' -NoNewWindow -PassThru; Set-Content -Path '${pidFile}' -Value $p.Id; $p.WaitForExit()`
+      : `sleep 120 & echo $! > '${pidFile}'; wait`;
+    const stub = await scripted({
+      'IN-BACKGROUND': {
+        toolCalls: [{ id: 'call_bg', name: 'shell', arguments: { command, background: true } }],
+      },
+    });
+    const real = start(dirs, stub);
+    let grandchild: number | null = null;
+    try {
+      await opened(real);
+      await ran(real, 'IN-BACKGROUND now');
+      // The shell may still hold the file open while it writes it: a read that is refused is tried again.
+      const written = (): string => {
+        try {
+          return existsSync(pidFile) ? readFileSync(pidFile, 'utf8').trim() : '';
+        } catch {
+          return '';
+        }
+      };
+      await until(() => /^\d+$/.test(written()), "the shell's child to be started");
+      grandchild = Number(written());
+      assert.equal(alive(grandchild), true, "control: the shell's child reads as alive before the close");
+      const host = real.hostPid();
+      assert.ok(host !== null);
+      assert.ok(
+        (await treeOf(host)).includes(grandchild),
+        "control: the shell's child is under the host process before the close",
+      );
+      assert.equal(await closed(real), null);
+      const deadline = Date.now() + 15_000;
+      while (alive(grandchild) && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.equal(alive(grandchild), false, 'a process the session started outlived the close');
+    } finally {
+      if (grandchild !== null && alive(grandchild)) process.kill(grandchild);
+      await closed(real);
+      await stub.close();
+      await removeScratch(dirs);
+    }
+  },
+);
+
+test(
   'the close ends every process the session started, a command its shell runs in the background included',
   { skip, timeout: 180_000 },
   async () => {

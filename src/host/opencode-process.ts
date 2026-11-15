@@ -735,11 +735,9 @@ export function startOpencodeProcess(
           if (interrupted !== null && !interrupted.ok)
             degrade(`the run was not interrupted: ${interrupted.refusal.detail}`);
         }
-        // The process closes its server and exits when its stdin ends; its tree is ended after the grace.
+        // The connection's close ends what the process started, then the process: it closes its server and
+        // exits when its stdin ends, and one that does not exit within the grace has its tree ended.
         await live.close();
-        const pid = live.pid;
-        if (pid !== null && runtime.killTree !== undefined)
-          await runtime.killTree(pid).catch(() => undefined);
       }
       if (home !== null && sessionId !== null) {
         const kept = carryOpencodeStateOut(runtime.base, home.database, sessionId);

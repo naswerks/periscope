@@ -17,7 +17,7 @@ import type { Refusal } from '../core/refusal.js';
 import type { Result } from '../core/result.js';
 import { ok, refuse } from '../core/result.js';
 import type { ChildExit, SpawnChild } from './stdio-rpc.js';
-import { RPC_METHOD_NOT_FOUND, describeExit, startStdioRpc } from './stdio-rpc.js';
+import { RPC_METHOD_NOT_FOUND, describeExit, killDescendants, startStdioRpc } from './stdio-rpc.js';
 
 /** The program a session's host process runs: this package's own, beside this file. */
 export function opencodeHostScript(): string {
@@ -32,7 +32,10 @@ export interface OpencodeConnection {
   readonly pid: number | null;
   /** Settles once the host process has exited. */
   readonly exited: Promise<ChildExit>;
-  /** Ends the process: its stdin ends, so it closes its server and exits; then its tree is killed. */
+  /**
+   * Ends the process: what it started is killed first, then its stdin ends, so it closes its server and
+   * exits; a process that does not exit in time has its tree killed.
+   */
   close(): Promise<void>;
 }
 
@@ -84,6 +87,8 @@ export interface OpencodeConnectOptions {
   /** How the program is started; the default spawns it with no shell and no window. */
   readonly spawn?: SpawnChild;
   readonly killTree?: (pid: number) => Promise<void>;
+  /** How what the host process started is ended before it is asked to exit; the default walks its tree. */
+  readonly killDescendants?: (pid: number) => Promise<void>;
   readonly closeGraceMs?: number;
 }
 
@@ -186,6 +191,14 @@ export const connectOpencodeHost: ConnectOpencode = async (options) => {
       return peer.pid;
     },
     exited: peer.exited,
-    close: () => peer.close(),
+    close: async () => {
+      // What the host process started is ended while it is still there to root the walk: it exits by itself
+      // once its stdin ends, and a process it leaves behind is then under nothing a tree kill can find.
+      const pid = peer.pid;
+      if (pid !== null && !peer.ended) {
+        await (options.killDescendants ?? killDescendants)(pid).catch(() => undefined);
+      }
+      await peer.close();
+    },
   });
 };

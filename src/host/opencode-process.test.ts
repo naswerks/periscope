@@ -1010,7 +1010,8 @@ test('the close interrupts the run, ends the host process and its tree, keeps th
   assert.equal(await run.ended, null);
   assert.deepEqual(run.record.of('session.interrupt'), [{ sessionID: 'ses_main' }]);
   assert.deepEqual(run.record.lifecycle, ['connect', 'close']);
-  assert.deepEqual(run.killed, [4343]);
+  // The connection's close ends the host process and what it started; the session ends no tree by itself.
+  assert.deepEqual(run.killed, []);
   assert.deepEqual(readdirSync(join(run.base, 'sessions')), [], 'the home was removed');
   assert.ok(existsSync(join(run.base, 'state', 'ses_main', 'session.db')));
   assert.ok(existsSync(join(run.base, 'state', 'ses_main', 'session.db-wal')));

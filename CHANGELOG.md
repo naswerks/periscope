@@ -65,6 +65,10 @@ frame it sends decodes unchanged.
   whole line; refused, the call fails with the refusal's words and never runs. A call allowed there is
   asked about once: the requests it then raises are held to the host's own gate alone. The read-back
   admits that one plugin, by its id and its source.
+- Fixed: the close of an opencode session ends what its commands started. The server's own close ends
+  its shells and not their children, and the host process then exits by itself, so on Windows a process
+  a background command had started was under nothing a tree kill could find, and outlived the session.
+  The close now ends everything under the host process before it asks the process to exit.
 - Fixed: an opencode request too large for one line is no longer lost. A line over 8 MiB from the host
   process was dropped whole and named nowhere, and an edit's request carries the whole text it writes,
   so a large write could wait unseen for good. The host process now cuts the longest texts of a line

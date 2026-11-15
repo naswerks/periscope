@@ -819,8 +819,12 @@ every request they raise.
     named pipe registered under the session's home, with a token; it opens no port. A command the agent's
     shell runs could reach it, as the same user, and start a process through it, as the shell itself can.
   - A command the agent detaches from its shell on purpose was not measured on opencode. A command the
-    session's shell still runs, in the foreground or the background, ends with the session (shown on the
-    pinned SDK).
+    session's shell still runs, in the foreground or the background, ends with the session, and so does
+    a process such a command started and still waits on (both shown on the pinned SDK). The server's own
+    close ends its shells and not what they started, and the host process then exits by itself, after
+    which nothing on Windows is under it for a tree kill to find. So the close ends everything under the
+    host process first, while it is still there to root the walk, and only then asks it to exit. On
+    Windows that walk reads the process table through PowerShell, about a second at each close.
 
 opencode is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
 
