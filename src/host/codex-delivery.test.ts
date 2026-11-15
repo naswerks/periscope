@@ -470,6 +470,8 @@ class RecordingLink implements HostLink {
   readonly sent: SessionPayload[] = [];
   handlers: LinkHandlers | null = null;
   announced: HostConfiguration | null = null;
+  /** The protocol the link reports it negotiated; null, as before any handshake. */
+  negotiatedVersion: number | null = null;
   send(_sessionId: string, payload: SessionPayload): Result<void> {
     this.sent.push(payload);
     return ok(undefined);
@@ -607,6 +609,81 @@ test("a Codex session's conversation reaches the wire as items naming codex, bes
     'the facts still ride',
   );
   periscope.stop();
+});
+
+/** A Codex sub-agent's turn on a link at `version`: each item the link was sent, as `[itemId, parentId]`. */
+async function subAgentItemsAt(version: number): Promise<[string, string | null][]> {
+  const fake = fakeCodex({ codexHome: HOME });
+  const { host: periscope, link } = await host(fake);
+  link.negotiatedVersion = version;
+  try {
+    link.deliver('session-1', sessionNew(CWD, { request: sessionNewRequest({ runtime: 'codex' }) }));
+    await until(() => link.bodies().some((body) => readStateTransition(body)?.to === 'ready'), 'ready');
+    link.deliver('session-1', { kind: 'session_prompt', text: 'hello' });
+    await until(() => fake.server.currentTurn !== null, 'the turn');
+    const own = fake.server.currentTurn ?? '';
+    // The shapes are the app-server protocol's at rust-v0.169.0: a v1 spawn names its agent's thread.
+    fake.server.notify('item/completed', {
+      threadId: 'thread-1',
+      turnId: own,
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'call-spawn',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'thread-1',
+        receiverThreadIds: ['agent-1'],
+        prompt: 'Review it.',
+        agentsStates: {},
+      },
+    });
+    fake.server.notify('turn/started', {
+      threadId: 'agent-1',
+      turn: { id: 'sub-turn', status: 'inProgress' },
+    });
+    fake.server.notify('item/completed', {
+      threadId: 'agent-1',
+      turnId: 'sub-turn',
+      item: { type: 'agentMessage', id: 'msg-sub', text: 'inside' },
+    });
+    fake.server.notify('item/completed', {
+      threadId: 'thread-1',
+      turnId: own,
+      item: { type: 'agentMessage', id: 'msg-own', text: 'outside' },
+    });
+    fake.server.completeTurn();
+    await until(
+      () => link.bodies().some((body) => readAgentItem(body)?.item.itemId === `${own}:completed`),
+      'the turn item',
+    );
+    return link.bodies().flatMap((body) => {
+      const read = readAgentItem(body);
+      return read === null ? [] : [[read.item.itemId.replace(own, 'own'), read.item.parentId ?? null]];
+    });
+  } finally {
+    periscope.stop();
+  }
+}
+
+test("a controller on protocol 19 is sent no Codex sub-agent's item, which it would read as the session's own; one on 20 is sent each naming its spawn", async () => {
+  const at19 = await subAgentItemsAt(19);
+  assert.deepEqual(at19, [
+    ['own:started', null],
+    ['call-spawn', null],
+    ['call-spawn:result', null],
+    ['msg-own', null],
+    ['own:completed', null],
+  ]);
+  const at20 = await subAgentItemsAt(20);
+  assert.deepEqual(at20, [
+    ['own:started', null],
+    ['call-spawn', null],
+    ['call-spawn:result', null],
+    ['sub-turn:started', 'call-spawn'],
+    ['msg-sub', 'call-spawn'],
+    ['msg-own', null],
+    ['own:completed', null],
+  ]);
 });
 
 test('a Codex session asking for a server Codex has no form for is refused at the door, before anything starts', () => {

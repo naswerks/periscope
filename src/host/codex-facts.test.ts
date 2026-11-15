@@ -274,8 +274,8 @@ test('the running tasks: spawned sub-agents join, a closed or settled one leaves
       kind: 'tasks',
       runtime: 'codex',
       running: [
-        { taskId: 'agent-a', type: 'subagent', description: 'Review it.' },
-        { taskId: 'agent-b', type: 'subagent', description: 'Review it.' },
+        { taskId: 'agent-a', type: 'subagent', description: 'Review it.', toolUseId: 'call-1' },
+        { taskId: 'agent-b', type: 'subagent', description: 'Review it.', toolUseId: 'call-1' },
       ],
       settled: [],
     },
@@ -407,7 +407,7 @@ test('settled sub-agents: an errored agent failed, an interrupted one stopped, a
         },
       }),
     ),
-    [[{ taskId: 'agent-a', type: 'subagent', status: 'failed' }]],
+    [[{ taskId: 'agent-a', type: 'subagent', status: 'failed', toolUseId: 'call-1', summary: 'it broke' }]],
   );
   assert.deepEqual(
     settledOf(
@@ -425,7 +425,7 @@ test('settled sub-agents: an errored agent failed, an interrupted one stopped, a
     ),
     [
       [
-        { taskId: 'agent-a', type: 'subagent', status: 'failed' },
+        { taskId: 'agent-a', type: 'subagent', status: 'failed', toolUseId: 'call-1', summary: 'it broke' },
         { taskId: 'agent-b', type: 'subagent', status: 'stopped' },
       ],
     ],

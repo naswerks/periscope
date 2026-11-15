@@ -181,6 +181,27 @@ export function parsed<T extends z.ZodType>(schema: T, value: unknown): z.infer<
   return result.success ? result.data : null;
 }
 
+/**
+ * The sub-agent threads a thread item says a call started: a `collabAgentToolCall` that spawns or resumes
+ * an agent names its receivers, and a `subAgentActivity` that started names its agent's thread, its own
+ * id being the spawning call's. Empty for every other item, and for a call about an agent already running
+ * (a message, a wait, a close), which starts nothing.
+ */
+export function codexStartedThreads(item: Readonly<Record<string, unknown>>): string[] {
+  if (
+    item['type'] === 'collabAgentToolCall' &&
+    (item['tool'] === 'spawnAgent' || item['tool'] === 'resumeAgent')
+  ) {
+    const receivers = item['receiverThreadIds'];
+    return Array.isArray(receivers) ? receivers.filter((id): id is string => typeof id === 'string') : [];
+  }
+  if (item['type'] === 'subAgentActivity' && item['kind'] === 'started') {
+    const agent = item['agentThreadId'];
+    return typeof agent === 'string' ? [agent] : [];
+  }
+  return [];
+}
+
 /** The stage of an agent message item (its final answer, or interim), read through the key table. */
 export function agentMessageStage(item: JsonObject): string | null {
   const stage = item[codexWireKey('agentMessage', 'stage')];

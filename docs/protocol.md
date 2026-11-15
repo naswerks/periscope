@@ -417,7 +417,10 @@ call that started it (`toolUseId`), its latest `summary`, its `usage` (`tokens`,
 `durationMs`) and the `outputFile` its output is written to (a path only). Each is stated only where the
 runtime reported it, so an absent one reads as null, and each text is held to `MAX_FACT_TEXT_LENGTH`, as
 the codec holds it. Claude's come from `task_started`, `task_progress` (the summary a running subagent
-writes about every 30 seconds) and `task_notification`.
+writes about every 30 seconds) and `task_notification`. Codex's name the call that started the sub-agent
+(`toolUseId`, where a call named its thread) and, on a settled entry, the message Codex reported for its
+end as its `summary` (a completed agent's final answer, an errored one's error); Codex reports no usage
+and no output file for a sub-agent.
 
 Codex's sources: `session_handle` is the thread id the opening answer names; `agent_receipt` is
 built from the opening answers, so it rides before `ready`, and sent again on a reroute, a skills
@@ -591,11 +594,15 @@ carry `parentId` (below):
   at a character and the item says so in `truncated`; a tool call's `input` past it is left out whole
   (`input: null`, `truncated: true`), never cut. The codec refuses an item past the budget.
 - **The parent.** From v20 an item a subagent's turn produced names `parentId`, the call that
-  spawned the subagent (Claude's `tool_use` id); an item of the session's own thread names none,
+  spawned the subagent (Claude's `tool_use` id; for Codex, the item id of the `collabAgentToolCall`
+  that spawned or resumed the sub-agent's thread, or of the `subAgentActivity` that started it, whose id
+  is the spawning call's); an item of the session's own thread names none,
   which reads as null. On a link negotiated below 20 a subagent's messages fill no item, since such a
   controller reads no parent and would fold them into the main conversation; they ride
   `agent_message`, and the subagent's call and result in the main conversation are items. Claude's
-  subagents fill items at 20; a Codex sub-agent thread's and a Qwen Code subagent's messages fill none.
+  subagents fill items at 20, and so does a Codex sub-agent's thread, its turns apart from the session's
+  own (a sub-agent's turn ending moves none of the session's state); a Qwen Code subagent's messages
+  fill none.
 
 Claude's items come from `UserPromptSubmit` (the turn's start and its prompt), each assistant
 `text`, `thinking`, `redacted_thinking` and `tool_use` block, each `tool_result` block, each `result`

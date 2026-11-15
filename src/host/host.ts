@@ -506,7 +506,10 @@ function composeCodexSession(
   const inverted = codexDeadlineOrderRefusal(decisionTimeoutMs);
   if (inverted !== null) return refuse<ComposedSession>('gate-deadlines-inverted', inverted);
 
-  const items = new CodexItemFill();
+  // A sub-agent's thread fills items only on a link that carries an item's parent.
+  const items = new CodexItemFill({
+    spawnedItems: () => itemParentsAtLinkVersion(options.linkVersion?.() ?? null),
+  });
   // The channel's own refusals (a request with the wrong token, a malformed line) reach the host's log
   // through the session once it exists.
   let reportChannel: (detail: string) => void = () => undefined;

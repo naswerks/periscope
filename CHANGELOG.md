@@ -40,8 +40,8 @@ frame it sends decodes unchanged.
   whose turn the item is from. A Claude subagent's messages now fill items, each naming its spawning
   call's `tool_use` id; an item of the session's own thread names none, which reads as null, so it is
   the item 1.10.0 sent. A link negotiated below 20 is sent no subagent's item, since its controller
-  reads no parent: there they ride `agent_message` alone, as before. Codex's and Qwen Code's subagents
-  fill no item yet.
+  reads no parent: there they ride `agent_message` alone, as before. Qwen Code's subagents fill no item
+  yet.
 - Added: what a task reported of itself, on each `tasks` entry, running or settled (`TaskReport`, all
   optional): the call that started it (`toolUseId`), its latest `summary`, its `usage` (`TaskUsage`:
   `tokens`, `toolUses`, `durationMs`) and its `outputFile`, each stated only where the runtime reported
@@ -75,6 +75,19 @@ frame it sends decodes unchanged.
   for a fresh decision, is decided fresh and never answered from the hook's decision for the same call.
   The app-server sends one only to a connection that opted into experimental API, which this host never
   does, and with none it refuses the call itself.
+- Added: a Codex sub-agent's thread fills conversation items, each naming as its `parentId` the call
+  that started the thread: the `collabAgentToolCall` that spawned or resumed it, or the `subAgentActivity`
+  that started it, whose id is the spawning call's. A sub-agent's own spawn names its child the same way. A
+  sub-agent that speaks before the call that spawned it reports it is held, a bounded while, and filled
+  once the call names it; one no call names fills nothing. Its turns stay apart from the session's own: a
+  sub-agent's turn ending moves none of the session's state and records no turn of the session's. As for
+  Claude, a link negotiated below 20 is sent none of a sub-agent's items.
+- Added: a Codex `tasks` entry names the call that started its sub-agent (`toolUseId`), and a settled
+  entry carries the message Codex reported for its end as its `summary` (a completed agent's final
+  answer, an errored one's error), cut at `MAX_FACT_TEXT_LENGTH` on a code point boundary. Codex reports no
+  usage and no output file for a sub-agent, so neither is stated.
+- Fixed: a Codex sub-agent's fragments name the call that started its thread and keep it: a later call
+  about the same agent (a message, a wait, a close) no longer takes the parent over.
 
 ## [1.10.0] - 2026-11-11
 
