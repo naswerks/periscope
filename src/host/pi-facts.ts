@@ -36,6 +36,7 @@ import type {
   ReceiptPluginError,
   SpendFacts,
 } from '../control/frames.js';
+import { cutText } from '../control/fact-text.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import { PI_RUNTIME } from '../sessions/runtimes.js';
@@ -332,7 +333,7 @@ function bounded<T>(list: readonly T[]): T[] {
 }
 
 function text(value: string): string {
-  return value.length <= MAX_FACT_TEXT_LENGTH ? value : value.slice(0, MAX_FACT_TEXT_LENGTH);
+  return cutText(value, MAX_FACT_TEXT_LENGTH);
 }
 
 /** A reported count as the wire carries it: a non-negative integer. */

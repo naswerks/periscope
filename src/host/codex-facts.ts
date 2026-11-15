@@ -45,7 +45,7 @@ import type {
   SpendFacts,
   TaskSettlement,
 } from '../control/frames.js';
-import { factText } from '../control/fact-text.js';
+import { cutText, factText } from '../control/fact-text.js';
 import { fitTasks } from '../control/tasks-budget.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
@@ -493,7 +493,7 @@ function bounded<T>(list: readonly T[]): T[] {
 }
 
 function text(value: string): string {
-  return value.length <= MAX_FACT_TEXT_LENGTH ? value : value.slice(0, MAX_FACT_TEXT_LENGTH);
+  return cutText(value, MAX_FACT_TEXT_LENGTH);
 }
 
 /** A reported count as the wire carries it: a non-negative integer. */

@@ -34,7 +34,7 @@ import type {
   SettledTaskEntry,
 } from '../control/frames.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_WORD_LENGTH } from '../control/frames.js';
-import { factText } from '../control/fact-text.js';
+import { cutText, factText } from '../control/fact-text.js';
 import { fitTasks } from '../control/tasks-budget.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import { OPENCODE_RUNTIME } from '../sessions/runtimes.js';
@@ -347,7 +347,7 @@ function bounded<T>(list: readonly T[]): T[] {
 }
 
 function word(value: string): string {
-  return value.length <= MAX_FACT_WORD_LENGTH ? value : value.slice(0, MAX_FACT_WORD_LENGTH);
+  return cutText(value, MAX_FACT_WORD_LENGTH);
 }
 
 /** The native id a fact lifted from an opencode message names: an event's own id; the open has none. */

@@ -37,6 +37,7 @@ import type {
   SettledTaskEntry,
   SpendFacts,
 } from '../control/frames.js';
+import { cutText } from '../control/fact-text.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH, MAX_FACT_WORD_LENGTH } from '../control/frames.js';
 import { fitTasks } from '../control/tasks-budget.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
@@ -451,7 +452,7 @@ function bounded<T>(list: readonly T[]): T[] {
 }
 
 function text(value: string): string {
-  return value.length <= MAX_FACT_TEXT_LENGTH ? value : value.slice(0, MAX_FACT_TEXT_LENGTH);
+  return cutText(value, MAX_FACT_TEXT_LENGTH);
 }
 
 function textOrNull(value: string | null): string | null {
@@ -459,7 +460,7 @@ function textOrNull(value: string | null): string | null {
 }
 
 function word(value: string): string {
-  return value.length <= MAX_FACT_WORD_LENGTH ? value : value.slice(0, MAX_FACT_WORD_LENGTH);
+  return cutText(value, MAX_FACT_WORD_LENGTH);
 }
 
 function wordOrNull(value: string | null): string | null {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { decode } from '../control/codec.js';
 import type { AgentFact } from '../control/frames.js';
-import { MAX_FACT_WORD_LENGTH } from '../control/frames.js';
+import { MAX_FACT_TEXT_LENGTH, MAX_FACT_WORD_LENGTH } from '../control/frames.js';
 import { CopilotFactLift, copilotFactSourceId } from './copilot-facts.js';
 import { CopilotItemFill } from './copilot-items.js';
 import type { CopilotEvent } from './copilot-sdk.js';
@@ -147,6 +147,35 @@ test("a sub-agent's own events move none of the session's registers: its model, 
   assert.ok(other.facts[0]?.kind === 'usage_sample');
   assert.equal(other.facts[0].model, 'gpt-5-mini');
   assert.equal(other.facts[0].cacheReadTokens, null);
+});
+
+test('a text or a word cut to its bound never ends on half a character', () => {
+  const lift = new CopilotFactLift();
+  lift.fromMessage(opened);
+  // A character outside the basic plane is two code units; each name puts one across its bound.
+  const pair = '\u{1F600}';
+  const step = lift.fromMessage(
+    event('assistant.usage', {
+      model: `${'m'.repeat(MAX_FACT_TEXT_LENGTH - 1)}${pair}tail`,
+      modelProvider: `${'p'.repeat(MAX_FACT_WORD_LENGTH - 1)}${pair}tail`,
+      inputTokens: 1,
+      outputTokens: 1,
+    }),
+  ).facts;
+  assert.ok(step[0]?.kind === 'turn_record');
+  const row = step[0].turn?.byModel[0];
+  assert.equal(row?.model, 'm'.repeat(MAX_FACT_TEXT_LENGTH - 1), 'the cut kept half of the character');
+  assert.equal(row.provider, 'p'.repeat(MAX_FACT_WORD_LENGTH - 1), 'the cut kept half of the character');
+  // Control: a character that ends at the bound is kept whole.
+  const whole = lift.fromMessage(
+    event('assistant.usage', {
+      model: `${'m'.repeat(MAX_FACT_TEXT_LENGTH - 2)}${pair}tail`,
+      inputTokens: 1,
+      outputTokens: 1,
+    }),
+  ).facts;
+  assert.ok(whole[0]?.kind === 'turn_record');
+  assert.equal(whole[0].turn?.byModel[0]?.model, `${'m'.repeat(MAX_FACT_TEXT_LENGTH - 2)}${pair}`);
 });
 
 test("a model call whose provider's name is longer than the wire takes still files its spend, the name cut to fit", () => {
