@@ -269,8 +269,8 @@ export function checkReadPath(candidate: string | null, options: JailOptions): R
 const GLOB_MAGIC = /[*?[\]{}]/;
 
 /**
- * The directories a search reads under: its `path` (else the workspace root), each entry of a `paths`
- * list, and the literal head of a `pattern` that names a place of its own (absolute, from the home
+ * The directories a search reads under: its `path` (else the workspace root), its `paths` (one string, or
+ * each entry of a list), and the literal head of a `pattern` that names a place of its own (absolute, from the home
  * directory, or climbing with `..`), resolved against that root. A pattern with no such head names files,
  * not a place, and adds nothing.
  */
@@ -282,13 +282,12 @@ function searchRoots(toolInput: unknown, options: JailOptions): string[] | null 
   if (base === null || base.trim() === '') return null;
 
   const roots = [expandHome(base, options.home)];
-  // A search tool that names several roots (`paths`, a list: Copilot's `grep` and `glob`) reads under each
-  // of them, so each is a root beside `path`.
+  // A search tool that names several roots (`paths`: Copilot's `grep` and `glob`) reads under each of
+  // them, so each is a root beside `path`. It takes one string as well as a list, and one string is a
+  // list of one. Any other shape names no root this host can read, and the tool rejects it itself.
   const listed = record['paths'];
-  if (Array.isArray(listed)) {
-    for (const entry of listed as unknown[]) {
-      if (typeof entry === 'string' && entry.trim() !== '') roots.push(expandHome(entry, options.home));
-    }
+  for (const entry of typeof listed === 'string' ? [listed] : Array.isArray(listed) ? listed : []) {
+    if (typeof entry === 'string' && entry.trim() !== '') roots.push(expandHome(entry, options.home));
   }
   const pattern = record['pattern'];
   if (typeof pattern === 'string') {

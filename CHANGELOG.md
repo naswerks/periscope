@@ -174,9 +174,9 @@ frame it sends decodes unchanged.
   records gain Copilot's session states. `credentialPaths` and `agentTranscriptPaths` take the new
   options.
 - Changed: `EXTRA_ENV_FLOOR` gains `COPILOT_*`.
-- Changed: a search tool that names its roots in a `paths` list (Copilot's `grep` and `glob`) is read as
-  searching under each of them, and a patch tool whose whole input is the patch (Copilot's
-  `apply_patch`) is held to the files the patch names.
+- Changed: a search tool that names its roots in `paths` (Copilot's `grep` and `glob`), as one string or
+  as a list, is read as searching under each of them, and a patch tool whose whole input is the patch
+  (Copilot's `apply_patch`) is held to the files the patch names.
 - Changed: an endpoint only Copilot reaches reports its `env` among its ignored members: Copilot reads
   its provider from the session, and the variables would reach the agent's shell.
 - Added: opencode as a sixth runtime. With `PERISCOPE_OPENCODE_SDK` (a directory the operator installed

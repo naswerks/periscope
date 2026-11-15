@@ -156,6 +156,13 @@ test("control: a search's paths are its roots; read only its path, a protected d
   assert.equal(decide('grep', { pattern: 'x', paths: [join(BASE, 'state')] }), 'credential-path-denied');
   // The same search naming the directory as `path` is refused by the older rule too: the list adds roots.
   assert.equal(decide('grep', { pattern: 'x', path: join(BASE, 'state') }), 'credential-path-denied');
+  // Copilot's searches take `paths` as one string too, and it is the same root.
+  assert.equal(decide('grep', { pattern: 'x', paths: join(BASE, 'state') }), 'credential-path-denied');
+  assert.equal(
+    decide('glob', { pattern: '*.json', paths: join(HOME, '.copilot') }),
+    'credential-path-denied',
+  );
+  assert.equal(decide('grep', { pattern: 'x', paths: ROOT }), null);
 });
 
 test('Copilot writes a relative path where the call runs, so a write is jailed there: inside goes on, out is refused', () => {

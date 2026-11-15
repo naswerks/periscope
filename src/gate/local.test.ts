@@ -157,6 +157,22 @@ test('a glob pattern that names a protected place refuses, absolute or climbing'
   );
 });
 
+test("a search's paths is a root when it is one string, as each entry of a list is; any other shape names no root", () => {
+  const search = (paths: unknown): ReturnType<typeof gate> =>
+    gate(request({ toolName: 'Grep', toolInput: { pattern: 'token', paths } }));
+  assert.equal(search(`${CREDENTIALS}/sub`)?.reason, 'credential-path-denied');
+  assert.equal(
+    search('C:/Users/agent')?.reason,
+    'credential-path-denied',
+    'a root that holds a protected path',
+  );
+  assert.equal(search([`${CREDENTIALS}/sub`])?.reason, 'credential-path-denied');
+  assert.equal(search('C:/Program Files/nodejs'), null);
+  // A shape that is neither names no root: the workspace alone is judged, as with no `paths` at all.
+  assert.equal(search(42), null);
+  assert.equal(search({ first: CREDENTIALS }), null);
+});
+
 test('a workspace that holds a protected path refuses a search that names no root', () => {
   const home = localGate({
     workspaceRoot: 'C:/Users/agent',
