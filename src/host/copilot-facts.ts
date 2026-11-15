@@ -266,7 +266,7 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
     if (model === null) return NOTHING;
     const row: ModelSpendFact = {
       model: text(model),
-      canonicalModel: wordOrNull(copilotWord(data['responseModel'])),
+      canonicalModel: textOrNull(copilotWord(data['responseModel'])),
       provider: wordOrNull(copilotWord(data['modelProvider'])),
       inputTokens: Math.max(0, (copilotCount(data['inputTokens']) ?? 0) - (cacheRead ?? 0)),
       outputTokens: copilotCount(data['outputTokens']) ?? 0,
@@ -462,7 +462,7 @@ function word(value: string): string {
 }
 
 function wordOrNull(value: string | null): string | null {
-  return value === null ? null : text(value);
+  return value === null ? null : word(value);
 }
 
 /** The native id a fact lifted from a Copilot message names: an event's own id; the open has none. */

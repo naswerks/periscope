@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { decode } from '../control/codec.js';
 import type { AgentFact } from '../control/frames.js';
+import { MAX_FACT_WORD_LENGTH } from '../control/frames.js';
 import { CopilotFactLift, copilotFactSourceId } from './copilot-facts.js';
 import { CopilotItemFill } from './copilot-items.js';
 import type { CopilotEvent } from './copilot-sdk.js';
@@ -145,6 +147,39 @@ test("a sub-agent's own events move none of the session's registers: its model, 
   assert.ok(other.facts[0]?.kind === 'usage_sample');
   assert.equal(other.facts[0].model, 'gpt-5-mini');
   assert.equal(other.facts[0].cacheReadTokens, null);
+});
+
+test("a model call whose provider's name is longer than the wire takes still files its spend, the name cut to fit", () => {
+  const lift = new CopilotFactLift();
+  lift.fromMessage(opened);
+  const step = lift.fromMessage(
+    event('assistant.usage', {
+      model: 'gpt-5-mini',
+      responseModel: `gpt-5-mini-${'r'.repeat(200)}`,
+      modelProvider: `azure-openai-${'p'.repeat(100)}`,
+      inputTokens: 120,
+      outputTokens: 7,
+    }),
+  ).facts;
+  assert.ok(step[0]?.kind === 'turn_record');
+  const row = step[0].turn?.byModel[0];
+  assert.equal(row?.provider?.length, MAX_FACT_WORD_LENGTH);
+  assert.ok(row?.provider?.startsWith('azure-openai-p'));
+  assert.equal(
+    row.canonicalModel?.length,
+    211,
+    "a response model's name has the longer bound, and fits it whole",
+  );
+  const decoded = decode(
+    JSON.stringify({
+      frame: 'session',
+      sessionId: 's-1',
+      seq: 1,
+      at: '2000-01-01T00:00:00.000Z',
+      payload: { kind: 'session_update', body: { update: 'agent_facts', fact: step[0], sourceId: null } },
+    }),
+  );
+  assert.ok(decoded.ok, decoded.ok ? '' : `the fact does not cross the wire: ${decoded.refusal.detail}`);
 });
 
 test("each model call is one step's spend, unpriced, its input counted without the cache reads; the shutdown files the totals", () => {
