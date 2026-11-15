@@ -454,7 +454,9 @@ MCP servers the host's extension registered, with no permission mode. It is sent
 its thinking level moved, and one composed by the host (`source: 'host'`) follows a model the host
 set, for which pi writes no event. `turn_record` is the answer to `get_session_stats`, which the host
 asks after each run: its `totals` are pi's running totals for the session, tokens and a cost in US
-dollars pi estimates from its own model catalogue (`costBasis: 'catalogue-estimated'`, never a bill),
+dollars pi estimates from its own model catalogue (`costBasis: 'catalogue-estimated'`), except that on an
+OpenRouter model pi takes the cost OpenRouter reported for each call it accounted for, so the total can
+be partly billed while its basis claims no bill,
 and its `turn` and `turnScope` null. pi counts every entry of the session's file, its compacted
 history, abandoned branches, failed retries and compaction calls included, so a total can exceed what
 the visible conversation used, and a resumed or forked session's includes the source's.

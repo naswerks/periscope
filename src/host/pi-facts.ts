@@ -16,7 +16,9 @@
  *     history, abandoned branches, failed retries and compaction calls included, so a total can exceed
  *     what the visible conversation used, and a resumed or forked session's includes the source
  *     session's). `turn` and `turnScope` are null: the totals carry the spend. The cost is pi's own
- *     estimate from its model catalogue (`catalogue-estimated`), in US dollars, never a bill.
+ *     figure in US dollars: its estimate from its model catalogue, except that on an OpenRouter model pi
+ *     takes the cost OpenRouter reported for each call it accounted for, so a total can be partly billed.
+ *     It is filed `catalogue-estimated`, the basis that claims no bill.
  *     `inputTokens` is pi's own `input`, which pi counts without the cached input: the cache reads and
  *     writes are members of their own. pi's totals carry no reasoning figure.
  *   - `usage_sample`: the same answer's context usage: pi's own count of the context (null right after a
