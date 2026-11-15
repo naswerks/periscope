@@ -222,14 +222,16 @@ export type MessageEventName = (typeof MESSAGE_EVENTS)[number];
  * Codex's are its app-server notifications, `codex:{method}`; Qwen Code's are its stream messages,
  * `qwen-code:{type}` and `qwen-code:system/{subtype}`, and the answers to the control requests this
  * host sends it, `qwen-code:{subtype}` (protocol 17); pi's are its RPC events, `pi:{type}`, and the
- * answers to the commands this host sends it, `pi:{command}`. An item's kind rides a cause's `detail`,
- * never its name.
+ * answers to the commands this host sends it, `pi:{command}`; Copilot's are its session events,
+ * `copilot:{type}`. An item's kind rides a cause's `detail`, never its name.
  *
  * Each runtime's set is its wired rows exactly: `pins/codex-coverage.test.ts` holds the `codex:` names
  * equal to the wired rows of `CODEX_NOTIFICATION_COVERAGE`, `pins/qwen-coverage.test.ts` the
- * `qwen-code:` names equal to the wired message and answer rows of `QWEN_COVERAGE`, and
+ * `qwen-code:` names equal to the wired message and answer rows of `QWEN_COVERAGE`,
  * `pins/pi-coverage.test.ts` the `pi:` names equal to the wired event and command rows of `PI_COVERAGE`,
- * each in both directions, and each holds every event its runtime's observer emits to it.
+ * and `pins/copilot-coverage.test.ts` the `copilot:` names equal to the wired event rows of
+ * `COPILOT_COVERAGE`, each in both directions, and each holds every event its runtime's observer emits to
+ * it.
  */
 export const AGENT_EVENTS = [
   'codex:error',
@@ -299,6 +301,37 @@ export const AGENT_EVENTS = [
   'pi:set_thinking_level',
   'pi:get_session_stats',
   'pi:get_commands',
+  'copilot:session.start',
+  'copilot:session.resume',
+  'copilot:session.error',
+  'copilot:session.idle',
+  'copilot:session.warning',
+  'copilot:session.model_change',
+  'copilot:session.mode_changed',
+  'copilot:session.permissions_changed',
+  'copilot:session.shutdown',
+  'copilot:session.usage_info',
+  'copilot:session.compaction_start',
+  'copilot:session.compaction_complete',
+  'copilot:user.message',
+  'copilot:assistant.server_tool_progress',
+  'copilot:assistant.reasoning',
+  'copilot:assistant.reasoning_delta',
+  'copilot:assistant.tool_call_delta',
+  'copilot:assistant.message',
+  'copilot:assistant.message_delta',
+  'copilot:assistant.usage',
+  'copilot:model.call_failure',
+  'copilot:tool.execution_start',
+  'copilot:tool.execution_complete',
+  'copilot:subagent.started',
+  'copilot:subagent.completed',
+  'copilot:subagent.failed',
+  'copilot:hook.end',
+  'copilot:permission.requested',
+  'copilot:session.skills_loaded',
+  'copilot:session.mcp_servers_loaded',
+  'copilot:session.mcp_server_status_changed',
 ] as const;
 
 export type AgentEventName = (typeof AGENT_EVENTS)[number];

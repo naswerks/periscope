@@ -29,6 +29,12 @@ export const QWEN_RUNTIME = 'qwen-code';
 export const PI_RUNTIME = 'pi';
 
 /**
+ * GitHub Copilot's name on the wire: the runtime this host drives through `@github/copilot-sdk`, one runtime
+ * process per session, its pre-tool hook answering `ask` and its permission requests decided here.
+ */
+export const COPILOT_RUNTIME = 'copilot';
+
+/**
  * The control tier a session starts at, per runtime, keyed by the runtime's name: what holds for every
  * session on it. A session's own opening transition adds the degrades known for it alone when it opens
  * (its sandbox, a hook this host did not install, the workspace's own configuration), so a hello and a
@@ -50,6 +56,10 @@ export const CONTROL_TIERS = {
   // the runtime is launched so that no other extension loads, and its own MCP extension only waits for
   // its servers. A session in which code this host did not load is found running starts below this.
   [PI_RUNTIME]: { level: 'intercepted', degrades: [] },
+  // Every Copilot call its pre-tool hook sees asks, and the request that raises is decided by this host's
+  // gate before the call runs. The hook runs fail-open on its own failure, and a provider-hosted tool never
+  // reaches it, so each such path is named as a degrade when it occurs.
+  [COPILOT_RUNTIME]: { level: 'intercepted-with-residual', degrades: [] },
 } as const satisfies Readonly<Record<string, ControlTier>>;
 
 /**
@@ -65,6 +75,9 @@ export const RUNTIME_WIRE_APIS = {
   [QWEN_RUNTIME]: ['openai-chat', 'openai-responses', 'anthropic-messages'],
   // pi calls an OpenAI-compatible chat endpoint, OpenAI's Responses API or Anthropic's Messages API.
   [PI_RUNTIME]: ['openai-chat', 'openai-responses', 'anthropic-messages'],
+  // Copilot calls an operator's endpoint as its provider: an OpenAI-compatible chat endpoint, OpenAI's
+  // Responses API or Anthropic's Messages API.
+  [COPILOT_RUNTIME]: ['openai-chat', 'openai-responses', 'anthropic-messages'],
 } as const satisfies Readonly<Record<keyof typeof CONTROL_TIERS, readonly EndpointWireApi[]>>;
 
 /**
@@ -74,13 +87,15 @@ export const RUNTIME_WIRE_APIS = {
  * starts, as skill roots, and this host starts one app-server per session; Qwen Code takes them with each
  * session's request too, as the skill directories of the settings this host writes for that session; pi
  * takes them with each session's process, as the skill directories on its command line, and this host
- * starts one process per session.
+ * starts one process per session; Copilot takes them with each session's request, as its skill
+ * directories, and names each skill by its own `name`, bare.
  */
 export const AGENT_SKILLS = {
   [DEFAULT_RUNTIME]: { naming: 'namespaced', delivery: 'per-session' },
   [CODEX_RUNTIME]: { naming: 'namespaced', delivery: 'per-process' },
   [QWEN_RUNTIME]: { naming: 'bare', delivery: 'per-session' },
   [PI_RUNTIME]: { naming: 'bare', delivery: 'per-session' },
+  [COPILOT_RUNTIME]: { naming: 'bare', delivery: 'per-session' },
 } as const satisfies Readonly<
   Record<keyof typeof CONTROL_TIERS, { readonly naming: SkillNaming; readonly delivery: SkillDelivery }>
 >;
@@ -104,6 +119,7 @@ export const ENDPOINT_ROUTED_RUNTIMES: readonly string[] = [
   CODEX_RUNTIME,
   QWEN_RUNTIME,
   PI_RUNTIME,
+  COPILOT_RUNTIME,
 ];
 
 /** The wire APIs `runtime` speaks; empty for a runtime this host does not spawn. */

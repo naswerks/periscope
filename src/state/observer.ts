@@ -31,6 +31,8 @@ import type { QwenMessage } from '../host/qwen-wire.js';
 import { QwenArmState, qwenRequestsFor } from './qwen-observer.js';
 import type { PiMessage } from '../host/pi-wire.js';
 import { PiArmState, piRequestsFor } from './pi-observer.js';
+import type { CopilotMessage } from '../host/copilot-wire.js';
+import { CopilotArmState, copilotRequestsFor } from './copilot-observer.js';
 
 /**
  * How this observer keys a permission entry. `PermissionRequest` carries no tool_use_id — see below.
@@ -102,6 +104,8 @@ export class SessionObserver {
   readonly #qwen = new QwenArmState();
   /** What the pi lane remembers; untouched on any other session. */
   readonly #pi = new PiArmState();
+  /** What the Copilot lane remembers; untouched on any other session. */
+  readonly #copilot = new CopilotArmState();
 
   constructor(machine: SessionStateMachine, options: SessionObserverOptions = {}) {
     this.#machine = machine;
@@ -257,6 +261,32 @@ export class SessionObserver {
         trigger: outcome.compaction.trigger,
         tokensBefore: outcome.compaction.tokensBefore,
         tokensAfter: null,
+      };
+      for (const listener of this.#compactionListeners) listener(report);
+    }
+    return recorded;
+  }
+
+  /**
+   * Every message a Copilot process yields: Copilot's lane, translated by `copilot-observer.ts` and recorded
+   * here, so its first `ready` carries the tier and its compaction is reported like any other. Returns what
+   * it recorded.
+   */
+  observeCopilotMessage(message: CopilotMessage): Result<SessionTransition>[] {
+    const outcome = copilotRequestsFor(message, this.#copilot, {
+      state: this.#machine.state,
+      controlTier: this.#controlTier,
+      isOpen: (entryId) => this.#isOpen(entryId),
+    });
+    if (outcome.requests.some((request) => request.to === 'ready')) this.#reported = true;
+    const recorded = outcome.requests.map((request) => this.#machine.record(request));
+    if (outcome.compaction !== null) {
+      // Copilot states the trigger, the tokens before and, at the end, the tokens after.
+      const report: CompactionReport = {
+        status: outcome.compaction.status,
+        trigger: outcome.compaction.trigger,
+        tokensBefore: outcome.compaction.tokensBefore,
+        tokensAfter: outcome.compaction.tokensAfter,
       };
       for (const listener of this.#compactionListeners) listener(report);
     }
