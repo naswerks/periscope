@@ -36,7 +36,7 @@ import type { ControlTier, SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 19;
+export const PROTOCOL_VERSION = 20;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -46,19 +46,18 @@ export const PROTOCOL_VERSION = 19;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 19 adds the repositories a host serves beside its home one, and a session's own worktree of
- * each: `configuration.repositories` in the hello (absent on a host that serves only its home
- * repository), `session_new.additionalRepositories`, `where.repositories` on a session's transitions,
- * `repository` on an inventory entry and on a release ask. Every one is optional: a `session_new`
- * without the member is the session version 18 opened, byte for byte, and a host serving no further
- * repository sends none of them. It adds one refusal reason, `repository-unknown`, answered to a
- * `session_new` or a release naming a repository this host does not serve. A version-18 controller
- * is still spoken to: what it sends decodes here unchanged, and what it receives decodes on its side.
- * The narrowing of `session_new.request.env` that version 14 made (a key a controller places in the
- * spawn environment must be one this host's operator declared, above the floor) holds at every
- * version this host negotiates.
+ * Version 20 adds, every member optional: `parentId` on each conversation item, the call that spawned
+ * the agent whose turn the item is from (null on the session's own thread); and on each entry of a
+ * `tasks` fact, the spawning call (`toolUseId`), the task's own summary, its usage and the file its
+ * output is written to. A sub-agent's items are composed only on a link at 20 or above: a controller
+ * at 19 cannot tell them from the session's own, so it is sent none, as version 19 sent none. A
+ * version-19 controller is still spoken to: what it sends decodes here unchanged, and what it receives
+ * decodes on its side, each new member carried as an unknown key. The narrowing of
+ * `session_new.request.env` that version 14 made (a key a controller places in the spawn environment
+ * must be one this host's operator declared, above the floor) holds at every version this host
+ * negotiates.
  */
-export const PROTOCOL_VERSION_MIN = 18;
+export const PROTOCOL_VERSION_MIN = 19;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {

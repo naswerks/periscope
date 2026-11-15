@@ -8,6 +8,13 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-15
+
+Protocol 20; the window is `[19, 20]`, so a version-19 controller is still spoken to, and a version-18
+controller is refused at the handshake by name. Every member version 20 adds is optional and it adds no
+payload kind: a version-19 controller reads each as an unknown key on a kind it already reads, and every
+frame it sends decodes unchanged.
+
 ## [1.10.0] - 2026-11-11
 
 Protocol 19; the window is `[18, 19]`, so a version-18 controller is still spoken to. Version 19 lets a

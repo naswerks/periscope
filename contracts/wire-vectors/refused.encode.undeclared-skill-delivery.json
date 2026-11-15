@@ -8,7 +8,7 @@
     "at": "2000-01-01T00:00:00.000Z",
     "payload": {
       "kind": "link_hello",
-      "protocolVersion": 19,
+      "protocolVersion": 20,
       "hostId": "host-1",
       "capabilities": [],
       "cursors": [],
@@ -31,12 +31,12 @@
       },
       "pendingRestart": [],
       "protocolRange": {
-        "min": 18,
-        "max": 19
+        "min": 19,
+        "max": 20
       }
     }
   },
   "name": "refused.encode.undeclared-skill-delivery",
-  "protocolVersion": 19,
+  "protocolVersion": 20,
   "wire": null
 }

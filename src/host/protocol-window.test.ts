@@ -1,26 +1,27 @@
 /**
- * The window's promise, checked against the peer it is made to: a controller on protocol 18 reads
+ * The window's promise, checked against the peer it is made to: a controller on protocol 19 reads
  * everything this host sends it, and this host reads everything that controller sends.
  *
- * `V18` below is that controller's decoder: the protocol-18 schemas of the codec the v1.9.2 tag ships
- * (`git show v1.9.2:src/control/codec.ts`), cut to the kinds this file reads, with that release's
+ * `V19` below is that controller's decoder: the protocol-19 schemas of the codec the v1.10.0 tag ships
+ * (`git show v1.10.0:src/control/codec.ts`), cut to the kinds this file reads, with that release's
  * bounds written as numbers. That codec reads the session and control payloads through the schemas
- * v1.7.0 shipped, which this file froze as `V16`, and the answers it changed or this file drives a host
- * to send are transcribed from v1.9.2 beside them. Each describes a released peer, so none changes to
+ * v1.7.0 shipped, which this file froze as `V16`, with the answers v1.9.2 changed (`V18`) and the
+ * members v1.10.0 added transcribed beside them. Each describes a released peer, so none changes to
  * follow this build; an edit here that turns a test green changes the contract rather than fixing it.
- * The frames `V18` reads are the bytes a real link carried, from a host the peer welcomed at 18.
+ * The frames `V19` reads are the bytes a real link carried, from a host the peer welcomed at 19.
  *
- * Protocol 19 adds what such a controller receives inside kinds it already reads, each optional: the
- * hello's `repositories`, a transition's `where.repositories`, an inventory entry's `repository`; and
- * the reason `repository-unknown`, on kinds it already reads. A controller at 18 names no further
- * repository, so the last two reach it only on a host it asked nothing of. So what is read here is a
- * Claude session's traffic, a Codex session's, a Qwen Code session's and a pi session's, side by side on
- * one link, a hello listing the repositories a host serves, and the inventory's answer.
+ * Protocol 20 adds what such a controller receives inside kinds it already reads, each optional and
+ * each carried there as an unknown key: an item's `parentId`, and the members a `tasks` entry gained.
+ * A sub-agent's items are composed only on a link at 20 or above, because a controller at 19 cannot
+ * tell them from the session's own. So what is read here is a Claude session's traffic, a Codex
+ * session's, a Qwen Code session's and a pi session's, side by side on one link, a hello listing the
+ * repositories a host serves, and the inventory's answer.
  *
- * Protocols 16 and 17 are outside the window, so no link is negotiated at either any more. `V16` and
- * `V17` stay for what they still prove: that the schemas `V18` is built from can refuse (the controls
- * below), that `decideAtLinkVersion` holds a decision request to 16's dialect words, and that every
- * word and answer protocols 17 and 18 added was readable by the controller one release behind.
+ * Protocols 16, 17 and 18 are outside the window, so no link is negotiated at any of them any more.
+ * `V16`, `V17` and `V18` stay for what they still prove: that the schemas `V19` is built from can
+ * refuse (the controls below), that `decideAtLinkVersion` holds a decision request to 16's dialect
+ * words, and that every word and answer protocols 17, 18 and 19 added was readable by the controller
+ * one release behind.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -601,6 +602,101 @@ const V18_KINDS = [
 const V18_DECISION_REQUEST = V17_DECISION_REQUEST;
 
 // ---------------------------------------------------------------------------
+// The protocol-19 decoder, as v1.10.0 shipped it.
+// ---------------------------------------------------------------------------
+
+const V19_MAX_REPOSITORIES = 8;
+const V19_MAX_REPOSITORY_NAME_LENGTH = 200;
+
+// What protocol 19 added to the kinds this file reads, transcribed from v1.10.0's codec
+// (`git show v1.10.0:src/control/codec.ts`): the repositories a host serves, in the hello and the
+// configure answer, and the repository an inventory entry is of. Every other kind is the protocol-18
+// schema above, which v1.10.0 ships unchanged.
+const v19HostRepository = z.looseObject({
+  name: z.string().min(1).max(V19_MAX_REPOSITORY_NAME_LENGTH),
+  root: z.string().min(1).max(V16_MAX_CONFIGURATION_VALUE_LENGTH),
+  defaultBranch: z.string().min(1).max(400).nullable(),
+});
+const v19HostConfiguration = v16HostConfiguration.extend({
+  repositories: z
+    .array(v19HostRepository)
+    .max(V19_MAX_REPOSITORIES + 1)
+    .nullable()
+    .optional(),
+});
+const v19WorkspaceListResult = z.looseObject({
+  kind: z.literal('workspace_list_result'),
+  requestId: z.string().min(1),
+  entries: z.array(
+    z.looseObject({
+      key: z.string().min(1).max(V18_MAX_WORKSPACE_ID_LENGTH),
+      path: z.string().min(1).max(V16_MAX_CONFIGURATION_VALUE_LENGTH),
+      branch: z.string().max(400).nullable(),
+      head: z.string().max(64).nullable(),
+      detached: z.boolean(),
+      locked: z.boolean(),
+      prunable: z.boolean(),
+      merged: z.boolean().nullable(),
+      aheadCount: z.number().int().nonnegative().nullable(),
+      lastCommitAt: z.string().nullable(),
+      repository: z.string().min(1).max(V19_MAX_REPOSITORY_NAME_LENGTH).nullable().optional(),
+    }),
+  ),
+  totalCount: z.number().int().nonnegative(),
+  nextIndex: z.number().int().nonnegative().nullable(),
+  defaultBranch: z.string().max(400).nullable(),
+  refusal: v16Refusal.nullable(),
+});
+const v19SessionPayload = z.discriminatedUnion('kind', [
+  v16SessionPayload.options[0],
+  v16SessionPayload.options[1],
+  z.looseObject({
+    kind: z.literal('host_configure_result'),
+    requestId: z.string().min(1),
+    configuration: v19HostConfiguration,
+    overriddenByEnvironment: z.array(z.string()),
+    pendingRestart: v16PendingRestart,
+    refusal: v16Refusal.nullable(),
+  }),
+  v18Answers[0],
+  v18Answers[1],
+  v18Answers[2],
+  v19WorkspaceListResult,
+  v18Answers[4],
+  v18Answers[5],
+]);
+
+const v19ControlPayload = z.discriminatedUnion('kind', [
+  z.looseObject({
+    kind: z.literal('link_hello'),
+    protocolVersion: z.number().int(),
+    hostId: z.string().min(1),
+    capabilities: z.array(z.string()),
+    cursors: z.array(v16SessionCursor),
+    configuration: v19HostConfiguration,
+    pendingRestart: v16PendingRestart,
+    protocolRange: v16ProtocolRange,
+  }),
+]);
+
+const V19 = z.discriminatedUnion('frame', [
+  z.looseObject({
+    frame: z.literal('session'),
+    sessionId: z.string().min(1),
+    seq: z.number().int().positive(),
+    at: z.string().min(1),
+    payload: v19SessionPayload,
+  }),
+  z.looseObject({ frame: z.literal('control'), at: z.string().min(1), payload: v19ControlPayload }),
+]);
+
+/** The kinds `V19` models: `V18`'s, the hello and the inventory read with what protocol 19 added. */
+const V19_KINDS = V18_KINDS;
+
+/** The decision request a protocol-19 controller reads: v1.10.0 ships v1.9.2's `DecisionRequest` unchanged. */
+const V19_DECISION_REQUEST = V18_DECISION_REQUEST;
+
+// ---------------------------------------------------------------------------
 
 const AGENT: HostAgent = {
   claudeCodeVersion: '2.1.284',
@@ -706,13 +802,13 @@ function reached(raw: readonly string[], handle: string, to: string): boolean {
   );
 }
 
-test('a controller on protocol 18 decodes every frame a host of this build sends it', async () => {
-  const peer = await peerOn({ welcomeVersion: 18, ack: true });
+test('a controller on protocol 19 decodes every frame a host of this build sends it', async () => {
+  const peer = await peerOn({ welcomeVersion: 19, ack: true });
   const cwd = await tempDir('protocol-window');
   const agents = fakeAgents();
   const codex = fakeCodex({ codexHome: cwd });
   // Qwen Code lists a tool its ask rules do not name and reports a mode that approves calls itself,
-  // and a variables file sits in the operator's home: three degrades a protocol-18 controller reads.
+  // and a variables file sits in the operator's home: three degrades a protocol-19 controller reads.
   const qwen = fakeQwen({
     tools: [...QWEN_NAMES.tools, 'example_unruled_tool'],
     mode: 'yolo',
@@ -779,7 +875,7 @@ test('a controller on protocol 18 decodes every frame a host of this build sends
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 18, 'the welcome at 18', TIMEOUT_MS);
+    await waitFor(() => host.link.negotiatedVersion === 19, 'the welcome at 19', TIMEOUT_MS);
 
     // A Claude session, driven through the members protocol 12 added on the way out (a forwarded
     // message with its instant, a transition caused by a model switch and one by a refusal with no
@@ -846,7 +942,7 @@ test('a controller on protocol 18 decodes every frame a host of this build sends
         await hook(toolCall, 'toolu_1', { signal: new AbortController().signal });
     }
 
-    // A Codex session, driven through a turn: what protocol 16 added, read natively at 18.
+    // A Codex session, driven through a turn: what protocol 16 added, read natively at 19.
     peer.send('session-2', 1, sessionNew(cwd, { request: sessionNewRequest({ runtime: 'codex' }) }));
     await waitFor(() => reached(peer.raw, 'session-2', 'ready'), 'the Codex session to be ready', TIMEOUT_MS);
     peer.send('session-2', 2, { kind: 'session_prompt', text: 'hello' });
@@ -884,7 +980,7 @@ test('a controller on protocol 18 decodes every frame a host of this build sends
     await waitFor(() => reached(peer.raw, 'session-2', 'idle'), 'the Codex turn to end', TIMEOUT_MS);
 
     // A Qwen Code session, driven through a turn with a shell call: what protocol 17 added, read
-    // natively at 18.
+    // natively at 19.
     peer.send(
       'session-3',
       1,
@@ -937,9 +1033,9 @@ test('a controller on protocol 18 decodes every frame a host of this build sends
     );
 
     const sent = sentFrames(peer.raw);
-    const read = sent.filter((one) => V18_KINDS.includes(one.kind));
+    const read = sent.filter((one) => V19_KINDS.includes(one.kind));
     const refused = read.flatMap((one) => {
-      const decoded = V18.safeParse(JSON.parse(one.raw));
+      const decoded = V19.safeParse(JSON.parse(one.raw));
       return decoded.success
         ? []
         : [`${one.kind}: ${decoded.error.issues.map((issue) => issue.message).join('; ')}`];
@@ -947,7 +1043,7 @@ test('a controller on protocol 18 decodes every frame a host of this build sends
     assert.deepEqual(
       refused,
       [],
-      `a protocol-18 controller refuses what this host sent:\n  ${refused.join('\n  ')}`,
+      `a protocol-19 controller refuses what this host sent:\n  ${refused.join('\n  ')}`,
     );
 
     // What was read carries the members protocols 12 and 15 added, so the green above is about them too.
@@ -1046,7 +1142,7 @@ test('a controller on protocol 18 decodes every frame a host of this build sends
       'a Codex turn record was sent',
     );
 
-    // What protocol 17 added for Qwen Code, among what the protocol-18 decoder read: its messages,
+    // What protocol 17 added for Qwen Code, among what the protocol-19 decoder read: its messages,
     // its fragments, transitions its events caused, its three degrades, and the one known when it
     // opened riding the first ready's tier.
     const qwenRead = read.filter((one) => one.sessionId === 'session-3');
@@ -1079,7 +1175,7 @@ test('a controller on protocol 18 decodes every frame a host of this build sends
       'the first ready states the tier, the degrade known at open with it',
     );
 
-    // What protocol 17 added for pi, among what the protocol-18 decoder read: its messages, its
+    // What protocol 17 added for pi, among what the protocol-19 decoder read: its messages, its
     // fragments, transitions its events and the host's commands caused, and the degrade known when it
     // opened, named and riding the first ready's tier.
     const piRead = read.filter((one) => one.sessionId === 'session-4');
@@ -1111,13 +1207,13 @@ test('a controller on protocol 18 decodes every frame a host of this build sends
       'the first ready states the tier, the degrade known at open with it',
     );
 
-    // The decision requests a protocol-18 endpoint reads: one for the Claude call, one for Qwen Code's
-    // and one for pi's. Qwen Code's shell on Windows is `cmd`, a word 18 declares, so its request names
+    // The decision requests a protocol-19 endpoint reads: one for the Claude call, one for Qwen Code's
+    // and one for pi's. Qwen Code's shell on Windows is `cmd`, a word 19 declares, so its request names
     // it; pi's `bash` is `posix` on every host.
     assert.equal(decided.length, 3, 'a tool call was not asked about');
     for (const request of decided) {
-      const asV18 = V18_DECISION_REQUEST.safeParse(JSON.parse(JSON.stringify(request)));
-      assert.ok(asV18.success, asV18.success ? '' : asV18.error.message);
+      const asV19 = V19_DECISION_REQUEST.safeParse(JSON.parse(JSON.stringify(request)));
+      assert.ok(asV19.success, asV19.success ? '' : asV19.error.message);
     }
     const body = JSON.parse(JSON.stringify(decided[0])) as Record<string, unknown>;
     assert.equal(body['toolKind'], 'shell');
@@ -1138,8 +1234,8 @@ test('a controller on protocol 18 decodes every frame a host of this build sends
   }
 });
 
-test('a controller on protocol 18 is read in turn: its configure, effort included, applies what it asks', async () => {
-  const peer = await peerOn({ welcomeVersion: 18, ack: true });
+test('a controller on protocol 19 is read in turn: its configure, effort included, applies what it asks', async () => {
+  const peer = await peerOn({ welcomeVersion: 19, ack: true });
   const cwd = await tempDir('protocol-window');
   const agents = fakeAgents();
   const host = new PeriscopeHost({
@@ -1153,14 +1249,14 @@ test('a controller on protocol 18 is read in turn: its configure, effort include
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 18, 'the welcome at 18', TIMEOUT_MS);
-    // The first hello, sent with no catalog read, carries the endpoints, and the protocol-18 decoder
+    await waitFor(() => host.link.negotiatedVersion === 19, 'the welcome at 19', TIMEOUT_MS);
+    // The first hello, sent with no catalog read, carries the endpoints, and the protocol-19 decoder
     // reads it.
     const firstHello = sentFrames(peer.raw).find((one) => one.kind === 'link_hello');
     assert.ok(firstHello !== undefined, 'the hello was captured');
     assert.ok(
-      V18.safeParse(JSON.parse(firstHello.raw)).success,
-      'a protocol-18 controller refuses the hello',
+      V19.safeParse(JSON.parse(firstHello.raw)).success,
+      'a protocol-19 controller refuses the hello',
     );
     assert.deepEqual((firstHello.payload['configuration'] as Record<string, unknown>)['endpoints'], [
       ENDPOINT_ENTRY,
@@ -1170,25 +1266,25 @@ test('a controller on protocol 18 is read in turn: its configure, effort include
     const agent = agents.started[0]!;
     agent.emit(initMessage('agent-1'));
 
-    // The shape a protocol-18 controller sends: the effort member protocol 12 added, applied after
+    // The shape a protocol-19 controller sends: the effort member protocol 12 added, applied after
     // the model.
-    const fromV18 = {
+    const fromV19 = {
       kind: 'session_configure',
       model: 'model-b',
       permissionMode: null,
       thinking: null,
       effort: 'max',
     };
-    peer.send('session-1', 2, fromV18 as SessionConfigure);
+    peer.send('session-1', 2, fromV19 as SessionConfigure);
     await waitFor(() => agent.configured.length === 2, 'the configure to apply', TIMEOUT_MS);
     assert.deepEqual(agent.configured, [
       { setter: 'setModel', value: 'model-b' },
       { setter: 'setEffort', value: 'max' },
     ]);
 
-    // The `session_new` a protocol-18 controller sends: a request with every member that release
+    // The `session_new` a protocol-19 controller sends: a request with every member that release
     // declares, its runtime and endpoint unset, which opens on this host's default runtime.
-    const openedFromV18 = {
+    const openedFromV19 = {
       kind: 'session_new',
       cwd,
       workspaceKey: null,
@@ -1212,9 +1308,10 @@ test('a controller on protocol 18 is read in turn: its configure, effort include
         runtime: null,
         endpoint: null,
       },
+      additionalRepositories: null,
     };
-    peer.send('session-2', 1, openedFromV18 as SessionNew);
-    await waitFor(() => agents.started.length === 2, 'the protocol-18 open to start a session', TIMEOUT_MS);
+    peer.send('session-2', 1, openedFromV19 as SessionNew);
+    await waitFor(() => agents.started.length === 2, 'the protocol-19 open to start a session', TIMEOUT_MS);
     assert.equal(agents.started[1]?.request.effort, 'high');
     // It names no endpoint, so it takes the runtime's own route on a host that declares one.
     assert.equal('ANTHROPIC_BASE_URL' in (agents.started[1]?.request.env ?? {}), false);
@@ -1273,8 +1370,8 @@ test('a hello from a host one release behind, runtimes and endpoints and all, de
   assert.deepEqual(payload.configuration['agentSkills'], skills, 'the pack list is read as sent');
 });
 
-test('a controller on protocol 18 reads the answer to every transcript ask: transcripts-not-served, on the kinds it already reads', async () => {
-  const peer = await peerOn({ welcomeVersion: 18, ack: true });
+test('a controller on protocol 19 reads the answer to every transcript ask: transcripts-not-served, on the kinds it already reads', async () => {
+  const peer = await peerOn({ welcomeVersion: 19, ack: true });
   const cwd = await tempDir('protocol-window');
   const host = new PeriscopeHost({
     controllerUrl: peer.url,
@@ -1286,8 +1383,8 @@ test('a controller on protocol 18 reads the answer to every transcript ask: tran
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 18, 'the welcome at 18', TIMEOUT_MS);
-    // The three asks a protocol-18 controller may still send for the agent's transcripts, on one
+    await waitFor(() => host.link.negotiatedVersion === 19, 'the welcome at 19', TIMEOUT_MS);
+    // The three asks a protocol-19 controller may still send for the agent's transcripts, on one
     // channel, then an ask the channel must still answer after them.
     peer.send('discovery-1', 1, transcriptList('ask-list'));
     peer.send('discovery-1', 2, transcriptTail('ask-tail', 'C--work-repo', 'session-1', 0));
@@ -1307,12 +1404,12 @@ test('a controller on protocol 18 reads the answer to every transcript ask: tran
 
     const answers = sentFrames(peer.raw).filter((sent) => sent.sessionId === 'discovery-1');
     const refused = answers
-      .filter((one) => V18_KINDS.includes(one.kind))
+      .filter((one) => V19_KINDS.includes(one.kind))
       .flatMap((one) => {
-        const decoded = V18.safeParse(JSON.parse(one.raw));
+        const decoded = V19.safeParse(JSON.parse(one.raw));
         return decoded.success ? [] : [`${one.kind}: ${JSON.stringify(decoded.error.issues)}`];
       });
-    assert.deepEqual(refused, [], 'a protocol-18 controller refuses an answer');
+    assert.deepEqual(refused, [], 'a protocol-19 controller refuses an answer');
     assert.deepEqual(
       answers.map((one) => {
         const refusal = one.payload['refusal'] as { reason?: string } | undefined;
@@ -1333,8 +1430,8 @@ test('a controller on protocol 18 reads the answer to every transcript ask: tran
   }
 });
 
-test('a controller on protocol 18 reads a repository_read answer and the next page it names', async () => {
-  const peer = await peerOn({ welcomeVersion: 18, ack: true });
+test('a controller on protocol 19 reads a repository_read answer and the next page it names', async () => {
+  const peer = await peerOn({ welcomeVersion: 19, ack: true });
   const root = await tempDir('protocol-window');
   writeFileSync(join(root, 'brief.md'), `# A brief\n${'x'.repeat(100)}\n`);
   const host = new PeriscopeHost({
@@ -1352,8 +1449,8 @@ test('a controller on protocol 18 reads a repository_read answer and the next pa
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 18, 'the welcome at 18', TIMEOUT_MS);
-    // The ask a protocol-18 controller sends with no offset: the head, and the page after it named.
+    await waitFor(() => host.link.negotiatedVersion === 19, 'the welcome at 19', TIMEOUT_MS);
+    // The ask a protocol-19 controller sends with no offset: the head, and the page after it named.
     peer.send('discovery-1', 1, {
       kind: 'repository_read',
       requestId: 'read-head',
@@ -1375,7 +1472,7 @@ test('a controller on protocol 18 reads a repository_read answer and the next pa
 
     const answers = sentFrames(peer.raw).filter((sent) => sent.kind === 'repository_read_result');
     for (const one of answers) {
-      const decoded = V18.safeParse(JSON.parse(one.raw));
+      const decoded = V19.safeParse(JSON.parse(one.raw));
       assert.ok(decoded.success, decoded.success ? '' : JSON.stringify(decoded.error.issues));
     }
     // The two reads settle in either order; each answer is matched on its request id.
@@ -1716,6 +1813,75 @@ test('control: the protocol-18 decoder refuses an answer a version-18 controller
   );
 });
 
+// What `V19` adds is evidence the same way: it must refuse what that release refuses.
+test('control: the protocol-19 decoder refuses what a version-19 controller refuses', () => {
+  const hello = (configuration: Record<string, unknown>): unknown => ({
+    frame: 'control',
+    at: '2000-01-01T00:00:00.000Z',
+    payload: {
+      kind: 'link_hello',
+      protocolVersion: 19,
+      hostId: 'host-1',
+      capabilities: [],
+      cursors: [],
+      configuration,
+      pendingRestart: [],
+      protocolRange: { min: 18, max: 19 },
+    },
+  });
+  const home = { name: 'home', root: '/srv/home', defaultBranch: 'main' };
+  assert.equal(
+    V19.safeParse(hello({ ...unsetHostConfiguration(), repositories: [home] })).success,
+    true,
+    'a protocol-19 hello listing its repositories',
+  );
+  assert.equal(
+    V19.safeParse(hello({ ...unsetHostConfiguration(), repositories: [{ ...home, name: '' }] })).success,
+    false,
+    'a repository with no name: the member protocol 19 added is checked',
+  );
+  assert.equal(
+    V18.safeParse(hello({ ...unsetHostConfiguration(), repositories: [{ ...home, name: '' }] })).success,
+    true,
+    "the protocol-18 decoder carries the same list unread, so the refusal above is protocol 19's own",
+  );
+  const answer = (payload: Record<string, unknown>): unknown => ({
+    frame: 'session',
+    sessionId: 'discovery-1',
+    seq: 1,
+    at: '2000-01-01T00:00:00.000Z',
+    payload,
+  });
+  const entry = {
+    key: 'k1',
+    path: '/srv/ws/k1',
+    branch: 'home/k1',
+    head: 'abc',
+    detached: false,
+    locked: false,
+    prunable: false,
+    merged: false,
+    aheadCount: 1,
+    lastCommitAt: null,
+    repository: 'tools',
+  };
+  const listed = {
+    kind: 'workspace_list_result',
+    requestId: 'r',
+    entries: [entry],
+    totalCount: 1,
+    nextIndex: null,
+    defaultBranch: 'main',
+    refusal: null,
+  };
+  assert.equal(V19.safeParse(answer(listed)).success, true, 'an inventory entry naming its repository');
+  assert.equal(
+    V19.safeParse(answer({ ...listed, entries: [{ ...entry, repository: '' }] })).success,
+    false,
+    'an entry naming an empty repository',
+  );
+});
+
 test('a controller on protocol 18 decodes every vector protocol 19 adds that a host sends: the repositories in the hello, a transition and the inventory, and repository-unknown', () => {
   const corpus = fileURLToPath(new URL('../../contracts/wire-vectors/', import.meta.url));
   const added = readdirSync(corpus).filter((file) =>
@@ -1731,8 +1897,8 @@ test('a controller on protocol 18 decodes every vector protocol 19 adds that a h
   }
 });
 
-test('a controller on protocol 18 reads the hello of a host serving several repositories', async () => {
-  const peer = await peerOn({ welcomeVersion: 18, ack: true });
+test('a controller on protocol 19 reads the hello of a host serving several repositories', async () => {
+  const peer = await peerOn({ welcomeVersion: 19, ack: true });
   const cwd = await tempDir('protocol-window');
   const served = (root: string, defaultBranch: string) => ({
     repositoryRoot: root,
@@ -1752,10 +1918,10 @@ test('a controller on protocol 18 reads the hello of a host serving several repo
 
   try {
     host.start();
-    await waitFor(() => host.link.negotiatedVersion === 18, 'the welcome at 18', TIMEOUT_MS);
+    await waitFor(() => host.link.negotiatedVersion === 19, 'the welcome at 19', TIMEOUT_MS);
     const hello = sentFrames(peer.raw).find((one) => one.kind === 'link_hello');
     assert.ok(hello !== undefined, 'the hello was captured');
-    const read = V18.safeParse(JSON.parse(hello.raw));
+    const read = V19.safeParse(JSON.parse(hello.raw));
     assert.ok(read.success, read.success ? '' : JSON.stringify(read.error.issues));
     assert.deepEqual((hello.payload['configuration'] as Record<string, unknown>)['repositories'], [
       { name: 'home', root: '/srv/home', defaultBranch: 'main' },

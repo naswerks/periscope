@@ -21,8 +21,8 @@ type Answer = { readonly welcome: number } | { readonly close: [code: number, re
 // The window moves at a protocol bump, a minor release, and this line with it: the new version and
 // the one before it. A patch release keeps the window its minor spoke, so every controller already
 // linked to a runner keeps linking when the runner is updated.
-test('deliberate: this release speaks the window [18, 19]', () => {
-  assert.deepEqual([PROTOCOL_VERSION_MIN, PROTOCOL_VERSION], [18, 19]);
+test('deliberate: this release speaks the window [19, 20]', () => {
+  assert.deepEqual([PROTOCOL_VERSION_MIN, PROTOCOL_VERSION], [19, 20]);
 });
 
 /** A controller that reads the hello's window and answers as told; the hello it saw is kept for assertions. */

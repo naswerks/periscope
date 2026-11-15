@@ -88,8 +88,21 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[18, 19]`. Version 19 adds the repositories a host serves beside its home one, and a session's own
-worktree of each, every member optional:
+`[19, 20]`. Version 20 adds, every member optional:
+
+- `parentId` on every conversation item: the call that spawned the agent whose turn the item is from,
+  null on the session's own thread ([The conversation item stream](#the-conversation-item-stream));
+- on each entry of a `tasks` fact, running or settled: the spawning call (`toolUseId`), the task's own
+  `summary`, its `usage` and the `outputFile` its output is written to ([The fact layer](#the-fact-layer)).
+
+It adds no payload kind. A version-19 controller reads what this build sends: each new member rides a
+kind it already reads and is carried as an unknown key. A sub-agent's items are composed only on a link
+negotiated at 20 or above: a controller at 19 reads no `parentId`, so a sub-agent's item would read as
+the session's own, and it is sent none, as version 19 sent none. Every frame a version-19 controller
+sends decodes here unchanged.
+
+Version 19 added the repositories a host serves beside its home one, and a session's own worktree of
+each, every member optional:
 
 - `configuration.repositories` in the hello and the configure answer (below);
 - `session_new.additionalRepositories`, the further repositories a session also writes in
@@ -99,19 +112,14 @@ worktree of each, every member optional:
 - the refusal reason `repository-unknown`, answered to a `session_new` or a release naming a
   repository the host does not serve.
 
-It adds no payload kind. A version-18 controller reads what this build sends: each new member rides a
-kind it already reads and is carried as an unknown key, and a controller at 18 names no further
-repository, so the transition and inventory members reach it only on a host it asked nothing of. Every
-frame a version-18 controller sends decodes here unchanged. Version 14 narrowed `session_new.request.env`
-(below), and the narrowing holds at every version the host negotiates. `src/host/protocol-window.test.ts`
-holds both directions over a real link: every frame this host sends, a Claude session's, a Codex
-session's, a Qwen Code session's and a pi session's on one link, its answers to the retired asks and to a
-`repository_read`, and the hello of a host serving several repositories, decodes with the protocol-18
-decoder v1.9.2 shipped, and every decision request it posts reads as that release's `DecisionRequest`;
-each vector version 19 adds that a host sends decodes with that decoder; and a version-18 controller's
-`session_new` and `session_configure` decode here and apply. A controller must check the version, or the
-hello's `repositories`, before it names a further repository: a host at 18 carries the unknown member and
-opens the session with no second place to write.
+Version 14 narrowed `session_new.request.env` (below), and the narrowing holds at every version the host
+negotiates. `src/host/protocol-window.test.ts` holds both directions over a real link: every frame this
+host sends, a Claude session's, a Codex session's, a Qwen Code session's and a pi session's on one link,
+its answers to the retired asks and to a `repository_read`, and the hello of a host serving several
+repositories, decodes with the protocol-19 decoder v1.10.0 shipped, and every decision request it posts
+reads as that release's `DecisionRequest`; each vector version 20 adds that a host sends decodes with that
+decoder; at 19 a sub-agent's message fills no item, and at 20 it fills one naming its parent; and a
+version-19 controller's `session_new` and `session_configure` decode here and apply.
 
 From v19, `configuration.repositories` lists the repositories the host serves, one `HostRepository` each
 (`name`, `root`, `defaultBranch`), the home one (the repository `repositoryRoot` names) first, at most
