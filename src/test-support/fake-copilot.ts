@@ -6,7 +6,8 @@
  *   answer raises a `hook` permission request, which the session's handler answers; any other answer, or
  *   none, lets the runtime's own flow decide, which raises a request of the tool's own kind (`read`,
  *   `write`, `shell`) instead.
- * - An approved call starts and completes; a refused one completes, failed, with the handler's words.
+ * - A call's start is sent before its hook fires and before its request is answered, as the runtime sends
+ *   it; an approved call then completes, and a refused one completes, failed, with the handler's words.
  * - `session.start` is sent during `createSession`, before it resolves; `session.idle` ends each run.
  * - The posture reads answer what the options say, `manual` and `interactive` by default.
  * - A client answers its hook discovery and its read of the managed settings with no session: no hook and
@@ -186,6 +187,12 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
     const envelope =
       call.parentToolCallId === undefined ? {} : { agentId: `agent-of-${call.parentToolCallId}` };
     const parent = call.parentToolCallId === undefined ? {} : { parentToolCallId: call.parentToolCallId };
+    emitTo(
+      config,
+      'tool.execution_start',
+      { toolCallId, toolName: call.toolName, arguments: call.toolArgs, ...parent },
+      envelope,
+    );
     let hookAnswer: CopilotPreToolOutput | undefined;
     if (options.hook !== 'skip') {
       hookAnswer = config.hooks.onPreToolUse({
@@ -222,12 +229,6 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
       envelope,
     );
     const ran = answer.kind === 'approve-once' || ignoreAnswer;
-    emitTo(
-      config,
-      'tool.execution_start',
-      { toolCallId, toolName: call.toolName, arguments: call.toolArgs, ...parent },
-      envelope,
-    );
     emitTo(
       config,
       'tool.execution_complete',

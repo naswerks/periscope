@@ -5,7 +5,7 @@
  * The snapshot is regenerated from an install of the release by `scripts/derive-copilot-names.mjs`; it holds
  * identifiers only. The coverage pin holds every session event of the release to one row of
  * `COPILOT_COVERAGE`, in both directions. The built-in tools are held to the runtime's own list on each host
- * that runs it (`copilot-runtime.test.ts`), since the list differs by platform.
+ * that runs it (the census in `copilot-local.test.ts`), since the list differs by platform.
  *
  * The file ships with the package (`files`), so the read works installed as well as in a checkout. A
  * snapshot that is missing, unreadable, or holds an empty list fails here, loudly, at load.

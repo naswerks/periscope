@@ -233,13 +233,15 @@ async function openReal(
     readonly skills?: readonly string[];
     readonly provider?: CopilotProvider;
     readonly model?: string;
+    /** Further variables of the environment the session is asked to start with. */
+    readonly env?: Readonly<Record<string, string>>;
   } = {},
 ): Promise<Real> {
   assert.ok(INSTALL.ok);
   const loadedSdk = await sdk();
   const made = createCopilotSessionHome(dirs.base);
   assert.ok(made.ok);
-  const env = copilotRuntimeEnv(scratchEnv(dirs), made.value.env);
+  const env = copilotRuntimeEnv({ ...scratchEnv(dirs), ...options.env }, made.value.env);
   const events: CopilotEvent[] = [];
   const requests: DecisionRequest[] = [];
   const raised: { name: RefusalReason; detail: string }[] = [];
@@ -435,11 +437,10 @@ test(
       await real.run('view', { path: join(dirs.work, 'readme.txt') }, 'pin-q3');
       assert.deepEqual(routeOf(real, 'pin-q3'), { hooked: true, kinds: ['hook'] });
       assert.equal(real.requests.length, before + 1, 'allow-all approved nothing by itself');
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      assert.ok(
-        real.raised.some((one) => one.name === 'gate-mode-widened'),
-        'the widened mode was named',
-      );
+      const named = (): boolean => real.raised.some((one) => one.name === 'gate-mode-widened');
+      const deadline = Date.now() + 10_000;
+      while (!named() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.ok(named(), 'the widened mode was named');
     } finally {
       await real.close();
       await removeScratch(dirs);
@@ -572,7 +573,21 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const dirs = await scratch();
-    const real = await openReal(dirs);
+    const planted = [
+      'GH_TOKEN',
+      'GITHUB_TOKEN',
+      'GH_ENTERPRISE_TOKEN',
+      'GITHUB_ENTERPRISE_TOKEN',
+      'GH_HOST',
+      'COPILOT_GITHUB_TOKEN',
+      'COPILOT_SDK_AUTH_TOKEN',
+      'COPILOT_CONNECTION_TOKEN',
+    ];
+    // Each credential's name is in the environment the session was asked to start with, beside a name that
+    // is no credential: the first must not reach a command, the second must.
+    const real = await openReal(dirs, {
+      env: { ...Object.fromEntries(planted.map((name) => [name, 'planted'])), PLANTED_CONTROL: 'planted' },
+    });
     try {
       const command = WINDOWS ? 'Get-ChildItem env: | ForEach-Object { $_.Name }' : 'env | cut -d= -f1';
       // A cold shell on a loaded host can take longer than the tool's own 30-second wait to answer.
@@ -583,18 +598,15 @@ test(
         .map((line) => line.trim().toUpperCase())
         .filter((line) => line !== '');
       assert.ok(names.includes('MARKER'), 'the marker did not reach the shell, so the read proves nothing');
-      const credentials = names.filter((name) =>
-        [
-          'GH_TOKEN',
-          'GITHUB_TOKEN',
-          'GH_ENTERPRISE_TOKEN',
-          'GITHUB_ENTERPRISE_TOKEN',
-          'COPILOT_GITHUB_TOKEN',
-          'COPILOT_SDK_AUTH_TOKEN',
-          'COPILOT_CONNECTION_TOKEN',
-        ].includes(name),
+      assert.ok(
+        names.includes('PLANTED_CONTROL'),
+        'what was planted did not reach the shell, so the read proves nothing',
       );
-      assert.deepEqual(credentials, []);
+      assert.deepEqual(
+        names.filter((name) => planted.includes(name)),
+        [],
+        "a planted credential's name reached a command the agent ran",
+      );
       assert.ok(
         names.includes('COPILOT_HOME'),
         "the SDK's own home variable, which the local gate reads as the protected path it is",
@@ -768,6 +780,20 @@ test(
       assert.equal(begun.toolName, 'probe-srv-echo');
       assert.equal(begun.mcpServerName, 'probe-srv', JSON.stringify(begun));
       assert.equal(begun.mcpToolName, 'echo', JSON.stringify(begun));
+      // The order the stand-in for this runtime sends a call's events in: the start comes first.
+      const steps = [
+        'tool.execution_start',
+        'permission.requested',
+        'permission.completed',
+        'tool.execution_complete',
+      ];
+      assert.deepEqual(
+        real.events
+          .filter((event) => steps.includes(event.type))
+          .filter((event) => JSON.stringify(event.data ?? {}).includes('call_mcp'))
+          .map((event) => event.type),
+        steps,
+      );
       assert.equal(real.requests.find((request) => request.toolUseId === 'call_mcp')?.toolKind, 'mcp');
     } finally {
       await real.close();
@@ -979,7 +1005,8 @@ test(
       assert.equal(alive(command), true, 'control: the command reads as alive before the close');
       run.proc.close();
       assert.equal(await run.ended, null);
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await untilGone(runtime);
+      await untilGone(command);
       assert.equal(alive(runtime), false, 'the runtime outlived the close');
       assert.equal(alive(command), false, 'a command the shell still ran outlived the close');
       assert.deepEqual(readdirSync(join(dirs.base, 'sessions')), [], "the session's home was removed");
@@ -1038,9 +1065,14 @@ test(
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       assert.ok(parent === null || !alive(parent), "the detached command's launching shell did not exit");
+      const client = run.client();
+      const runtime = client === null ? null : copilotRuntimePid(client);
+      assert.ok(runtime !== null, 'the runtime process is not there to watch end');
       run.proc.close();
       await run.ended;
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      // The close has ended the runtime and its whole tree once the runtime itself is gone.
+      await untilGone(runtime);
+      assert.equal(alive(runtime), false, 'the runtime outlived the close, so the tree was not ended yet');
       assert.equal(
         alive(detached),
         true,

@@ -669,6 +669,27 @@ test('a resume copies the kept state into the fresh home first; a fork forks it 
   await rm(missing.base, { recursive: true, force: true });
 });
 
+test("a call's events arrive in the order the runtime was measured sending them: its start, its request, the answer, its end", async () => {
+  const run = await started({
+    fake: { calls: () => [{ toolName: 'view', toolArgs: { path: 'a.txt' }, toolCallId: 'call_1' }] },
+  });
+  await waitFor(() => opened(run), 'the open');
+  run.process.prompt('go');
+  await waitFor(() => types(run).includes('session.idle'), 'the run');
+  const steps = [
+    'tool.execution_start',
+    'permission.requested',
+    'permission.completed',
+    'tool.execution_complete',
+  ];
+  assert.deepEqual(
+    types(run).filter((type) => steps.includes(type)),
+    steps,
+  );
+  assert.deepEqual(run.raised, [], 'a call that starts before it is decided is no call that ran undecided');
+  await closed(run);
+});
+
 test("what the runtime writes to its standard error reaches the session's own lane, as it was written", async () => {
   const lines: string[] = [];
   const run = await started({ request: { onStderr: (data) => lines.push(data) } });
