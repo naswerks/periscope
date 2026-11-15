@@ -42,7 +42,7 @@ const DRIVE_ROOTED = /^[A-Za-z]:[\\/]/;
 const DRIVE = /^([A-Za-z]):/;
 
 /** Whether an absolute directory is spelled the Windows way: from a drive, or from a share. */
-function isWindowsDirectory(directory: string): boolean {
+export function isWindowsDirectory(directory: string): boolean {
   return DRIVE.test(directory) || directory.startsWith('\\\\');
 }
 
@@ -126,6 +126,20 @@ function placedOnWindows(candidate: string, directory: string, placesRelative: b
   }
   if (/^[\\/]/.test(candidate)) return `${rootOf(directory)}${candidate}`;
   return placesRelative ? `${directory}/${candidate}` : candidate;
+}
+
+/**
+ * The drive path a rooted path names when its first segment is read as a drive letter: `/c/Users/x` and
+ * `/cygdrive/c/Users/x` as `c:/Users/x`. A POSIX layer on Windows (Git Bash, Cygwin) reads a path that
+ * way, and so does the agent CLI for its own tools, where Windows itself reads `/c/Users/x` as the
+ * folder `c` at the root of the current drive. Null for any other path. The file a tool opens is one of
+ * the two readings, so the protected set is compared with both.
+ */
+export function driveLetterReading(candidate: string): string | null {
+  const drive = /^[\\/](?:(?:proc[\\/])?cygdrive[\\/])?([A-Za-z])(?=[\\/]|$)/.exec(candidate);
+  if (drive === null) return null;
+  const rest = candidate.slice(drive[0].length);
+  return `${drive[1] ?? ''}:${rest === '' ? '/' : rest}`;
 }
 
 /**

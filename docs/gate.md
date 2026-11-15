@@ -111,8 +111,13 @@ segments have lost what Windows ignores (trailing dots and spaces, a stream afte
 path with a segment shaped like a generated short name (`PROGRA~1`), also with the path as the file
 system names it (`LocalGateOptions.realPath`; the host passes `canonicalPath`). A short name is never
 refused for its shape, and the write limits stay textual: a short name cannot leave its own folder, so
-a temp folder handed over in short form is written as before. The shell scan matches a protected path written
-literally, through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}`
+a temp folder handed over in short form is written as before. A rooted path whose first segment is one
+letter (`/c/Users/x`, `/cygdrive/c/Users/x`, `/proc/cygdrive/c/Users/x`) is compared with the protected
+set in both its readings under Windows rules: the folder Windows reads, and the drive that letter names,
+which is how a POSIX layer on Windows and the agent CLI's own tools read it; the write limits keep
+Windows' reading. The shell scan matches a protected path written
+literally, or, for one on a drive, from the root as a POSIX shell on Windows writes it (`/c/...`,
+`/cygdrive/c/...`, `/mnt/c/...`), through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}`
 spellings or `%USERPROFILE%`, or through a variable of the session's spawn environment whose value is
 one absolute path (`$NAME`, `${NAME}`, `$env:NAME`, `${env:NAME}`, `%NAME%`; PowerShell's and `cmd`'s
 names read without regard to case, a POSIX shell's exactly), and every protected-path comparison folds

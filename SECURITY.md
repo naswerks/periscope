@@ -178,7 +178,10 @@ names this machine's own drive (`\\localhost\C$\...`, a loopback address, the ma
 `COMPUTERNAME`) is that drive's path. The dots and spaces that end a name, and a stream named after a
 colon (`id_rsa.`, `id_rsa::$DATA`), are folded away before the protected set is compared, as case is. A
 path with a segment shaped like a generated short name (`CREDEN~1.JSO`) is compared as written and as
-the file system says it is named. A device or volume form that maps to no drive path
+the file system says it is named. A rooted path whose first segment is one letter (`/c/Users/x`,
+`/cygdrive/c/Users/x`) has two readings on Windows, the folder `c` at the root of the drive and the
+drive that letter names, which is how Git Bash, Cygwin and the agent CLI's own tools read it; the
+protected set is compared with both. A device or volume form that maps to no drive path
 (`\\?\Volume{...}\`, `\\?\GLOBALROOT\...`) is refused `path-unplaceable`.
 
 What falls through a read, a write, a patch or a search:
@@ -191,8 +194,10 @@ What falls through a read, a write, a patch or a search:
 
 The shell scan reads a command as text, so of the spellings above it matches one only where the command
 still contains the protected path as written: a device prefix before it, or a dot or a stream name after
-it. A dot or a space inside the path, a share of this machine's drive and a short name are not matched
-in a command. What also falls through is a shell command that reaches a protected path without naming
+it. It also matches a protected path on a drive written from the root, as a POSIX shell on Windows
+writes it: `/c/Users/x` (Git Bash), `/cygdrive/c/Users/x` (Cygwin) and `/mnt/c/Users/x` (the Linux
+subsystem). A dot or a space inside the path, a share of this machine's drive and a short name are not
+matched in a command. What also falls through is a shell command that reaches a protected path without naming
 it:
 
 - a recursive search of an ancestor directory;

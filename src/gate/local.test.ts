@@ -242,6 +242,21 @@ test("regression: the session's spawn environment is read at each decision, so a
   );
 });
 
+test('a shell command naming a protected drive path from the root, as a POSIX shell on Windows writes it, refuses', () => {
+  for (const command of [
+    'cat /c/Users/agent/.claude/.credentials.json',
+    'cat /C/Users/Agent/.claude/.credentials.json',
+    'cat /cygdrive/c/Users/agent/.claude/.credentials.json',
+    'wsl cat /mnt/c/Users/agent/.claude/.credentials.json',
+    'tar -C /c/Users/agent -czf out.tgz .claude/.credentials.json /c/Users/agent/.claude',
+  ]) {
+    assert.equal(gate(request({ toolInput: { command } }))?.reason, 'credential-path-denied', command);
+  }
+  // Control: the same spellings of a place that is not protected are no credential matter.
+  assert.equal(gate(request({ toolInput: { command: 'cat /c/repo/notes.txt' } })), null);
+  assert.equal(gate(request({ toolInput: { command: 'ls /c/Users/agent/Documents' } })), null);
+});
+
 test('control: the expansion is what refuses; with no home known the same command has no credential opinion', () => {
   assert.equal(gate(request({ toolInput: { command: 'cat ~/.claude/.credentials.json' } })), null);
   assert.equal(homed(request({ toolInput: { command: 'cat ~/notes.txt' } })), null);

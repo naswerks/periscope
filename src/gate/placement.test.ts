@@ -364,3 +364,47 @@ test('control: under a POSIX path a trailing dot, a colon and two leading slashe
   assert.equal(read('//?/C:/Users/op/.ssh/id_rsa'), null);
   assert.equal(read('/home/op/.ssh/id_rsa')?.reason, 'credential-path-denied');
 });
+
+// ---------------------------------------------------------------------------
+// A rooted path whose first segment is one letter
+// ---------------------------------------------------------------------------
+
+test('a rooted path whose first segment is one letter is checked as the drive that letter names, as well as the folder Windows reads', () => {
+  const plain = localGate({ workspaceRoot: WORK, resolve: onWindows, protectedPaths: [KEYS], home: HOME });
+  for (const path of [
+    '/c/Users/op/.ssh/id_rsa',
+    '/C/Users/op/.ssh/id_rsa',
+    '/cygdrive/c/Users/op/.ssh/id_rsa',
+    '/proc/cygdrive/c/Users/op/.ssh/id_rsa',
+    '\\c\\Users\\op\\.ssh\\id_rsa',
+  ]) {
+    assert.equal(pi(request('read', { path }))?.reason, 'credential-path-denied', path);
+    assert.equal(plain(request('Grep', { pattern: 'x', path }))?.reason, 'credential-path-denied', path);
+  }
+  // A search from the drive's root, written that way, reads the protected folder beneath it.
+  assert.equal(plain(request('Grep', { pattern: 'x', path: '/c' }))?.reason, 'credential-path-denied');
+  assert.equal(plain(request('Glob', { pattern: '/c/Users/op/.ssh/*' }))?.reason, 'credential-path-denied');
+  // Control: the same spelling of a place that is not protected is read, and a path whose first folder is
+  // longer than a letter has one reading alone.
+  assert.equal(pi(request('read', { path: '/c/work/session-1/a.ts' })), null);
+  assert.equal(pi(request('read', { path: '/d/Users/op/.ssh/id_rsa' })), null, 'another drive');
+  assert.equal(pi(request('read', { path: '/cc/Users/op/.ssh/id_rsa' })), null);
+});
+
+test('control: a write keeps the reading Windows gives the path, and a POSIX call directory has no second reading', () => {
+  assert.equal(
+    pi(request('write', { path: '/c/work/session-1/out.txt', content: 'x' }))?.reason,
+    'path-escapes-root',
+    'the folder c at the root of the drive is outside the workspace, as it was',
+  );
+  const linux = localGate({
+    workspaceRoot: '/work/session-1',
+    resolve: (path) => posix.resolve(path),
+    protectedPaths: ['/home/op/.ssh', 'C:\\Users\\op\\.ssh'],
+    home: '/home/op',
+    toolFamilies: PI_TOOL_FAMILIES,
+    resolvesAgainstCallCwd: true,
+    resolvesWritesAgainstCallCwd: true,
+  });
+  assert.equal(linux(request('read', { path: '/c/Users/op/.ssh/id_rsa' }, '/work/session-1')), null);
+});

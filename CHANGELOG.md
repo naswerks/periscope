@@ -47,6 +47,12 @@ frame it sends decodes unchanged.
   it. A device or volume form that maps to no drive path is refused `path-unplaceable`. Still outside
   the gate: a link, a short name set by hand, and a share reached by a name the host does not know as
   its own.
+- Security: the local gate reads a drive path written from the root. On Windows `/c/Users/x` and
+  `/cygdrive/c/Users/x` name drive C to Git Bash, Cygwin and the agent CLI's own tools, and the folder
+  `c` at the root of the current drive to Windows itself. A read or a search is now compared with the
+  protected set in both readings, and the shell scan matches a protected path on a drive written as
+  `/c/...`, `/cygdrive/c/...` or `/mnt/c/...`; `cat /c/Users/x/.ssh/id_rsa` in a Git Bash shell named no
+  protected path before. The write limits keep Windows' reading.
 - Added: `LocalGateOptions.localNames` and `LocalGateOptions.realPath` (and the same two on
   `JailOptions`), with `machineNames` and `canonicalPath` exported to fill them: the names this machine
   answers to as a file server, and a path as the file system names it. `PeriscopeHost` passes both.

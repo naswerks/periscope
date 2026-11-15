@@ -32,7 +32,7 @@
 import type { Refusal } from '../core/refusal.js';
 import { refusal } from '../core/refusal.js';
 import { isContainedBy, isContainedByIgnoringCase, isAbsolutePath, normalizePath } from '../core/paths.js';
-import { placePath } from './placement.js';
+import { driveLetterReading, isWindowsDirectory, placePath } from './placement.js';
 
 /**
  * Turns a path into its canonical absolute form.
@@ -177,15 +177,39 @@ function callDirectoryOf(options: JailOptions): string | null {
 function placeAndResolve(
   candidate: string,
   options: JailOptions,
-): { resolved: string } | { refusal: Refusal } {
+): { resolved: string; also: readonly string[] } | { refusal: Refusal } {
+  const directory = callDirectoryOf(options);
   const placed = placePath(candidate, {
-    directory: callDirectoryOf(options),
+    directory,
     home: options.home,
     localNames: options.localNames,
     placesRelative: options.placesRelative ?? false,
   });
   if (typeof placed !== 'string') return { refusal: placed };
-  return resolveOrRefuse(placed, options.resolve);
+  const outcome = resolveOrRefuse(placed, options.resolve);
+  if ('refusal' in outcome) return outcome;
+  // Under Windows rules a rooted path whose first segment is one letter has a second reading, the drive
+  // that letter names. Which of the two a tool opens is the tool's own choice, so the protected set is
+  // compared with both; the write limits read the system's own, above.
+  const also: string[] = [];
+  const drive = directory !== null && isWindowsDirectory(directory) ? driveLetterReading(candidate) : null;
+  if (drive !== null) {
+    const second = resolveOrRefuse(drive, options.resolve);
+    if ('resolved' in second) also.push(second.resolved);
+  }
+  return { resolved: outcome.resolved, also };
+}
+
+/** The credential refusal for any reading of a placed path, or null when no protected path covers one. */
+function credentialRefusalOfAny(
+  placed: { readonly resolved: string; readonly also: readonly string[] },
+  options: JailOptions,
+): Refusal | null {
+  for (const reading of [placed.resolved, ...placed.also]) {
+    const refused = credentialRefusal(reading, options);
+    if (refused !== null) return refused;
+  }
+  return null;
 }
 
 /**
@@ -278,7 +302,7 @@ export function checkPath(candidate: string | null, options: JailOptions): Refus
   if ('refusal' in outcome) return outcome.refusal;
   const { resolved } = outcome;
 
-  const credential = credentialRefusal(resolved, options);
+  const credential = credentialRefusalOfAny(outcome, options);
   if (credential !== null) return credential;
 
   const declared = options.workspaceRoot !== null && options.workspaceRoot.trim() !== '';
@@ -328,7 +352,7 @@ export function checkReadPath(candidate: string | null, options: JailOptions): R
   if (candidate === null) return refusal('path-input-missing', MISSING_PATH_DETAIL);
   const outcome = placeAndResolve(candidate, options);
   if ('refusal' in outcome) return outcome.refusal;
-  return credentialRefusal(outcome.resolved, options);
+  return credentialRefusalOfAny(outcome, options);
 }
 
 /** The characters that begin the wildcard part of a glob pattern. */
@@ -384,15 +408,16 @@ export function checkSearch(toolInput: unknown, options: JailOptions): Refusal |
   for (const root of roots) {
     const outcome = placeAndResolve(root, options);
     if ('refusal' in outcome) return outcome.refusal;
-    const { resolved } = outcome;
-    const covering = credentialRefusal(resolved, options);
+    const covering = credentialRefusalOfAny(outcome, options);
     if (covering !== null) return covering;
-    for (const candidate of options.protectedPaths) {
-      if (withinProtection(candidate, resolved, options)) {
-        return refusal(
-          'credential-path-denied',
-          `a search under ${resolved} reads ${candidate}, which holds credential material; search a directory that does not contain it`,
-        );
+    for (const resolved of [outcome.resolved, ...outcome.also]) {
+      for (const candidate of options.protectedPaths) {
+        if (withinProtection(candidate, resolved, options)) {
+          return refusal(
+            'credential-path-denied',
+            `a search under ${resolved} reads ${candidate}, which holds credential material; search a directory that does not contain it`,
+          );
+        }
       }
     }
   }
@@ -502,7 +527,18 @@ export function checkShellForProtectedPaths(command: string, options: JailOption
     // A protected path this host cannot resolve is still protected — fall back to its literal form
     // rather than dropping it from the set, which would silently shrink the protected surface.
     const needle = normalizePath('refusal' in outcome ? candidate : outcome.resolved).toLowerCase();
-    if (needle !== '' && haystack.includes(needle)) {
+    if (needle === '') continue;
+    // A protected path on a drive is also written from the root by a POSIX shell on Windows: Git Bash's
+    // `/c/Users/x`, Cygwin's `/cygdrive/c/Users/x`, and `/mnt/c/Users/x` under the Linux subsystem.
+    const drive = /^([a-z]):\/(.*)$/.exec(needle);
+    const spellings =
+      drive === null
+        ? [needle]
+        : [
+            needle,
+            ...['/', '/cygdrive/', '/mnt/'].map((root) => `${root}${drive[1] ?? ''}/${drive[2] ?? ''}`),
+          ];
+    if (spellings.some((spelling) => haystack.includes(spelling))) {
       return refusal(
         'credential-path-denied',
         `the command names ${needle}, which holds credential material; the agent shares the host's OS user, so this gate is the only control over it`,
