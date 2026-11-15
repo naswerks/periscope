@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 import { COPILOT_EXCLUDED_TOOLS } from '../gate/tool-kind.js';
@@ -313,6 +324,65 @@ test("a closed session's state is kept for a resume, and a resume of a session w
       'a session with no state moves nothing',
     );
     resumed.value.remove();
+    return Promise.resolve();
+  }));
+
+test('a kept state is replaced, never deleted first: a close that cannot bring the new state in leaves the older copy for a resume', () =>
+  withTempDir('copilot-replace', (base) => {
+    const first = createCopilotSessionHome(base);
+    assert.ok(first.ok);
+    const stateOf = (home: string): string => join(home, 'session-state', 'abc-123');
+    mkdirSync(stateOf(first.value.home), { recursive: true });
+    writeFileSync(join(stateOf(first.value.home), 'events.jsonl'), 'first\n');
+    assert.ok(carryCopilotStateOut(base, first.value.home, 'abc-123').ok);
+    const kept = join(base, 'state', 'abc-123', 'events.jsonl');
+    assert.equal(readFileSync(kept, 'utf8'), 'first\n');
+
+    // The next close cannot move or copy the new state.
+    const second = createCopilotSessionHome(base);
+    assert.ok(second.ok);
+    mkdirSync(stateOf(second.value.home), { recursive: true });
+    writeFileSync(join(stateOf(second.value.home), 'events.jsonl'), 'second\n');
+    const failing = carryCopilotStateOut(base, second.value.home, 'abc-123', {
+      rename: () => {
+        throw new Error('the volume is full');
+      },
+      copy: () => {
+        throw new Error('the volume is full');
+      },
+      remove: (path) => rmSync(path, { recursive: true, force: true }),
+    });
+    assert.equal(failing.ok, false);
+    assert.match(failing.ok ? '' : failing.refusal.detail, /could not be kept: the volume is full/);
+    assert.equal(readFileSync(kept, 'utf8'), 'first\n', 'the older copy was deleted before its replacement');
+
+    // The new state arrives beside the older one, and the last step fails: the older copy is put back.
+    let renames = 0;
+    const lastStepFails = carryCopilotStateOut(base, second.value.home, 'abc-123', {
+      rename: (from, to) => {
+        renames += 1;
+        if (renames === 3) throw new Error('the name is held');
+        renameSync(from, to);
+      },
+      copy: (from, to) => cpSync(from, to, { recursive: true }),
+      remove: (path) => rmSync(path, { recursive: true, force: true }),
+    });
+    assert.equal(lastStepFails.ok, false);
+    assert.equal(readFileSync(kept, 'utf8'), 'first\n', 'the older copy was not put back');
+    assert.deepEqual(
+      readdirSync(join(base, 'state')),
+      ['abc-123'],
+      'something was left beside the kept state',
+    );
+
+    // Control: a close that can, replaces it, and leaves nothing else in the directory.
+    mkdirSync(stateOf(second.value.home), { recursive: true });
+    writeFileSync(join(stateOf(second.value.home), 'events.jsonl'), 'second\n');
+    assert.ok(carryCopilotStateOut(base, second.value.home, 'abc-123').ok);
+    assert.equal(readFileSync(kept, 'utf8'), 'second\n');
+    assert.deepEqual(readdirSync(join(base, 'state')), ['abc-123']);
+    first.value.remove();
+    second.value.remove();
     return Promise.resolve();
   }));
 
