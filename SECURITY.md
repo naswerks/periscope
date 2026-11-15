@@ -667,7 +667,7 @@ stops being true.
 | Node                             | 22 or later, and CI runs 22 and 24 on both Linux and Windows |
 | Codex app-server                 | **0.169.0**, pinned; any other version is listed unavailable |
 | Qwen Code CLI                    | **0.27.3**, pinned; any other version is listed unavailable  |
-| pi                               | **1.2.0**, pinned; any other version is listed unavailable   |
+| pi                               | **1.5.2**, pinned; any other version is listed unavailable   |
 
 The SDK is pre-1.0 and its surface moves without semver protection, so a SHA-256 of the installed
 type definitions is kept in `contracts/sdk.sha256` and a CI job fails on any drift between the installed

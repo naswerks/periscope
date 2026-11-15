@@ -111,6 +111,10 @@ frame it sends decodes unchanged.
   the session's state, closes none of its tool entries, fills no turn item, records no `turn_record` and
   frees no queued prompt, where it errored the session and filed a zero running total. A background
   sub-agent's, written after its call has returned, still reads as the session's turn ending.
+- Changed: pi is pinned at 1.5.2 (was 1.2.0); a CLI that reports any other version, 1.2.0 included, is
+  listed unavailable by name, so the operator installs `@earendil-works/pi-coding-agent@1.5.2` (Node 22.19
+  or later) before a pi session runs. `contracts/pi-names.json` is the 1.5.2 release's, and it names the
+  same events, commands, records, dialogs, deltas and tools as 1.2.0's.
 - Fixed: `scripts/derive-qwen-names.mjs` also reads the service modules the CLI's stream-json path
   imports, so the contract keeps `ui_log`, which the 0.27.3 CLI still emits from its mod session there.
 

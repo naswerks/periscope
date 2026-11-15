@@ -517,8 +517,8 @@ A host offers pi beside Claude when `PERISCOPE_PI_BIN` and `PERISCOPE_PI_HOME` a
 lines on stdin and stdout, and the hello's `agents` lists pi after Claude, Codex and Qwen Code
 ([the wire protocol](protocol.md)).
 
-- **The version is pinned.** This release runs pi 1.2.0 (`PI_PINNED_VERSION`). Install that version
-  (`npm install -g @earendil-works/pi-coding-agent@1.2.0`, which needs Node 22.19 or later) and point
+- **The version is pinned.** This release runs pi 1.5.2 (`PI_PINNED_VERSION`). Install that version
+  (`npm install -g @earendil-works/pi-coding-agent@1.5.2`, which needs Node 22.19 or later) and point
   `PERISCOPE_PI_BIN` at the package's `dist/bundle/cli.js`. A CLI that reports another version, or
   none, is listed unavailable with the path, the version it reports and the version pinned; the host
   still starts, and a session naming `pi` is refused `runtime-unavailable` with that reason. Nothing
@@ -602,7 +602,7 @@ intercepted-with-residual`, or `[codex] codex is listed unavailable` with the re
 periscope's hook was written to the runner's home and answered its probe. A host offering Qwen Code
 prints `[qwen-code] qwen-code 0.27.3, 0 model(s) in the hello, control tier intercepted-with-residual`,
 or `[qwen-code] qwen-code is listed unavailable` with the reason. A host offering pi prints `[pi] pi
-1.2.0, 3 model(s) in the hello, control tier intercepted`, or `[pi] pi is listed unavailable` with the
+1.5.2, 3 model(s) in the hello, control tier intercepted`, or `[pi] pi is listed unavailable` with the
 reason.
 
 A paired host prints `[credential] paired as <hostId> - the paired credential is presented on every

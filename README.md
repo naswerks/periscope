@@ -147,7 +147,7 @@ anything. The figure for a release is in [`CHANGELOG.md`](CHANGELOG.md).
 | Claude Code CLI                  | **2.1.325** (bundled with that SDK)   |
 | Codex app-server                 | **0.169.0**, pinned, when configured  |
 | Qwen Code CLI                    | **0.27.3**, pinned, when configured   |
-| pi CLI                           | **1.2.0**, pinned, when configured    |
+| pi CLI                           | **1.5.2**, pinned, when configured    |
 | Node                             | 22 or later; CI proves 22 and 24      |
 
 The SDK is pre-1.0, so the SHA-256 of its installed type definitions is kept in
