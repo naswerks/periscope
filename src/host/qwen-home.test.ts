@@ -7,6 +7,7 @@ import { withTempDir } from '../test-support/temp-dir.js';
 import {
   createQwenSessionHome,
   inheritedEnvFiles,
+  QWEN_DENIED_TOOLS,
   qwenAskRules,
   qwenSystemSettings,
   readBackQwenSettings,
@@ -24,6 +25,19 @@ test('the settings ask about every tool and every attached server, turn every ho
   assert.deepEqual(settings['skills'], { directories: ['C:/plugins/pack/skills'] });
   assert.deepEqual(settings['modelProviders'], {});
   assert.deepEqual(settings['security'], { folderTrust: { enabled: false } });
+});
+
+test('the settings deny every tool this host turns off, the pull-request helper among them, and each is a tool of the pinned release', () => {
+  const settings = qwenSystemSettings(input) as { permissions: { deny?: string[] } };
+  const deny = settings.permissions.deny ?? [];
+  assert.deepEqual(deny, [...QWEN_DENIED_TOOLS]);
+  assert.ok(
+    deny.includes('autofix_pr'),
+    'autofix_pr pushes and posts under a name no reading of a command sees',
+  );
+  for (const tool of QWEN_DENIED_TOOLS) {
+    assert.ok(QWEN_NAMES.tools.includes(tool), `${tool} is denied but is no tool of ${QWEN_NAMES.release}`);
+  }
 });
 
 test("an endpoint's auth rides the settings, and an Anthropic endpoint lists a provider per model", () => {
@@ -96,6 +110,16 @@ test('control: the read-back refuses a missing rule, hooks left on, a file that 
         }),
       ) ?? '',
       /does not turn every hook off/,
+    );
+    assert.match(
+      readBackQwenSettings(
+        home,
+        home.env,
+        edited((settings) => {
+          delete (settings['permissions'] as { deny?: string[] }).deny;
+        }),
+      ) ?? '',
+      /does not deny autofix_pr/,
     );
     assert.match(readBackQwenSettings(home, home.env, () => 'not json') ?? '', /could not be read back/);
     assert.match(

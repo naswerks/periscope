@@ -88,6 +88,19 @@ frame it sends decodes unchanged.
   usage and no output file for a sub-agent, so neither is stated.
 - Fixed: a Codex sub-agent's fragments name the call that started its thread and keep it: a later call
   about the same agent (a message, a wait, a close) no longer takes the parent over.
+- Changed: Qwen Code is pinned at 0.27.3 (was 0.25.1); a CLI that reports any other version, 0.25.1
+  included, is listed unavailable by name, so the operator installs `@qwen-code/qwen-code@0.27.3` before a
+  Qwen Code session runs. `contracts/qwen-code-names.json` is the 0.27.3 release's: its new system message
+  `mod_prompt` rides the native message only, its two new control requests (`get_workflow_mode`,
+  `set_workflow_mode`) are never sent, and its new tool `autofix_pr` has an ask rule like every other and
+  reads as `other`.
+- Security: a Qwen Code session's settings deny `autofix_pr`, which runs the CLI's own pull-request helpers
+  by name and so pushes a branch or posts a reply under a decision request no reading of a command
+  recognises as a push. A deny outranks every scope's ask and allow, so no repository's rule turns it back
+  on, and the read-back refuses the open `qwen-ask-rules-not-active` when the deny is missing. Turning it
+  back on is a later release's change to `QWEN_DENIED_TOOLS`.
+- Fixed: `scripts/derive-qwen-names.mjs` also reads the service modules the CLI's stream-json path
+  imports, so the contract keeps `ui_log`, which the 0.27.3 CLI still emits from its mod session there.
 
 ## [1.10.0] - 2026-11-11
 

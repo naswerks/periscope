@@ -268,6 +268,35 @@ test('the settings are read back before the CLI starts: a file missing one rule 
   );
 });
 
+test('a settings file that no longer denies the tools this host turns off refuses the open qwen-ask-rules-not-active and starts nothing', async () => {
+  const run = await started({
+    runtime: {
+      readSettings: (path) => {
+        const read = JSON.parse(readFileSync(path, 'utf8')) as { permissions: { deny?: string[] } };
+        delete read.permissions.deny;
+        return JSON.stringify(read);
+      },
+    },
+  });
+  run.process.prompt('never sent');
+  // Whichever comes first, the refusal or the CLI's spawn, is the answer: a spawn is the deny not held.
+  let error: Error | null | undefined;
+  void run.ended.then((ended) => {
+    error = ended;
+  });
+  await waitFor(
+    () => error !== undefined || run.fake.child.spawned !== null,
+    'the open to be refused or the CLI spawned',
+  );
+  if (run.fake.child.spawned !== null) await closed(run);
+  assert.equal(
+    run.fake.child.spawned,
+    null,
+    'the CLI was started though its settings do not deny autofix_pr',
+  );
+  assert.match(String(error?.message), /^qwen-ask-rules-not-active: .*does not deny autofix_pr/);
+});
+
 test('the settings name every built-in tool and every attached server as one to ask about, and turn every hook off', async () => {
   const run = await started({
     request: { mcpServers: { nas: { type: 'http', url: 'https://plane/mcp' } } },

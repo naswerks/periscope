@@ -391,9 +391,17 @@ is the settings file this host writes for each session (`src/host/qwen-home.ts`)
   `scripts/derive-qwen-names.mjs`) and `mcp__<server>` for each attached server; `disableAllHooks`
   turns off every hook a settings file could add. The operator's own `~/.qwen` is never the session's
   home.
+- **One tool is turned off** (`QWEN_DENIED_TOOLS`, `src/host/qwen-home.ts`). `autofix_pr` runs the CLI's
+  own pull-request helpers by name (`push`, `reply` and `rerun` among them), so a call to it pushes a
+  branch or posts a reply while its decision request names only the tool and a helper, which no shell
+  rule and no reading of a command recognises as a push. The session's settings deny it: the CLI merges
+  each scope's rules into one list per kind and weighs a deny before any ask or allow, so no repository's
+  rule turns it back on, and a tool a whole-tool deny names is never registered. Turning it back on is a
+  later release's change to that list, once a decision request can say what such a call publishes.
 - **Read back before the CLI starts.** The host reads the file back through the environment the CLI
-  will start with: the environment names it, it parses, its ask rules cover every name, and its hooks
-  are off. Anything else refuses the open `qwen-ask-rules-not-active`, and no process starts.
+  will start with: the environment names it, it parses, its ask rules cover every name, it denies every
+  tool turned off, and its hooks are off. Anything else refuses the open `qwen-ask-rules-not-active`, and
+  no process starts.
   `QWEN_CODE_SAFE_MODE`, which would drop every rule, is removed from the CLI's environment.
 - **One decision per call** (`src/host/qwen-gate.ts`). A `can_use_tool` request becomes a
   `DecisionRequest` (`toolName`, `tool_use_id`, the input, the session id, the call's own directory

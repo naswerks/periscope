@@ -5,7 +5,8 @@ import type { DecisionRequest } from './decision.js';
 import type { PathResolver } from './jail.js';
 import { localGate, QWEN_TOOL_FAMILIES } from './local.js';
 import { parseCommand, readCmdCommand } from './command.js';
-import { qwenShellDialect, qwenToolKind } from './tool-kind.js';
+import { QWEN_TOOL_KINDS, qwenShellDialect, qwenToolKind } from './tool-kind.js';
+import { QWEN_NAMES } from '../host/qwen-names.js';
 
 const WORK = 'C:/work/session-1';
 const CREDS = 'C:/Users/op/.qwen/oauth_creds.json';
@@ -190,4 +191,82 @@ test('the dialect is the shell the CLI picks from its environment: Git Bash, Pow
   assert.equal(qwenShellDialect('win32', { MSYSTEM: 'MINGW64', ComSpec: 'pwsh.exe' }), 'posix');
   assert.equal(qwenShellDialect('win32', { TERM: 'cygwin' }), 'posix');
   assert.equal(qwenShellDialect('win32', { TERM: 'xterm-256color' }), 'cmd');
+});
+
+/**
+ * The tools of the pinned release that run no command and name no path this gate reads, each stated
+ * `other` by name: a tool the release adds must land here or in `QWEN_TOOL_KINDS`, never in `other` by
+ * default. `autofix_pr` runs the CLI's own pull-request helpers by name, so its input is no command line.
+ */
+const QWEN_OTHER_TOOLS = [
+  'exec',
+  'todo_write',
+  'save_memory',
+  'manage_memory',
+  'search_memory',
+  'agent',
+  'skill',
+  'exit_plan_mode',
+  'enter_plan_mode',
+  'image_gen',
+  'lsp',
+  'ask_user_question',
+  'cron_create',
+  'cron_list',
+  'cron_delete',
+  'autofix_pr',
+  'loop_wakeup',
+  'create_sub_session',
+  'list_agents',
+  'task_stop',
+  'task_create',
+  'task_update',
+  'task_list',
+  'team_create',
+  'team_delete',
+  'team_plan_approval',
+  'request_shutdown',
+  'send_message',
+  'structured_output',
+  'tool_call',
+  'tool_search',
+  'read_mcp_resource',
+  'advisor',
+  'enter_worktree',
+  'exit_worktree',
+  'workflow',
+  'artifact',
+  'record_artifact',
+  'record_source',
+  'report_findings',
+  'get_goal',
+  'update_goal',
+  'omni_downsample_image',
+  'omni_downscale_video',
+  'omni_downsample_audio',
+  'omni_extract_keyframes',
+  'omni_extract_audio',
+  'omni_clip_video',
+  'omni_convert_image',
+  'omni_transcribe_audio',
+  'omni_clip_image',
+  'omni_clip_audio',
+  'omni_caption_image',
+  'omni_caption_audio',
+  'omni_ocr_image',
+  'omni_understand_video_segments',
+  'omni_recall_media_memory',
+  'propose_goal',
+];
+
+test('every tool of the pinned release has its kind stated: a row of its own, or other by name', () => {
+  const stated = new Set([...Object.keys(QWEN_TOOL_KINDS), ...QWEN_OTHER_TOOLS]);
+  const unstated = QWEN_NAMES.tools.filter((tool) => !stated.has(tool));
+  assert.deepEqual(unstated, [], `${QWEN_NAMES.release} has tools whose kind is stated nowhere`);
+  const gone = [...stated].filter((tool) => !QWEN_NAMES.tools.includes(tool));
+  assert.deepEqual(gone, [], `kinds stated for tools ${QWEN_NAMES.release} does not have`);
+  for (const tool of QWEN_OTHER_TOOLS) {
+    assert.equal(Object.hasOwn(QWEN_TOOL_KINDS, tool), false, `${tool} is both other and a row`);
+    assert.equal(qwenToolKind(tool), 'other', tool);
+  }
 });

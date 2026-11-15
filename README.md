@@ -146,7 +146,7 @@ anything. The figure for a release is in [`CHANGELOG.md`](CHANGELOG.md).
 | `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret |
 | Claude Code CLI                  | **2.1.325** (bundled with that SDK)   |
 | Codex app-server                 | **0.169.0**, pinned, when configured  |
-| Qwen Code CLI                    | **0.25.1**, pinned, when configured   |
+| Qwen Code CLI                    | **0.27.3**, pinned, when configured   |
 | pi CLI                           | **1.2.0**, pinned, when configured    |
 | Node                             | 22 or later; CI proves 22 and 24      |
 

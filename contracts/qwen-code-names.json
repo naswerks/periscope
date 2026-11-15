@@ -1,6 +1,6 @@
 {
-  "release": "v0.25.1",
-  "version": "0.25.1",
+  "release": "v0.27.3",
+  "version": "0.27.3",
   "tools": [
     "exec",
     "edit",
@@ -27,6 +27,7 @@
     "cron_create",
     "cron_list",
     "cron_delete",
+    "autofix_pr",
     "loop_wakeup",
     "create_sub_session",
     "list_agents",
@@ -93,6 +94,7 @@
   ],
   "systemSubtypes": [
     "task_notification",
+    "mod_prompt",
     "worktree_started",
     "worktree_restored",
     "task_started",
@@ -102,9 +104,9 @@
     "vision_bridge_failed",
     "session_recording_degraded",
     "model_fallback",
-    "ui_log",
     "init",
-    "continue_turn_failed"
+    "continue_turn_failed",
+    "ui_log"
   ],
   "streamEvents": [
     "message_stop",
@@ -125,6 +127,8 @@
     "interrupt",
     "continue_last_turn",
     "set_model",
+    "get_workflow_mode",
+    "set_workflow_mode",
     "set_effort",
     "supported_commands",
     "get_context_usage",

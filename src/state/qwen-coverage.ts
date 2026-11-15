@@ -87,6 +87,10 @@ export const QWEN_MESSAGE_COVERAGE = {
     note: 'a warning notice item: the CLI could not record the session, so a later resume may find nothing',
   },
   'system/ui_log': { handling: 'declined', note: `${NATIVE_ONLY}: a mod's log line; this host loads none` },
+  'system/mod_prompt': {
+    handling: 'declined',
+    note: `${NATIVE_ONLY}: the mark after a mod's own prompt; this host loads none`,
+  },
 } as const satisfies Readonly<Record<string, CoverageRow>>;
 
 /** Each event a `stream_event` carries, when the session asked for partial messages. */
@@ -150,6 +154,11 @@ export const QWEN_ANSWER_COVERAGE = {
     note: `${NEVER_SENT}: a session's models are its endpoint's`,
   },
   get_usage_info: { handling: 'declined', note: NEVER_SENT },
+  get_workflow_mode: { handling: 'declined', note: `${NEVER_SENT}: this host sets no workflow mode` },
+  set_workflow_mode: {
+    handling: 'declined',
+    note: `${NEVER_SENT}: workflow mode steers the model toward a workflow tool and decides no call`,
+  },
   can_use_tool: { handling: 'declined', note: `${NEVER_SENT}: the CLI asks it of this host` },
   mcp_server_status: {
     handling: 'declined',

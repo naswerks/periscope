@@ -462,8 +462,8 @@ set. Then a `session_new` naming `runtime: "qwen-code"` runs the Qwen Code CLI i
 directory, driven over its stream-json control protocol on stdin and stdout, and the hello's `agents`
 lists Qwen Code after Claude and Codex ([the wire protocol](protocol.md)).
 
-- **The version is pinned.** This release runs Qwen Code 0.25.1 (`QWEN_PINNED_VERSION`). Install that
-  version (`npm install -g @qwen-code/qwen-code@0.25.1`) and point `PERISCOPE_QWEN_BIN` at the
+- **The version is pinned.** This release runs Qwen Code 0.27.3 (`QWEN_PINNED_VERSION`). Install that
+  version (`npm install -g @qwen-code/qwen-code@0.27.3`) and point `PERISCOPE_QWEN_BIN` at the
   package's `cli-entry.js`. A CLI that reports another version, or none, is listed unavailable with
   the path, the version it reports and the version pinned; the host still starts, and a session naming
   `qwen-code` is refused `runtime-unavailable` with that reason. Nothing installs or updates it.
@@ -600,7 +600,7 @@ a model without mapping it, which a session naming it is refused (`model-endpoin
 offering Codex prints `[codex] codex 0.169.0, 6 model(s) in the hello, control tier
 intercepted-with-residual`, or `[codex] codex is listed unavailable` with the reason, and then whether
 periscope's hook was written to the runner's home and answered its probe. A host offering Qwen Code
-prints `[qwen-code] qwen-code 0.25.1, 0 model(s) in the hello, control tier intercepted-with-residual`,
+prints `[qwen-code] qwen-code 0.27.3, 0 model(s) in the hello, control tier intercepted-with-residual`,
 or `[qwen-code] qwen-code is listed unavailable` with the reason. A host offering pi prints `[pi] pi
 1.2.0, 3 model(s) in the hello, control tier intercepted`, or `[pi] pi is listed unavailable` with the
 reason.
