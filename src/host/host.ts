@@ -816,6 +816,7 @@ function composeCopilotSession(
       observer.refused({ kind: 'refusal', event: name, detail });
       options.onRefusal?.(refusal(name, detail));
     },
+    onDegradePastCap: (name, detail) => options.onRefusal?.(refusal(name, detail)),
     onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
     ...spawnedWithOf(options),
   });

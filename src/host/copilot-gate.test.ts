@@ -11,6 +11,7 @@ import {
   COPILOT_MEASURED_PERMISSION_WAIT_MS,
   COPILOT_PROBE_ID_PREFIX,
   copilotAnswerOf,
+  MAX_RAISED_DEGRADES,
   copilotDeadlineOrderRefusal,
   copilotMcpToolName,
   createCopilotSessionGate,
@@ -390,6 +391,35 @@ test('a mode a sub-agent reports is said of that sub-agent, by its id, and never
   // Control: an admitted mode is nothing to name, whoever reports it.
   run.built.observe(fromAgent('session.mode_changed', { newMode: 'plan', previousMode: 'interactive' }));
   assert.equal(run.raised.length, 3);
+});
+
+test("a degrade past the session's cap is kept off its lane and still reaches the host's log, each time it occurs", () => {
+  const onLane: string[] = [];
+  const logged: string[] = [];
+  const built = createCopilotSessionGate({
+    sessionKey: 'k',
+    cwd: 'C:/work',
+    decide: allow,
+    decisionTimeoutMs: 1_000,
+    holdAfterMs: 10_000,
+    servers: [],
+    onOutcome: () => undefined,
+    onDegrade: (_name, detail) => onLane.push(detail),
+    onDegradePastCap: (name, detail) => logged.push(`${name}: ${detail}`),
+    onSpawnDegrades: () => undefined,
+  });
+  for (let index = 0; index < MAX_RAISED_DEGRADES; index += 1) {
+    built.raise('gate-hook-missing', `call ${index}`, `call_${index}`);
+  }
+  assert.equal(onLane.length, MAX_RAISED_DEGRADES);
+  assert.deepEqual(logged, [], 'a degrade under the cap went to the log alone');
+  built.raise('gate-unhooked-call', 'one more', 'call_past');
+  built.raise('gate-unhooked-call', 'one more', 'call_past');
+  assert.equal(onLane.length, MAX_RAISED_DEGRADES, 'the lane took a degrade past its cap');
+  assert.deepEqual(logged, ['gate-unhooked-call: one more', 'gate-unhooked-call: one more']);
+  // One raised before the cap is still said once.
+  built.raise('gate-hook-missing', 'call 0', 'call_0');
+  assert.equal(logged.length, 2);
 });
 
 test('a decided call that ran raises nothing', async () => {
