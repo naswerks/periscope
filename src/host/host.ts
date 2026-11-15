@@ -576,6 +576,7 @@ function composeCodexSession(
       observer.refused({ kind: 'refusal', event: name, detail });
       options.onRefusal?.(refusal(name, detail));
     },
+    onDegradePastCap: (name, detail) => options.onRefusal?.(refusal(name, detail)),
     onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
     onChannelRefused: (detail) => reportChannel(detail),
     ...spawnedWithOf(options),
@@ -660,6 +661,7 @@ function composeQwenSession(
       observer.refused({ kind: 'refusal', event: name, detail });
       options.onRefusal?.(refusal(name, detail));
     },
+    onDegradePastCap: (name, detail) => options.onRefusal?.(refusal(name, detail)),
     onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
     ...spawnedWithOf(options),
   });
@@ -736,6 +738,7 @@ function composePiSession(
       observer.refused({ kind: 'refusal', event: name, detail });
       options.onRefusal?.(refusal(name, detail));
     },
+    onDegradePastCap: (name, detail) => options.onRefusal?.(refusal(name, detail)),
     onSpawnDegrades: (names, level) => observer.stateSpawnDegrades(names, level),
     onChannelRefused: (detail) => reportChannel(detail),
     ...spawnedWithOf(options),
@@ -901,6 +904,7 @@ function composeOpencodeSession(
       observer.refused({ kind: 'refusal', event: name, detail });
       options.onRefusal?.(refusal(name, detail));
     },
+    onDegradePastCap: (name, detail) => options.onRefusal?.(refusal(name, detail)),
     onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
     ...spawnedWithOf(options),
   });

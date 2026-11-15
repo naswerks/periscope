@@ -33,6 +33,7 @@ import { fakeAgents } from '../test-support/fake-agent.js';
 import { FAKE_HOOK_HASH, FAKE_MODELS, fakeCodex } from '../test-support/fake-codex.js';
 import type { FakeCodex, FakeCodexOptions } from '../test-support/fake-codex.js';
 import type { CodexSessionGate } from './codex-gate.js';
+import { MAX_RAISED_DEGRADES, createCodexSessionGate } from './codex-gate.js';
 import { CODEX_HOME_VARIABLE } from './codex-process.js';
 import { availableCodexEntry, codexHostModel } from './codex-runtime.js';
 import type { HostLink } from './host.js';
@@ -90,6 +91,40 @@ async function until(check: () => boolean, what: string, ms = 4000): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
 }
+
+test("a degrade past the session's cap is kept off its lane and still reaches the host's log, each time it occurs", () => {
+  const onLane: string[] = [];
+  const logged: string[] = [];
+  const built = createCodexSessionGate({
+    sessionKey: 'k',
+    cwd: 'C:/work',
+    decide: () => Promise.resolve({ behavior: 'allow' }),
+    decisionTimeoutMs: 1_000,
+    holdAfterMs: 10_000,
+    hooksPath: 'C:/runner/codex-home/hooks.json',
+    version: 'test',
+    onOutcome: () => undefined,
+    onDegrade: (_name, detail) => onLane.push(detail),
+    onDegradePastCap: (name, detail) => logged.push(`${name}: ${detail}`),
+    onSpawnDegrades: () => undefined,
+  });
+  try {
+    for (let index = 0; index < MAX_RAISED_DEGRADES; index += 1) {
+      built.raise('gate-hook-missing', `call ${index}`, `call_${index}`);
+    }
+    assert.equal(onLane.length, MAX_RAISED_DEGRADES);
+    assert.deepEqual(logged, [], 'a degrade under the cap went to the log alone');
+    built.raise('gate-unhooked-call', 'one more', 'call_past');
+    built.raise('gate-unhooked-call', 'one more', 'call_past');
+    assert.equal(onLane.length, MAX_RAISED_DEGRADES, 'the lane took a degrade past its cap');
+    assert.deepEqual(logged, ['gate-unhooked-call: one more', 'gate-unhooked-call: one more']);
+    // One raised before the cap is still said once.
+    built.raise('gate-hook-missing', 'call 0', 'call_0');
+    assert.equal(logged.length, 2);
+  } finally {
+    built.close();
+  }
+});
 
 /** A host with Codex on a fake app-server, its decider recording what it is asked. */
 async function gateHost(

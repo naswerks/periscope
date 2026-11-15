@@ -7,6 +7,7 @@ import type { Decider, DecisionRequest } from '../gate/decision.js';
 import type { GateOutcome } from '../gate/outcome.js';
 import { isCodexSessionGate } from './codex-gate.js';
 import {
+  MAX_RAISED_DEGRADES,
   QWEN_MAX_PERMISSION_TIMEOUT_MS,
   createQwenSessionGate,
   isQwenSessionGate,
@@ -193,6 +194,35 @@ test("a call to a tool the session's settings deny is refused by name and nobody
     run.requests.map((request) => request.toolName),
     ['exec', 'read_file'],
   );
+});
+
+test("a degrade past the session's cap is kept off its lane and still reaches the host's log, each time it occurs", () => {
+  const onLane: string[] = [];
+  const logged: string[] = [];
+  const built = createQwenSessionGate({
+    sessionKey: 'k',
+    cwd: 'C:/work',
+    decide: () => Promise.resolve({ behavior: 'allow' }),
+    decisionTimeoutMs: 1_000,
+    holdAfterMs: 10_000,
+    askRules: [],
+    onOutcome: () => undefined,
+    onDegrade: (_name, detail) => onLane.push(detail),
+    onDegradePastCap: (name, detail) => logged.push(`${name}: ${detail}`),
+    onSpawnDegrades: () => undefined,
+  });
+  for (let index = 0; index < MAX_RAISED_DEGRADES; index += 1) {
+    built.raise('gate-hook-missing', `call ${index}`, `call_${index}`);
+  }
+  assert.equal(onLane.length, MAX_RAISED_DEGRADES);
+  assert.deepEqual(logged, [], 'a degrade under the cap went to the log alone');
+  built.raise('gate-unhooked-call', 'one more', 'call_past');
+  built.raise('gate-unhooked-call', 'one more', 'call_past');
+  assert.equal(onLane.length, MAX_RAISED_DEGRADES, 'the lane took a degrade past its cap');
+  assert.deepEqual(logged, ['gate-unhooked-call: one more', 'gate-unhooked-call: one more']);
+  // One raised before the cap is still said once.
+  built.raise('gate-hook-missing', 'call 0', 'call_0');
+  assert.equal(logged.length, 2);
 });
 
 test('a widened mode is named once per mode; default and plan are not', () => {

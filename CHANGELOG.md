@@ -297,6 +297,9 @@ frame it sends decodes unchanged.
   it never arrived. Such a detail is now cut by as much as the transition is over and says it was cut;
   a transition that fits is sent as before.
 - Fixed: a text or a word a fact carries is never cut inside a character that takes two code units.
+- Fixed: a degrade past the 4096 a Codex, a Qwen Code, a pi or an opencode session's state lane keeps
+  reaches the host's log, each time it occurs, as a Copilot session's does. It was dropped before
+  anything heard of it.
 - Fixed, in a Copilot session:
   - a degrade past the 4096 a session's state lane keeps reaches the host's log, each time it occurs;
     it was dropped before anything heard of it;

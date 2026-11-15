@@ -39,8 +39,11 @@ import { openHookChannel } from './hook-channel.js';
 import type { PiHello, PiHelloEntry } from './pi-extension.js';
 import { PI_NAMES } from './pi-names.js';
 
-/** How many distinct degrades one session raises at most; past it, the host's own log still has each. */
-const MAX_RAISED_DEGRADES = 4096;
+/**
+ * How many distinct degrades one session raises on its state lane at most. One past it is handed to
+ * `onDegradePastCap` instead, each time it occurs, so the host's own log still has it.
+ */
+export const MAX_RAISED_DEGRADES = 4096;
 
 /** The level a session's opening tier drops to when a degrade is known at its open. */
 export const PI_DEGRADED_LEVEL: ControlTierLevel = 'intercepted-with-residual';
@@ -85,6 +88,8 @@ export interface PiSessionGateOptions {
   readonly onOutcome: (outcome: GateOutcome) => void;
   /** A degrade for the session's state lane. */
   readonly onDegrade: (name: RefusalReason, detail: string) => void;
+  /** A degrade the session's lane takes no more of: for the host's log alone. */
+  readonly onDegradePastCap?: (name: RefusalReason, detail: string) => void;
   /** The degrades known at the open, and the level the opening tier drops to with them. */
   readonly onSpawnDegrades: (names: readonly RefusalReason[], level: ControlTierLevel) => void;
   /** A request the channel refused before deciding anything. */
@@ -223,7 +228,15 @@ export function createPiSessionGate(options: PiSessionGateOptions): PiSessionGat
 
   const raise = (name: RefusalReason, detail: string, key: string): void => {
     const id = `${name}\u0000${key}`;
-    if (raised.has(id) || raised.size >= MAX_RAISED_DEGRADES) return;
+    if (raised.has(id)) return;
+    if (raised.size >= MAX_RAISED_DEGRADES) {
+      try {
+        options.onDegradePastCap?.(name, detail);
+      } catch {
+        // A log that throws must not stop the gate answering the call this was raised beside.
+      }
+      return;
+    }
     raised.add(id);
     try {
       options.onDegrade(name, detail);

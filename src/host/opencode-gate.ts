@@ -112,8 +112,11 @@ export interface OpencodeAnswer {
 const MAX_KNOWN_CALLS = 2048;
 /** How many decided call ids one session keeps, to tell a decided call from an undecided one. */
 const MAX_DECIDED_IDS = 8192;
-/** How many distinct degrades one session raises at most; past it, the host's own log still has each. */
-const MAX_RAISED_DEGRADES = 4096;
+/**
+ * How many distinct degrades one session raises on its state lane at most. One past it is handed to
+ * `onDegradePastCap` instead, each time it occurs, so the host's own log still has it.
+ */
+export const MAX_RAISED_DEGRADES = 4096;
 
 /** What the runtime is told for one terminal outcome. There are always words, so the turn goes on. */
 export function opencodeAnswerOf(outcome: TerminalOutcome): OpencodeAnswer {
@@ -254,6 +257,8 @@ export interface OpencodeSessionGateOptions {
   readonly onOutcome: (outcome: GateOutcome) => void;
   /** A degrade for the session's state lane. */
   readonly onDegrade: (name: RefusalReason, detail: string) => void;
+  /** A degrade the session's lane takes no more of: for the host's log alone. */
+  readonly onDegradePastCap?: (name: RefusalReason, detail: string) => void;
   /** The degrades known at the open, for the opening tier. */
   readonly onSpawnDegrades: (names: readonly RefusalReason[]) => void;
   /** Told every environment the session's host process is started with, for the local gate. */
@@ -307,7 +312,15 @@ export function createOpencodeSessionGate(options: OpencodeSessionGateOptions): 
 
   const raise = (name: RefusalReason, detail: string, key: string): void => {
     const id = `${name}\u0000${key}`;
-    if (raised.has(id) || raised.size >= MAX_RAISED_DEGRADES) return;
+    if (raised.has(id)) return;
+    if (raised.size >= MAX_RAISED_DEGRADES) {
+      try {
+        options.onDegradePastCap?.(name, detail);
+      } catch {
+        // A log that throws must not stop the gate answering the call this was raised beside.
+      }
+      return;
+    }
     raised.add(id);
     try {
       options.onDegrade(name, detail);
