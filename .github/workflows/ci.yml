@@ -236,6 +236,28 @@ jobs:
             console.log('imports ok: protocol v' + protocol.PROTOCOL_VERSION);
           "
 
+      # The Copilot SDK is the operator's own install, never this package's: in a project without it the
+      # package resolves nothing of it, the adapter still loads, and the read at start lists Copilot
+      # unavailable with the reason.
+      - name: copilot without its SDK
+        shell: bash
+        run: |
+          cd "${RUNNER_TEMP}/consumer"
+          if [ -d node_modules/@github ]; then echo "the tarball installed @github packages: $(ls node_modules/@github)"; exit 1; fi
+          node --input-type=module -e "
+            const { pathToFileURL } = await import('node:url');
+            const { mkdtempSync } = await import('node:fs');
+            const { tmpdir } = await import('node:os');
+            const { join } = await import('node:path');
+            const adapter = join(process.cwd(), 'node_modules', '@naswerks', 'periscope', 'dist', 'host', 'copilot-runtime.js');
+            const { readCopilotRuntime } = await import(pathToFileURL(adapter).href);
+            const scratch = mkdtempSync(join(tmpdir(), 'periscope-copilot-'));
+            const read = await readCopilotRuntime({ sdk: join(scratch, 'sdk'), base: join(scratch, 'home') });
+            if (read.entry.available !== false) throw new Error('copilot is listed available with no SDK installed');
+            if (!/no @github\/copilot-sdk is installed/.test(read.entry.unavailableReason ?? '')) throw new Error('the reason is not said: ' + read.entry.unavailableReason);
+            console.log('copilot without its SDK: available false: ' + read.entry.unavailableReason);
+          "
+
   # ---------------------------------------------------------------------------------------------
   # Mutation testing. Runs on the schedule and on a manual dispatch only: it is minutes of compute
   # per file under mutation and its output is a score, not a pass. `thresholds.break` is null, so

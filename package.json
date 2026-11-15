@@ -44,6 +44,7 @@
     "contracts/codex-protocol-names.json",
     "contracts/qwen-code-names.json",
     "contracts/pi-names.json",
+    "contracts/copilot-names.json",
     "docs/",
     "examples/",
     "README.md",
@@ -93,6 +94,7 @@
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
     "@eslint/js": "^10.0.1",
+    "@github/copilot-sdk": "1.0.34",
     "@stryker-mutator/core": "^10.0.0",
     "@types/node": "^22.19.0",
     "@types/ws": "^8.18.1",
