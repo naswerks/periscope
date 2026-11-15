@@ -157,6 +157,8 @@ test("the runtime's environment holds no GitHub token and no COPILOT_ variable, 
       github_token: 'b',
       GH_ENTERPRISE_TOKEN: 'c',
       GITHUB_ENTERPRISE_TOKEN: 'd',
+      GH_HOST: 'github.example.com',
+      gh_host: 'github.example.com',
       COPILOT_GITHUB_TOKEN: 'e',
       Copilot_Cli_Path: 'C:/other/copilot.exe',
       COPILOT_HOME: 'C:/Users/me/.copilot',
@@ -200,9 +202,48 @@ test('the token provider reads the file at each acquisition, trimmed, and says i
     );
     writeFileSync(file, '  \n');
     assert.deepEqual(await provide({ host: 'https://github.com', reason: 'refresh' }), { kind: 'cancelled' });
-    assert.deepEqual(await copilotTokenProvider(join(dir, 'absent'))({ host: 'h', reason: 'r' }), {
-      kind: 'cancelled',
-    });
+    assert.deepEqual(
+      await copilotTokenProvider(join(dir, 'absent'))({ host: 'https://github.com', reason: 'r' }),
+      { kind: 'cancelled' },
+    );
+  }));
+
+test("the operator's token is given for github.com alone: asked for any other host the provider gives nothing, never reads the file, and says which host asked", () =>
+  withTempDir('copilot-token-host', async (dir) => {
+    const file = join(dir, 'token');
+    writeFileSync(file, 'gho_operator');
+    const read: string[] = [];
+    const asked: string[] = [];
+    const provide = copilotTokenProvider(
+      file,
+      (path) => {
+        read.push(path);
+        return 'gho_operator';
+      },
+      (host) => asked.push(host),
+    );
+    for (const host of [
+      'https://github.example.com',
+      'https://github.com.example.net',
+      'https://ghe.corp.example',
+      'evil.example',
+      '',
+    ]) {
+      assert.deepEqual(await provide({ host, reason: 'startup' }), { kind: 'cancelled' }, host);
+    }
+    assert.deepEqual(read, [], 'the token file was read for a host the token is not for');
+    assert.deepEqual(asked, [
+      'https://github.example.com',
+      'https://github.com.example.net',
+      'https://ghe.corp.example',
+      'evil.example',
+      '',
+    ]);
+    // Control: github.com, however the runtime spells it, is given the token.
+    for (const host of ['https://github.com', 'https://github.com/', 'github.com', 'HTTPS://GitHub.com']) {
+      assert.equal((await provide({ host, reason: 'startup' })).kind, 'token', host);
+    }
+    assert.equal(asked.length, 5);
   }));
 
 test('the lifetime a handed-over token is said to have clears the hour the runtime demands once it has checked the token', () => {

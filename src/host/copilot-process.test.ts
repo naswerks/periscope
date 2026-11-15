@@ -743,6 +743,33 @@ test('an install off the pin is refused before anything starts', async () => {
   await rm(run.base, { recursive: true, force: true });
 });
 
+test('a token the runtime asks for another GitHub host is not given, and the session says which host asked', async () => {
+  const dir = await tempDir('copilot-token-host');
+  const tokenFile = join(dir, 'token');
+  writeFileSync(tokenFile, TOKEN);
+  const run = await started({
+    request: { env: { PATH: 'p', GH_HOST: 'github.example.com' } },
+    runtime: { tokenFile },
+  });
+  await waitFor(() => opened(run), 'the open');
+  assert.equal(run.record.connections[0]?.env['GH_HOST'], undefined, 'the host variable reached the runtime');
+  const provide = run.record.configs[0]?.gitHubTokenProvider;
+  assert.deepEqual(await provide?.({ host: 'https://github.example.com', reason: 'startup' }), {
+    kind: 'cancelled',
+  });
+  assert.ok(
+    run.degrades.some((detail) =>
+      /asked for a GitHub token for https:\/\/github\.example\.com; the operator's token is given for github\.com alone/.test(
+        detail,
+      ),
+    ),
+    run.degrades.join(' | '),
+  );
+  assert.equal((await provide?.({ host: 'https://github.com', reason: 'refresh' }))?.kind, 'token');
+  await closed(run);
+  await rm(dir, { recursive: true, force: true });
+});
+
 test('the runtime process id is read only from a process that is still running', () => {
   const holding = (child: unknown): CopilotClient => ({ cliProcess: child }) as unknown as CopilotClient;
   assert.equal(copilotRuntimePid(holding({ pid: 7, exitCode: null, signalCode: null })), 7);

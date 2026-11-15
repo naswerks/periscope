@@ -616,7 +616,9 @@ the other runtimes ([the wire protocol](protocol.md)).
   its settings, its sessions) is never what a session runs from. The home is removed when the session
   closes; its state moves to `<base>/state/<session id>`, which a resume copies back.
 - **The sign-in.** A session signs in with the token in `PERISCOPE_COPILOT_TOKEN_FILE`, read each time
-  the runtime asks and handed over the SDK's own pipe. The token is said to last eight hours, the
+  the runtime asks and handed over the SDK's own pipe. The token is given for `github.com` alone: a
+  runtime that asks for a token for another GitHub host is given none, and `GH_HOST` never reaches the
+  runtime's environment. A sign-in to an enterprise host is not offered. The token is said to last eight hours, the
   lifetime the SDK gives production tokens, and the runtime asks again before then; a file that is
   empty or gone when it asks refuses the session's open, since the runtime never falls back to another
   sign-in. No token is ever placed in the runtime's

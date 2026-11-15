@@ -17,7 +17,8 @@
  *   every GitHub token variable and every `COPILOT_` name, its caches pointed into the home. The runtime
  *   hands that environment whole to every command the agent runs, so a credential reaches it only over the
  *   SDK's own pipe: a GitHub token from the operator's token file (`gitHubTokenProvider`), read at each
- *   acquisition, or an endpoint's key in the session's `provider`.
+ *   acquisition and given for `github.com` alone, or an endpoint's key in the session's `provider`. The
+ *   variable that names another GitHub host (`GH_HOST`) is taken out of the runtime's environment too.
  * - **The open, proven before any prompt.** The session is created in the `manual` permission mode with
  *   this host's pre-tool hook and permission handler (`copilot-gate.ts`). Then the runtime is read back
  *   (`copilotReadBackProblem`), and one probe call is run through it: `view` on the session's own directory,
@@ -452,7 +453,11 @@ export function startCopilotProcess(
       provider: route === null ? null : copilotProvider(route),
       tokenProvider:
         route === null && runtime.tokenFile !== undefined && runtime.tokenFile !== null
-          ? copilotTokenProvider(runtime.tokenFile)
+          ? copilotTokenProvider(runtime.tokenFile, undefined, (host) =>
+              degrade(
+                `the Copilot runtime asked for a GitHub token for ${host === '' ? 'a host it did not name' : host}; the operator's token is given for github.com alone, so none was given`,
+              ),
+            )
           : null,
       onEvent,
       signal: decisions.signal,

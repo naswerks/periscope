@@ -201,6 +201,10 @@ frame it sends decodes unchanged.
 - Added: a Copilot session's `decisionTimeoutMs` may be at most 240,000ms, the wait the runtime was
   measured holding a permission request with no timeout of its own; a longer one is refused
   `gate-deadlines-inverted`.
+- Security: a Copilot session signs in to `github.com` alone. The operator's token is given only when
+  the runtime asks for that host, and `GH_HOST` is taken out of the runtime's environment as the GitHub
+  token variables are, so a controller an operator lets set `GH_HOST` cannot have the token sent to a
+  host of its choosing.
 - Added: `PERISCOPE_COPILOT_SDK`, `PERISCOPE_COPILOT_HOME` and `PERISCOPE_COPILOT_TOKEN_FILE`, config-file
   keys never settable over the link. The token is read from the file when the runtime asks for it and
   handed over the SDK's pipe; an endpoint whose `runtimes` name `copilot` is the session's own provider,

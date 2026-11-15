@@ -155,15 +155,17 @@ export function carryCopilotStateIn(base: string, home: string, sessionId: strin
 
 /**
  * The variables never handed to the runtime: each is a GitHub credential the runtime or the agent's shell
- * would read (the runtime hands its whole environment to the agent's shell), or the variable that would
- * swap the pinned runtime for another. Matched without regard to case, as Windows matches names. Every
- * `COPILOT_` name goes too; the SDK sets the two it needs itself (`COPILOT_HOME`, `COPILOT_DISABLE_KEYTAR`).
+ * would read (the runtime hands its whole environment to the agent's shell), the variable that names
+ * which GitHub host a sign-in is for, or the variable that would swap the pinned runtime for another.
+ * Matched without regard to case, as Windows matches names. Every `COPILOT_` name goes too; the SDK sets
+ * the two it needs itself (`COPILOT_HOME`, `COPILOT_DISABLE_KEYTAR`).
  */
 export const COPILOT_STRIPPED_VARIABLES: readonly string[] = [
   'GH_TOKEN',
   'GITHUB_TOKEN',
   'GH_ENTERPRISE_TOKEN',
   'GITHUB_ENTERPRISE_TOKEN',
+  'GH_HOST',
 ];
 
 /** Whether `name` is one this host never hands the runtime. */
@@ -196,16 +198,40 @@ export function copilotRuntimeEnv(
  */
 export const COPILOT_TOKEN_LIFETIME_SECONDS = 8 * 60 * 60;
 
+/** The one GitHub host the operator's token is given for. */
+export const COPILOT_TOKEN_HOST = 'github.com';
+
+/** A host as the runtime names it (`https://github.com`, `github.com/`), as its bare name in lower case. */
+function hostNameOf(host: unknown): string {
+  if (typeof host !== 'string') return '';
+  return host
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/+$/, '');
+}
+
 /**
  * The session-level token provider: the operator's token file, read at each acquisition, so a rotated token
  * is taken without a restart. The token crosses the SDK's own pipe and never the runtime's environment. A
- * missing or empty file answers that there is nothing to give.
+ * missing or empty file answers that there is nothing to give. The token is the operator's sign-in to
+ * `github.com`, so it is given for that host alone: asked for any other, the provider gives nothing and
+ * tells `onOtherHost` which host asked.
  */
 export function copilotTokenProvider(
   file: string,
   read: (path: string) => string = (path) => readFileSync(path, 'utf8'),
+  onOtherHost: (host: string) => void = () => undefined,
 ): (request: CopilotTokenRequest) => Promise<CopilotTokenAnswer> {
-  return (): Promise<CopilotTokenAnswer> => {
+  return (request): Promise<CopilotTokenAnswer> => {
+    if (hostNameOf(request.host) !== COPILOT_TOKEN_HOST) {
+      try {
+        onOtherHost(typeof request.host === 'string' ? request.host : '');
+      } catch {
+        // Saying which host asked must not turn a refusal to answer into a thrown one.
+      }
+      return Promise.resolve({ kind: 'cancelled' });
+    }
     let token: string;
     try {
       token = read(file).trim();

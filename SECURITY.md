@@ -574,7 +574,7 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   replace the runtime the next one starts.
 - **No credential is in the runtime's environment.** The runtime hands its whole environment to every
   command the agent runs, so the host strips `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
-  `GITHUB_ENTERPRISE_TOKEN` and every `COPILOT_` variable from it. Your GitHub token is read from
+  `GITHUB_ENTERPRISE_TOKEN`, `GH_HOST` and every `COPILOT_` variable from it. Your GitHub token is read from
   `PERISCOPE_COPILOT_TOKEN_FILE` when the runtime asks for one, and handed over the SDK's own pipe; an
   endpoint's key rides the session's request the same way. Neither is ever on a command line.
 - **Nothing of yours is what a session runs from.** Each session's runtime runs in a fresh home of its
@@ -624,8 +624,13 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   stored in the Windows Credential Manager is outside the protected set, which holds files: a session's
   runtime never reads or writes the keyring, but a command the agent runs, as your user, can. Sign the
   runner's Copilot sessions in with `PERISCOPE_COPILOT_TOKEN_FILE` instead, and remove that entry.
-- **The runtime's route and identity are beneath the floor.** `COPILOT_*` is in `EXTRA_ENV_FLOOR`, so
-  no controller can move a Copilot session's home, swap its runtime or hand it a credential.
+- **No controller moves a session's route or its identity.** `COPILOT_*` is in `EXTRA_ENV_FLOOR`, so no
+  controller can move a Copilot session's home, swap its runtime or hand it a credential. The host a
+  sign-in is for is held twice: `GH_HOST` is taken out of the runtime's environment whoever set it, as
+  the GitHub token variables are, and your token is given for `github.com` alone. Asked for a token for
+  any other host, the host gives none, never reads the file, and says on the session which host asked.
+  `GH_HOST` is not beneath the floor: a controller you let set it can still set it for another
+  runtime's session, where only a command the agent runs reads it.
 
 ## opencode sessions
 
