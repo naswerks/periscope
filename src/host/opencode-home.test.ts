@@ -15,6 +15,7 @@ import {
   ensureOpencodeBase,
   isStrippedOpencodeVariable,
   opencodeConfig,
+  opencodeConfigText,
   opencodeHostEnv,
   opencodeReadBackProblem,
   opencodeRuleset,
@@ -270,6 +271,37 @@ function posture(overrides: Partial<OpencodePostureRead> = {}): OpencodePostureR
 }
 
 const EXPECTED = { servers: ['docs'], home: HOME, providerId: 'endpoint-stub' };
+
+test("the configuration's text holds no reference the server would follow, and parses back to exactly what was written", () => {
+  const config = {
+    mcp: {
+      servers: {
+        probe: {
+          type: 'remote',
+          url: 'https://example.invalid/{env:HOME}/mcp',
+          headers: {
+            'x-file': '{file:C:/Users/op/.ssh/id_rsa}',
+            'x-env': '{env:SECRET}',
+            'x-escaped': '\\{file:~/x}',
+            'x-plain': '{not-a-reference} and {"json": true}',
+          },
+        },
+        local: {
+          type: 'local',
+          command: ['tool', '--token={env:TOKEN}'],
+          environment: { A: '{file:/etc/x}' },
+        },
+      },
+    },
+    'a-key-{file:odd}': 1,
+  };
+  const text = opencodeConfigText(config);
+  assert.doesNotMatch(text, /\{(?:env|file):/, 'the text holds a reference the server would follow');
+  assert.deepEqual(JSON.parse(text), config, 'a value was changed by how it was written');
+  // Control: a configuration with no reference is written as plain JSON.
+  const plain = { shell: '/bin/sh', mcp: { servers: {} } };
+  assert.equal(opencodeConfigText(plain), JSON.stringify(plain));
+});
 
 test('control: the read-back holds the posture this host created', () => {
   assert.equal(opencodeReadBackProblem(posture(), EXPECTED), null);

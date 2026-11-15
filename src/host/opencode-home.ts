@@ -429,6 +429,19 @@ export function isOpencodeGatePlugin(plugin: {
   return plugin.id === OPENCODE_GATE_PLUGIN && plugin.source.type === OPENCODE_GATE_PLUGIN_SOURCE;
 }
 
+/**
+ * The configuration as the text the server loads. The server follows two references in that text itself,
+ * before it parses it and wherever they stand: `{env:NAME}` becomes a variable of the host process's and
+ * `{file:path}` the content of any file the host process can read. A value a controller supplied (an MCP
+ * server's URL, a header, an argument, a variable) is in that text, so a reference in it would put a file's
+ * content into what the server is sent. Nothing this host writes is meant to be followed, so the brace that
+ * opens either reference is written as its JSON escape: the text holds no such reference, and the parse
+ * gives every value back exactly as it was.
+ */
+export function opencodeConfigText(config: Readonly<Record<string, unknown>>): string {
+  return JSON.stringify(config).replace(/\{(?=(?:env|file):)/g, '\\u007b');
+}
+
 /** What the server said about its posture, read before the first prompt. */
 export interface OpencodePostureRead {
   /** The session's own rules. */

@@ -57,6 +57,12 @@ frame it sends decodes unchanged.
 - Added: `LocalGateOptions.localNames` and `LocalGateOptions.realPath` (and the same two on
   `JailOptions`), with `machineNames` and `canonicalPath` exported to fill them: the names this machine
   answers to as a file server, and a path as the file system names it. `PeriscopeHost` passes both.
+- Security: nothing a controller hands an opencode session's MCP servers is followed as a reference.
+  opencode replaces `{file:path}` with a file's content, and `{env:NAME}` with a variable's value,
+  in its configuration's text before it parses it, and a controller's MCP URL, headers, arguments and
+  variables are in that text: on the pinned SDK a header naming a file was sent to its server as the
+  file's content. The host now writes the text so it holds neither reference, and each value is
+  parsed back as written.
 - Security: an opencode `shell` call is decided before it runs, whole. The `shell` tool asks only about
   the commands the runtime's own reading finds in a line, so a line it finds none in ran with nothing
   asked: on Windows, a PowerShell assignment through a provider path writes a file that way. Each

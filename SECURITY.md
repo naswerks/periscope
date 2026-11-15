@@ -683,6 +683,14 @@ hello says so ([gate.md](docs/gate.md), the opencode gate). What holds, and what
   reads and no setting turns off), and the whole runner base are in the protected set.
 - **One provider.** A session's configuration allows no model provider but the endpoint it opened on, and
   the open is refused if the server offers a model of any other.
+- **No reference in the configuration is followed.** opencode follows two references in its
+  configuration's text, before it parses it and wherever they stand: `{env:NAME}` becomes a variable of
+  the host process's, and `{file:path}` the content of any file the host process can read. What your
+  controller hands a session's MCP servers (a URL, a header, an argument, a variable) is in that text,
+  so a `{file:…}` in a header would have sent a file's content to the server the header goes to:
+  measured on the pinned SDK. The host writes the text so that it holds neither reference (the opening
+  brace of each as its JSON escape), and the server parses every value back exactly as your controller
+  wrote it. Shown on the pinned SDK: the header reaches the MCP server as written.
 - **Proven before the first prompt.** The host reads the server back (the session's rules, every agent's,
   no saved approval, only the runtime's own plugins, the host's own pre-call gate and none it turns off,
   only the session's MCP servers, no configuration but its own, no model but the endpoint's). A server

@@ -1096,6 +1096,48 @@ test(
 );
 
 test(
+  "a value a controller hands an MCP server reaches it as written: the server's file and variable references are not followed in it",
+  { skip, timeout: 180_000 },
+  async () => {
+    const dirs = await scratch();
+    const secret = join(dirs.tmp, 'not-for-the-server.txt');
+    writeFileSync(secret, 'the-content-of-a-file');
+    const mcp = held(await fakeMcpHttp());
+    const stub = await scripted({});
+    // The two references opencode follows in its configuration's text: a file's content, a variable's value.
+    const fromFile = `{file:${secret.replace(/\\/g, '/')}}`;
+    const fromEnv = '{env:MARKER}';
+    const real = start(dirs, stub, {
+      request: {
+        mcpServers: {
+          probe: { type: 'http', url: mcp.url, headers: { 'x-from-file': fromFile, 'x-from-env': fromEnv } },
+        },
+      },
+    });
+    try {
+      await opened(real);
+      await until(() => mcp.requests.length > 0, 'the MCP server to be reached');
+      const headers = mcp.requests[0]?.headers ?? {};
+      assert.equal(
+        headers['x-from-file'],
+        fromFile,
+        "a file's content was put where a controller named the file",
+      );
+      assert.equal(
+        headers['x-from-env'],
+        fromEnv,
+        "a variable of the host process's was put where a controller named it",
+      );
+    } finally {
+      await closed(real);
+      await mcp.close();
+      await stub.close();
+      await removeScratch(dirs);
+    }
+  },
+);
+
+test(
   'an MCP server whose name has an underscore is told apart: its tool reaches this host as mcp__{server}__{tool}',
   { skip, timeout: 180_000 },
   async () => {
