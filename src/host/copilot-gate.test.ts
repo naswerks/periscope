@@ -393,6 +393,39 @@ test('a mode a sub-agent reports is said of that sub-agent, by its id, and never
   assert.equal(run.raised.length, 3);
 });
 
+test('a call is decided on the arguments its hook announced, and a request that carries others is named, not refused', async () => {
+  const run = gate(allow);
+  run.built.preToolUse(hooked('powershell', 'call_1', { command: 'npm test', description: 'tests' }));
+  const answer = await run.built.decide(
+    request('powershell', 'call_1', { command: 'npm test -- --watch', description: 'tests' }),
+  );
+  assert.deepEqual(answer, { kind: 'approve-once' }, 'the call is decided like any other');
+  assert.deepEqual(run.requests[0]?.toolInput, { command: 'npm test', description: 'tests' });
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-hook-missing'],
+  );
+  assert.match(
+    run.raised[0]?.detail ?? '',
+    /call call_1 with other arguments than its pre-tool hook announced/,
+  );
+  // Control: the same arguments by value, in another order and as a text, are no difference.
+  run.built.preToolUse(hooked('powershell', 'call_2', { command: 'npm test', description: 'tests' }));
+  await run.built.decide(request('powershell', 'call_2', { description: 'tests', command: 'npm test' }));
+  run.built.preToolUse(hooked('apply_patch', 'call_3', '*** Begin Patch'));
+  await run.built.decide(request('apply_patch', 'call_3', '*** Begin Patch'));
+  assert.equal(run.raised.length, 1);
+  assert.equal(run.requests[2]?.toolInput, '*** Begin Patch');
+  // A hook that announced no arguments leaves the request's to be read; a request with none, the hook's.
+  run.built.preToolUse({ ...hooked('view', 'call_4'), toolArgs: undefined });
+  await run.built.decide(request('view', 'call_4', { path: 'C:/work/a.txt' }));
+  assert.deepEqual(run.requests[3]?.toolInput, { path: 'C:/work/a.txt' });
+  run.built.preToolUse(hooked('view', 'call_5', { path: 'C:/work/b.txt' }));
+  await run.built.decide({ kind: 'hook', toolCallId: 'call_5', toolName: 'view' });
+  assert.deepEqual(run.requests[4]?.toolInput, { path: 'C:/work/b.txt' });
+  assert.equal(run.raised.length, 1);
+});
+
 test("a degrade past the session's cap is kept off its lane and still reaches the host's log, each time it occurs", () => {
   const onLane: string[] = [];
   const logged: string[] = [];

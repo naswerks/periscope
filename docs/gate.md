@@ -560,7 +560,11 @@ the one this host decides.
   `hook` permission request that follows names the same id, and the host reads the pair as a
   `DecisionRequest`: the tool's name in this host's spelling, the call id, the input, the directory the
   call runs in, the sub-agent that made it, `toolKind`, `shellDialect`, through the same call decision as
-  a Claude call (the local gate, then the decider, with the session's deadline and hold). The answer is
+  a Claude call (the local gate, then the decider, with the session's deadline and hold). The input is
+  the one the hook announced, which is the call's own. On the pinned runtime the request carried the
+  same arguments by value for every tool measured (a shell line, `view`, `create`, `apply_patch`,
+  `task`, a skill, an MCP tool, a sub-agent's call); a request that carries others is named
+  `gate-hook-missing`, and the call is still decided, on the hook's. The answer is
   one call approved, or refused with the outcome's words, which the model reads. Nothing broader is ever
   sent: no approval for the session, for a location or for good. An allow that rewrites the input is
   refused: the rewrite would live only in the fail-open hook (`canRewriteInput: false`).
@@ -617,7 +621,8 @@ the one this host decides.
 - **What the reused names mean on Copilot.** Each is raised once per call, request or mode:
   - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the
     hook did not ask; the request is refused, never decided), a `hook` request whose call no hook
-    announced, a pre-tool hook the runtime reports as failed (after which it lets the call proceed), or
+    announced, a `hook` request whose arguments are not the ones its hook announced (decided on the
+    hook's), a pre-tool hook the runtime reports as failed (after which it lets the call proceed), or
     a call that finished with no decision of this host's behind it: none at all, one still awaited, or
     a refusal the call ran against. Each call's answer is kept by its call id until
     `tool.execution_complete` and forgotten then, so an id a provider hands out again is a new call; only

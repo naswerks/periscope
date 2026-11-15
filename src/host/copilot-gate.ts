@@ -22,6 +22,8 @@
  * What it names, each a degrade raised once per (name, key):
  * - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the hook
  *   did not ask; the request is refused, never decided), a `hook` request no pre-tool hook announced, a
+ *   `hook` request whose arguments are not the ones its hook announced (the call is decided on the hook's,
+ *   which are the call's own), a
  *   pre-tool hook the runtime reports as failed, or a call that finished with no decision of this host's
  *   behind it: none at all, one still being awaited, or a refusal the call ran against. Each call's answer
  *   is kept until the call finishes and forgotten then, so a provider that hands out the same call id
@@ -35,6 +37,8 @@
  *   (`COPILOT_TOOL_KINDS`, `COPILOT_OTHER_TOOLS`, `COPILOT_EXCLUDED_TOOLS`). The session opens and the call is
  *   asked about as any other is, kind `other`; the name is said so the tables can learn it.
  */
+import { isDeepStrictEqual } from 'node:util';
+
 import type { RefusalReason } from '../core/refusal.js';
 import type { CallDecision } from '../gate/call-decision.js';
 import { createCallDecision } from '../gate/call-decision.js';
@@ -221,6 +225,8 @@ export interface CopilotSessionGateOptions {
 
 interface HookedCall {
   readonly toolName: string;
+  /** The arguments the hook announced the call with: what the runtime said it would run. */
+  readonly toolArgs: unknown;
   readonly workingDirectory: string;
   readonly agentId: string | null;
   readonly agentType: string | null;
@@ -397,7 +403,8 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
     return {
       toolName: spelled,
       toolUseId: toolCallId,
-      toolInput: raw.toolArgs ?? null,
+      // The arguments the hook announced are the call's own; the request's stand in where it announced none.
+      toolInput: (call.toolArgs === undefined ? raw.toolArgs : call.toolArgs) ?? null,
       sessionId,
       sessionKey: options.sessionKey,
       // A call runs in the directory the runtime names for it; the session's own when it names none.
@@ -422,6 +429,7 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           }
           hooked.set(id, {
             toolName: named(input.toolName) ? input.toolName : '',
+            toolArgs: input.toolArgs,
             workingDirectory: named(input.workingDirectory) ? input.workingDirectory : '',
             agentId: named(input.agentId) ? input.agentId : null,
             agentType: named(input.agentType) ? input.agentType : null,
@@ -478,6 +486,17 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           kind: 'reject',
           feedback: `${asked} is turned off in every session this host runs: no decision request can say what it runs`,
         };
+      }
+      if (
+        call.toolArgs !== undefined &&
+        raw.toolArgs !== undefined &&
+        !isDeepStrictEqual(call.toolArgs, raw.toolArgs)
+      ) {
+        raise(
+          'gate-hook-missing',
+          `Copilot asked about call ${id} with other arguments than its pre-tool hook announced for it; the call is decided on the arguments the hook announced`,
+          `arguments:${id}`,
+        );
       }
       remember(id, 'awaited');
       // The decision ends with the session's signal or with its own, which an interrupt ends.
