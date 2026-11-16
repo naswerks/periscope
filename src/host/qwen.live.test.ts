@@ -340,8 +340,8 @@ test(
     const run = start(dir, []);
     const before: string[] = [];
     try {
-      // The marker is the command's own argument, the name of the signal it waits for, so a model that
-      // tidies the line cannot drop it and the listing finds the command itself.
+      // The marker is a word of the command itself, on Windows the name of the signal it waits for, so a
+      // model that tidies the line cannot drop it and the listing finds the command.
       const command =
         process.platform === 'win32' ? `waitfor /t 120 ${MARKER}` : `sh -c "sleep 120; true ${MARKER}"`;
       run.process.prompt(`Start this shell command in the background and do not wait for it: ${command}`);
