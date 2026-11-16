@@ -27,7 +27,7 @@ import type { Decider, DecisionRequest } from '../gate/decision.js';
 import { COPILOT_TOOL_FAMILIES, localGate } from '../gate/local.js';
 import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import { fakeMcpHttp } from '../test-support/fake-mcp-http.js';
-import { LiveStream, closeAndWait, removeScratch } from '../test-support/live-session.js';
+import { LiveStream, closeAndWait, endListed, removeScratch } from '../test-support/live-session.js';
 import type { AgentProcessRequest } from './agent-process.js';
 import { createCopilotSessionGate } from './copilot-gate.js';
 import { startCopilotProcess } from './copilot-process.js';
@@ -45,7 +45,7 @@ const skip = !LIVE
     : false;
 
 /** A word no real command carries, so the process listing after close finds only what this run started. */
-const MARKER = `periscope-copilot-live-${process.pid}`;
+const MARKER = `periscopecopilotlive${process.pid}`;
 
 /** One receipt line, as the measurement's record. */
 function receipt(what: string, data: Record<string, unknown>): void {
@@ -319,8 +319,10 @@ test(
     const run = start(dir, allow);
     const before: string[] = [];
     try {
+      // The marker is the command's own argument, the name of the signal it waits for, so a model that
+      // tidies the line cannot drop it and the listing finds the command itself.
       const command =
-        process.platform === 'win32' ? `ping -n 120 127.0.0.1 # ${MARKER}` : `sleep 120 # ${MARKER}`;
+        process.platform === 'win32' ? `waitfor /t 120 ${MARKER}` : `sh -c "sleep 120; true ${MARKER}"`;
       run.process.prompt(
         `Run this command with the shell tool in its async mode, and do not wait for it: ${command}`,
       );
@@ -337,6 +339,7 @@ test(
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     const left = survivors();
     receipt('after close', { survivors: left });
+    endListed(left);
     assert.deepEqual(left, [], 'a command the session started outlived its close');
     // A close that ended nothing proves nothing: the command has to have been running when it came.
     if (before.length === 0) {

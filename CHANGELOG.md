@@ -77,6 +77,10 @@ frame it sends decodes unchanged.
   of. Both were measured on the pinned pi. The probe now holds the first where it was measured, records
   what it found and ends it, and [SECURITY.md](SECURITY.md) and [gate.md](docs/gate.md) say what a
   close of a pi session does not end.
+- Changed: the Qwen Code, opencode and Copilot live probes of a background command carry their marker
+  as the command's own argument. It was a trailing comment, which a model drops, so the listing found
+  nothing before the close or after it and the probe passed on a run that measured nothing. A command
+  that was not running when the close came is now reported as skipped, not passed.
 - Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
   The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
   what the CLI then registered. The first list of tools the CLI sends is now read for the tools the

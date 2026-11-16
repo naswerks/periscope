@@ -29,7 +29,7 @@ import type { DecisionRequest } from '../gate/decision.js';
 import { localGate, QWEN_TOOL_FAMILIES } from '../gate/local.js';
 import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import { fakeMcpHttp } from '../test-support/fake-mcp-http.js';
-import { LiveStream, closeAndWait, removeScratch } from '../test-support/live-session.js';
+import { LiveStream, closeAndWait, endListed, removeScratch } from '../test-support/live-session.js';
 import type { AgentProcessRequest } from './agent-process.js';
 import { nodePathResolver } from './paths.js';
 import type { QwenEndpointRoute } from './qwen-endpoints.js';
@@ -52,7 +52,7 @@ const skip = !LIVE
     : false;
 
 /** A word no real command carries, so the process listing after close finds only what this run started. */
-const MARKER = `periscope-qwen-live-${process.pid}`;
+const MARKER = `periscopeqwenlive${process.pid}`;
 
 /** One receipt line, as the measurement's record. */
 function receipt(what: string, data: Record<string, unknown>): void {
@@ -335,15 +335,19 @@ test(
 test(
   "a command the agent starts in the background does not outlive the session's close",
   { skip },
-  async () => {
+  async (t) => {
     const dir = scratchRepository();
     const run = start(dir, []);
+    const before: string[] = [];
     try {
+      // The marker is the command's own argument, the name of the signal it waits for, so a model that
+      // tidies the line cannot drop it and the listing finds the command itself.
       const command =
-        process.platform === 'win32' ? `ping -n 120 127.0.0.1 & rem ${MARKER}` : `sleep 120 # ${MARKER}`;
+        process.platform === 'win32' ? `waitfor /t 120 ${MARKER}` : `sh -c "sleep 120; true ${MARKER}"`;
       run.process.prompt(`Start this shell command in the background and do not wait for it: ${command}`);
       await run.stream.until(() => results(run.stream).length > 0, 300_000);
-      receipt('running before close', { survivors: survivors() });
+      before.push(...survivors());
+      receipt('running before close', { survivors: before });
     } finally {
       await closeAndWait(run.process, run.stream, receipt);
       removeScratch(dir, receipt);
@@ -352,6 +356,13 @@ test(
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     const left = survivors();
     receipt('after close', { survivors: left });
+    endListed(left);
     assert.deepEqual(left, [], 'a command the session started outlived its close');
+    // A close that ended nothing proves nothing: the command has to have been running when it came.
+    if (before.length === 0) {
+      t.skip(
+        'the command was not running when the session closed, so this run says nothing of what a close ends',
+      );
+    }
   },
 );
