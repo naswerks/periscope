@@ -574,6 +574,14 @@ does not:
 - **A pinned CLI, quiet at start.** The host runs one pi release (`PI_PINNED_VERSION`), checks its
   `--version`, and lists any other version unavailable. It never installs or updates pi, never runs a
   batch file, and starts pi with its version check and telemetry off.
+- **On Windows a program the agent's shell started can outlive the session.** Closing a session ends
+  pi, and the shells pi still runs end with it. What ends a process tree on Windows walks the process
+  table from parent to child, and pi's shell there is Git for Windows: measured on the pinned pi, a
+  program that shell started was not under it in the table, its parent there a process already gone.
+  So a command the shell put in the background and left (`some-command &`), and the program a command
+  still running at the close was in the middle of, were both running after the close, until they
+  ended by themselves. Nothing this host can walk reaches either. Every shell call is asked about
+  before it runs, so a command that must not outlive its session is your controller's to refuse.
 
 ## Copilot sessions
 

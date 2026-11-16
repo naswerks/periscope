@@ -70,6 +70,13 @@ frame it sends decodes unchanged.
   decider, and a read the protected set refuses never reaches it, so the probe failed on a refusal
   that held. It now asks for an ordinary read, which must be asked about, and a protected one, which
   must be refused with nobody asked.
+- Changed: the pi live probe of a background command holds what was measured. It asserted that such a
+  command does not outlive the session's close. On Windows a command the agent's shell puts in the
+  background and leaves has no running parent, so nothing that walks the process table reaches it, and
+  it outlives the close; so does the program a command still running at the close was in the middle
+  of. Both were measured on the pinned pi. The probe now holds the first where it was measured, records
+  what it found and ends it, and [SECURITY.md](SECURITY.md) and [gate.md](docs/gate.md) say what a
+  close of a pi session does not end.
 - Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
   The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
   what the CLI then registered. The first list of tools the CLI sends is now read for the tools the

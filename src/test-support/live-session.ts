@@ -3,6 +3,7 @@
  * messages that never drops one, a close that waits for the process to let go of its directory, and a
  * scratch directory's removal that never throws over the test's own result.
  */
+import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 
 /** A receipt line's writer, the test's own record of what was measured. */
@@ -75,5 +76,25 @@ export function removeScratch(dir: string, receipt: Receipt): void {
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   } catch (error) {
     receipt('scratch directory left behind', { dir, error: String(error) });
+  }
+}
+
+/**
+ * End each process a listing named, by the pid its line starts with, and on Windows what runs under it.
+ * A probe that found a command still running after its session's close leaves none of it behind.
+ */
+export function endListed(lines: readonly string[]): void {
+  for (const line of lines) {
+    const pid = Number(/^\s*(\d+)/.exec(line)?.[1]);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    try {
+      if (process.platform === 'win32') {
+        execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      } else {
+        process.kill(pid, 'SIGKILL');
+      }
+    } catch {
+      // Already gone.
+    }
   }
 }

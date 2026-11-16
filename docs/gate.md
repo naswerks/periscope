@@ -563,6 +563,23 @@ it is loaded, that it is the last handler a call meets, and that nothing else is
 - **The residual known at the open.** `gate-foreign-extension` (above), and `gate-credential-in-shell`
   when the session's endpoint has variables of its own, which pi's environment carries to every
   command the agent runs; the detail names the variables, never their values.
+- **What it does not hold.** On Windows a program the agent's shell started can outlive the session's
+  close. The close ends pi's stdin and waits a grace for pi to exit, and ends the process tree of a pi
+  that has not. What ends a tree on Windows, this host's kill and pi's own, walks the process table by
+  parent (`taskkill /T`), and pi's shell there is Git for Windows. Measured on the pinned pi, on a stub
+  model:
+  - A command the shell put in the background and left (`... &`) had no running parent before the
+    close, and was running after it. pi's shell tool had returned when its shell exited; pi 1.5.2's own
+    shell code says of such processes that "Windows cannot find them once the shell pid is gone". The
+    live probe holds this one (`pi.live.test.ts`), so a pi or a host that ends such a command is
+    noticed.
+  - With a command still running when the close came, pi and its shells were gone after it. The
+    program the shell was running (`sleep`) was not: before the close its parent in the table was
+    already a process that had ended, so it was under neither shell.
+
+  Each ran on until it ended by itself. Reaching either takes a way to hold a process and everything
+  it starts that does not go by parent (on Windows, a job object), which this host does not have. Not
+  measured off Windows.
 
 pi is advertised at `intercepted` (`CONTROL_TIERS`); a session with either degrade known at its open
 opens at `intercepted-with-residual`.
