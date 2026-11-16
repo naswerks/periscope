@@ -1934,14 +1934,14 @@ test('a controller on protocol 19 reads the hello of a host serving several repo
   }
 });
 
-test('a controller on protocol 19 decodes every vector protocol 20 adds that a host sends: an item naming its parent, and what a task entry reports', () => {
+test('a controller on protocol 19 decodes every vector protocol 20 adds that a host sends: an item naming its parent, what a task entry reports, and how a compaction ended', () => {
   const corpus = fileURLToPath(new URL('../../contracts/wire-vectors/', import.meta.url));
   const added = readdirSync(corpus).filter((file) =>
-    /^session_update\.(agent-item-parent|agent-facts-tasks-reported|agent-facts-tasks-summary-non-bmp-at-bound)\.json$/.test(
+    /^session_update\.(agent-item-parent|agent-facts-tasks-reported|agent-facts-tasks-summary-non-bmp-at-bound|agent-facts-compaction-failed)\.json$/.test(
       file,
     ),
   );
-  assert.equal(added.length, 3, `the vectors this reads: ${added.join(', ')}`);
+  assert.equal(added.length, 4, `the vectors this reads: ${added.join(', ')}`);
   for (const file of added) {
     const wire = (JSON.parse(readFileSync(`${corpus}${file}`, 'utf8')) as { wire: string }).wire;
     const read = V19.safeParse(JSON.parse(wire));
