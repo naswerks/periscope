@@ -832,6 +832,30 @@ test('held usage goes out with the first message after the pace, whatever that m
   assert.deepEqual(tokensSent(factsOf(lift, assistant('msg-3', callUsage()))), []);
 });
 
+test('while figures are held, a message inside the pace composes nothing: the clock is read first, and the task list is neither rebuilt nor serialized', (t) => {
+  const ticker = fixedTicker(0);
+  const lift = new ClaudeFactLift({ ticker });
+  factsOf(lift, started('agent-1', 'local_agent'));
+  ticker.advance(1_000);
+  assert.deepEqual(tokensSent(factsOf(lift, progressed('agent-1', { usage: usageOf(100) }))), []);
+  const delta = streamed({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hel' } });
+  const serialized = t.mock.method(JSON, 'stringify');
+  for (let index = 0; index < 50; index += 1) {
+    ticker.advance(10);
+    assert.equal(lift.fromMessage(delta).fragments.length, 1);
+  }
+  assert.equal(
+    serialized.mock.callCount(),
+    0,
+    'a streamed fragment inside the pace serialized the task list to learn the pace had not passed',
+  );
+  // Control: the first message after the pace composes the list and carries the held figures, so the
+  // count above is of work that is done when it is due.
+  ticker.advance(TASKS_USAGE_PACE_MS);
+  assert.deepEqual(tokensSent(factsOf(lift, delta)), [100]);
+  assert.ok(serialized.mock.callCount() > 0, 'the count never moves, so it proves nothing');
+});
+
 test('control: a usage that moves long after the last tasks fact is sent at once', () => {
   const ticker = fixedTicker(0);
   const lift = new ClaudeFactLift({ ticker });

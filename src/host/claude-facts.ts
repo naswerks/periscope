@@ -203,7 +203,10 @@ export class ClaudeFactLift implements FactLift {
     }
 
     // Held figures go out with the first message after the pace has passed, whatever that message is.
-    if (this.#usageHeld) this.#tasksIfChanged(facts);
+    // The clock is read first: a message inside the pace, a streamed fragment among them, composes nothing.
+    if (this.#usageHeld && this.#ticker() - this.#tasksSentAt >= TASKS_USAGE_PACE_MS) {
+      this.#tasksIfChanged(facts);
+    }
 
     return { facts, fragments };
   }
