@@ -15,6 +15,14 @@ controller is refused at the handshake by name. Every member version 20 adds is 
 payload kind: a version-19 controller reads each as an unknown key on a kind it already reads, and every
 frame it sends decodes unchanged.
 
+- Fixed: a Claude session no longer carries an open model request after its turn. Claude Code 2.1.325
+  sends `system/status` with `status: 'requesting'` at the start of every model request and no status
+  at its end (a null status arrives for a compaction's end and a permission-mode change), and the
+  request entry was closed only by a null status, so after its first request a session showed
+  `requesting` for good, through its tools and after the turn. The request is now closed by its
+  answer, the session's own `assistant` message, in a transition whose cause is `assistant`; one that
+  got no answer is closed by the turn's end, `Stop` or `result`. A sub-agent's message closes nothing,
+  and with no request open none of the three names an entry.
 - Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
   The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
   what the CLI then registered. The first list of tools the CLI sends is now read for the tools the

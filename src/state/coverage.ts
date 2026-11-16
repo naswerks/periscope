@@ -205,7 +205,7 @@ export const MESSAGE_COVERAGE = {
   },
   'system/status': {
     handling: 'wired',
-    note: "SDKStatus — sets activity `requesting` or `compacting`, and closes it on null. The SDK's own word for what a session is doing, adopted verbatim.",
+    note: "SDKStatus — sets activity `requesting` or `compacting`, and closes it on null. The SDK's own word for what a session is doing, adopted verbatim. The CLI sends `requesting` at the start of every model request and no status at its end (a null arrives for a compaction's end and a permission-mode change), so a request is closed by its answer (`assistant`), or by the turn's end.",
   },
   'system/session_state_changed': {
     handling: 'wired',
@@ -242,8 +242,8 @@ export const MESSAGE_COVERAGE = {
 
   // --- declined -------------------------------------------------------------
   assistant: {
-    handling: 'declined',
-    note: 'model output. Content, owned by the streaming layer; the state it implies is already carried by system/status and system/session_state_changed.',
+    handling: 'wired',
+    note: "model output. Content, owned by the streaming layer. One thing it implies is carried by nothing else: the session's own assistant message is the answer to the model request `system/status` opened, and closes it. A sub-agent's message closes nothing, and with no request open the message moves nothing.",
   },
   user: {
     handling: 'declined',

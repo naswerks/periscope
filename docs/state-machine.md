@@ -186,11 +186,19 @@ positive control on the parser; and `observationHooks()` derives its registratio
 pinned to match. An event absent from the table is a gap, not a default.
 
 The table answers "does this move the machine". `MESSAGE_ROUTING` (`src/control/stream-routing.ts`)
-answers "does this go on the wire". They disagree in both directions on purpose (`assistant` is
+answers "does this go on the wire". They disagree in both directions on purpose (`stream_event` is
 declined here and forwarded there; `session_state_changed` is wired here and declined there) and
 must never be merged. The fact lift is a third reader with rows of its own: it reads messages this
-table declines (`assistant`, `system/background_tasks_changed`, `stream_event`) for the facts they
+table declines (`system/background_tasks_changed`, `stream_event`) for the facts they
 carry, and they still move nothing here ([protocol.md](protocol.md), the fact layer).
+
+A model request is one entry, `requesting`. The CLI states its start (`system/status` with
+`status: 'requesting'`, at every request) and sends no status at its end: a null status arrives for a
+compaction's end and for a permission-mode change, not for a request (read from the bundled CLI's
+code and recorded on Claude Code 2.1.325). So the request is closed by its answer, the session's own
+`assistant` message (a sub-agent's closes nothing), and a request that got no answer is closed by the
+turn's end, `Stop` or `result`, whichever arrives. A session never carries an open model request
+after its turn.
 
 The runtime wins over the types. Four wired events are measured not to fire under an SDK-hosted
 session: `SessionStart` (take the start receipt from `system/init`), `PermissionRequest` and

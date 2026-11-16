@@ -454,15 +454,43 @@ export class SessionObserver {
       ];
     }
 
+    if (message.type === 'assistant') {
+      // The CLI states a model request's start (`status: 'requesting'`) and nothing at its end, so the
+      // answer is the end: the session's own assistant message closes the request it answers. A
+      // sub-agent's message answers a request of the sub-agent's, which opened no entry here.
+      if (message.parent_tool_use_id !== null || !this.#isOpen(REQUEST_ENTRY)) return [];
+      return [
+        {
+          to: 'working',
+          entry: { op: 'close', entryId: REQUEST_ENTRY },
+          cause: cause('assistant', 'the model answered, so its request finished'),
+        },
+      ];
+    }
+
     if (message.type === 'result') {
       const clean = message.subtype === 'success';
       const why = clean
         ? `the turn completed in ${message.duration_ms}ms`
         : `the turn ended ${message.subtype}${'terminal_reason' in message && message.terminal_reason !== undefined ? ` (${message.terminal_reason})` : ''}`;
-      return [{ to: clean ? 'idle' : 'errored', cause: cause('result', why) }];
+      return [
+        {
+          to: clean ? 'idle' : 'errored',
+          ...this.#requestLeftOpen(),
+          cause: cause('result', why),
+        },
+      ];
     }
 
     return [];
+  }
+
+  /**
+   * The close of a model request still open when its turn ends: one that was interrupted, or failed,
+   * got no answer to close it. Nothing when none is open, so a turn's end names no entry it did not close.
+   */
+  #requestLeftOpen(): { readonly entry?: EntryOp } {
+    return this.#isOpen(REQUEST_ENTRY) ? { entry: { op: 'close', entryId: REQUEST_ENTRY } } : {};
   }
 
   #taskUpdateRequests(
@@ -582,6 +610,7 @@ export class SessionObserver {
         return [
           {
             to: 'idle',
+            ...this.#requestLeftOpen(),
             cause: cause(
               `the turn ended cleanly${
                 input.background_tasks !== undefined && input.background_tasks.length > 0

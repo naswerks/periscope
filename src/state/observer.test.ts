@@ -233,6 +233,63 @@ test("the SDK's own status drives the request and compaction lanes", () => {
   assert.deepEqual(machine.activity, { kind: 'compacting', name: null });
 });
 
+test("a model request is closed by the answer that arrives for it, and never outlives its turn: the CLI states a request's start and not its end", () => {
+  const { observer: o, machine, store } = observer();
+  const requesting = message({ type: 'system', subtype: 'status', status: 'requesting' });
+  const answer = (id: string, parent: string | null = null): SDKMessage =>
+    message({ type: 'assistant', parent_tool_use_id: parent, message: { id, content: [] } });
+  const result = (subtype = 'success'): SDKMessage => message({ type: 'result', subtype, duration_ms: 5 });
+  const open = (): string[] => machine.openEntries().map((entry) => entry.activity.kind);
+
+  // One turn as the pinned CLI was recorded sending it: a status at each request's start, the answer,
+  // the tool's hooks, a second request and its answer, the stop and the result. No status ends a request.
+  o.observeHook(hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' }));
+  o.observeMessage(requesting);
+  assert.deepEqual(machine.activity, { kind: 'requesting', name: null });
+  o.observeMessage(answer('msg-1'));
+  assert.deepEqual(open(), [], 'the request stayed open after its answer arrived');
+  const closed = store.all().at(-1);
+  assert.deepEqual(
+    [closed?.cause.kind, closed?.cause.event, closed?.to],
+    ['sdk-message', 'assistant', 'working'],
+    'the close is not named for the message that caused it',
+  );
+  o.observeHook(hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'tu-1' }));
+  o.observeHook(hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'tu-1' }));
+  o.observeMessage(requesting);
+  // A sub-agent's message is not the answer to the session's own request.
+  o.observeMessage(answer('msg-sub', 'toolu_task'));
+  assert.deepEqual(open(), ['requesting']);
+  o.observeMessage(answer('msg-2'));
+  assert.deepEqual(open(), []);
+  o.observeHook(hook({ hook_event_name: 'Stop' }));
+  o.observeMessage(result());
+  assert.equal(machine.state, 'idle');
+  assert.deepEqual(open(), [], 'a model request was still open after the turn');
+
+  // A request that gets no answer ends with its turn, by the stop or by the result, whichever arrives.
+  o.observeMessage(requesting);
+  o.observeHook(hook({ hook_event_name: 'Stop' }));
+  assert.deepEqual(open(), [], 'the stop left a model request open');
+  o.observeMessage(requesting);
+  o.observeMessage(result('error_during_execution'));
+  assert.deepEqual(open(), [], 'the result left a model request open');
+
+  // Control: with no request open, an answer records nothing, and a stop and a result name no entry.
+  const before = store.all().length;
+  o.observeMessage(answer('msg-3'));
+  assert.equal(store.all().length, before, 'an answer with no request open was recorded');
+  o.observeHook(hook({ hook_event_name: 'Stop' }));
+  o.observeMessage(result());
+  assert.deepEqual(
+    store
+      .all()
+      .slice(before)
+      .map((transition) => transition.entryId),
+    [null, null],
+  );
+});
+
 test('the turn-over signal moves the state, and requires_action does not invent a second one', () => {
   const { observer: o, machine } = observer();
 

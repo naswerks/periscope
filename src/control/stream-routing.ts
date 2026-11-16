@@ -12,7 +12,8 @@
  * questions and disagree in both directions:
  *   - `coverage.ts`: does this message move the state machine?
  *   - this table: does this message go on the wire, and on which lane?
- * `assistant` is declined there (it changes no state) and forwarded here (it is the turn's text).
+ * `stream_event` is declined there (it changes no state) and forwarded here (it is the turn's text as it
+ * arrives).
  * `system/session_state_changed` is wired there and declined here (the transition it causes already
  * carries the fact, and two names for one fact is how a vocabulary drifts apart). A single table
  * would have to pick one question and would silently answer the other one wrongly.
