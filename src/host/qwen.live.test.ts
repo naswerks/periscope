@@ -100,6 +100,8 @@ interface LiveRun {
   readonly stream: LiveStream<QwenMessage>;
   readonly process: ReturnType<typeof startQwenProcess>;
   readonly decided: DecisionRequest[];
+  /** Every call this host refused by itself, before anyone was asked: the tool, its input and the reason. */
+  readonly refused: { tool: string; input: unknown; reason: string }[];
   readonly raised: { name: RefusalReason; detail: string }[];
   readonly base: string;
 }
@@ -111,6 +113,7 @@ function start(
 ): LiveRun {
   const base = mkdtempSync(`${tmpdir()}/periscope-qwen-base-`);
   const decided: DecisionRequest[] = [];
+  const refused: LiveRun['refused'] = [];
   const raised: { name: RefusalReason; detail: string }[] = [];
   const route: QwenEndpointRoute = {
     name: 'live',
@@ -141,7 +144,16 @@ function start(
     decisionTimeoutMs: 50_000,
     holdAfterMs: 250,
     askRules: qwenAskRules(Object.keys(sessionRequest.mcpServers ?? {})),
-    onOutcome: (outcome) => receipt('outcome', { kind: outcome.kind, tool: outcome.request.toolName }),
+    onOutcome: (outcome) => {
+      receipt('outcome', { kind: outcome.kind, tool: outcome.request.toolName });
+      if (outcome.kind === 'refused') {
+        refused.push({
+          tool: outcome.request.toolName,
+          input: outcome.request.toolInput,
+          reason: outcome.refusal.reason,
+        });
+      }
+    },
     onDegrade: (name, detail) => {
       raised.push({ name, detail });
       receipt('degrade', { name, detail });
@@ -155,7 +167,19 @@ function start(
     'live',
     gate,
   );
-  return { stream: new LiveStream(process.messages), process, decided, raised, base };
+  return { stream: new LiveStream(process.messages), process, decided, refused, raised, base };
+}
+
+/** The calls of `tool` the model made, by their input as JSON: what it asked for, whoever decided it. */
+function called(stream: LiveStream<QwenMessage>, tool: string): string[] {
+  return stream.seen.flatMap((message) => {
+    if (message.kind !== 'message' || message.message['type'] !== 'assistant') return [];
+    const content = (message.message['message'] as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return [];
+    return (content as { type?: unknown; name?: unknown; input?: unknown }[]).flatMap((block) =>
+      block.type === 'tool_use' && block.name === tool ? [JSON.stringify(block.input ?? null)] : [],
+    );
+  });
 }
 
 const results = (stream: LiveStream<QwenMessage>): JsonObject[] =>
@@ -246,26 +270,59 @@ test(
 test(
   'a read the CLI allows by default asks, and a read of a protected file is refused by the protected set',
   { skip },
-  async () => {
+  async (t) => {
     const dir = scratchRepository();
+    writeFileSync(join(dir, 'notes.txt'), 'four\n');
     const secret = join(mkdtempSync(`${tmpdir()}/periscope-qwen-secret-`), 'oauth_creds.json');
     writeFileSync(secret, '{"token":"not-a-real-token"}\n');
     const run = start(dir, [secret]);
     try {
       run.process.prompt(
-        `Read the file ${secret} with your file-reading tool and say how many characters it has.`,
+        `Do these two things in order, one tool call each, with your file-reading tool: read the file notes.txt; then read the file ${secret}. Then say what each read gave you.`,
       );
       await run.stream.until(() => results(run.stream).length > 0, 300_000);
-      const reads = run.decided.filter((asked) => asked.toolName === 'read_file');
-      receipt('read decisions', { reads });
-      assert.ok(reads.length > 0, "the read never reached the decision: it ran on the CLI's own say");
+      const names = (text: string, file: string): boolean => text.includes(file);
+      const made = called(run.stream, 'read_file');
+      const asked = run.decided
+        .filter((one) => one.toolName === 'read_file')
+        .map((one) => JSON.stringify(one.toolInput));
+      const refused = run.refused.filter((one) => one.tool === 'read_file');
+      receipt('reads', { made, asked, refused });
+
+      // An ordinary read. The CLI allows a read by default, so one that ran without asking this host is
+      // what the ask rules are there to stop. A read the model never made measures nothing.
+      if (!made.some((input) => names(input, 'notes.txt'))) {
+        return t.skip('the model never read the ordinary file, so whether such a read asks was not measured');
+      }
+      assert.ok(
+        asked.some((input) => names(input, 'notes.txt')),
+        "the ordinary read never reached the decision: it ran on the CLI's own say",
+      );
+
+      // A protected read. This host refuses it by itself, so nobody is asked: it is counted among the
+      // refusals, never among the decisions.
+      if (!made.some((input) => names(input, 'oauth_creds.json'))) {
+        return t.skip('the model never read the protected file, so its refusal was not measured');
+      }
+      assert.ok(
+        refused.some(
+          (one) =>
+            one.reason === 'credential-path-denied' && names(JSON.stringify(one.input), 'oauth_creds.json'),
+        ),
+        'the read of the protected file was not refused by the protected set',
+      );
+      assert.equal(
+        asked.some((input) => names(input, 'oauth_creds.json')),
+        false,
+        'the decider was asked about a read the protected set refuses',
+      );
       const answered = run.stream.seen.flatMap((message) =>
         message.kind === 'control_request' ? [message.answer] : [],
       );
       receipt('answers', { answered });
       assert.ok(
         answered.some((answer) => JSON.stringify(answer).includes('credential-path-denied')),
-        'the read of the protected file was not refused by the protected set',
+        'the CLI was not told why the read of the protected file was refused',
       );
     } finally {
       await closeAndWait(run.process, run.stream, receipt);
