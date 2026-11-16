@@ -131,8 +131,12 @@ async function qwenHost(
 
 async function stopped(run: QwenHost): Promise<void> {
   run.host.stop();
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  await rm(run.base, { recursive: true, force: true });
+  // The CLI the test's session started, where it started one, has exited: the stop is done with the base.
+  await until(
+    () => run.fake.child.spawned === null || run.fake.child.closed,
+    "the stop to end the session's CLI",
+  );
+  await rm(run.base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 async function until(check: () => boolean, what: string, ms = 3000): Promise<void> {
