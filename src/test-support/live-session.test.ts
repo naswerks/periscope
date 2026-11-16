@@ -15,10 +15,15 @@ test('a scratch directory a process still has as its working directory is waited
   const dir = await tempDir('scratch-held');
   writeFileSync(join(dir, 'notes.txt'), 'the notes say hello\n');
   // A process that holds the directory as its working directory, then leaves by itself: what a session's
-  // command is for a moment after the close that ended it.
-  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 1500)'], { cwd: dir, stdio: 'ignore' });
+  // command is for a moment after the close that ended it. It says when it is running, since a process
+  // takes hold of its working directory as it starts and not when it is asked for.
+  const child = spawn(
+    process.execPath,
+    ['-e', "process.stdout.write('running'); setTimeout(() => {}, 1500)"],
+    { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] },
+  );
   const left = new Promise((resolve) => child.on('close', resolve));
-  await new Promise((resolve) => child.on('spawn', resolve));
+  await new Promise((resolve) => child.stdout.once('data', resolve));
   const receipts: { what: string; data: Record<string, unknown> }[] = [];
   removeScratch(dir, (what, data) => receipts.push({ what, data }));
   await left;
