@@ -4,7 +4,8 @@
  * scratch directory's removal that never throws over the test's own result.
  */
 import { execFileSync } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /** A receipt line's writer, the test's own record of what was measured. */
 export type Receipt = (what: string, data: Record<string, unknown>) => void;
@@ -120,4 +121,36 @@ export function endListed(lines: readonly string[]): void {
       // Already gone.
     }
   }
+}
+
+/** The file a session's command writes its environment to, in the session's directory. */
+export const ENVIRONMENT_FILE = 'environment.txt';
+
+/**
+ * Write, into a session's directory, a script that writes the environment it runs in to
+ * `ENVIRONMENT_FILE` beside it, and return the shell line that runs it. A probe reads that file itself,
+ * so what it measures is the command's environment and not a model's account of it: a model asked to
+ * print every variable may decline, since they can hold secrets, or spell the line so that it prints an
+ * error, and either leaves a probe that reads the tool's output with nothing of an environment to read.
+ */
+export function environmentScript(dir: string): string {
+  if (process.platform === 'win32') {
+    writeFileSync(join(dir, 'write-environment.cmd'), `@set > "%~dp0${ENVIRONMENT_FILE}"\r\n`);
+    return '.\\write-environment.cmd';
+  }
+  writeFileSync(join(dir, 'write-environment.sh'), `env > "$(dirname "$0")/${ENVIRONMENT_FILE}"\n`);
+  return 'sh ./write-environment.sh';
+}
+
+/** The variable names of an environment listing, one `NAME=value` a line, as `set` and `env` write it. */
+export function environmentNames(listing: string): string[] {
+  return listing
+    .split(/\r?\n/)
+    .map((line) => line.split('=')[0] ?? '')
+    .filter((name) => name !== '');
+}
+
+/** Whether a listing's names are an environment's: the search path is among them, under either spelling. */
+export function isEnvironment(names: readonly string[]): boolean {
+  return names.some((name) => name.toLowerCase() === 'path');
 }

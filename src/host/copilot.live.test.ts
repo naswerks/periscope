@@ -35,7 +35,16 @@ import type { Decider, DecisionRequest } from '../gate/decision.js';
 import { COPILOT_TOOL_FAMILIES, localGate } from '../gate/local.js';
 import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import { fakeMcpHttp } from '../test-support/fake-mcp-http.js';
-import { LiveStream, closeAndWait, endListed, removeScratch } from '../test-support/live-session.js';
+import {
+  ENVIRONMENT_FILE,
+  LiveStream,
+  closeAndWait,
+  endListed,
+  environmentNames,
+  environmentScript,
+  isEnvironment,
+  removeScratch,
+} from '../test-support/live-session.js';
 import type { AgentProcessRequest } from './agent-process.js';
 import { createCopilotSessionGate } from './copilot-gate.js';
 import { startCopilotProcess } from './copilot-process.js';
@@ -183,24 +192,6 @@ const writes = (asked: DecisionRequest, file: string): boolean =>
   asked.toolKind === 'file_write' ||
   asked.toolKind === 'file_edit' ||
   (asked.toolKind === 'shell' && JSON.stringify(asked.toolInput).includes(file));
-
-/** The file a command's environment is written to, in the session's directory. */
-const ENVIRONMENT_FILE = 'environment.txt';
-
-/**
- * Write, into the session's directory, a script that writes the environment it runs in to
- * `ENVIRONMENT_FILE` beside it, and return the shell line that runs it. The probe reads that file itself,
- * so what is measured is the command's environment and not a model's account of it: a model asked to
- * print every variable may decline, since they can hold secrets.
- */
-function environmentScript(dir: string): string {
-  if (process.platform === 'win32') {
-    writeFileSync(join(dir, 'write-environment.cmd'), `@set > "%~dp0${ENVIRONMENT_FILE}"\r\n`);
-    return '.\\write-environment.cmd';
-  }
-  writeFileSync(join(dir, 'write-environment.sh'), `env > "$(dirname "$0")/${ENVIRONMENT_FILE}"\n`);
-  return 'sh ./write-environment.sh';
-}
 
 /** What the session's model said, turn by turn. */
 const repliesOf = (stream: LiveStream<CopilotMessage>): unknown[] =>
@@ -380,16 +371,10 @@ test(
       receipt('replies', { replies: repliesOf(run.stream), wrote: existsSync(snapshot) });
       assert.ok(existsSync(snapshot), 'the command did not run, so its environment was not read');
       const text = readFileSync(snapshot, 'utf8');
-      const names = text
-        .split(/\r?\n/)
-        .map((line) => line.split('=')[0] ?? '')
-        .filter((name) => name !== '');
+      const names = environmentNames(text);
       receipt('environment names', { names });
       // Control: what the command wrote is an environment, the search path among its names.
-      assert.ok(
-        names.some((name) => name.toLowerCase() === 'path'),
-        'what the command wrote is no environment, so nothing of it was read',
-      );
+      assert.ok(isEnvironment(names), 'what the command wrote is no environment, so nothing of it was read');
       const token = readFileSync(TOKEN_FILE, 'utf8').trim();
       assert.equal(text.includes(token), false, "the token reached the agent's shell");
       for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'COPILOT_GITHUB_TOKEN', 'COPILOT_SDK_AUTH_TOKEN']) {

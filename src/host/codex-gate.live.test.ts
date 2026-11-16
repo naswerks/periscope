@@ -456,6 +456,11 @@ test(
 
     try {
       assert.ok(stream.notified('turn/completed'), 'the turn did not complete');
+      // With no listing there is nothing a variable could have been seen in, and nothing was read.
+      assert.ok(
+        envItem !== undefined,
+        "the environment listing never ran, so the agent's shell was not read",
+      );
       assert.deepEqual(leaked, [], "the agent's shell saw a variable the exclusion names");
       assert.ok(asked.length > 0, 'no tool call reached the gate');
       for (const id of deniedIds) {

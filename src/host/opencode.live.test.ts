@@ -29,7 +29,16 @@ import type { Decider, DecisionRequest } from '../gate/decision.js';
 import { OPENCODE_TOOL_FAMILIES, localGate } from '../gate/local.js';
 import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import { fakeMcpHttp } from '../test-support/fake-mcp-http.js';
-import { LiveStream, closeAndWait, endListed, removeScratch } from '../test-support/live-session.js';
+import {
+  ENVIRONMENT_FILE,
+  LiveStream,
+  closeAndWait,
+  endListed,
+  environmentNames,
+  environmentScript,
+  isEnvironment,
+  removeScratch,
+} from '../test-support/live-session.js';
 import type { AgentProcessRequest } from './agent-process.js';
 import type { OpencodeEndpointRoute } from './opencode-endpoints.js';
 import { OpencodeFactLift } from './opencode-facts.js';
@@ -331,20 +340,21 @@ test(
   { skip },
   async () => {
     const dir = scratch();
+    // The command writes its own environment to a file this probe reads: what a model relays of a
+    // listing it was asked to print can be an error's text, which holds no key and proves nothing.
+    const command = environmentScript(dir);
     const run = start(dir, allow);
     try {
-      const command =
-        process.platform === 'win32'
-          ? 'Get-ChildItem env: | ForEach-Object { $_.Name + "=" + $_.Value }'
-          : 'env';
       run.process.prompt(`Run exactly this shell command with the shell tool and reply done: ${command}`);
       await run.stream.until(() => settled(run.stream), 600_000);
-      const outputs = events(run.stream, 'session.tool.success').map((event) => JSON.stringify(event.data));
-      const text = outputs.join('\n');
-      receipt('environment names', {
-        names: text.split(/\\r?\\n|\r?\n/).map((line) => line.split('=')[0]),
-      });
-      assert.ok(text.length > 0, 'the command printed nothing, so its environment was not read');
+      const snapshot = join(dir, ENVIRONMENT_FILE);
+      receipt('the command wrote its environment', { wrote: existsSync(snapshot) });
+      assert.ok(existsSync(snapshot), 'the command did not run, so its environment was not read');
+      const text = readFileSync(snapshot, 'utf8');
+      const names = environmentNames(text);
+      receipt('environment names', { names });
+      // Control: what the command wrote is an environment, the search path among its names.
+      assert.ok(isEnvironment(names), 'what the command wrote is no environment, so nothing of it was read');
       assert.equal(text.includes(KEY()), false, "the key reached the agent's shell");
       assert.equal(
         /PERISCOPE_OPENCODE_/.test(text),

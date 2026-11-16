@@ -86,6 +86,11 @@ frame it sends decodes unchanged.
   ended, for under a second, as its working directory: on Windows such a directory cannot be removed,
   the removal fails at once, and the retry `rmSync` offers does not wait that failure out. The shared
   removal now tries again itself, for up to ten seconds, and says in a receipt when it had to wait.
+- Changed: the opencode live probe reads a command's environment from a file the command writes, as
+  the Copilot probe does. It read what the model relayed of a listing it was asked to print; in a
+  release run the model spelt the line so that it printed an error, whose text holds no key, and the
+  test passed having read no environment. The listing must now be an environment, the search path
+  among its names. The Codex probe's own listing must have run before what it shows is read.
 - Fixed: a Copilot session opens where the runtime allows a directory that is none of the session's.
   The read-back refused the open `copilot-gate-not-active` for it, and the runtime allows its temp folder
   by itself, so a session whose temp folder is no write root of its own (one that covers the session's
