@@ -215,8 +215,10 @@ gate).
   (8 MiB) is dropped whole and named. Ids out are integers; every request has a deadline the host
   sets; notifications are delivered in arrival order; a server request with no handler is answered
   `-32601`. The child is spawned with `shell: false`, and a batch file is refused by name. Close ends
-  stdin, waits a grace, then kills the process tree (`taskkill /T /F` on Windows, the process group
-  elsewhere).
+  stdin and gives the child a grace to exit. On Windows a child still running then has its process
+  tree killed (`taskkill /T /F`, a walk from a running process, so a child that left on its own has
+  no tree to end). Elsewhere the child's process group is signalled either way, with what the process
+  table shows under the child.
 - The binary is pinned (`CODEX_PINNED_VERSION`, `src/host/codex-binary.ts`). Its `--version` and the
   `initialize` answer's user agent must both name the pinned release, or Codex is listed unavailable
   with the path, the version found and the version pinned. A `.js` path is the npm launcher and runs
