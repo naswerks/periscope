@@ -144,9 +144,14 @@ async function wire(
   assert.equal(opened.ok, true, `the probe session did not start: ${opened.ok ? '' : opened.refusal.detail}`);
   const session = opened.ok ? opened.value : (undefined as never);
 
-  session.onMessage((message) => observer.observeMessage(message));
-  const result = await waitForResult(session, TURN_TIMEOUT_MS);
-  session.stop('the probe finished');
+  let result: SDKMessage | null;
+  try {
+    session.onMessage((message) => observer.observeMessage(message));
+    result = await waitForResult(session, TURN_TIMEOUT_MS);
+  } finally {
+    // Whatever the turn did, the agent is ended here: a probe that left one running could not exit.
+    registry.stopAll('the probe finished');
+  }
 
   return { session, machine, transitions, outcomes, hookEvents, result, cwd };
 }

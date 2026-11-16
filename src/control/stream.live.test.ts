@@ -121,13 +121,18 @@ async function observeTurn(
     onRefusal: (refusal) => refusals.push(refusal),
   });
 
-  const sent = session.prompt(prompt);
-  assert.equal(sent.ok, true);
-  const live = await session.whenLive(START_TIMEOUT_MS);
-  assert.equal(live.ok, true, `the agent never reported itself: ${live.ok ? '' : live.refusal.detail}`);
+  try {
+    const sent = session.prompt(prompt);
+    assert.equal(sent.ok, true);
+    const live = await session.whenLive(START_TIMEOUT_MS);
+    assert.equal(live.ok, true, `the agent never reported itself: ${live.ok ? '' : live.refusal.detail}`);
 
-  await waitForResult(discriminators, TURN_TIMEOUT_MS);
-  session.stop('the probe finished');
+    await waitForResult(discriminators, TURN_TIMEOUT_MS);
+  } finally {
+    // A turn that never started or never ended must not leave the agent running: this process could
+    // not exit.
+    registry.stopAll('the probe finished');
+  }
 
   return { frames: sink.sent, discriminators, refusals, cwd };
 }

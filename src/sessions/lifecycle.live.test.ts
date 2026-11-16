@@ -110,68 +110,76 @@ test(
     let observed: Record<string, string | undefined> | null = null;
     const workspace = workspaceOutsideAnyRepo('env');
     const sessions = registry(parentEnv);
+    try {
+      const opened = await sessions.open({
+        cwd: workspace,
+        prompt: 'Reply with the single word: ok',
+        // The SDK's own seam for VMs and containers, used here to read the environment at the exact
+        // moment of process creation — which is the child's environment, by construction.
+        spawn: (options: SpawnOptions) => {
+          observed = options.env;
+          return spawn(options.command, options.args, {
+            cwd: options.cwd,
+            env: options.env,
+            signal: options.signal,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            windowsHide: true,
+          });
+        },
+      });
 
-    const opened = await sessions.open({
-      cwd: workspace,
-      prompt: 'Reply with the single word: ok',
-      // The SDK's own seam for VMs and containers, used here to read the environment at the exact
-      // moment of process creation — which is the child's environment, by construction.
-      spawn: (options: SpawnOptions) => {
-        observed = options.env;
-        return spawn(options.command, options.args, {
-          cwd: options.cwd,
-          env: options.env,
-          signal: options.signal,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          windowsHide: true,
-        });
-      },
-    });
+      assert.ok(opened.ok, `the session should have started: ${JSON.stringify(opened)}`);
+      assert.ok(observed !== null, 'the spawn seam was never called');
+      const childEnv: Record<string, string | undefined> = observed;
 
-    assert.ok(opened.ok, `the session should have started: ${JSON.stringify(opened)}`);
-    assert.ok(observed !== null, 'the spawn seam was never called');
-    const childEnv: Record<string, string | undefined> = observed;
+      console.log('[live/env] child env key count :', Object.keys(childEnv).length);
+      console.log('[live/env] sentinel in child   :', sentinel in childEnv);
+      console.log('[live/env] CHILD_SESSION marker:', 'CLAUDE_CODE_CHILD_SESSION' in childEnv);
+      console.log('[live/env] CLAUDE_EFFORT       :', 'CLAUDE_EFFORT' in childEnv);
+      console.log('[live/env] USERPROFILE         :', 'USERPROFILE' in childEnv);
+      console.log('[live/env] apiKeySource        :', opened.value.facts?.apiKeySource);
+      console.log('[live/env] cliVersion          :', opened.value.facts?.cliVersion);
 
-    console.log('[live/env] child env key count :', Object.keys(childEnv).length);
-    console.log('[live/env] sentinel in child   :', sentinel in childEnv);
-    console.log('[live/env] CHILD_SESSION marker:', 'CLAUDE_CODE_CHILD_SESSION' in childEnv);
-    console.log('[live/env] CLAUDE_EFFORT       :', 'CLAUDE_EFFORT' in childEnv);
-    console.log('[live/env] USERPROFILE         :', 'USERPROFILE' in childEnv);
-    console.log('[live/env] apiKeySource        :', opened.value.facts?.apiKeySource);
-    console.log('[live/env] cliVersion          :', opened.value.facts?.cliVersion);
+      // A variable's name is matched without regard to case, as Windows matches it: a shell there hands
+      // this process the search path as `Path`, and the child must have it under whatever case it came.
+      const carries = (name: string): boolean =>
+        Object.keys(childEnv).some((key) => key.toUpperCase() === name.toUpperCase());
+      assert.equal(carries(sentinel), false, 'an undeclared variable reached the agent');
+      assert.equal(carries('CLAUDE_CODE_CHILD_SESSION'), false);
+      assert.equal(carries('CLAUDE_EFFORT'), false);
+      assert.equal(carries('CLAUDECODE'), false);
 
-    assert.equal(sentinel in childEnv, false, 'an undeclared variable reached the agent');
-    assert.equal('CLAUDE_CODE_CHILD_SESSION' in childEnv, false);
-    assert.equal('CLAUDE_EFFORT' in childEnv, false);
-    assert.equal('CLAUDECODE' in childEnv, false);
+      // The other half: the keys that must survive did.
+      assert.equal(carries('USERPROFILE'), true, 'USERPROFILE is load-bearing for ambient auth');
+      assert.equal(carries('PATH'), true, 'the search path did not reach the agent');
 
-    // The other half: the keys that must survive did.
-    assert.equal('USERPROFILE' in childEnv, true, 'USERPROFILE is load-bearing for ambient auth');
-    assert.equal('PATH' in childEnv, true);
+      // And the session is real — it reported a version and an identity of its own.
+      assert.match(opened.value.facts?.cliVersion ?? '', /^\d+\.\d+\.\d+$/);
+      assert.ok((opened.value.facts?.id ?? '').length > 0);
 
-    // And the session is real — it reported a version and an identity of its own.
-    assert.match(opened.value.facts?.cliVersion ?? '', /^\d+\.\d+\.\d+$/);
-    assert.ok((opened.value.facts?.id ?? '').length > 0);
+      const result = await firstResult(opened.value, TURN_TIMEOUT_MS);
+      console.log(
+        '[live/env] turn result         :',
+        result === null
+          ? 'NONE'
+          : JSON.stringify({
+              subtype: (result as { subtype?: string }).subtype,
+              is_error: (result as { is_error?: boolean }).is_error,
+              cost: (result as { total_cost_usd?: number }).total_cost_usd,
+            }),
+      );
 
-    const result = await firstResult(opened.value, TURN_TIMEOUT_MS);
-    console.log(
-      '[live/env] turn result         :',
-      result === null
-        ? 'NONE'
-        : JSON.stringify({
-            subtype: (result as { subtype?: string }).subtype,
-            is_error: (result as { is_error?: boolean }).is_error,
-            cost: (result as { total_cost_usd?: number }).total_cost_usd,
-          }),
-    );
+      // This is the ambient-auth proof: a turn that completed without error means the agent found
+      // its credentials, which on Windows it can only do through the USERPROFILE family.
+      assert.ok(result !== null, 'the turn produced no result — the session did not authenticate');
+      assert.equal((result as { is_error?: boolean }).is_error, false, 'the turn came back as an error');
 
-    // This is the ambient-auth proof: a turn that completed without error means the agent found
-    // its credentials, which on Windows it can only do through the USERPROFILE family.
-    assert.ok(result !== null, 'the turn produced no result — the session did not authenticate');
-    assert.equal((result as { is_error?: boolean }).is_error, false, 'the turn came back as an error');
-
-    opened.value.stop('probe done');
-    assert.equal(sessions.liveCount, 0, 'a stopped session leaves the registry');
+      opened.value.stop('probe done');
+      assert.equal(sessions.liveCount, 0, 'a stopped session leaves the registry');
+    } finally {
+      // A failed assertion above must not leave an agent running: this process could not exit.
+      sessions.stopAll('the probe ended');
+    }
   },
 );
 
@@ -182,42 +190,46 @@ test(
     const workspace = workspaceOutsideAnyRepo('plugin-none');
     const plugin = pluginWithOneSkill(workspace, 'periscope-probe-skill');
     const sessions = registry();
+    try {
+      const opened = await sessions.open({
+        cwd: workspace,
+        prompt: 'Reply with the single word: ok',
+        settingSources: [],
+        plugins: [{ type: 'local', path: plugin }],
+      });
 
-    const opened = await sessions.open({
-      cwd: workspace,
-      prompt: 'Reply with the single word: ok',
-      settingSources: [],
-      plugins: [{ type: 'local', path: plugin }],
-    });
+      assert.ok(opened.ok, `the session should have started: ${JSON.stringify(opened)}`);
+      const facts = opened.value.facts;
+      assert.ok(facts !== null);
 
-    assert.ok(opened.ok, `the session should have started: ${JSON.stringify(opened)}`);
-    const facts = opened.value.facts;
-    assert.ok(facts !== null);
+      console.log('[live/plugin-none] settingSources : []');
+      console.log('[live/plugin-none] cliVersion     :', facts.cliVersion);
+      console.log('[live/plugin-none] plugins        :', JSON.stringify(facts.plugins));
+      console.log('[live/plugin-none] skills         :', JSON.stringify(facts.skills));
 
-    console.log('[live/plugin-none] settingSources : []');
-    console.log('[live/plugin-none] cliVersion     :', facts.cliVersion);
-    console.log('[live/plugin-none] plugins        :', JSON.stringify(facts.plugins));
-    console.log('[live/plugin-none] skills         :', JSON.stringify(facts.skills));
+      // The answer: a plugin's skill is discovered with no settings sources at all.
+      // It arrives plugin-qualified — `periscope-probe:periscope-probe-skill`, not the bare name —
+      // which is why this matches the suffix. Checking for the bare name reports "not found" against
+      // a skill that is plainly there, and would have inverted this whole result.
+      assert.ok(
+        facts.skills.some((name) => name.endsWith(':periscope-probe-skill')),
+        `the plugin's skill was not discovered under settingSources: [] — got ${JSON.stringify(facts.skills)}`,
+      );
+      assert.ok(
+        facts.plugins.some((plugin) => plugin.name === 'periscope-probe'),
+        'the plugin itself was not loaded, so the skill result above proves nothing',
+      );
 
-    // The answer: a plugin's skill is discovered with no settings sources at all.
-    // It arrives plugin-qualified — `periscope-probe:periscope-probe-skill`, not the bare name —
-    // which is why this matches the suffix. Checking for the bare name reports "not found" against
-    // a skill that is plainly there, and would have inverted this whole result.
-    assert.ok(
-      facts.skills.some((name) => name.endsWith(':periscope-probe-skill')),
-      `the plugin's skill was not discovered under settingSources: [] — got ${JSON.stringify(facts.skills)}`,
-    );
-    assert.ok(
-      facts.plugins.some((plugin) => plugin.name === 'periscope-probe'),
-      'the plugin itself was not loaded, so the skill result above proves nothing',
-    );
+      // The version receipt: a second session in the same process reports its own. A value cached at
+      // module load would be indistinguishable from this one only while nothing changed underneath.
+      assert.match(facts.cliVersion, /^\d+\.\d+\.\d+$/);
+      assert.notEqual(facts.id, '', 'a second session has its own identity');
 
-    // The version receipt: a second session in the same process reports its own. A value cached at
-    // module load would be indistinguishable from this one only while nothing changed underneath.
-    assert.match(facts.cliVersion, /^\d+\.\d+\.\d+$/);
-    assert.notEqual(facts.id, '', 'a second session has its own identity');
-
-    opened.value.stop('probe done');
+      opened.value.stop('probe done');
+    } finally {
+      // A failed assertion above must not leave an agent running: this process could not exit.
+      sessions.stopAll('the probe ended');
+    }
   },
 );
 
@@ -238,89 +250,98 @@ test(
     );
 
     const sessions = registry();
-    const degrades: string[] = [];
+    try {
+      const degrades: string[] = [];
 
-    const created = sessions.create({
-      cwd: workspace,
-      settingSources: ['project'],
-      plugins: [{ type: 'local', path: plugin }],
-    });
-    assert.ok(created.ok);
-    created.value.onDegrade((degrade) => degrades.push(`${degrade.kind}: ${degrade.detail}`));
+      const created = sessions.create({
+        cwd: workspace,
+        settingSources: ['project'],
+        plugins: [{ type: 'local', path: plugin }],
+      });
+      assert.ok(created.ok);
+      created.value.onDegrade((degrade) => degrades.push(`${degrade.kind}: ${degrade.detail}`));
 
-    created.value.prompt('Reply with the single word: ok');
-    const live = await created.value.whenLive(START_TIMEOUT_MS);
-    assert.ok(live.ok, `the session should have started: ${JSON.stringify(live)}`);
+      created.value.prompt('Reply with the single word: ok');
+      const live = await created.value.whenLive(START_TIMEOUT_MS);
+      assert.ok(live.ok, `the session should have started: ${JSON.stringify(live)}`);
 
-    console.log('[live/trust] workspaceTrust :', live.value.workspaceTrust);
-    console.log('[live/trust] degrades       :', JSON.stringify(degrades));
-    console.log('[live/trust] skills         :', JSON.stringify(live.value.skills));
+      console.log('[live/trust] workspaceTrust :', live.value.workspaceTrust);
+      console.log('[live/trust] degrades       :', JSON.stringify(degrades));
+      console.log('[live/trust] skills         :', JSON.stringify(live.value.skills));
 
-    // The control leg for the settings-source question: the same plugin under `['project']`. If
-    // this differed from the `[]` leg, the choice would cost something; it does not, which is what
-    // makes the no-settings default free.
-    assert.ok(
-      live.value.skills.some((name) => name.endsWith(':periscope-probe-skill')),
-      `the plugin's skill was not discovered under settingSources: ['project'] either`,
-    );
+      // The control leg for the settings-source question: the same plugin under `['project']`. If
+      // this differed from the `[]` leg, the choice would cost something; it does not, which is what
+      // makes the no-settings default free.
+      assert.ok(
+        live.value.skills.some((name) => name.endsWith(':periscope-probe-skill')),
+        `the plugin's skill was not discovered under settingSources: ['project'] either`,
+      );
 
-    // The property: a directory this host just created has never been trusted, and the host says
-    // so rather than discovering it as a line on stderr nobody read.
-    assert.equal(
-      live.value.workspaceTrust,
-      'untrusted',
-      'a freshly provisioned directory cannot have been trusted by anyone',
-    );
-    assert.ok(
-      degrades.some((entry) => entry.startsWith('workspace_untrusted')),
-      'asking for settings files in an untrusted workspace must be a named condition',
-    );
+      // The property: a directory this host just created has never been trusted, and the host says
+      // so rather than discovering it as a line on stderr nobody read.
+      assert.equal(
+        live.value.workspaceTrust,
+        'untrusted',
+        'a freshly provisioned directory cannot have been trusted by anyone',
+      );
+      assert.ok(
+        degrades.some((entry) => entry.startsWith('workspace_untrusted')),
+        'asking for settings files in an untrusted workspace must be a named condition',
+      );
 
-    created.value.stop('probe done');
+      created.value.stop('probe done');
+    } finally {
+      // A failed assertion above must not leave an agent running: this process could not exit.
+      sessions.stopAll('the probe ended');
+    }
   },
 );
 
 test('live: a session survives resume with its context', { skip, timeout: 420_000 }, async () => {
   const workspace = workspaceOutsideAnyRepo('resume');
   const sessions = registry();
+  try {
+    const first = await sessions.open({
+      cwd: workspace,
+      prompt: 'Remember this word: pomegranate. Reply with only: stored',
+    });
+    assert.ok(first.ok, `the first session should have started: ${JSON.stringify(first)}`);
+    const originalId = first.value.facts?.id ?? '';
+    console.log('[live/resume] first session id :', originalId);
 
-  const first = await sessions.open({
-    cwd: workspace,
-    prompt: 'Remember this word: pomegranate. Reply with only: stored',
-  });
-  assert.ok(first.ok, `the first session should have started: ${JSON.stringify(first)}`);
-  const originalId = first.value.facts?.id ?? '';
-  console.log('[live/resume] first session id :', originalId);
+    const firstResultMessage = await firstResult(first.value, TURN_TIMEOUT_MS);
+    assert.ok(firstResultMessage !== null, 'the first turn did not complete');
+    first.value.stop('first turn done');
 
-  const firstResultMessage = await firstResult(first.value, TURN_TIMEOUT_MS);
-  assert.ok(firstResultMessage !== null, 'the first turn did not complete');
-  first.value.stop('first turn done');
+    // The host carries out a resume; it never decides when one happens.
+    const resumed = await sessions.open({
+      cwd: workspace,
+      prompt: 'What word did I ask you to remember? Reply with only that word.',
+      resume: originalId,
+    });
+    assert.ok(resumed.ok, `the resumed session should have started: ${JSON.stringify(resumed)}`);
+    console.log('[live/resume] resumed session id:', resumed.value.facts?.id);
 
-  // The host carries out a resume; it never decides when one happens.
-  const resumed = await sessions.open({
-    cwd: workspace,
-    prompt: 'What word did I ask you to remember? Reply with only that word.',
-    resume: originalId,
-  });
-  assert.ok(resumed.ok, `the resumed session should have started: ${JSON.stringify(resumed)}`);
-  console.log('[live/resume] resumed session id:', resumed.value.facts?.id);
+    const replies: string[] = [];
+    resumed.value.onMessage((message) => {
+      if (message.type !== 'assistant') return;
+      for (const block of message.message.content) {
+        if (block.type === 'text') replies.push(block.text);
+      }
+    });
 
-  const replies: string[] = [];
-  resumed.value.onMessage((message) => {
-    if (message.type !== 'assistant') return;
-    for (const block of message.message.content) {
-      if (block.type === 'text') replies.push(block.text);
-    }
-  });
+    const secondResult = await firstResult(resumed.value, TURN_TIMEOUT_MS);
+    assert.ok(secondResult !== null, 'the resumed turn did not complete');
+    const said = replies.join(' ').toLowerCase();
+    console.log('[live/resume] said            :', JSON.stringify(replies));
 
-  const secondResult = await firstResult(resumed.value, TURN_TIMEOUT_MS);
-  assert.ok(secondResult !== null, 'the resumed turn did not complete');
-  const said = replies.join(' ').toLowerCase();
-  console.log('[live/resume] said            :', JSON.stringify(replies));
+    // The property: the context crossed the resume. Nothing in the second turn's own words
+    // contains the answer, so recalling it can only come from the first session's history.
+    assert.match(said, /pomegranate/, 'the resumed session did not carry its context');
 
-  // The property: the context crossed the resume. Nothing in the second turn's own words
-  // contains the answer, so recalling it can only come from the first session's history.
-  assert.match(said, /pomegranate/, 'the resumed session did not carry its context');
-
-  resumed.value.stop('probe done');
+    resumed.value.stop('probe done');
+  } finally {
+    // A failed assertion above must not leave an agent running: this process could not exit.
+    sessions.stopAll('the probe ended');
+  }
 });

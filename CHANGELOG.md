@@ -46,6 +46,12 @@ frame it sends decodes unchanged.
   [protocol.md](docs/protocol.md) says so. The probe of the thinking display runs both its turns at
   the highest effort, where adaptive thinking does think, and reports itself skipped, not failed, when
   neither turn produced a thinking block.
+- Fixed: a live probe whose assertion fails no longer leaves its agent running. Four probe files
+  stopped their sessions on the last line of each test, so a failed assertion left the agent up and
+  the probe's own process could not exit; every probe now ends what it started in a `finally`, and a
+  pin holds that for each probe file. The probe of the spawn environment looked for the search path
+  as `PATH` exactly, which a shell on Windows hands over as `Path`; it now matches a variable's name
+  without regard to case, as the host does.
 - Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
   The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
   what the CLI then registered. The first list of tools the CLI sends is now read for the tools the

@@ -92,6 +92,109 @@ test('the probes skip on a named condition rather than on an accident', () => {
   }
 });
 
+/**
+ * What starts an agent, a runtime or a host: a thing that keeps this process from exiting until it is
+ * ended. `query(` is not among them: a probe reads it in a `for await`, which ends it however the loop
+ * is left.
+ */
+const STARTS =
+  /\.open\(\{|\.create\(\{|\bstart(?:Agent|Codex|Qwen|Pi|Copilot|Opencode)Process\(|\bstartStdioRpc\(|\bPiRpc\.start\(|\bnew PeriscopeHost\(/;
+
+/** One top-level test or function of a probe file: its name (null for a test) and its text. */
+interface Unit {
+  readonly name: string | null;
+  readonly text: string;
+}
+
+function unitsOf(text: string): Unit[] {
+  const starts = [...text.matchAll(/^(?:test\(|(?:async )?function (\w+))/gm)];
+  return starts.map((start, index) => ({
+    name: start[1] ?? null,
+    text: text.slice(start.index, starts[index + 1]?.index ?? text.length),
+  }));
+}
+
+/**
+ * The units of a probe file that start something and leave its end to a line a failed assertion would
+ * skip. A unit that starts something ends it in a `finally` of its own, or hands it over: straight into
+ * a call of a function that has one, or back to callers that each have one.
+ */
+function leavesRunning(text: string): string[] {
+  const units = unitsOf(text);
+  const guarded = (unit: Unit): boolean => /\bfinally\b/.test(unit.text);
+  const calls = (name: string): RegExp => new RegExp(`(?<![.\\w])${name}\\(`);
+  const guardedNames = units.flatMap((unit) => (unit.name !== null && guarded(unit) ? [unit.name] : []));
+  // A start written inside the call of a guarded function is that function's to end, so the statement
+  // of such a call is left out before a unit is read for what it starts itself.
+  const handedOver =
+    guardedNames.length === 0 ? null : new RegExp(`(?<![.\\w])(?:${guardedNames.join('|')})\\([^;]*;`, 'gs');
+  return units
+    .filter((unit) => {
+      if (guarded(unit)) return false;
+      const own = handedOver === null ? unit.text : unit.text.replace(handedOver, ';');
+      if (!STARTS.test(own)) return false;
+      const name = unit.name;
+      if (name === null) return true;
+      const callers = units.filter((other) => other !== unit && calls(name).test(other.text));
+      return callers.length === 0 || callers.some((caller) => !guarded(caller));
+    })
+    .map((unit) => unit.name ?? /^test\(\s*(['"`])((?:(?!\1).)*)\1/s.exec(unit.text)?.[2] ?? 'a test');
+}
+
+test('a live probe ends what it starts in a finally: a failed assertion leaves no agent running', () => {
+  // A probe whose assertion throws past the line that stops its session leaves an agent running, and
+  // the probe's own process then cannot exit: the run hangs until something outside ends it.
+  const found = liveFiles().flatMap((file) =>
+    leavesRunning(file.text).map((unit) => `${file.path}: ${unit}`),
+  );
+  assert.deepEqual(found, [], 'a probe starts something and ends it on a line a failed assertion would skip');
+});
+
+// Guards the selectors, not the rules: a regex that fires on nothing and an `includes` that
+// discriminates nothing would both leave the assertions above green over any file at all.
+test('control: a start with no finally is found, and one that is guarded or handed over is not', () => {
+  const unguarded = [
+    "test('a turn', async () => {",
+    '  const opened = await sessions.open({ cwd });',
+    '  assert.ok(opened.ok);',
+    "  opened.value.stop('done');",
+    '});',
+  ].join('\n');
+  assert.deepEqual(leavesRunning(unguarded), ['a turn']);
+  const guarded = unguarded
+    .replace('  assert.ok', '  try {\n  assert.ok')
+    .replace("  opened.value.stop('done');", "  } finally {\n  opened.value.stop('done');\n  }");
+  assert.deepEqual(leavesRunning(guarded), []);
+
+  // A helper that starts and hands back is its callers' to end: each caller needs the finally.
+  const helper = 'function start(dir: string) {\n  return startPiProcess(request(dir));\n}\n';
+  const careful =
+    "test('one', async () => {\n  const run = start(dir);\n  try {\n  } finally {\n    run.close();\n  }\n});\n";
+  const careless =
+    "test('two', async () => {\n  const run = start(dir);\n  assert.ok(run);\n  run.close();\n});\n";
+  assert.deepEqual(leavesRunning(helper + careful), []);
+  assert.deepEqual(leavesRunning(helper + careful + careless), ['start']);
+
+  // A start handed straight into a function that has the finally is that function's.
+  const leg =
+    'async function leg(agent: AgentProcess) {\n  try {\n    await agent.turn();\n  } finally {\n    agent.close();\n  }\n}\n';
+  const handing =
+    "test('three', async () => {\n  const first = await leg(\n    startAgentProcess(request(cwd)),\n  );\n  assert.ok(first);\n});\n";
+  assert.deepEqual(leavesRunning(leg + handing), []);
+  // Reading a query in a loop starts nothing this rule holds.
+  assert.deepEqual(
+    leavesRunning(
+      "test('four', async () => {\n  for await (const one of query({ prompt })) seen.push(one);\n});\n",
+    ),
+    [],
+  );
+
+  assert.ok(
+    liveFiles().some((file) => STARTS.test(file.text)),
+    'no probe file starts anything by these names, so the rule above reads nothing',
+  );
+});
+
 // Guards the selectors, not the rules: a regex that fires on nothing and an `includes` that
 // discriminates nothing would both leave the assertions above green over any file at all.
 test('control: the workspace patterns and the property check discriminate on planted text', () => {

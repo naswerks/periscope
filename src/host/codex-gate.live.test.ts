@@ -601,24 +601,28 @@ test(
         onNotification: () => undefined,
       });
       assert.ok(started.ok);
-      await started.value.request(
-        'initialize',
-        {
-          clientInfo: { name: 'periscope', title: null, version: packageVersion() },
-          capabilities: { experimentalApi: false },
-        },
-        30_000,
-      );
-      started.value.notify('initialized', {});
-      const listed = await started.value.request('hooks/list', { cwds: [dir] }, 30_000);
-      const sleeping = listed.ok
-        ? listedHooks(listed.value as JsonObject).find(
-            (one) => one.command === (process.platform === 'win32' ? sleeper : posixSleep),
-          )
-        : undefined;
-      assert.ok(sleeping !== undefined, 'the sleeping hook is not listed');
-      await started.value.request('config/batchWrite', hookTrustWrite(sleeping), 30_000);
-      await started.value.close();
+      try {
+        await started.value.request(
+          'initialize',
+          {
+            clientInfo: { name: 'periscope', title: null, version: packageVersion() },
+            capabilities: { experimentalApi: false },
+          },
+          30_000,
+        );
+        started.value.notify('initialized', {});
+        const listed = await started.value.request('hooks/list', { cwds: [dir] }, 30_000);
+        const sleeping = listed.ok
+          ? listedHooks(listed.value as JsonObject).find(
+              (one) => one.command === (process.platform === 'win32' ? sleeper : posixSleep),
+            )
+          : undefined;
+        assert.ok(sleeping !== undefined, 'the sleeping hook is not listed');
+        await started.value.request('config/batchWrite', hookTrustWrite(sleeping), 30_000);
+      } finally {
+        // A hook that is not listed must not leave this app-server running.
+        await started.value.close();
+      }
 
       const raised: string[] = [];
       const watch = new CodexGateWatch({
