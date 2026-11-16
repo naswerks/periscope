@@ -195,6 +195,50 @@ test('control: a start with no finally is found, and one that is guarded or hand
   );
 });
 
+/**
+ * The timers of a probe file that nothing waits out and nothing can clear, by line. A sleep that is
+ * awaited runs to its end before the next line. A timer that is one arm of a race is left running when
+ * the other arm wins, and holds the probe's own process open until it fires: such a timer keeps its
+ * handle, so the race can clear it. A `setTimeout(` inside a string is a script the probe writes, not a
+ * timer of its own.
+ */
+function droppedTimers(text: string): number[] {
+  const lines: number[] = [];
+  for (const match of text.matchAll(/(?<!["'`])\bsetTimeout\(/g)) {
+    const before = text.slice(0, match.index);
+    if (/=\s*$/.test(before)) continue;
+    const waited = before.lastIndexOf('await new Promise');
+    if (waited >= 0 && !before.slice(waited).includes(';')) continue;
+    lines.push(before.split('\n').length);
+  }
+  return lines;
+}
+
+test("a live probe leaves no timer running that it neither waits out nor can clear: one would hold the probe's process open until it fires", () => {
+  const found = liveFiles().flatMap((file) => droppedTimers(file.text).map((line) => `${file.path}:${line}`));
+  assert.deepEqual(found, [], 'a probe sets a timer, drops its handle and does not wait for it');
+});
+
+test('control: a raced timer whose handle is dropped is found, and an awaited sleep, a kept handle and a script in a string are not', () => {
+  const raced =
+    'const won = await Promise.race([\n  opened,\n  new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 180_000)),\n]);\n';
+  assert.deepEqual(droppedTimers(raced), [3]);
+  assert.deepEqual(droppedTimers('await new Promise((resolve) => setTimeout(resolve, 2_000));\n'), []);
+  assert.deepEqual(
+    droppedTimers('const timer = setTimeout(() => resolve(false), 180_000);\nclearTimeout(timer);\n'),
+    [],
+  );
+  assert.deepEqual(
+    droppedTimers('new Promise<void>((resolve) => (timer = setTimeout(resolve, 5_000)));\n'),
+    [],
+  );
+  assert.deepEqual(droppedTimers('writeFileSync(file, `node -e "setTimeout(() => {}, 20000)"`);\n'), []);
+  assert.ok(
+    liveFiles().some((file) => /\bsetTimeout\(/.test(file.text)),
+    'no probe file sets a timer, so the rule above reads nothing',
+  );
+});
+
 // Guards the selectors, not the rules: a regex that fires on nothing and an `includes` that
 // discriminates nothing would both leave the assertions above green over any file at all.
 test('control: the workspace patterns and the property check discriminate on planted text', () => {

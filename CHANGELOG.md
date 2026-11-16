@@ -81,6 +81,10 @@ frame it sends decodes unchanged.
   as the command's own argument. It was a trailing comment, which a model drops, so the listing found
   nothing before the close or after it and the probe passed on a run that measured nothing. A command
   that was not running when the close came is now reported as skipped, not passed.
+- Fixed: the trace live probe's process ends when its tests do. One test raced a three-minute timer
+  and dropped its handle, so the probe's process stayed for three minutes after its last test. The
+  timer is cleared when the wait is over, and a pin reads every probe file for a timer that is
+  neither waited out nor kept.
 - Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
   The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
   what the CLI then registered. The first list of tools the CLI sends is now read for the tools the

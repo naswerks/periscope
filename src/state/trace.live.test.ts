@@ -228,10 +228,16 @@ test(
 
       wired.observer.promptSubmitted('the probe queued a turn');
       created.value.prompt('Run the bash command: sleep 120');
+      // The bound's timer is cleared once the wait is over: left running, it holds this process open for
+      // the whole bound after the last test has ended.
+      let bound: ReturnType<typeof setTimeout> | undefined = undefined;
       const raced = await Promise.race([
         opened.then(() => true),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), TURN_TIMEOUT_MS)),
+        new Promise<boolean>((resolve) => {
+          bound = setTimeout(() => resolve(false), TURN_TIMEOUT_MS);
+        }),
       ]);
+      clearTimeout(bound);
       assert.equal(raced, true, 'the tool entry never opened, so nothing was abandoned');
 
       created.value.stop('the probe killed the session mid-tool');
