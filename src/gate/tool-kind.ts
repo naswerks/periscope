@@ -340,7 +340,9 @@ export const OPENCODE_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
  * The actions of the pinned opencode release that ask and are `other` by name: `external_directory`, asked
  * first for any path outside the session's location (the directory a call goes to); `subagent`, the start of
  * another session under this one; `skill`, a skill's instructions read; `todowrite`, the session's own list;
- * the MCP resource tools; and the MCP event watch. Together with `OPENCODE_TOOL_KINDS` and
+ * the MCP resource tools; and the MCP event watch. The list of a server's resources asks about each server
+ * it would list, so in a session with no server attached it asks about none, lists nothing, and is named
+ * as a call that ran with no decision (`opencode-gate.ts`). Together with `OPENCODE_TOOL_KINDS` and
  * `OPENCODE_DENIED_TOOLS` it names every tool the runtime offers a session (`opencode-local.test.ts` holds
  * them to the runtime's own list).
  */

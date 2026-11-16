@@ -887,7 +887,10 @@ every request they raise.
     never saw begin is one an earlier process ran, which the server states again to a resumed session,
     and is not named. At the open the same name says this host's pre-call gate is missing from the
     server's plugins; then no call is known to have begun, and a call is named on its success alone, as
-    a shell line that names no command would be. What is kept for a call (its input, whether it was
+    a shell line that names no command would be. One call the pinned SDK runs this way with the gate in
+    place: `opencode_list_mcp_resources` asks about each MCP server it would list (the SDK's own
+    source), so in a session with no server attached it asks about none, lists nothing, and is named
+    (seen on a real model). What is kept for a call (its input, whether it was
     decided, whether it runs) is kept by its session and its id together, since one server runs a
     session and its subagents and a provider may hand two of them the same call id.
   - `gate-mode-widened`: the rules of one of the session's sessions changed after the open and are no

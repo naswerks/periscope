@@ -107,6 +107,10 @@ frame it sends decodes unchanged.
   session makes when it is told its subagent went idle. The subagent's call is a leg of its own:
   skipped with its reason when the subagent made no call, red when a call of its began with nobody
   asked. [gate.md](docs/gate.md) says when a subagent's call can arrive.
+- Changed: the documents say when opencode's list of MCP resources asks nobody. The tool asks about
+  each server it would list, so in a session with no MCP server attached it raises no request, lists
+  nothing, and is named `gate-hook-missing`, as a release run on a real model showed. The tables'
+  comment said the MCP resource tools ask, without that case.
 - Fixed: a Copilot session opens where the runtime allows a directory that is none of the session's.
   The read-back refused the open `copilot-gate-not-active` for it, and the runtime allows its temp folder
   by itself, so a session whose temp folder is no write root of its own (one that covers the session's
