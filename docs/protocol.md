@@ -335,6 +335,12 @@ after a drop, because a minted number must be accounted for or the receiver hold
 never fill. A delta never enters a durable store; the two halves of that rule point opposite ways
 and both are pinned (`stream-replay.test.ts`).
 
+A Claude turn's text arrives as fragments before the assistant message that settles it. The markers
+that end a block and a message (`content_block_stop`, `message_delta`, `message_stop`) ride the same
+lane and are not text: Claude Code 2.1.325 sends them after that assistant message (recorded, and
+printed by `stream.live.test.ts`), so the last delta of a response is not its last fragment of text,
+and a view that waits for `message_stop` before it shows the settled message waits past it.
+
 `MESSAGE_ROUTING` (`src/control/stream-routing.ts`) names the lane for every SDK message
 discriminator: delta, update or declined with a reason. `forwardSession` puts each message on its
 lane, then the facts and fragments it carries (below), then the transitions that message caused,

@@ -39,6 +39,13 @@ frame it sends decodes unchanged.
   deny rule refuses never reaches the gate. The live probe asserts it in three turns (no rule, the
   tool's rule, a path's rule), and reports itself skipped when the model did not make the one call it
   was asked to make.
+- Changed: the live probe of a turn rendered as it happens asserts what its title says, that the
+  last fragment of text arrives before the assistant message that carries the text. It counted every
+  delta, and Claude Code 2.1.325 sends the markers that end a block and a message
+  (`content_block_stop`, `message_delta`, `message_stop`) after that message; the probe prints them and
+  [protocol.md](docs/protocol.md) says so. The probe of the thinking display runs both its turns at
+  the highest effort, where adaptive thinking does think, and reports itself skipped, not failed, when
+  neither turn produced a thinking block.
 - Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
   The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
   what the CLI then registered. The first list of tools the CLI sends is now read for the tools the
