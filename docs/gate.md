@@ -669,7 +669,12 @@ the one this host decides.
     a call that finished with no decision of this host's behind it: none at all, one still awaited, or
     a refusal the call ran against. Each call's answer is kept by its call id until
     `tool.execution_complete` and forgotten then, so an id a provider hands out again is a new call; only
-    the probe id this gate minted is exempt, never an id that merely starts the same.
+    the probe id this gate minted is exempt, never an id that merely starts the same. The detail names
+    the call's tool, which the runtime states at the call's start and not at its end. One such call is
+    the runtime's own: when a command started in the shell's background mode ends
+    (`system.notification`, `shell_completed`), the pinned runtime reads its output with a
+    `read_powershell` call under an id of its own, which fires no hook and raises no request (measured
+    on a real model). It is named, with the shell it read, as the runtime's own read.
   - `gate-hook-foreign`: a hook this host did not install answered a request (`resolvedByHook`), or a
     machine-wide policy hook was found at the open, which lowers the opening tier. The runtime is asked
     for the hooks it finds and the machine's managed settings (`hooks.discover`, `managedSettings.read`)

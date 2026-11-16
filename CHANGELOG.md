@@ -59,6 +59,13 @@ frame it sends decodes unchanged.
   everything under the runtime first, while the runtime and its shells are there to root the walk, as
   the close of an opencode session does. Found by the live probe's first turns on a real model;
   held on the real runtime with a stub model.
+- Changed: a Copilot call that ran with no decision is named with its tool, and the runtime's own
+  read of a finished background command is named as that. When a command started in the shell's
+  background mode ends, the pinned runtime reads its output with a `read_powershell` call of its own,
+  under its own id, which reaches neither the hook nor the permission request. It was named
+  `gate-hook-missing` by its id alone. The detail now carries the tool, which the runtime states at a
+  call's start and not at its end, and says when the call is that read, with the shell it read.
+  [SECURITY.md](SECURITY.md) and [gate.md](docs/gate.md) say what the runtime does.
 - Fixed: a Copilot session opens where the runtime allows a directory that is none of the session's.
   The read-back refused the open `copilot-gate-not-active` for it, and the runtime allows its temp folder
   by itself, so a session whose temp folder is no write root of its own (one that covers the session's

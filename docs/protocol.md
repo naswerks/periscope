@@ -794,8 +794,9 @@ the CLI allows by default runs without asking; once per tool) and `gate-mode-wid
 a mode other than `default` or `plan`; once per mode); the one known at the open is also raised once,
 with its detail. pi's two are known at the open, and each is raised once, with its detail.
 Copilot's are `gate-hook-missing` (a permission request the hook did not raise, refused; a hook the
-runtime reports as failed; a call that finished with no decision behind it, or ran against a refusal;
-once per call), `gate-hook-foreign` (a
+runtime reports as failed; a call that finished with no decision behind it, or ran against a refusal,
+the runtime's own read of a finished background command's output among them; once per call),
+`gate-hook-foreign` (a
 hook this host did not install answered a request; also known at the open, for a machine-wide policy
 hook), `gate-unhooked-call` (a tool the model's provider ran itself; once per kind) and
 `gate-mode-widened` (a permission mode other than `manual`, or an agent mode other than `interactive`

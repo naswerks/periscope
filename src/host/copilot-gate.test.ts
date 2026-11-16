@@ -504,6 +504,44 @@ test("a call id handed out again is a new call: the first one's answer does not 
   assert.match(run.raised[0]?.detail ?? '', /ran call call_0 \(view\) with no decision from this host/);
 });
 
+test("a call the runtime makes by itself is named with its tool and with what it is: its read of a finished background command's output reaches no hook", () => {
+  const run = gate(allow);
+  // As the pinned runtime sends them: the command's end, then a read of its output under an id of the
+  // runtime's own, whose start names the tool and whose end does not.
+  run.built.observe(
+    event('system.notification', { kind: { type: 'shell_completed', shellId: '0', exitCode: 1 } }),
+  );
+  run.built.observe(
+    event('tool.execution_start', {
+      toolCallId: 'd7ef7090',
+      toolName: 'read_powershell',
+      arguments: { shellId: '0', delay: 0 },
+    }),
+  );
+  run.built.observe(event('tool.execution_complete', { toolCallId: 'd7ef7090', success: true }));
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-hook-missing'],
+  );
+  assert.match(
+    run.raised[0]?.detail ?? '',
+    /ran call d7ef7090 \(read_powershell\) with no decision from this host for it: the runtime's own read of the output of a background command that had ended \(shell 0\)/,
+  );
+  // Control: a read of a shell nothing said had ended is named with its tool, and as nothing more.
+  run.built.observe(
+    event('tool.execution_start', {
+      toolCallId: 'call_other',
+      toolName: 'read_powershell',
+      arguments: { shellId: '7' },
+    }),
+  );
+  run.built.observe(event('tool.execution_complete', { toolCallId: 'call_other', success: true }));
+  assert.match(
+    run.raised[1]?.detail ?? '',
+    /ran call call_other \(read_powershell\) with no decision from this host for it$/,
+  );
+});
+
 test('a call that finishes while this host is still deciding it is named', async () => {
   let answer: (decision: unknown) => void = () => undefined;
   const run = gate(() => new Promise((resolve) => (answer = resolve)));

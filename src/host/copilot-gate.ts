@@ -86,6 +86,9 @@ export const COPILOT_TOOL_LIST_WAIT_MS = 10_000;
 /** What the hook tells the runtime beside its `ask`, which the runtime carries on the request as `hookMessage`. */
 export const COPILOT_HOOK_REASON = 'this host decides every call';
 
+/** The tools that read what a command in the shell's background mode has written. */
+const COPILOT_SHELL_READERS: readonly string[] = ['read_powershell', 'read_bash'];
+
 /** The prefix of the call ids this host mints for its own probe call at the open. */
 export const COPILOT_PROBE_ID_PREFIX = 'periscope-route-probe-';
 
@@ -278,6 +281,11 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
   // Each unfinished call's answer, by its call id. One runtime serves one session, so the id alone names the
   // call; an entry leaves when its call finishes, so an id a provider hands out again is a new call.
   const answers = new Map<string, CallAnswer>();
+  // What each running call's start said of it, by its call id, until it finishes: the runtime names a
+  // call's tool when it starts and not when it ends.
+  const started = new Map<string, { readonly tool: string | null; readonly shell: string | null }>();
+  // The background commands the runtime has said ended, by their shell ids.
+  const endedShells = new Set<string>();
   const servers = new Map<string, readonly string[]>(options.servers.map((server) => [server, []]));
   // The offered tools the runtime says an attached server brings: never a built-in, whatever their names.
   const fromServers = new Set<string>();
@@ -553,6 +561,30 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           }
           return;
         }
+        case 'system.notification': {
+          const kind = recordOf(data['kind']);
+          if (kind['type'] !== 'shell_completed' || !named(kind['shellId'])) return;
+          if (endedShells.size >= MAX_DECIDED_IDS) {
+            const oldest = endedShells.values().next().value;
+            if (oldest !== undefined) endedShells.delete(oldest);
+          }
+          endedShells.add(kind['shellId']);
+          return;
+        }
+        case 'tool.execution_start': {
+          const id = named(data['toolCallId']) ? data['toolCallId'] : null;
+          if (id === null || (probe !== null && id === probe.id)) return;
+          if (!started.has(id) && started.size >= MAX_DECIDED_IDS) {
+            const oldest = started.keys().next().value;
+            if (oldest !== undefined) started.delete(oldest);
+          }
+          const shell = recordOf(data['arguments'])['shellId'];
+          started.set(id, {
+            tool: named(data['toolName']) ? data['toolName'] : null,
+            shell: named(shell) ? shell : null,
+          });
+          return;
+        }
         case 'tool.execution_complete': {
           // Read when the call finishes: the decision follows the call's start.
           const id = named(data['toolCallId']) ? data['toolCallId'] : null;
@@ -560,11 +592,24 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           if (id === null || (probe !== null && id === probe.id)) return;
           const answer = answers.get(id);
           answers.delete(id);
+          const start = started.get(id);
+          started.delete(id);
           if (answer === 'allowed' || answer === 'foreign') return;
           const ran = data['success'] === true;
           // A refused call that did not run is what a refusal is.
           if (answer === 'refused' && !ran) return;
-          const call = `call ${id}${named(data['toolName']) ? ` (${data['toolName']})` : ''}`;
+          const tool = named(data['toolName']) ? data['toolName'] : (start?.tool ?? null);
+          const call = `call ${id}${tool === null ? '' : ` (${tool})`}`;
+          // When a command started in the shell's background mode ends, the runtime reads its output by a
+          // call of its own, which reaches no hook and no request: said as what it is.
+          const ownRead =
+            answer === undefined &&
+            tool !== null &&
+            COPILOT_SHELL_READERS.includes(tool) &&
+            start?.shell != null &&
+            endedShells.has(start.shell)
+              ? `: the runtime's own read of the output of a background command that had ended (shell ${start.shell}), which it asks nobody about`
+              : '';
           raise(
             'gate-hook-missing',
             answer === 'refused'
@@ -572,8 +617,8 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
               : answer === 'awaited'
                 ? `Copilot finished ${call} while this host was still deciding it, so no decision of this host's stood behind it`
                 : ran
-                  ? `Copilot ran ${call} with no decision from this host for it`
-                  : `Copilot finished ${call}, which failed, with no decision from this host for it`,
+                  ? `Copilot ran ${call} with no decision from this host for it${ownRead}`
+                  : `Copilot finished ${call}, which failed, with no decision from this host for it${ownRead}`,
             // Its own key: what a call did at its end is said beside whatever was said of its request.
             `finished:${id}`,
           );

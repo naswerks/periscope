@@ -640,6 +640,12 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   hook, and is never counted as holding none. The session opens either way. The runtime's answer was
   measured on the pinned runtime with no policy on the machine; a policy hook in it was not, since
   planting one means writing the machine's own policy.
+- **The runtime reads a finished background command's output by a call of its own.** When a command
+  started in the shell's background mode ends, the pinned runtime makes a `read_powershell` call
+  itself, not the model, under an id of its own, and that call reaches neither the hook nor the
+  permission request. It reads the output of a command this host already decided, and it is named
+  `gate-hook-missing` with its id, its tool and what it is, like any call that ran with no decision
+  behind it. Every call a model makes asks; this one, which the runtime makes, does not.
 - **A built-in the host does not know is named, not refused.** The session is offered every built-in
   the runtime has, less the three turned off. One the host's tables do not name has no kind but `other`
   and no local family, so neither the write limits nor the protected set read its input: what bounds it
