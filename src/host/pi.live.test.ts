@@ -502,7 +502,10 @@ test(
       return t.skip('recorded, not held: the residual is held where it was measured, on Windows');
     }
     // The residual's own precondition: the shell that started the command is gone.
-    if (parents.some((parent) => parent === null || parent.running)) {
+    if (parents.some((parent) => parent === null)) {
+      return t.skip('what started the command could not be read, so whether it was detached is not known');
+    }
+    if (parents.some((parent) => parent?.running === true)) {
       return t.skip(
         "the command's own shell was still running at the close, so this was not a detached command",
       );
