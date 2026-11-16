@@ -7,7 +7,8 @@
  * runtime present). No runtime is started, no model is called and nothing is fetched. An install that is
  * absent, off the pin or incomplete is listed `available: false` with the reason. No model list is read:
  * Copilot lists its models only once signed in, so the hello lists none, and a session names its model, or
- * its endpoint's.
+ * its endpoint's, or none: a session that names none opens on the runtime's own default, which the
+ * runtime reports as `auto` and resolves to a model at each turn.
  */
 import type { HostAgentEntry, JsonObject } from '../control/frames.js';
 import { MAX_CONFIGURATION_VALUE_LENGTH } from '../control/frames.js';

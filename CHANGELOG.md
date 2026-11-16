@@ -66,6 +66,16 @@ frame it sends decodes unchanged.
   `gate-hook-missing` by its id alone. The detail now carries the tool, which the runtime states at a
   call's start and not at its end, and says when the call is that read, with the shell it read.
   [SECURITY.md](SECURITY.md) and [gate.md](docs/gate.md) say what the runtime does.
+- Changed: the Copilot live probe runs on an account that is offered no model by name.
+  `PERISCOPE_COPILOT_MODEL=default` names no model, so each session opens on the runtime's own default,
+  which is the only way an account on Copilot's free plan runs a turn: the runtime lists no model for
+  it and refuses one that is named. A session that names no model already opened and ran; the
+  documents now say so, and that the runtime reports such a session's model as `auto`. The probe no
+  longer names the tool a write is made with, since the runtime picks a session's file tools by its
+  model; it reads a command's environment from a file the command writes, since a model asked to print
+  every variable declines; it waits for a background command itself and not for the turn's end, since
+  a session is not idle while a command it started runs; and the sub-agent's leg reports alone, so
+  that it alone is skipped where the plan gives a sub-agent no model.
 - Fixed: a Copilot session opens where the runtime allows a directory that is none of the session's.
   The read-back refused the open `copilot-gate-not-active` for it, and the runtime allows its temp folder
   by itself, so a session whose temp folder is no write root of its own (one that covers the session's

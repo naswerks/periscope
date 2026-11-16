@@ -197,7 +197,8 @@ fails or is past the hello's bounds), each listing the six efforts when it reaso
 does not, no permission modes, the efforts `minimal`, `low`, `medium`, `high`, `xhigh` and `max`
 (pi's thinking levels), `thinking` true, and the tier `intercepted`. Copilot's entry is its pinned
 runtime and SDK versions, no models (Copilot lists its models only once signed in, and the read at start
-signs nothing in, so a session names its model, or its endpoint's), the permission modes `default` and
+signs nothing in, so a session names its model, or its endpoint's, or none and opens on the runtime's
+own default, reported as `auto`), the permission modes `default` and
 `plan`, the efforts `low`, `medium`, `high`, `xhigh` and `max`, `thinking` false, and the tier
 `intercepted-with-residual`. opencode's entry is its pinned SDK version, no models (an opencode
 session's model is an endpoint's, and the session names it), the permission modes `default` and `plan`,

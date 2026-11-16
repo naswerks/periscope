@@ -4,16 +4,24 @@
  *
  * It runs only with `PERISCOPE_LIVE=1`, `PERISCOPE_COPILOT_SDK` (the directory the SDK was installed into
  * at the pinned version), `PERISCOPE_COPILOT_TOKEN_FILE` (a file holding a GitHub token with Copilot
- * access) and `PERISCOPE_COPILOT_MODEL` (a model that token may use). Without them each property is NOT
- * exercised, and the skip says so. Every run spends the account's requests, so each prompt is short. Each
- * test prints its receipts as JSON lines, which are the record of what was measured; the assertions hold
- * only what the gate depends on.
+ * access) and `PERISCOPE_COPILOT_MODEL`: a model that token may use, or the word `default`, which names
+ * none, so each session opens on the runtime's own default. An account on Copilot's free plan is offered
+ * no model by name (the runtime lists none, and refuses one that is named), so `default` is the only
+ * value that runs a turn there. Without the variables each property is NOT exercised, and the skip says
+ * so. Every run spends the account's requests, so each prompt is short. Each test prints its receipts as
+ * JSON lines, which are the record of what was measured; the assertions hold only what the gate depends
+ * on. The runtime picks a session's file tools by its model, so no assertion names the tool a write was
+ * made with.
+ *
+ * One leg may report skipped: on the free plan a sub-agent fails at its start (`400 The requested model
+ * is not supported`) and makes no call, so whether its calls ask is not measured there, and the leg says
+ * so in the runtime's words. Every other leg runs.
  *
  * Run it from a plain terminal, not from inside an agent session, which would lend it that session's tools:
  *
  *   npm install --prefix <sdk directory> @github/copilot-sdk@1.0.34
  *   npm run build
- *   PERISCOPE_LIVE=1 PERISCOPE_COPILOT_SDK=<sdk directory> PERISCOPE_COPILOT_TOKEN_FILE=<token file> PERISCOPE_COPILOT_MODEL=<model> node --test dist/host/copilot.live.test.js
+ *   PERISCOPE_LIVE=1 PERISCOPE_COPILOT_SDK=<sdk directory> PERISCOPE_COPILOT_TOKEN_FILE=<token file> PERISCOPE_COPILOT_MODEL=<model, or default> node --test dist/host/copilot.live.test.js
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,6 +46,8 @@ const LIVE = process.env['PERISCOPE_LIVE'] === '1';
 const SDK = process.env['PERISCOPE_COPILOT_SDK'] ?? '';
 const TOKEN_FILE = process.env['PERISCOPE_COPILOT_TOKEN_FILE'] ?? '';
 const MODEL = process.env['PERISCOPE_COPILOT_MODEL'] ?? '';
+/** The value of `PERISCOPE_COPILOT_MODEL` that names no model: the session opens on the runtime's own. */
+const RUNTIME_DEFAULT = 'default';
 const skip = !LIVE
   ? 'PERISCOPE_LIVE is not set — this property is NOT exercised'
   : SDK === '' || TOKEN_FILE === '' || MODEL === ''
@@ -76,7 +86,7 @@ function request(cwd: string, overrides: Partial<AgentProcessRequest> = {}): Age
     sessionStore: null,
     sessionStoreFlush: null,
     spawn: null,
-    model: MODEL,
+    model: MODEL === RUNTIME_DEFAULT ? null : MODEL,
     systemPrompt: {
       type: 'preset',
       preset: 'runtime-default',
@@ -126,7 +136,13 @@ function start(
     decisionTimeoutMs,
     holdAfterMs: 250,
     servers: Object.keys(sessionRequest.mcpServers ?? {}),
-    onOutcome: (outcome) => receipt('outcome', { kind: outcome.kind, tool: outcome.request.toolName }),
+    onOutcome: (outcome) =>
+      receipt('outcome', {
+        kind: outcome.kind,
+        tool: outcome.request.toolName,
+        // A call this host refused by itself is recorded whole: what was asked for, and why it was refused.
+        ...(outcome.kind === 'refused' ? { input: outcome.request.toolInput, refusal: outcome.refusal } : {}),
+      }),
     onDegrade: (name, detail) => {
       raised.push({ name, detail });
       receipt('degrade', { name, detail });
@@ -153,6 +169,60 @@ const events = (stream: LiveStream<CopilotMessage>, type: string) =>
       : [],
   );
 
+/** Every event of `type`, the session's own and a sub-agent's. */
+const everyEvent = (stream: LiveStream<CopilotMessage>, type: string) =>
+  stream.seen.flatMap((message) =>
+    message.kind === 'event' && message.event.type === type ? [message.event] : [],
+  );
+
+/**
+ * Whether a call would write `file`, by whatever tool the session's model was given for it: a file tool
+ * (`create`, or `edit` and `apply_patch`, by their kinds), or a shell line that names the file.
+ */
+const writes = (asked: DecisionRequest, file: string): boolean =>
+  asked.toolKind === 'file_write' ||
+  asked.toolKind === 'file_edit' ||
+  (asked.toolKind === 'shell' && JSON.stringify(asked.toolInput).includes(file));
+
+/** The file a command's environment is written to, in the session's directory. */
+const ENVIRONMENT_FILE = 'environment.txt';
+
+/**
+ * Write, into the session's directory, a script that writes the environment it runs in to
+ * `ENVIRONMENT_FILE` beside it, and return the shell line that runs it. The probe reads that file itself,
+ * so what is measured is the command's environment and not a model's account of it: a model asked to
+ * print every variable may decline, since they can hold secrets.
+ */
+function environmentScript(dir: string): string {
+  if (process.platform === 'win32') {
+    writeFileSync(join(dir, 'write-environment.cmd'), `@set > "%~dp0${ENVIRONMENT_FILE}"\r\n`);
+    return '.\\write-environment.cmd';
+  }
+  writeFileSync(join(dir, 'write-environment.sh'), `env > "$(dirname "$0")/${ENVIRONMENT_FILE}"\n`);
+  return 'sh ./write-environment.sh';
+}
+
+/** What the session's model said, turn by turn. */
+const repliesOf = (stream: LiveStream<CopilotMessage>): unknown[] =>
+  events(stream, 'assistant.message').map((event) => (event.data as { content?: unknown }).content);
+
+/** The model the session was opened on and the ones its turns ran on, as the runtime named them. */
+function modelsOf(stream: LiveStream<CopilotMessage>): { changes: unknown[]; used: unknown[] } {
+  return {
+    changes: events(stream, 'session.model_change').map(
+      (event) => (event.data as { newModel?: unknown }).newModel,
+    ),
+    used: [
+      ...new Set(
+        everyEvent(stream, 'assistant.usage').map((event) => (event.data as { model?: unknown }).model),
+      ),
+    ],
+  };
+}
+
+/** What the runtime says when the account's plan has no model for a sub-agent. */
+const NO_SUBAGENT_MODEL = 'The requested model is not supported';
+
 const idle = (stream: LiveStream<CopilotMessage>): boolean => events(stream, 'session.idle').length > 0;
 
 /**
@@ -168,7 +238,7 @@ function ranNoTurn(stream: LiveStream<CopilotMessage>): string | null {
   const unavailable = said.find((message) => /Model "[^"]*" is not available/.test(message));
   return unavailable === undefined
     ? null
-    : `the session opened and ran no turn: ${unavailable} Name a model the token's account may use in PERISCOPE_COPILOT_MODEL`;
+    : `the session opened and ran no turn: ${unavailable} Name a model the token's account may use in PERISCOPE_COPILOT_MODEL, or ${RUNTIME_DEFAULT} for the runtime's own`;
 }
 
 /** Processes whose command line carries the marker, after close: what outlived the session. */
@@ -198,7 +268,7 @@ test(
       dir,
       (asked) =>
         Promise.resolve(
-          asked.toolName === 'create'
+          writes(asked, 'blocked.txt')
             ? { behavior: 'deny', message: 'periscope-denied-the-write' }
             : { behavior: 'allow' },
         ),
@@ -206,26 +276,41 @@ test(
     );
     try {
       run.process.prompt(
-        'Do these four things in order, one tool each: read notes.txt with the view tool; create a file named blocked.txt containing hi; call the echo tool of the fake server with the text ping; use the task tool with agent_type general-purpose to have a sub-agent read notes.txt with the view tool. Then say what the create tool told you.',
+        'Do these four things in order, one tool each: read notes.txt with the view tool; create a file named blocked.txt containing hi with your file-writing tool; call the echo tool of the fake server with the text ping; use the task tool with agent_type general-purpose to have a sub-agent read notes.txt with the view tool. Then say what the file-writing tool told you.',
       );
       await run.stream.until(() => idle(run.stream), 600_000);
       const nothing = ranNoTurn(run.stream);
       if (nothing !== null) return t.skip(nothing);
-      const failure = events(run.stream, 'session.error');
-      receipt('errors', { failure: failure.map((event) => event.data) });
+      receipt('models', { asked: MODEL, ...modelsOf(run.stream) });
+      receipt('replies', { replies: repliesOf(run.stream) });
+      const said = (event: { data?: unknown }): string => JSON.stringify(event.data ?? null);
+      // The one failure the free plan is known for is the sub-agent leg's to report, below.
+      const failure = events(run.stream, 'session.error').filter(
+        (event) => !said(event).includes(NO_SUBAGENT_MODEL),
+      );
+      receipt('errors', { failure: events(run.stream, 'session.error').map((event) => event.data) });
       assert.deepEqual(failure, [], 'the session did not sign in or failed its run');
       const names = run.decided.map((asked) => asked.toolName);
       assert.ok(names.includes('view'), `no read reached the decision: ${names.join(', ')}`);
-      assert.ok(names.includes('create'), `no write reached the decision: ${names.join(', ')}`);
+      assert.ok(
+        run.decided.some((asked) => writes(asked, 'blocked.txt')),
+        `no write reached the decision: ${names.join(', ')}`,
+      );
       assert.ok(names.includes('mcp__fake__echo'), `no MCP call reached the decision: ${names.join(', ')}`);
       assert.equal(existsSync(join(dir, 'blocked.txt')), false, 'the refused write ran');
-      const sub = run.decided.filter((asked) => asked.agentId !== null || asked.agentType !== null);
-      receipt('sub-agent decisions', { sub });
-      assert.ok(sub.length > 0, "no sub-agent's call reached the decision");
-      const replies = events(run.stream, 'assistant.message').map(
-        (event) => (event.data as { content?: string }).content,
-      );
-      receipt('replies', { replies });
+      await t.test("the sub-agent's own call asks this host", (leg) => {
+        const sub = run.decided.filter((asked) => asked.agentId !== null || asked.agentType !== null);
+        const ended = [...everyEvent(run.stream, 'subagent.failed'), ...events(run.stream, 'session.error')];
+        receipt('sub-agent decisions', { sub, failed: ended.map((event) => event.data) });
+        // A sub-agent the plan gives no model fails at its start and makes no call: nothing of it asked
+        // because nothing of it ran. Any other sub-agent that made no call that asked is a red.
+        const refused = ended.map(said).find((text) => text.includes(NO_SUBAGENT_MODEL));
+        if (sub.length === 0 && refused !== undefined) {
+          leg.skip(`the sub-agent ran no call, so none could ask: the runtime said ${NO_SUBAGENT_MODEL}`);
+          return;
+        }
+        assert.ok(sub.length > 0, "no sub-agent's call reached the decision");
+      });
       const causes = run.stream.seen
         .filter((message) => message.kind === 'event')
         .map((message) => (message.kind === 'event' ? message.event.type : ''));
@@ -260,13 +345,15 @@ test(
       20_000,
     );
     try {
-      run.process.prompt('Create a file named silent.txt containing hi, with the create tool.');
+      run.process.prompt('Create a file named silent.txt containing hi, with your file-writing tool.');
       await run.stream.until(() => idle(run.stream), 600_000);
       const nothing = ranNoTurn(run.stream);
       if (nothing !== null) return t.skip(nothing);
+      receipt('models', { asked: MODEL, ...modelsOf(run.stream) });
+      receipt('replies', { replies: repliesOf(run.stream) });
       assert.ok(
-        run.decided.some((asked) => asked.toolName === 'create'),
-        'the write never asked',
+        run.decided.some((asked) => writes(asked, 'silent.txt')),
+        `the write never asked: ${run.decided.map((asked) => asked.toolName).join(', ')}`,
       );
       assert.equal(existsSync(join(dir, 'silent.txt')), false, 'a call nobody answered ran');
     } finally {
@@ -282,23 +369,28 @@ test(
   { skip },
   async (t) => {
     const dir = scratch();
+    const command = environmentScript(dir);
     const run = start(dir, allow);
     try {
-      const command =
-        process.platform === 'win32'
-          ? 'Get-ChildItem env: | ForEach-Object { $_.Name + "=" + $_.Value }'
-          : 'env';
       run.process.prompt(`Run exactly this shell command and reply done: ${command}`);
       await run.stream.until(() => idle(run.stream), 600_000);
       const nothing = ranNoTurn(run.stream);
       if (nothing !== null) return t.skip(nothing);
-      const outputs = events(run.stream, 'tool.execution_complete').map((event) =>
-        String((event.data as { result?: { content?: string } }).result?.content ?? ''),
+      const snapshot = join(dir, ENVIRONMENT_FILE);
+      receipt('replies', { replies: repliesOf(run.stream), wrote: existsSync(snapshot) });
+      assert.ok(existsSync(snapshot), 'the command did not run, so its environment was not read');
+      const text = readFileSync(snapshot, 'utf8');
+      const names = text
+        .split(/\r?\n/)
+        .map((line) => line.split('=')[0] ?? '')
+        .filter((name) => name !== '');
+      receipt('environment names', { names });
+      // Control: what the command wrote is an environment, the search path among its names.
+      assert.ok(
+        names.some((name) => name.toLowerCase() === 'path'),
+        'what the command wrote is no environment, so nothing of it was read',
       );
       const token = readFileSync(TOKEN_FILE, 'utf8').trim();
-      const text = outputs.join('\n');
-      receipt('environment names', { names: text.split(/\r?\n/).map((line) => line.split('=')[0]) });
-      assert.ok(text.length > 0, 'the command printed nothing, so its environment was not read');
       assert.equal(text.includes(token), false, "the token reached the agent's shell");
       for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'COPILOT_GITHUB_TOKEN', 'COPILOT_SDK_AUTH_TOKEN']) {
         assert.equal(new RegExp(`^${name}=`, 'mi').test(text), false, `${name} reached the agent's shell`);
@@ -326,11 +418,16 @@ test(
       run.process.prompt(
         `Run this command with the shell tool in its async mode, and do not wait for it: ${command}`,
       );
-      await run.stream.until(() => idle(run.stream), 600_000);
+      // The session is not idle while a command it started still runs, so the wait is for the command
+      // itself: the turn's end would come only after the command's own.
+      const deadline = Date.now() + 300_000;
+      while (before.length === 0 && !idle(run.stream) && Date.now() < deadline) {
+        await run.stream.until(() => idle(run.stream), 2_000);
+        before.push(...survivors());
+      }
       const nothing = ranNoTurn(run.stream);
       if (nothing !== null) return t.skip(nothing);
-      before.push(...survivors());
-      receipt('running before close', { survivors: before });
+      receipt('running before close', { survivors: before, idle: idle(run.stream) });
     } finally {
       await closeAndWait(run.process, run.stream, receipt);
       removeScratch(dir, receipt);

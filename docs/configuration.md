@@ -609,7 +609,11 @@ the other runtimes ([the wire protocol](protocol.md)).
   install's files, starting nothing: an install that is absent, of another version, pinning another
   runtime, or missing this platform's runtime is listed unavailable with what it found and what is
   pinned; the host still starts, and a session naming `copilot` is refused `runtime-unavailable` with
-  that reason. The hello lists no models: Copilot lists its models only once signed in.
+  that reason. The hello lists no models: Copilot lists its models only once signed in. A session
+  that names no model opens on the runtime's own default: the runtime reports the session's model as
+  `auto` and picks a model for each turn, which each step's usage names. An account on Copilot's free
+  plan is offered no model by name (the runtime lists none for it and refuses one that is named), so
+  naming none is how a session of such an account runs.
 - **The home is the runner's own.** Each session's runtime runs with a fresh home under
   `<base>/sessions`, its caches pointed inside it on every platform (`COPILOT_CACHE_HOME`, which the
   runtime reads before the platform's own cache directory, and on Windows `LOCALAPPDATA` and `APPDATA`

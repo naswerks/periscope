@@ -125,12 +125,16 @@ npm run build && PERISCOPE_LIVE=1 node --test dist/host/further-writes.live.test
 signed in with a token file, on a real model: every call of a Copilot session asks this host (a read, a
 refused write that does not run, an MCP call, a sub-agent's read), silence holds to the decision deadline,
 an approved command's environment names no credential, and nothing the shell still runs outlives the
-close. Run it before tagging any release that moves the Copilot SDK; the variables it needs are in its
-header:
+close. `PERISCOPE_COPILOT_MODEL` names a model the token's account may use, or is the word `default`,
+which names none: each session then opens on the runtime's own default. An account on Copilot's free
+plan is offered no model by name, so `default` is the only value that runs a turn there; on that plan a
+sub-agent can fail at its start (`400 The requested model is not supported`), and the sub-agent's leg
+then reports skipped with those words, the one leg that may. Run it before tagging any release that
+moves the Copilot SDK; the variables it needs are in its header:
 
 ```sh
 npm install --prefix <sdk directory> @github/copilot-sdk@1.0.34
-npm run build && PERISCOPE_LIVE=1 PERISCOPE_COPILOT_SDK=<sdk directory> PERISCOPE_COPILOT_TOKEN_FILE=<token file> PERISCOPE_COPILOT_MODEL=<model> node --test dist/host/copilot.live.test.js
+npm run build && PERISCOPE_LIVE=1 PERISCOPE_COPILOT_SDK=<sdk directory> PERISCOPE_COPILOT_TOKEN_FILE=<token file> PERISCOPE_COPILOT_MODEL=<model, or default> node --test dist/host/copilot.live.test.js
 ```
 
 `src/host/opencode.live.test.ts` holds opencode under the gate against the SDK an operator installed, on a

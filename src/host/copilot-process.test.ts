@@ -498,6 +498,17 @@ test("a call is decided by this host's gate: an approved one runs, a refused one
   await closed(run);
 });
 
+test("a session whose request names no model names none to the runtime, so it opens on the runtime's own default; a switch back to the session's own model then has none to send", async () => {
+  const run = await started();
+  await waitFor(() => opened(run), 'the open');
+  const [config] = run.record.configs;
+  assert.ok(config !== undefined);
+  assert.equal(Object.hasOwn(config, 'model'), false, 'a model was named to the runtime');
+  await run.process.setModel(null);
+  assert.deepEqual(run.record.models, []);
+  assert.equal(await closed(run), null);
+});
+
 test("the setters: the agent mode, the effort and the model are the runtime's own calls, and what Copilot has no form for is refused", async () => {
   const run = await started({ request: { model: 'gpt-5-mini' } });
   await waitFor(() => opened(run), 'the open');
