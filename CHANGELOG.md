@@ -45,6 +45,15 @@ frame it sends decodes unchanged.
   directory, so a path that climbed out of the session's directory into a protected folder was judged
   as some other folder and passed. `PeriscopeHost` now places it under the call's directory, as it does
   for every other runtime. A write is unchanged.
+- Security: the local gate reads the NT namespace prefix. `\??\C:\...` is the system's own name for the
+  drive path after it, and Windows opens it as that path when a program hands it over unchanged. The
+  gate placed it as a folder named `??` at the root of the drive, so a protected file named that way had
+  no local refusal: on the pinned Copilot runtime, whose `view` and `create` open that spelling, a
+  protected file was read through it. It is now the drive path after it, as a device prefix is
+  (`\??\UNC\server\share\...` is that share), so a protected file is refused, a write outside the
+  session's roots is refused, and a file in the workspace named that way is written where it was refused
+  as outside. A form under it that maps to no drive path (`\??\GLOBALROOT\...`, a volume) is refused
+  `path-unplaceable`. With forward slashes it is no prefix and is read as before.
 - Security: the local gate reads the other ways Windows spells one file. A device prefix
   (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it, so a long-path spelling of a workspace file
   is now written where it was refused as outside the workspace, and one of a protected file is refused

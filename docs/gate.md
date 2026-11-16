@@ -101,12 +101,15 @@ first for every runtime, Claude included, so a relative read or search is checke
 and never where the host process happens to be, and the second for the runtimes whose tools write
 relative to where they run. Under Windows rules a form that maps to a drive path by its text is
 mapped before it is checked: a device prefix (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it,
-`\\?\UNC\server\share\...` is that share, and a share that names this machine's own drive
+and so is the NT namespace prefix (`\??\C:\...`, with backslashes), which Windows opens as that drive
+path when a program hands it over unchanged and which Copilot's `view` and `create` were measured
+opening on the pinned runtime (Node's own file calls do not);
+`\\?\UNC\server\share\...` and `\??\UNC\server\share\...` are that share, and a share that names this machine's own drive
 (`\\localhost\C$\...`, a loopback address, or a name in `LocalGateOptions.localNames`, which the host
 fills with its host name and `COMPUTERNAME`) is that drive's path. Three forms cannot be placed and are
 refused `path-unplaceable`: a drive-relative path on another drive, whose directory no call states;
 another user's home (`~name/...`); and a device or volume form that maps to no drive path
-(`\\?\Volume{...}\`, `\\.\PhysicalDrive0`). The protected set is compared with a Windows path whose
+(`\\?\Volume{...}\`, `\\.\PhysicalDrive0`, `\??\GLOBALROOT\...`). The protected set is compared with a Windows path whose
 segments have lost what Windows ignores (trailing dots and spaces, a stream after a colon), and, for a
 path with a segment shaped like a generated short name (`PROGRA~1`), also with the path as the file
 system names it (`LocalGateOptions.realPath`; the host passes `canonicalPath`). A short name is never

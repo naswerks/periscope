@@ -10,9 +10,9 @@
  *
  * Windows also names one file several ways, and a form that maps to a drive path by its text is mapped
  * to it, so the checks read the path every other spelling is compared with: a device prefix
- * (`\\?\C:\...`, `\\.\C:\...`, which programs hand out for long paths) is the drive path after it,
- * `\\?\UNC\server\share\...` is that share, and a share that names this machine's own drive
- * (`\\localhost\C$\...`) is that drive's path.
+ * (`\\?\C:\...`, `\\.\C:\...`, which programs hand out for long paths) is the drive path after it, and so
+ * is the NT namespace prefix (`\??\C:\...`); `\\?\UNC\server\share\...` is that share, and a share that
+ * names this machine's own drive (`\\localhost\C$\...`) is that drive's path.
  *
  * Which rules hold is read from the call's directory: one spelled the Windows way (a drive or a share)
  * means Windows rules, and any other means POSIX rules, under which only `~` is placed and every other
@@ -74,13 +74,23 @@ function namesThisMachine(server: string, localNames: readonly string[]): boolea
 }
 
 /**
- * `candidate` with a device prefix, or a share of this machine's own drive, mapped to the drive path it
- * names; any other path is returned as written. A device or volume form that names no drive path is
- * refused. Windows reads either separator, so a path that starts with two of either is read here.
+ * The NT namespace prefix, `\??\`: the system's own name for what the device prefix `\\?\` names. Windows
+ * opens `\??\C:\x` as `C:\x` when a program hands it the path unchanged, and a runtime's file tools do
+ * (Copilot's `view` and `create`). It is the prefix only with backslashes: `/??/C:/x` is a rooted path.
+ */
+const NT_PREFIX = /^\\\?\?\\/;
+
+/**
+ * `candidate` with a device prefix or the NT namespace prefix, or a share of this machine's own drive,
+ * mapped to the drive path it names; any other path is returned as written. A device or volume form that
+ * names no drive path is refused. Windows reads either separator in a device prefix, so a path that
+ * starts with two of either is read here.
  */
 function mapped(candidate: string, localNames: readonly string[]): string | Refusal {
-  if (!/^[\\/]{2}/.test(candidate)) return candidate;
-  let unified = candidate.replace(/\//g, '\\');
+  // What follows the NT prefix is what follows the device prefix: a drive path, `UNC\`, or a device.
+  const spelled = NT_PREFIX.test(candidate) ? `\\\\?\\${candidate.slice(4)}` : candidate;
+  if (!/^[\\/]{2}/.test(spelled)) return candidate;
+  let unified = spelled.replace(/\//g, '\\');
   const device = /^\\\\[?.]\\(.*)$/s.exec(unified);
   if (device !== null) {
     const rest = device[1] ?? '';
@@ -152,8 +162,10 @@ export function placePath(candidate: string, where: Placement): string | Refusal
   const homed = atHome(candidate, where.home);
   if (typeof homed !== 'string') return homed;
   const windows = where.directory !== null && isWindowsDirectory(where.directory);
-  // With no directory to read the rules from, a path that opens with two backslashes is Windows' own.
-  const windowsForm = windows || (where.directory === null && homed.startsWith('\\\\'));
+  // With no directory to read the rules from, a path that opens with two backslashes, or with the NT
+  // namespace prefix, is Windows' own.
+  const windowsForm =
+    windows || (where.directory === null && (homed.startsWith('\\\\') || NT_PREFIX.test(homed)));
   const form = windowsForm ? mapped(homed, where.localNames ?? []) : homed;
   if (typeof form !== 'string') return form;
   if (windows && where.directory !== null) {

@@ -183,7 +183,9 @@ only shows such a variable is refused like one that mentions the path itself:
 `echo "$PI_CODING_AGENT_DIR"` is, since the whole pi home is protected.
 
 Windows names one file several ways, and a read, a write, a patch and a search are checked under each
-the gate can read. A device prefix (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it. A share that
+the gate can read. A device prefix (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it, and so is
+the NT namespace prefix (`\??\C:\...`), which Copilot's own file tools open (measured on the pinned
+runtime: before this was read, a protected file was read through it). A share that
 names this machine's own drive (`\\localhost\C$\...`, a loopback address, the machine's host name or
 `COMPUTERNAME`) is that drive's path. The dots and spaces that end a name, and a stream named after a
 colon (`id_rsa.`, `id_rsa::$DATA`), are folded away before the protected set is compared, as case is. A
@@ -192,7 +194,7 @@ the file system says it is named. A rooted path whose first segment is one lette
 `/cygdrive/c/Users/x`) has two readings on Windows, the folder `c` at the root of the drive and the
 drive that letter names, which is how Git Bash, Cygwin and the agent CLI's own tools read it; the
 protected set is compared with both. A device or volume form that maps to no drive path
-(`\\?\Volume{...}\`, `\\?\GLOBALROOT\...`) is refused `path-unplaceable`.
+(`\\?\Volume{...}\`, `\\?\GLOBALROOT\...`, and the same after `\??\`) is refused `path-unplaceable`.
 
 What falls through a read, a write, a patch or a search:
 
@@ -203,8 +205,8 @@ What falls through a read, a write, a patch or a search:
   one of its network cards), or a share an administrator made of a folder.
 
 The shell scan reads a command as text, so of the spellings above it matches one only where the command
-still contains the protected path as written: a device prefix before it, or a dot or a stream name after
-it. It also matches a protected path on a drive written from the root, as a POSIX shell on Windows
+still contains the protected path as written: a device prefix or the NT namespace prefix before it, or a
+dot or a stream name after it. It also matches a protected path on a drive written from the root, as a POSIX shell on Windows
 writes it: `/c/Users/x` (Git Bash), `/cygdrive/c/Users/x` (Cygwin) and `/mnt/c/Users/x` (the Linux
 subsystem). A dot or a space inside the path, a share of this machine's drive and a short name are not
 matched in a command. What also falls through is a shell command that reaches a protected path without naming

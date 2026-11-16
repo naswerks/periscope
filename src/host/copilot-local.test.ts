@@ -659,6 +659,61 @@ test(
 );
 
 test(
+  "the runtime's file tools open a file by its NT-namespace spelling, and the gate reads that spelling as the drive path: a protected file is not read through it, a write outside the roots does not land, and one inside does",
+  {
+    skip: skip !== false ? skip : WINDOWS ? false : "the NT namespace prefix is Windows' own",
+    timeout: 120_000,
+  },
+  async () => {
+    const dirs = await scratch();
+    const secret = join(dirs.profile, 'held', 'token.txt');
+    mkdirSync(dirname(secret), { recursive: true });
+    writeFileSync(secret, 'kept-from-the-agent');
+    const gate = localGate({
+      workspaceRoot: dirs.work,
+      resolve: nodePathResolver,
+      protectedPaths: [dirname(secret)],
+      home: dirs.profile,
+      toolFamilies: COPILOT_TOOL_FAMILIES,
+      readsShellDialect: true,
+      resolvesAgainstCallCwd: true,
+      resolvesWritesAgainstCallCwd: true,
+    });
+    const spelled = (path: string): string => `\\??\\${path}`;
+    const real = await openReal(dirs, { localGate: gate });
+    try {
+      // The premise: the runtime's own view reads the file the spelling names.
+      const opened = await real.run('view', { path: spelled(join(dirs.work, 'readme.txt')) }, 'pin-nt-open');
+      assert.equal(opened.resultType, 'success', opened.text);
+      assert.match(opened.text, /scratch/, 'the runtime did not open the file its NT spelling names');
+      const refused = await real.run('view', { path: spelled(secret) }, 'pin-nt-view');
+      assert.equal(
+        refused.resultType,
+        'denied',
+        `a protected file was read by its NT spelling: ${refused.text}`,
+      );
+      assert.match(refused.text, /credential-path-denied/);
+      const outside = join(dirs.profile, 'outside-nt.txt');
+      const escaped = await real.run('create', { path: spelled(outside), file_text: 'x' }, 'pin-nt-escape');
+      assert.equal(escaped.resultType, 'denied', escaped.text);
+      assert.match(escaped.text, /path-escapes-root/);
+      assert.equal(existsSync(outside), false);
+      const inside = join(dirs.work, 'made-nt.txt');
+      const made = await real.run('create', { path: spelled(inside), file_text: 'made\n' }, 'pin-nt-inside');
+      assert.equal(
+        made.resultType,
+        'success',
+        `a file in the workspace was refused by its NT spelling: ${made.text}`,
+      );
+      assert.equal(readFileSync(inside, 'utf8').replace(/\r\n/g, '\n'), 'made\n');
+    } finally {
+      await real.close();
+      await removeScratch(dirs);
+    }
+  },
+);
+
+test(
   "a sub-agent's call asks this host through the hook, as the session's own calls do; driven by a stub model, not a model",
   { skip, timeout: 180_000 },
   async () => {

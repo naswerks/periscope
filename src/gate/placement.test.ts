@@ -252,9 +252,56 @@ test('a device or volume form that maps to no drive path is refused by name', ()
     '\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\Users\\op\\.ssh\\id_rsa',
     '\\\\.\\PhysicalDrive0',
     '\\\\.\\C:',
+    '\\??\\Volume{4c1b02c1-d990-11dc-99ae-806e6f6e6963}\\Users\\op\\.ssh\\id_rsa',
+    '\\??\\GLOBALROOT\\??\\C:\\Users\\op\\.ssh\\id_rsa',
   ]) {
     assert.equal(pi(request('read', { path }))?.reason, 'path-unplaceable', path);
   }
+});
+
+test('the NT namespace prefix is the drive path after it, as a device prefix is: a protected file under it is refused, and any other is read or written as its plain spelling is', () => {
+  const named = placing({ localNames: ['RUNNER-7'] });
+  for (const path of [
+    '\\??\\C:\\Users\\op\\.ssh\\id_rsa',
+    '\\??\\c:\\Users\\op\\.ssh\\id_rsa',
+    '\\??\\UNC\\localhost\\C$\\Users\\op\\.ssh\\id_rsa',
+    '\\??\\UNC\\runner-7\\C$\\Users\\op\\.ssh\\id_rsa',
+  ]) {
+    assert.equal(named(request('read', { path }))?.reason, 'credential-path-denied', path);
+  }
+  assert.equal(
+    placePath('\\??\\C:\\Windows\\win.ini', { directory: WORK, placesRelative: true }),
+    'C:\\Windows\\win.ini',
+  );
+  assert.equal(
+    placePath('\\??\\UNC\\files\\team\\notes.txt', { directory: WORK, placesRelative: true }),
+    '\\\\files\\team\\notes.txt',
+  );
+  // With no directory to read the rules from, the prefix is Windows' own.
+  assert.equal(
+    placePath('\\??\\C:\\Windows\\win.ini', { directory: null, placesRelative: true }),
+    'C:\\Windows\\win.ini',
+  );
+  assert.equal(pi(request('read', { path: '\\??\\C:\\work\\session-1\\a.ts' })), null);
+  assert.equal(
+    pi(request('write', { path: '\\??\\C:\\work\\session-1\\out.txt', content: 'x' })),
+    null,
+    'a file in the workspace named by that spelling is written',
+  );
+  assert.equal(
+    pi(request('write', { path: '\\??\\C:\\elsewhere\\out.txt', content: 'x' }))?.reason,
+    'path-escapes-root',
+  );
+  // Control: with forward slashes it is no prefix, and is rooted at the drive like any such path.
+  assert.equal(
+    placePath('/??/C:/Windows/win.ini', { directory: WORK, placesRelative: true }),
+    'C:/??/C:/Windows/win.ini',
+  );
+  // Control: under a POSIX call directory it is an ordinary name.
+  assert.equal(
+    placePath('\\??\\C:\\Windows\\win.ini', { directory: '/work/session-1', placesRelative: true }),
+    '/work/session-1/\\??\\C:\\Windows\\win.ini',
+  );
 });
 
 test('what Windows ignores at the end of a name, and a stream named after it, do not hide a protected path', () => {
