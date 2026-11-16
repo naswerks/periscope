@@ -33,15 +33,15 @@ const NEVER_SENT = 'this host never sends it';
 export const QWEN_MESSAGE_COVERAGE = {
   user: {
     handling: 'wired',
-    note: "each tool_result block closes its tool entry and fills a tool_result item (blocked when this host refused the call, failed on is_error, else completed); the prompt itself is never echoed, so the user_text item is this host's own prompt",
+    note: "each tool_result block closes its tool entry and fills a tool_result item (blocked when this host refused the call, failed on is_error, else completed), a sub-agent's naming its spawning call (parent_tool_use_id) on a link that carries an item's parent; the prompt itself is never echoed, so the user_text item is this host's own prompt",
   },
   assistant: {
     handling: 'wired',
-    note: "text, thinking and tool_use blocks fill agent_text, thinking and tool_call items; a tool_use block opens a tool entry; message.model moves the model register; one model call's usage rides on one of the call's messages and is not summed",
+    note: "text, thinking and tool_use blocks fill agent_text, thinking and tool_call items, a sub-agent's naming its spawning call (parent_tool_use_id) on a link that carries an item's parent; a main-thread tool_use block opens a tool entry; message.model moves the model register; one model call's usage rides on one of the call's messages and is not summed",
   },
   result: {
     handling: 'wired',
-    note: "state -> idle, or errored with error.message in the detail, or interrupted on \"Operation cancelled.\"; closes any tool entry left open; turn_record with totals = usage, the session's running total (a resumed or forked session's includes the source session's tokens), turn and turnScope null, cost null and unreported, inputTokens = input_tokens - cache_read_input_tokens, Qwen's own split; a turn item; then get_context_usage. Sign-in marker: an is_error result with num_turns 0 whose error.message names the auth type or the API key, written before the session loop",
+    note: "state -> idle, or errored with error.message in the detail, or interrupted on \"Operation cancelled.\"; closes any tool entry left open; turn_record with totals = usage, the session's running total (a resumed or forked session's includes the source session's tokens), turn and turnScope null, cost null and unreported, inputTokens = input_tokens - cache_read_input_tokens, Qwen's own split; a turn item; then get_context_usage. Sign-in marker: an is_error result with num_turns 0 whose error.message names the auth type or the API key, written before the session loop. The result the CLI writes when a foreground sub-agent fails or is cancelled (no parent, error_during_execution, num_turns 0, duration_ms 0, while a main-thread agent call is open) moves nothing, fills no turn item and records no turn; a background sub-agent's, written after its call returned, is read as the session's, since it names no call",
   },
   stream_event: {
     handling: 'wired',
@@ -87,6 +87,10 @@ export const QWEN_MESSAGE_COVERAGE = {
     note: 'a warning notice item: the CLI could not record the session, so a later resume may find nothing',
   },
   'system/ui_log': { handling: 'declined', note: `${NATIVE_ONLY}: a mod's log line; this host loads none` },
+  'system/mod_prompt': {
+    handling: 'declined',
+    note: `${NATIVE_ONLY}: the mark after a mod's own prompt; this host loads none`,
+  },
 } as const satisfies Readonly<Record<string, CoverageRow>>;
 
 /** Each event a `stream_event` carries, when the session asked for partial messages. */
@@ -150,6 +154,11 @@ export const QWEN_ANSWER_COVERAGE = {
     note: `${NEVER_SENT}: a session's models are its endpoint's`,
   },
   get_usage_info: { handling: 'declined', note: NEVER_SENT },
+  get_workflow_mode: { handling: 'declined', note: `${NEVER_SENT}: this host sets no workflow mode` },
+  set_workflow_mode: {
+    handling: 'declined',
+    note: `${NEVER_SENT}: workflow mode steers the model toward a workflow tool and decides no call`,
+  },
   can_use_tool: { handling: 'declined', note: `${NEVER_SENT}: the CLI asks it of this host` },
   mcp_server_status: {
     handling: 'declined',

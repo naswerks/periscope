@@ -15,6 +15,7 @@
  */
 import type { AgentItem, FileChangeEntry } from './frames.js';
 import { MAX_AGENT_ITEM_BYTES, MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH } from './frames.js';
+import { cutText } from './fact-text.js';
 
 const UTF8 = new TextEncoder();
 
@@ -97,7 +98,7 @@ function textSlots(item: AgentItem): TextSlot[] {
 /** A change's paths held to the fact text bound, which the codec holds every path to. */
 function boundedChange(change: FileChangeEntry): { change: FileChangeEntry; cut: boolean } {
   const cut = (path: string | null): string | null =>
-    path === null || path.length <= MAX_FACT_TEXT_LENGTH ? path : path.slice(0, MAX_FACT_TEXT_LENGTH);
+    path === null ? path : cutText(path, MAX_FACT_TEXT_LENGTH);
   const path = cut(change.path) ?? '';
   const movePath = cut(change.movePath);
   return {

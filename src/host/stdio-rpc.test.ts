@@ -8,11 +8,12 @@ import { drain, fakeChild, spawnerFor } from '../test-support/fake-child.js';
 import type { FakeChild } from '../test-support/fake-child.js';
 import type { StdioRpcOptions, StdioRpcPeer } from './stdio-rpc.js';
 import {
-  JsonLineDecoder,
-  RPC_METHOD_NOT_FOUND,
-  RPC_SERVER_OVERLOADED,
   classifyRpc,
   isBatchFile,
+  JsonLineDecoder,
+  killDescendants,
+  RPC_METHOD_NOT_FOUND,
+  RPC_SERVER_OVERLOADED,
   startStdioRpc,
 } from './stdio-rpc.js';
 
@@ -365,6 +366,68 @@ test('a real child that crashes mid-request refuses the request rpc-request-fail
   assert.equal(result.ok ? '' : result.refusal.reason, 'rpc-request-failed');
   assert.match(result.ok ? '' : result.refusal.detail, /exit code 3/);
   await peer.close();
+});
+
+test("what a child started is killed and the child is left running: every descendant and its group elsewhere, each direct child's tree on Windows", async () => {
+  const table = [
+    { pid: 100, ppid: 1 },
+    { pid: 200, ppid: 100 },
+    { pid: 300, ppid: 200 },
+    { pid: 400, ppid: 100 },
+    { pid: 900, ppid: 1 },
+  ];
+  const signalled: number[] = [];
+  await killDescendants(100, {
+    platform: 'linux',
+    readTable: () => Promise.resolve(table),
+    signal: (target) => signalled.push(target),
+  });
+  assert.deepEqual(signalled, [-200, 200, -400, 400, -300, 300]);
+  assert.ok(!signalled.includes(100) && !signalled.includes(-100), 'the child itself was signalled');
+
+  const killed: number[] = [];
+  await killDescendants(100, {
+    platform: 'win32',
+    readTable: () => Promise.resolve(table),
+    killTree: (pid) => {
+      killed.push(pid);
+      return Promise.resolve();
+    },
+  });
+  assert.deepEqual(
+    killed.sort(),
+    [200, 400],
+    "each direct child's tree, which the walk on Windows takes the rest of",
+  );
+});
+
+test("on Windows a process that names the child as its parent but started before it is an older process's orphan, and is left alone", async () => {
+  const killed: number[] = [];
+  await killDescendants(100, {
+    platform: 'win32',
+    readTable: () =>
+      Promise.resolve([
+        { pid: 100, ppid: 1, started: 5_000 },
+        // Started after the child: the child's own.
+        { pid: 200, ppid: 100, started: 6_000 },
+        // Started before it: the orphan of an earlier process that had the same number.
+        { pid: 300, ppid: 100, started: 1_000 },
+        // No start stated: taken for a child, as it is where the table states none.
+        { pid: 400, ppid: 100 },
+      ]),
+    killTree: (pid) => {
+      killed.push(pid);
+      return Promise.resolve();
+    },
+  });
+  assert.deepEqual(killed.sort(), [200, 400]);
+  // A table that cannot be read walks nothing, and a kill that fails does not fail the walk.
+  await killDescendants(100, { platform: 'win32', readTable: () => Promise.reject(new Error('no table')) });
+  await killDescendants(100, {
+    platform: 'win32',
+    readTable: () => Promise.resolve([{ pid: 200, ppid: 100 }]),
+    killTree: () => Promise.reject(new Error('gone')),
+  });
 });
 
 test('closing a real child that ignores stdin kills its whole tree, its own child included', async () => {

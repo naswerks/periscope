@@ -197,7 +197,7 @@ export type HookEventName = (typeof HOOK_EVENTS)[number];
 /**
  * The SDK message discriminators this model names as causes — `type` for the plain kinds,
  * `type/subtype` for the `system` family. Only the ones that can move a session appear here;
- * `coverage.ts` accounts for all 39 members of the union, wired or declined.
+ * `coverage.ts` accounts for all 40 members of the union, wired or declined.
  */
 export const MESSAGE_EVENTS = [
   'system/init',
@@ -222,14 +222,18 @@ export type MessageEventName = (typeof MESSAGE_EVENTS)[number];
  * Codex's are its app-server notifications, `codex:{method}`; Qwen Code's are its stream messages,
  * `qwen-code:{type}` and `qwen-code:system/{subtype}`, and the answers to the control requests this
  * host sends it, `qwen-code:{subtype}` (protocol 17); pi's are its RPC events, `pi:{type}`, and the
- * answers to the commands this host sends it, `pi:{command}`. An item's kind rides a cause's `detail`,
- * never its name.
+ * answers to the commands this host sends it, `pi:{command}`; Copilot's are its session events,
+ * `copilot:{type}`; opencode's are its stream's events, `opencode:{type}`. An item's kind rides a cause's
+ * `detail`, never its name.
  *
  * Each runtime's set is its wired rows exactly: `pins/codex-coverage.test.ts` holds the `codex:` names
  * equal to the wired rows of `CODEX_NOTIFICATION_COVERAGE`, `pins/qwen-coverage.test.ts` the
- * `qwen-code:` names equal to the wired message and answer rows of `QWEN_COVERAGE`, and
+ * `qwen-code:` names equal to the wired message and answer rows of `QWEN_COVERAGE`,
  * `pins/pi-coverage.test.ts` the `pi:` names equal to the wired event and command rows of `PI_COVERAGE`,
- * each in both directions, and each holds every event its runtime's observer emits to it.
+ * `pins/copilot-coverage.test.ts` the `copilot:` names equal to the wired event rows of
+ * `COPILOT_COVERAGE`, and `pins/opencode-coverage.test.ts` the `opencode:` names equal to the wired event
+ * rows of `OPENCODE_COVERAGE`, each in both directions, and each holds every event its runtime's observer
+ * emits to it.
  */
 export const AGENT_EVENTS = [
   'codex:error',
@@ -299,6 +303,68 @@ export const AGENT_EVENTS = [
   'pi:set_thinking_level',
   'pi:get_session_stats',
   'pi:get_commands',
+  'copilot:session.start',
+  'copilot:session.resume',
+  'copilot:session.error',
+  'copilot:session.idle',
+  'copilot:session.warning',
+  'copilot:session.model_change',
+  'copilot:session.mode_changed',
+  'copilot:session.permissions_changed',
+  'copilot:session.shutdown',
+  'copilot:session.usage_info',
+  'copilot:session.compaction_start',
+  'copilot:session.compaction_complete',
+  'copilot:user.message',
+  'copilot:assistant.server_tool_progress',
+  'copilot:assistant.reasoning',
+  'copilot:assistant.reasoning_delta',
+  'copilot:assistant.tool_call_delta',
+  'copilot:assistant.message',
+  'copilot:assistant.message_delta',
+  'copilot:assistant.usage',
+  'copilot:model.call_failure',
+  'copilot:tool.execution_start',
+  'copilot:tool.execution_complete',
+  'copilot:subagent.started',
+  'copilot:subagent.completed',
+  'copilot:subagent.failed',
+  'copilot:hook.end',
+  'copilot:permission.requested',
+  'copilot:session.skills_loaded',
+  'copilot:session.mcp_servers_loaded',
+  'copilot:session.mcp_server_status_changed',
+  'opencode:session.created',
+  'opencode:session.agent.selected',
+  'opencode:session.model.selected',
+  'opencode:session.permissions',
+  'opencode:session.inbox.delivered',
+  'opencode:session.inbox.enqueued',
+  'opencode:session.execution.started',
+  'opencode:session.execution.succeeded',
+  'opencode:session.execution.failed',
+  'opencode:session.execution.interrupted',
+  'opencode:session.step.started',
+  'opencode:session.step.ended',
+  'opencode:session.step.failed',
+  'opencode:session.text.delta',
+  'opencode:session.text.ended',
+  'opencode:session.reasoning.delta',
+  'opencode:session.reasoning.ended',
+  'opencode:session.tool.input.started',
+  'opencode:session.tool.input.delta',
+  'opencode:session.tool.called',
+  'opencode:session.tool.progress',
+  'opencode:session.tool.success',
+  'opencode:session.tool.failed',
+  'opencode:session.retry.scheduled',
+  'opencode:session.compaction.started',
+  'opencode:session.compaction.ended',
+  'opencode:session.compaction.failed',
+  'opencode:permission.asked',
+  'opencode:permission.replied',
+  'opencode:plugin.updated',
+  'opencode:form.created',
 ] as const;
 
 export type AgentEventName = (typeof AGENT_EVENTS)[number];

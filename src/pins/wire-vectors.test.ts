@@ -36,6 +36,7 @@ import {
   MAX_AGENT_ENTRIES,
   MAX_AGENT_ITEM_BYTES,
   MAX_ENDPOINTS,
+  MAX_FACT_TEXT_LENGTH,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   PROTOCOL_VERSION_MIN,
@@ -310,6 +311,60 @@ const TRANSITION_PI_FOREIGN_EXTENSION: SessionTransition = {
   },
 };
 
+/** Copilot's first ready: its open proven, at its tier, with a machine-wide policy hook known at the open. */
+const TRANSITION_READY_COPILOT: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'copilot-session-a',
+  cause: {
+    kind: 'agent-event',
+    event: 'copilot:session.start',
+    detail:
+      "the runtime's posture was read back, and a probe call reached this host through the pre-tool hook and the permission request",
+  },
+  controlTier: { level: 'intercepted-with-residual', degrades: ['gate-hook-foreign'] },
+};
+
+/** A Copilot session's gate naming a call that ran with no decision from this host, on the state lane. */
+const TRANSITION_COPILOT_HOOK_MISSING: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'copilot-session-a',
+  seq: 3,
+  from: 'working',
+  to: 'working',
+  cause: {
+    kind: 'refusal',
+    event: 'gate-hook-missing',
+    detail: 'Copilot ran call call_1 (view) with no decision from this host for it',
+  },
+};
+
+/** opencode's first ready: its open proven, at its tier. */
+const TRANSITION_READY_OPENCODE: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'ses_opencode_a',
+  cause: {
+    kind: 'agent-event',
+    event: 'opencode:session.created',
+    detail: "the new session's rules, agents, plugins, servers, configuration and models were read back",
+  },
+  controlTier: { level: 'intercepted-with-residual', degrades: [] },
+};
+
+/** An opencode session's gate naming a call the model's provider ran itself, on the state lane. */
+const TRANSITION_OPENCODE_UNHOOKED: SessionTransition = {
+  ...TRANSITION_READY,
+  sessionId: 'ses_opencode_a',
+  seq: 3,
+  from: 'working',
+  to: 'working',
+  cause: {
+    kind: 'refusal',
+    event: 'gate-unhooked-call',
+    detail:
+      "the model's provider ran websearch itself; no permission request is raised for a call the runtime does not run",
+  },
+};
+
 /** An open refused before any process existed, for one of the runtime and endpoint reasons. */
 const openRefused = (event: RefusalReason, detail: string): SessionTransition => ({
   ...TRANSITION_OPEN_REFUSED,
@@ -518,6 +573,36 @@ const FACT_TASKS: TasksFact = {
   ],
 };
 
+/** A tasks fact whose entries state every member protocol 20 adds. */
+const FACT_TASKS_REPORTED: TasksFact = {
+  kind: 'tasks',
+  runtime: 'claude',
+  running: [
+    {
+      taskId: 'agent-1',
+      type: 'local_agent',
+      description: 'map the store',
+      toolUseId: 'toolu_task',
+      summary: 'reading the store',
+      usage: { tokens: 1200, toolUses: 3, durationMs: 4500 },
+    },
+  ],
+  settled: [
+    {
+      taskId: 'bash-1',
+      type: 'local_bash',
+      status: 'completed',
+      toolUseId: 'toolu_bash',
+      summary: 'the suite passed',
+      usage: { tokens: 0, toolUses: 0, durationMs: 61000 },
+      outputFile: '/tmp/tasks/bash-1.output',
+    },
+  ],
+};
+
+/** A character outside the Basic Multilingual Plane: one code point, two UTF-16 code units. */
+const NON_BMP = '\u{20000}';
+
 const FACT_COMPACTION: CompactionFact = {
   kind: 'compaction',
   runtime: 'claude',
@@ -706,6 +791,25 @@ const AUTHORED = {
       name: 'session_update.agent-facts-compaction',
       frame: session(agentFactsUpdate(FACT_COMPACTION, null, AT)),
     },
+    // The member protocol 20 adds to an ended compaction: how it came out.
+    {
+      name: 'session_update.agent-facts-compaction-failed',
+      frame: session(
+        agentFactsUpdate(
+          {
+            kind: 'compaction',
+            runtime: 'claude',
+            status: 'ended',
+            trigger: null,
+            tokensBefore: null,
+            tokensAfter: null,
+            outcome: 'failed',
+          },
+          null,
+          AT,
+        ),
+      ),
+    },
     // The members protocol 16 adds to facts, each stated.
     {
       name: 'session_update.agent-facts-agent-receipt-effort-reported',
@@ -757,6 +861,39 @@ const AUTHORED = {
     },
     { name: 'session_update.agent-item-plan', frame: session(agentItemUpdate('codex', ITEM_PLAN, AT)) },
     { name: 'session_update.agent-item-notice', frame: session(agentItemUpdate('codex', ITEM_NOTICE, AT)) },
+    // The members protocol 20 adds: an item naming the call that spawned the agent whose turn it is from,
+    // and the tasks entries' reports, each stated.
+    {
+      name: 'session_update.agent-item-parent',
+      frame: session(agentItemUpdate('claude', { ...ITEM_AGENT_TEXT, parentId: 'toolu_task' }, AT)),
+    },
+    {
+      name: 'session_update.agent-facts-tasks-reported',
+      frame: session(agentFactsUpdate(FACT_TASKS_REPORTED, 'message-uuid-4', AT)),
+    },
+    // A summary at the bound made of characters outside the BMP: 1000 code points, 2000 UTF-16 code units.
+    // It decodes, so the codec's bound counts code points; its twin one past the bound is refused.
+    {
+      name: 'session_update.agent-facts-tasks-summary-non-bmp-at-bound',
+      frame: session(
+        agentFactsUpdate(
+          {
+            kind: 'tasks',
+            runtime: 'claude',
+            running: [
+              {
+                taskId: 'agent-1',
+                type: 'local_agent',
+                description: null,
+                summary: NON_BMP.repeat(MAX_FACT_TEXT_LENGTH),
+              },
+            ],
+          },
+          null,
+          AT,
+        ),
+      ),
+    },
     {
       name: 'session_update.state-transition-control-tier',
       frame: session(stateTransitionUpdate(TRANSITION_READY_WITH_TIER)),
@@ -982,6 +1119,72 @@ const AUTHORED = {
             'pi-extension-not-active',
             "this host's extension did not say hello over its channel within 30000ms, so pi may be running with no gate",
           ),
+        ),
+      ),
+    },
+    // Copilot: its first ready at its tier with the degrade known at open, a degrade its gate names, the
+    // open refused when the runtime is not in the posture this host started it in, and a native event.
+    {
+      name: 'session_update.state-transition-copilot-ready',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_COPILOT)),
+    },
+    {
+      name: 'session_update.state-transition-copilot-hook-missing',
+      frame: session(stateTransitionUpdate(TRANSITION_COPILOT_HOOK_MISSING)),
+    },
+    {
+      name: 'session_update.open-refused-copilot-gate-not-active',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused('copilot-gate-not-active', "the runtime's permission mode is allow-all, not manual"),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.agent-message-copilot',
+      frame: session(
+        agentMessageUpdate(
+          {
+            id: 'event-1',
+            parentId: null,
+            timestamp: '2000-01-01T00:00:00.000Z',
+            type: 'tool.execution_start',
+            data: { toolCallId: 'call_1', toolName: 'view', arguments: { path: 'README.md' } },
+          },
+          AT,
+          'copilot',
+        ),
+      ),
+    },
+    // opencode: its first ready at its tier, a degrade its gate names, the open refused when the server is
+    // not in the posture this host created it in, and a native event.
+    {
+      name: 'session_update.state-transition-opencode-ready',
+      frame: session(stateTransitionUpdate(TRANSITION_READY_OPENCODE)),
+    },
+    {
+      name: 'session_update.state-transition-opencode-unhooked-call',
+      frame: session(stateTransitionUpdate(TRANSITION_OPENCODE_UNHOOKED)),
+    },
+    {
+      name: 'session_update.open-refused-opencode-gate-not-active',
+      frame: session(
+        stateTransitionUpdate(
+          openRefused('opencode-gate-not-active', 'the server holds saved approvals: shell git *'),
+        ),
+      ),
+    },
+    {
+      name: 'session_update.agent-message-opencode',
+      frame: session(
+        agentMessageUpdate(
+          {
+            id: 'evt_1',
+            type: 'session.tool.called',
+            data: { sessionID: 'ses_opencode_a', id: 'call_1', input: { path: 'README.md' } },
+          },
+          AT,
+          'opencode',
         ),
       ),
     },
@@ -2272,6 +2475,54 @@ const AUTHORED_WIRES: readonly AuthoredWire[] = [
     }),
     expect: refused('frame-malformed'),
   },
+  // The well-formed twin is `session_update.agent-item-parent`; only the parent's length differs.
+  {
+    name: 'refused.agent-item-parent-past-bound',
+    wire: sessionWire({
+      kind: 'session_update',
+      body: {
+        update: 'agent_item',
+        runtime: 'claude',
+        item: { ...ITEM_AGENT_TEXT, parentId: 'x'.repeat(MAX_FACT_TEXT_LENGTH + 1) },
+        observedAt: AT,
+      },
+    }),
+    expect: refused('frame-malformed'),
+  },
+  // The well-formed twin of each below is `session_update.agent-facts-tasks-reported`; one member differs.
+  ...(
+    [
+      [
+        'refused.agent-facts-task-tool-use-id-past-bound',
+        { toolUseId: 'x'.repeat(MAX_FACT_TEXT_LENGTH + 1) },
+      ],
+      ['refused.agent-facts-task-summary-past-bound', { summary: 'x'.repeat(MAX_FACT_TEXT_LENGTH + 1) }],
+      [
+        'refused.agent-facts-task-summary-non-bmp-past-bound',
+        { summary: NON_BMP.repeat(MAX_FACT_TEXT_LENGTH + 1) },
+      ],
+      [
+        'refused.agent-facts-task-output-file-past-bound',
+        { outputFile: 'x'.repeat(MAX_FACT_TEXT_LENGTH + 1) },
+      ],
+      [
+        'refused.agent-facts-task-usage-fraction',
+        { usage: { tokens: 1200.5, toolUses: 3, durationMs: 4500 } },
+      ],
+    ] as const
+  ).map(([name, member]) => ({
+    name,
+    wire: sessionWire({
+      kind: 'session_update',
+      body: {
+        update: 'agent_facts',
+        fact: { ...FACT_TASKS_REPORTED, running: [{ ...FACT_TASKS_REPORTED.running[0], ...member }] },
+        sourceId: 'message-uuid-4',
+        observedAt: AT,
+      },
+    }),
+    expect: refused('frame-malformed'),
+  })),
   // The well-formed twin is `session_update.agent-facts-usage-sample`; only the count differs.
   {
     name: 'refused.malformed-agent-facts',

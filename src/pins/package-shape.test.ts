@@ -87,6 +87,33 @@ test('the pi names snapshot ships: the host reads it at load, so a package witho
   );
 });
 
+test('the opencode names snapshot ships: its reader reads it at load, so a package without it could not load that module', () => {
+  const files = manifest.files ?? [];
+  const reader = readFileSync(at('src/host/opencode-names.ts'), 'utf8');
+  assert.ok(
+    reader.includes("'../../contracts/opencode-names.json'"),
+    'the names reader no longer reads the snapshot from the package root; this pin is about nothing',
+  );
+  assert.ok(
+    files.includes('contracts/opencode-names.json'),
+    'the allowlist does not ship contracts/opencode-names.json, which src/host/opencode-names.ts reads at load',
+  );
+});
+
+test("opencode's host process ships beside the relay that starts it", () => {
+  const files = manifest.files ?? [];
+  const relay = readFileSync(at('src/host/opencode-relay.ts'), 'utf8');
+  assert.ok(
+    relay.includes("new URL('./opencode-host.js', import.meta.url)"),
+    'the relay no longer finds the host process beside its own module; this pin is about nothing',
+  );
+  assert.ok(files.includes('dist/'), 'the allowlist does not ship dist/, where the built host process is');
+  assert.ok(
+    !files.some((entry) => /opencode-host/.test(entry) && entry.startsWith('!')),
+    'the allowlist excludes the host process',
+  );
+});
+
 test('the pi extension ships beside the module that names it to pi, and is neither a command nor an entry point', () => {
   const files = manifest.files ?? [];
   const locator = readFileSync(at('src/host/pi-binary.ts'), 'utf8');

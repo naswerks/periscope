@@ -1,0 +1,468 @@
+/**
+ * opencode under the gate against the SDK the operator installed, on a real model behind an OpenAI-compatible
+ * endpoint: what only a real run settles. The release runs it; nothing else does.
+ *
+ * It runs only with `PERISCOPE_LIVE=1`, `PERISCOPE_OPENCODE_SDK` (the directory the SDK was installed into at
+ * the pinned version), `PERISCOPE_OPENCODE_BASE_URL` (an OpenAI-compatible chat endpoint's base URL, one that
+ * serves the model below), `PERISCOPE_OPENCODE_KEY_FILE` (a file holding that endpoint's key) and
+ * `PERISCOPE_OPENCODE_MODEL` (the model's id on that endpoint). The key is read from its file when a session
+ * opens, and never sits in a variable. Without them each property is NOT exercised, and the skip says so.
+ * Every run spends the endpoint's credit, so each prompt is short. Each test prints its receipts as JSON
+ * lines, which are the record of what was measured; the assertions hold only what the gate depends on.
+ * opencode needs Node 24 or later.
+ *
+ * Run it from a plain terminal, not from inside an agent session, which would lend it that session's tools:
+ *
+ *   npm install --prefix <sdk directory> @opencode/sdk@2.3.0
+ *   npm run build
+ *   PERISCOPE_LIVE=1 PERISCOPE_OPENCODE_SDK=<sdk directory> PERISCOPE_OPENCODE_BASE_URL=<base url> PERISCOPE_OPENCODE_KEY_FILE=<key file> PERISCOPE_OPENCODE_MODEL=<model> node --test dist/host/opencode.live.test.js
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import type { RefusalReason } from '../core/refusal.js';
+import type { Decider, DecisionRequest } from '../gate/decision.js';
+import { OPENCODE_TOOL_FAMILIES, localGate } from '../gate/local.js';
+import { composeSpawnEnv } from '../sessions/spawn-env.js';
+import { fakeMcpHttp } from '../test-support/fake-mcp-http.js';
+import {
+  ENVIRONMENT_FILE,
+  LiveStream,
+  closeAndWait,
+  endListed,
+  environmentNames,
+  environmentScript,
+  isEnvironment,
+  removeScratch,
+} from '../test-support/live-session.js';
+import type { AgentProcessRequest } from './agent-process.js';
+import type { OpencodeEndpointRoute } from './opencode-endpoints.js';
+import { OpencodeFactLift } from './opencode-facts.js';
+import { createOpencodeSessionGate } from './opencode-gate.js';
+import { startOpencodeProcess } from './opencode-process.js';
+import { nodeCanRunOpencode } from './opencode-sdk.js';
+import type { OpencodeMessage } from './opencode-wire.js';
+import { nodePathResolver } from './paths.js';
+
+const LIVE = process.env['PERISCOPE_LIVE'] === '1';
+const SDK = process.env['PERISCOPE_OPENCODE_SDK'] ?? '';
+const BASE_URL = process.env['PERISCOPE_OPENCODE_BASE_URL'] ?? '';
+const KEY_FILE = process.env['PERISCOPE_OPENCODE_KEY_FILE'] ?? '';
+const MODEL = process.env['PERISCOPE_OPENCODE_MODEL'] ?? '';
+const NODE = nodeCanRunOpencode();
+const skip = !LIVE
+  ? 'PERISCOPE_LIVE is not set — this property is NOT exercised'
+  : SDK === '' || BASE_URL === '' || KEY_FILE === '' || MODEL === ''
+    ? 'PERISCOPE_OPENCODE_SDK, PERISCOPE_OPENCODE_BASE_URL, PERISCOPE_OPENCODE_KEY_FILE and PERISCOPE_OPENCODE_MODEL are not all set — this property is NOT exercised'
+    : NODE !== null
+      ? `${NODE} — this property is NOT exercised`
+      : false;
+
+/** A word no real command carries, so the process listing after close finds only what this run started. */
+const MARKER = `periscopeopencodelive${process.pid}`;
+
+/** One receipt line, as the measurement's record. */
+function receipt(what: string, data: Record<string, unknown>): void {
+  process.stdout.write(`${JSON.stringify({ receipt: what, ...data })}\n`);
+}
+
+function scratch(): string {
+  const dir = mkdtempSync(`${tmpdir()}/periscope-opencode-live-`);
+  writeFileSync(join(dir, 'notes.txt'), 'the notes say hello\n');
+  return dir;
+}
+
+/** A plugin directory with one skill, to read whether the skills handed over reach the model. */
+function skillPlugin(): string {
+  const dir = mkdtempSync(`${tmpdir()}/periscope-opencode-plugin-`);
+  mkdirSync(join(dir, '.claude-plugin'), { recursive: true });
+  writeFileSync(
+    join(dir, '.claude-plugin', 'plugin.json'),
+    JSON.stringify({ name: 'live-plugin', version: '1.0.0' }),
+  );
+  mkdirSync(join(dir, 'skills', 'greet'), { recursive: true });
+  writeFileSync(
+    join(dir, 'skills', 'greet', 'SKILL.md'),
+    '---\nname: greet\ndescription: How to greet. Load it when asked to greet.\n---\nGreet with the word periscope-skill-loaded.\n',
+  );
+  return dir;
+}
+
+function request(cwd: string, overrides: Partial<AgentProcessRequest> = {}): AgentProcessRequest {
+  return {
+    cwd,
+    env: composeSpawnEnv(process.env),
+    settingSources: [],
+    plugins: null,
+    hooks: null,
+    resume: null,
+    fork: false,
+    includePartialMessages: false,
+    thinking: null,
+    forwardSubagentText: false,
+    onStderr: null,
+    mcpServers: null,
+    strictMcpConfig: true,
+    sessionStore: null,
+    sessionStoreFlush: null,
+    spawn: null,
+    model: MODEL,
+    systemPrompt: {
+      type: 'preset',
+      preset: 'runtime-default',
+      append: 'Answer in one short line. Run exactly the tools you are asked to run.',
+    },
+    effort: null,
+    permissionMode: null,
+    ...overrides,
+  };
+}
+
+interface LiveRun {
+  readonly stream: LiveStream<OpencodeMessage>;
+  readonly process: ReturnType<typeof startOpencodeProcess>;
+  readonly decided: DecisionRequest[];
+  readonly raised: { name: RefusalReason; detail: string }[];
+  readonly base: string;
+}
+
+function route(key: () => string): OpencodeEndpointRoute {
+  return { name: 'live', wireApi: 'openai-chat', baseUrl: BASE_URL, models: [MODEL], authToken: key };
+}
+
+const KEY = (): string => readFileSync(KEY_FILE, 'utf8').trim();
+
+function start(
+  cwd: string,
+  decide: Decider,
+  overrides: Partial<AgentProcessRequest> = {},
+  options: { readonly decisionTimeoutMs?: number; readonly key?: () => string } = {},
+): LiveRun {
+  const base = mkdtempSync(`${tmpdir()}/periscope-opencode-base-`);
+  const decided: DecisionRequest[] = [];
+  const raised: { name: RefusalReason; detail: string }[] = [];
+  const sessionRequest = request(cwd, overrides);
+  const gate = createOpencodeSessionGate({
+    sessionKey: 'live',
+    cwd,
+    decide: (asked, signal) => {
+      decided.push(asked);
+      receipt('decision request', { request: asked });
+      return decide(asked, signal);
+    },
+    localGate: localGate({
+      workspaceRoot: cwd,
+      resolve: nodePathResolver,
+      protectedPaths: [KEY_FILE, base, SDK],
+      toolFamilies: OPENCODE_TOOL_FAMILIES,
+      readsShellDialect: true,
+      resolvesAgainstCallCwd: true,
+      resolvesWritesAgainstCallCwd: true,
+    }),
+    decisionTimeoutMs: options.decisionTimeoutMs ?? 60_000,
+    holdAfterMs: 250,
+    servers: Object.keys(sessionRequest.mcpServers ?? {}),
+    onOutcome: (outcome) => receipt('outcome', { kind: outcome.kind, tool: outcome.request.toolName }),
+    onDegrade: (name, detail) => {
+      raised.push({ name, detail });
+      receipt('degrade', { name, detail });
+    },
+    onSpawnDegrades: (names) => receipt('opening tier degrades', { names }),
+  });
+  const process = startOpencodeProcess(
+    sessionRequest,
+    { sdk: SDK, base, endpoints: [route(options.key ?? KEY)] },
+    (detail) => receipt('runtime degraded', { detail }),
+    'live',
+    gate,
+  );
+  return { stream: new LiveStream(process.messages), process, decided, raised, base };
+}
+
+const allow: Decider = () => Promise.resolve({ behavior: 'allow' });
+
+/** The session's own events of `type`. */
+const events = (stream: LiveStream<OpencodeMessage>, type: string) =>
+  stream.seen.flatMap((message) =>
+    message.kind === 'event' && message.main && message.event.type === type ? [message.event] : [],
+  );
+
+/** The events a run ends with, by any of its ends. */
+const RUN_ENDS = ['session.execution.succeeded', 'session.execution.failed', 'session.execution.interrupted'];
+
+/** Whether the session's own run has ended, by any of its ends. */
+const settled = (stream: LiveStream<OpencodeMessage>): boolean =>
+  RUN_ENDS.some((type) => events(stream, type).length > 0);
+
+/** How many runs of its own the session has ended. */
+const runsEnded = (stream: LiveStream<OpencodeMessage>): number =>
+  RUN_ENDS.reduce((count, type) => count + events(stream, type).length, 0);
+
+/** One subagent's session, as the stream shows it: whether its own run has ended, and the calls it began. */
+interface SubagentRun {
+  readonly session: string;
+  readonly ended: boolean;
+  readonly calls: number;
+}
+
+/**
+ * The subagent sessions a run started. A subagent always runs in the background: the call that starts it
+ * returns at once, so the session's own run can end before the subagent has made a call, and what a
+ * subagent did is known only once its own run has ended.
+ */
+function subagentRuns(stream: LiveStream<OpencodeMessage>): SubagentRun[] {
+  const runs = new Map<string, { ended: boolean; calls: number }>();
+  for (const message of stream.seen) {
+    if (message.kind !== 'event' || message.main || message.spawnedBy === null || message.session === null) {
+      continue;
+    }
+    const run = runs.get(message.session) ?? { ended: false, calls: 0 };
+    if (message.event.type === 'session.execution.started') run.ended = false;
+    if (RUN_ENDS.includes(message.event.type)) run.ended = true;
+    if (message.event.type === 'session.tool.called') run.calls += 1;
+    runs.set(message.session, run);
+  }
+  return [...runs].map(([session, run]) => ({ session, ...run }));
+}
+
+/** Processes whose command line carries the marker, after close: what outlived the session. */
+function survivors(): string[] {
+  try {
+    if (process.platform === 'win32') {
+      const script = `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${MARKER}*' } | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`;
+      return execFileSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8' })
+        .split(/\r?\n/)
+        .filter((line) => line.trim() !== '' && !line.includes('Get-CimInstance'));
+    }
+    return execFileSync('ps', ['-eo', 'pid,args'], { encoding: 'utf8' })
+      .split('\n')
+      .filter((line) => line.includes(MARKER) && !line.includes('ps -eo'));
+  } catch (error) {
+    return [`the process listing failed: ${String(error)}`];
+  }
+}
+
+test(
+  "every call of an opencode session asks this host, its subagents' included: a read, a refused write that does not run, an MCP call and a subagent's read; the skill handed over is offered; spend is filed per model call",
+  { skip },
+  async (t) => {
+    const dir = scratch();
+    const plugin = skillPlugin();
+    const mcp = await fakeMcpHttp('2024-11-05');
+    const run = start(
+      dir,
+      (asked) =>
+        Promise.resolve(
+          asked.toolName === 'edit'
+            ? { behavior: 'deny', message: 'periscope-denied-the-write' }
+            : { behavior: 'allow' },
+        ),
+      {
+        mcpServers: { fake: { type: 'http', url: mcp.url, headers: { 'X-Job-Ticket': 'live' } } },
+        plugins: [{ type: 'local', path: plugin }],
+      },
+    );
+    try {
+      run.process.prompt(
+        'Do these things in order, one tool each: read notes.txt with the read tool; write a file named blocked.txt containing hi with the write tool; call the echo tool of the fake server with the text ping; use the subagent tool with agent general to have a subagent read notes.txt with the read tool; load the greet skill. Then say what the write tool told you.',
+      );
+      await run.stream.until(() => settled(run.stream), 600_000);
+      // The session's own run can end with its subagent still at work, so the subagent's own end is
+      // waited for before anything of it is read. The session is then told its subagent went idle and
+      // runs once more: that run is waited for too, so the close does not come in the middle of it.
+      // A subagent's session is on the stream by the time the call that started it returns; a moment is
+      // given for it all the same, and none is waited for where the call started nothing.
+      if (await run.stream.until(() => subagentRuns(run.stream).length > 0, 15_000)) {
+        await run.stream.until(() => subagentRuns(run.stream).every((one) => one.ended), 300_000);
+        const ranAgain = await run.stream.until(() => runsEnded(run.stream) > 1, 30_000);
+        receipt('after the subagent', { subagents: subagentRuns(run.stream), theSessionRanAgain: ranAgain });
+      }
+      const failure = events(run.stream, 'session.execution.failed');
+      receipt('errors', { failure: failure.map((event) => event.data) });
+      assert.deepEqual(
+        failure,
+        [],
+        'the run failed: the endpoint refused the key, or the model could not run',
+      );
+      const names = run.decided.map((asked) => asked.toolName);
+      assert.ok(names.includes('read'), `no read reached the decision: ${names.join(', ')}`);
+      assert.ok(names.includes('edit'), `no write reached the decision: ${names.join(', ')}`);
+      assert.ok(names.includes('mcp__fake__echo'), `no MCP call reached the decision: ${names.join(', ')}`);
+      assert.equal(existsSync(join(dir, 'blocked.txt')), false, 'the refused write ran');
+      await t.test("the subagent's own call asks this host", (leg) => {
+        const sub = run.decided.filter((asked) => asked.agentId !== null);
+        const subagents = subagentRuns(run.stream);
+        receipt('subagent decisions', { sub, subagents });
+        if (sub.length > 0) return;
+        // No call of a subagent asked. That is nothing to hold only where no subagent made a call: a
+        // call that began with nobody asked is the worst this probe can find, and is a red.
+        if (subagents.length === 0) {
+          leg.skip('the model started no subagent, so no call of one could ask');
+          return;
+        }
+        assert.ok(
+          subagents.every((one) => one.ended),
+          "the subagent's own run did not end in the time waited, so what it did was not read",
+        );
+        assert.equal(
+          subagents.reduce((count, one) => count + one.calls, 0),
+          0,
+          "a subagent's call began and none reached the decision",
+        );
+        leg.skip('the subagent ended its run having made no call, so none could ask');
+      });
+      receipt('skill', {
+        asked: names.includes('skill'),
+        loaded: run.stream.seen.some(
+          (message) => message.kind === 'event' && message.event.type === 'session.skill.activated',
+        ),
+      });
+      const lift = new OpencodeFactLift();
+      const spend = run.stream.seen
+        .flatMap((message) => lift.fromMessage(message).facts)
+        .filter((fact) => fact.kind === 'turn_record');
+      receipt('spend', { steps: spend });
+      assert.ok(spend.length > 0, 'no model call was filed');
+      const types = run.stream.seen.flatMap((message) =>
+        message.kind === 'event' && message.main ? [message.event.type] : [],
+      );
+      receipt('event order', { first: types[0], last: types.at(-1) });
+      assert.deepEqual(
+        run.raised.filter((one) => one.name !== 'gate-mode-widened'),
+        [],
+        'a degrade was named',
+      );
+    } finally {
+      await closeAndWait(run.process, run.stream, receipt);
+      await mcp.close();
+      removeScratch(dir, receipt);
+      removeScratch(plugin, receipt);
+      removeScratch(run.base, receipt);
+    }
+  },
+);
+
+test(
+  "a key the endpoint refuses fails the run in the provider's own words, the sign-in failure a controller sees",
+  { skip },
+  async () => {
+    const dir = scratch();
+    const run = start(dir, allow, {}, { key: () => `refused-${process.pid}` });
+    try {
+      run.process.prompt('Say hello.');
+      await run.stream.until(() => settled(run.stream), 300_000);
+      const failure = events(run.stream, 'session.execution.failed');
+      receipt('sign-in failure', { failure: failure.map((event) => event.data) });
+      assert.ok(failure.length > 0, 'a refused key did not fail the run');
+    } finally {
+      await closeAndWait(run.process, run.stream, receipt);
+      removeScratch(dir, receipt);
+      removeScratch(run.base, receipt);
+    }
+  },
+);
+
+test(
+  "silence holds to this host's deadline: a call nobody answers expires and does not run",
+  { skip },
+  async () => {
+    const dir = scratch();
+    const run = start(
+      dir,
+      (_asked, signal) =>
+        new Promise((_resolve, reject) =>
+          signal.addEventListener('abort', () => reject(new Error('aborted'))),
+        ),
+      {},
+      { decisionTimeoutMs: 20_000 },
+    );
+    try {
+      run.process.prompt('Write a file named silent.txt containing hi, with the write tool.');
+      await run.stream.until(() => settled(run.stream), 600_000);
+      assert.ok(
+        run.decided.some((asked) => asked.toolName === 'edit'),
+        'the write never asked',
+      );
+      assert.equal(existsSync(join(dir, 'silent.txt')), false, 'a call nobody answered ran');
+    } finally {
+      await closeAndWait(run.process, run.stream, receipt);
+      removeScratch(dir, receipt);
+      removeScratch(run.base, receipt);
+    }
+  },
+);
+
+test(
+  "an approved command's environment names no credential, and holds no copy of the key",
+  { skip },
+  async () => {
+    const dir = scratch();
+    // The command writes its own environment to a file this probe reads: what a model relays of a
+    // listing it was asked to print can be an error's text, which holds no key and proves nothing.
+    const command = environmentScript(dir);
+    const run = start(dir, allow);
+    try {
+      run.process.prompt(`Run exactly this shell command with the shell tool and reply done: ${command}`);
+      await run.stream.until(() => settled(run.stream), 600_000);
+      const snapshot = join(dir, ENVIRONMENT_FILE);
+      receipt('the command wrote its environment', { wrote: existsSync(snapshot) });
+      assert.ok(existsSync(snapshot), 'the command did not run, so its environment was not read');
+      const text = readFileSync(snapshot, 'utf8');
+      const names = environmentNames(text);
+      receipt('environment names', { names });
+      // Control: what the command wrote is an environment, the search path among its names.
+      assert.ok(isEnvironment(names), 'what the command wrote is no environment, so nothing of it was read');
+      assert.equal(text.includes(KEY()), false, "the key reached the agent's shell");
+      assert.equal(
+        /PERISCOPE_OPENCODE_/.test(text),
+        false,
+        "this host's own variables reached the agent's shell",
+      );
+    } finally {
+      await closeAndWait(run.process, run.stream, receipt);
+      removeScratch(dir, receipt);
+      removeScratch(run.base, receipt);
+    }
+  },
+);
+
+test(
+  "a command the agent's shell runs in the background does not outlive the session's close",
+  { skip },
+  async (t) => {
+    const dir = scratch();
+    const run = start(dir, allow);
+    const before: string[] = [];
+    try {
+      // The marker is a word of the command itself, on Windows the name of the signal it waits for, so a
+      // model that tidies the line cannot drop it and the listing finds the command.
+      const command =
+        process.platform === 'win32' ? `waitfor /t 120 ${MARKER}` : `sh -c "sleep 120; true ${MARKER}"`;
+      run.process.prompt(
+        `Run this command with the shell tool in the background, and do not wait for it: ${command}`,
+      );
+      await run.stream.until(() => settled(run.stream), 600_000);
+      before.push(...survivors());
+      receipt('running before close', { survivors: before });
+    } finally {
+      await closeAndWait(run.process, run.stream, receipt);
+      removeScratch(dir, receipt);
+      removeScratch(run.base, receipt);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const left = survivors();
+    receipt('after close', { survivors: left });
+    endListed(left);
+    assert.deepEqual(left, [], 'a command the session started outlived its close');
+    // A close that ended nothing proves nothing: the command has to have been running when it came.
+    if (before.length === 0) {
+      t.skip(
+        'the command was not running when the session closed, so this run says nothing of what a close ends',
+      );
+    }
+  },
+);

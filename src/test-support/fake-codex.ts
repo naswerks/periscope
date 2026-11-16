@@ -12,6 +12,7 @@ import { join } from 'node:path';
 
 import type { JsonObject, JsonValue } from '../control/frames.js';
 import { CODEX_HOOK_TIMEOUT_SECONDS } from '../gate/hook-exchange.js';
+import { CODEX_PINNED_VERSION } from '../host/codex-binary.js';
 import { codexHookLines } from '../host/codex-hook.js';
 import { fakeChild, spawnerFor } from './fake-child.js';
 import type { FakeChild } from './fake-child.js';
@@ -19,7 +20,7 @@ import type { FakeChild } from './fake-child.js';
 export interface FakeCodexOptions {
   /** The home `initialize` answers with; a session asserts it equals the configured one. */
   readonly codexHome: string;
-  /** The version the `userAgent` names. Default the pinned `0.162.1`. */
+  /** The version the `userAgent` names. Default the pinned version, `CODEX_PINNED_VERSION`. */
   readonly version?: string;
   readonly threadId?: string;
   /** The model a thread opens on when none is named. */
@@ -168,7 +169,7 @@ export class FakeCodexServer {
   }
 
   get version(): string {
-    return this.#options.version ?? '0.162.1';
+    return this.#options.version ?? CODEX_PINNED_VERSION;
   }
 
   /** The client requests that named `method`, in order. */

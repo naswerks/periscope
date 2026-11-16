@@ -2,9 +2,12 @@
  * The Claude fill: a Claude session's conversation, read into the wire's items from the SDK messages
  * this host already forwards, and from the one hook that reports the prompt.
  *
- * What each item is read from (the main thread only: a message a subagent's turn produced, with
- * `parent_tool_use_id` set, rides its native `agent_message` and fills no item, because an item has no
- * member naming the call that spawned it):
+ * What each item is read from, on the main thread and in a subagent's turn alike: a message a
+ * subagent's turn produced carries `parent_tool_use_id`, the call that spawned it, and each item it fills
+ * names that call as its `parentId`; an item of the session's own thread names none, which reads as null,
+ * so it is the item a link at protocol 19 reads, byte for byte. A link below
+ * protocol 20 cannot read an item's parent, so on one a subagent's message fills no item and rides its
+ * native `agent_message` alone (`spawnedItems`).
  *   - `turn` started and `user_text`: `UserPromptSubmit`, whose `prompt` is the prompt as the agent took
  *     it, at the moment its turn starts. A prompt sent while a turn runs is not marked started early.
  *   - `agent_text`: each assistant `text` block. Claude marks no text as a turn's answer, so `final` is
@@ -87,11 +90,11 @@ export const CLAUDE_ITEM_COVERAGE = {
   },
   assistant: {
     handling: 'wired',
-    note: 'its text, thinking and tool_use blocks, each an item, on the main thread only (CLAUDE_BLOCK_ITEMS)',
+    note: 'its text, thinking and tool_use blocks, each an item (CLAUDE_BLOCK_ITEMS); in a subagent turn each names the spawning call as its parent',
   },
   user: {
     handling: 'wired',
-    note: 'its tool_result blocks, each a tool_result item, on the main thread only; the prompt rides UserPromptSubmit',
+    note: 'its tool_result blocks, each a tool_result item, in a subagent turn naming the spawning call as its parent; the prompt rides UserPromptSubmit',
   },
   stream_event: { handling: 'declined', note: `${NATIVE_ONLY}; streaming text rides the fragments` },
   tool_progress: { handling: 'declined', note: `${NATIVE_ONLY}; progress of a call whose result follows` },
@@ -143,6 +146,7 @@ export const CLAUDE_ITEM_COVERAGE = {
   },
   'system/mirror_error': { handling: 'declined', note: `${NATIVE_ONLY}; a transcript store event` },
   'system/informational': { handling: 'declined', note: `${NATIVE_ONLY}; a message for an interactive user` },
+  'system/session_writes_lost': { handling: 'declined', note: `${NATIVE_ONLY}; a storage event` },
 } as const satisfies Readonly<Record<MessageDiscriminator, CoverageRow>>;
 
 /** Every content block kind an assistant message can carry, filled or declined. */
@@ -206,14 +210,20 @@ export class ClaudeItemFill implements ItemFill<SDKMessage> {
   readonly #sessionKey: string;
   #prompts = 0;
   #push: ((item: AgentItem) => void) | null = null;
+  /** Whether a subagent's message fills items: read as each message is read. */
+  readonly #spawnedItems: () => boolean;
   /** Calls this host's gate refused, by tool use id. */
   readonly #blocked = new Set<string>();
   /** Calls the agent's own permission check refused, by tool use id. */
   readonly #declined = new Set<string>();
 
-  /** `sessionKey` is the periscope session's own key: what a prompt's item id is made from. */
-  constructor(sessionKey: string) {
+  /**
+   * `sessionKey` is the periscope session's own key: what a prompt's item id is made from.
+   * `spawnedItems`, when given, says whether a subagent's message fills items now; by default it does.
+   */
+  constructor(sessionKey: string, options: { readonly spawnedItems?: () => boolean } = {}) {
     this.#sessionKey = sessionKey;
+    this.#spawnedItems = options.spawnedItems ?? (() => true);
   }
 
   attach(push: (item: AgentItem) => void): void {
@@ -279,7 +289,9 @@ export class ClaudeItemFill implements ItemFill<SDKMessage> {
   }
 
   #fromAssistant(message: AssistantMessage): AgentItem[] {
-    if (onSubagent(message.parent_tool_use_id)) return [];
+    const parentId = parentOf(message.parent_tool_use_id);
+    if (parentId !== null && !this.#spawnedItems()) return [];
+    const parented = parentId === null ? {} : { parentId };
     const items: AgentItem[] = [];
     for (const [index, block] of message.message.content.entries()) {
       const itemId = `${message.uuid}:${index}`;
@@ -288,6 +300,7 @@ export class ClaudeItemFill implements ItemFill<SDKMessage> {
           kind: 'agent_text',
           itemId,
           turnId: null,
+          ...parented,
           text: block.text,
           final: null,
           truncated: false,
@@ -297,20 +310,30 @@ export class ClaudeItemFill implements ItemFill<SDKMessage> {
           kind: 'thinking',
           itemId,
           turnId: null,
+          ...parented,
           text: block.thinking,
           summary: false,
           truncated: false,
         });
       } else if (block.type === 'redacted_thinking') {
-        items.push({ kind: 'thinking', itemId, turnId: null, text: '', summary: false, truncated: false });
+        items.push({
+          kind: 'thinking',
+          itemId,
+          turnId: null,
+          ...parented,
+          text: '',
+          summary: false,
+          truncated: false,
+        });
       } else if (block.type === 'tool_use') {
         items.push({
           kind: 'tool_call',
           itemId: block.id,
           turnId: null,
+          ...parented,
           toolUseId: block.id,
           toolName: block.name,
-          toolKind: claudeToolKind(block.name),
+          toolKind: claudeToolKind(block.name, block.input),
           input: isObject(block.input) ? (block.input as JsonObject) : null,
           truncated: false,
         });
@@ -320,7 +343,9 @@ export class ClaudeItemFill implements ItemFill<SDKMessage> {
   }
 
   #fromUser(message: UserMessage): AgentItem[] {
-    if (onSubagent(message.parent_tool_use_id)) return [];
+    const parentId = parentOf(message.parent_tool_use_id);
+    if (parentId !== null && !this.#spawnedItems()) return [];
+    const parented = parentId === null ? {} : { parentId };
     if ((message as { isReplay?: unknown }).isReplay === true) return [];
     const content = message.message.content;
     if (typeof content === 'string') return [];
@@ -332,6 +357,7 @@ export class ClaudeItemFill implements ItemFill<SDKMessage> {
         kind: 'tool_result',
         itemId: `${toolUseId}:result`,
         turnId: null,
+        ...parented,
         toolUseId,
         status: this.#statusOf(toolUseId, block.is_error === true),
         output: outputOf(block.content),
@@ -351,9 +377,9 @@ export class ClaudeItemFill implements ItemFill<SDKMessage> {
   }
 }
 
-/** Whether a message belongs to a subagent's turn rather than the main thread. */
-function onSubagent(parent: string | null | undefined): boolean {
-  return typeof parent === 'string' && parent !== '';
+/** The call that spawned the subagent whose turn a message is from, or null on the main thread. */
+function parentOf(parent: string | null | undefined): string | null {
+  return typeof parent === 'string' && parent !== '' ? parent : null;
 }
 
 /** The text a tool result reported: a string as it is, or its text blocks joined; null when none. */

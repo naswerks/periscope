@@ -50,6 +50,7 @@ import {
 import { qwenMcpServers } from './qwen-mcp.js';
 import { qwenSkillDirectories } from './qwen-pack.js';
 import type { QwenHostRequest, QwenMessage } from './qwen-wire.js';
+import { QwenSpawnWatch } from '../state/qwen-observer.js';
 import { InitializeAnswer, SystemInit, parsed, qwenMessageKey } from './qwen-wire.js';
 import type { SpawnChild } from './stdio-rpc.js';
 import type { QwenPermissionMode } from './wire-request.js';
@@ -335,8 +336,13 @@ export function startQwenProcess(
     return answered;
   }
 
+  // The main thread's sub-agent calls still running, to tell a sub-agent's end from the turn's.
+  const spawns = new QwenSpawnWatch();
+
   function onMessage(message: JsonObject): void {
     const key = qwenMessageKey(message);
+    const turnEnded = key === 'result' && !spawns.isSubagentEnd(message);
+    spawns.observe(message);
     if (key === 'system/init') {
       const init = parsed(SystemInit, message);
       if (init !== null) {
@@ -350,7 +356,7 @@ export function startQwenProcess(
       }
     }
     output.push({ kind: 'message', message });
-    if (key === 'result') {
+    if (turnEnded) {
       outstanding = Math.max(0, outstanding - 1);
       void readContextUsage();
     }

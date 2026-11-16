@@ -8,6 +8,551 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-15
+
+Protocol 20; the window is `[19, 20]`, so a version-19 controller is still spoken to, and a version-18
+controller is refused at the handshake by name. Every member version 20 adds is optional and it adds no
+payload kind: a version-19 controller reads each as an unknown key on a kind it already reads, and every
+frame it sends decodes unchanged.
+
+- Fixed: a Claude session no longer carries an open model request after its turn. Claude Code 2.1.325
+  sends `system/status` with `status: 'requesting'` at the start of every model request and no status
+  at its end (a null status arrives for a compaction's end and a permission-mode change), and the
+  request entry was closed only by a null status, so after its first request a session showed
+  `requesting` for good, through its tools and after the turn. The request is now closed by its
+  answer, the session's own `assistant` message, in a transition whose cause is `assistant`; one that
+  got no answer is closed by the turn's end, `Stop` or `result`. A sub-agent's message closes nothing,
+  and with no request open none of the three names an entry.
+- Fixed: a Claude session's `permission:<toolName>` entry is closed by what the CLI sends. Claude Code
+  2.1.325 fires `PermissionRequest` for a call the hooks left to its own permission flow (an allow
+  that does not grant, in a mode that asks), after that call's `PreToolUse`; it reports a denial as
+  the `system/permission_denied` message with the `PermissionDenied` hook silent, and runs the tool
+  when a hook grants. The entry was closed by the next `PreToolUse` of the same tool, which is
+  another call's, so the trace said a permission had resolved when nobody had answered it, and a
+  denied one stayed open. It is now closed by the denial, whichever of the message and the hook
+  reports it, once; or by the end of a call of that tool. A session whose gate grants on allow, as
+  `PeriscopeHost`'s do, opens no such entry and is unchanged.
+- Changed: what an operator's deny rule does to a call a hook would allow is measured, where it was
+  stated from the documentation alone. On Claude Code 2.1.325 a deny rule is applied before any hook is
+  asked: a rule that names the whole tool takes the tool from the model, and a rule that names a path
+  refuses the call with `PreToolUse` never firing, so a hook's allow overrides neither, and a call a
+  deny rule refuses never reaches the gate. The live probe asserts it in three turns (no rule, the
+  tool's rule, a path's rule), and reports itself skipped when the model did not make the one call it
+  was asked to make.
+- Changed: the live probe of a turn rendered as it happens asserts what its title says, that the
+  last fragment of text arrives before the assistant message that carries the text. It counted every
+  delta, and Claude Code 2.1.325 sends the markers that end a block and a message
+  (`content_block_stop`, `message_delta`, `message_stop`) after that message; the probe prints them and
+  [protocol.md](docs/protocol.md) says so. The probe of the thinking display runs both its turns at
+  the highest effort, where adaptive thinking does think, and reports itself skipped, not failed, when
+  neither turn produced a thinking block.
+- Fixed: a live probe whose assertion fails no longer leaves its agent running. Four probe files
+  stopped their sessions on the last line of each test, so a failed assertion left the agent up and
+  the probe's own process could not exit; every probe now ends what it started in a `finally`, and a
+  pin holds that for each probe file. The probe of the spawn environment looked for the search path
+  as `PATH` exactly, which a shell on Windows hands over as `Path`; it now matches a variable's name
+  without regard to case, as the host does.
+- Fixed: the close of a Copilot session ends a command a turn started in the shell's background mode.
+  The close ended the turn first, which makes the runtime end its shells, each without the command it
+  is running; where the runtime's shell is PowerShell 7 the command was then under a process that was
+  gone, which no tree kill from the runtime finds, and it outlived the session. The close now ends
+  everything under the runtime first, while the runtime and its shells are there to root the walk, as
+  the close of an opencode session does. Found by the live probe's first turns on a real model;
+  held on the real runtime with a stub model.
+- Changed: a Copilot call that ran with no decision is named with its tool, and the runtime's own
+  read of a finished background command is named as that. When a command started in the shell's
+  background mode ends, the pinned runtime reads its output with a `read_powershell` call of its own,
+  under its own id, which reaches neither the hook nor the permission request. It was named
+  `gate-hook-missing` by its id alone. The detail now carries the tool, which the runtime states at a
+  call's start and not at its end, and says when the call is that read, with the shell it read.
+  [SECURITY.md](SECURITY.md) and [gate.md](docs/gate.md) say what the runtime does.
+- Changed: the Copilot live probe runs on an account that is offered no model by name.
+  `PERISCOPE_COPILOT_MODEL=default` names no model, so each session opens on the runtime's own default,
+  which is the only way an account on Copilot's free plan runs a turn: the runtime lists no model for
+  it and refuses one that is named. A session that names no model already opened and ran; the
+  documents now say so, and that the runtime reports such a session's model as `auto`. The probe no
+  longer names the tool a write is made with, since the runtime picks a session's file tools by its
+  model; it reads a command's environment from a file the command writes, since a model asked to print
+  every variable declines; it waits for a background command itself and not for the turn's end, since
+  a session is not idle while a command it started runs; and the sub-agent's leg reports alone, so
+  that it alone is skipped where the plan gives a sub-agent no model.
+- Changed: the trace live probe holds that the CLI sends no `requesting` status for a sub-agent's
+  model requests. A status names no thread, so one sent for a sub-agent would open the session's own
+  request entry and leave the session reading as requesting for the sub-agent's whole run. Claude
+  Code 2.1.325 sends none, by its own code and by a recorded turn; the probe's sub-agent test now
+  asserts it, and [state-machine.md](docs/state-machine.md) says it.
+- Fixed: a live probe no longer leaves its scratch directory behind. The opencode probe's background
+  test left its directory in the temp folder each run. What held it was the command the close had just
+  ended, for under a second, as its working directory: on Windows such a directory cannot be removed,
+  the removal fails at once, and the retry `rmSync` offers does not wait that failure out. The shared
+  removal now tries again itself, for up to ten seconds, and says in a receipt when it had to wait.
+- Changed: the opencode live probe reads a command's environment from a file the command writes, as
+  the Copilot probe does. It read what the model relayed of a listing it was asked to print; in a
+  release run the model spelt the line so that it printed an error, whose text holds no key, and the
+  test passed having read no environment. The listing must now be an environment, the search path
+  among its names. The Codex probe's own listing must have run before what it shows is read.
+- Fixed: a Copilot session's model is told its working directory, and no longer a folder under the
+  runner's Copilot home. The SDK's `empty` client mode removes the runtime's environment section from
+  the system message unless it is asked for, and the runtime's instructions name its session folder,
+  under the session's home. So the one folder a model was told of was under the runner's home, while
+  its file tools take only absolute paths: on a real model two first turns in six named a file there,
+  were refused `credential-path-denied`, and stopped. The host now asks for the environment section
+  and takes the session folder out of the runtime's instructions. A sub-agent's system message is the
+  runtime's own and still names that folder beside the working directory; a call that names it is
+  refused as before, and the documents say so.
+- Fixed: the opencode live probe waits for a subagent's own end before it reads what the subagent
+  asked. An opencode subagent always runs in the background, so the session's own run can end before
+  its subagent has made a call; the probe read at the session's end, found no call of the subagent,
+  and failed, in one release run of two. It now waits for the subagent's run, and then for the run the
+  session makes when it is told its subagent went idle. The subagent's call is a leg of its own:
+  skipped with its reason when the subagent made no call, red when a call of its began with nobody
+  asked. [gate.md](docs/gate.md) says when a subagent's call can arrive.
+- Changed: the documents say when opencode's list of MCP resources asks nobody. The tool asks about
+  each server it would list, so in a session with no MCP server attached it raises no request, lists
+  nothing, and is named `gate-hook-missing`, as a release run on a real model showed. The tables'
+  comment said the MCP resource tools ask, without that case.
+- Fixed: a Copilot session opens where the runtime allows a directory that is none of the session's.
+  The read-back refused the open `copilot-gate-not-active` for it, and the runtime allows its temp folder
+  by itself, so a session whose temp folder is no write root of its own (one that covers the session's
+  directory, its home or a protected path) never opened. The runtime's list bounds no write: the hook
+  asks about every call, and the host's gate holds a write to the session's write limits. Such a
+  directory is now named `gate-mode-widened`, once, and the session opens. Every other posture the
+  read-back holds still refuses the open.
+- Security: Copilot's `rg` is read as the search tool it is. Under some models (the `gpt-` family on
+  the pinned runtime) a session is offered `rg` and `apply_patch` in place of `grep`, `create` and
+  `edit`. `rg` was in none of the host's tables: its kind was `other`, and its `paths` were not read
+  against the protected set, so a search under a protected directory had no local refusal (it was named
+  `gate-tool-unnamed`, and still went to the controller). It is now kind `file_read` and in the search
+  family, held by its `paths` as `grep` is, and a real-runtime test reads the tools a session is offered
+  under each of the two families.
+- Changed: what the Qwen Code live probe of a read counts. It counted the calls that reached the
+  decider, and a read the protected set refuses never reaches it, so the probe failed on a refusal
+  that held. It now asks for an ordinary read, which must be asked about, and a protected one, which
+  must be refused with nobody asked.
+- Changed: the pi live probe of a background command holds what was measured. It asserted that such a
+  command does not outlive the session's close. On Windows a command the agent's shell puts in the
+  background and leaves has no running parent, so nothing that walks the process table reaches it, and
+  it outlives the close; so does the program a command still running at the close was in the middle
+  of. Both were measured on the pinned pi. The probe now holds the first where it was measured, records
+  what it found and ends it, and [SECURITY.md](SECURITY.md) and [gate.md](docs/gate.md) say what a
+  close of a pi session does not end.
+- Changed: the Qwen Code, opencode and Copilot live probes of a background command carry their marker
+  as the command's own argument. It was a trailing comment, which a model drops, so the listing found
+  nothing before the close or after it and the probe passed on a run that measured nothing. A command
+  that was not running when the close came is now reported as skipped, not passed.
+- Fixed: the trace live probe's process ends when its tests do. One test raced a three-minute timer
+  and dropped its handle, so the probe's process stayed for three minutes after its last test. The
+  timer is cleared when the wait is over, and a pin reads every probe file for a timer that is
+  neither waited out nor kept.
+- Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
+  The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
+  what the CLI then registered. The first list of tools the CLI sends is now read for the tools the
+  settings deny (`autofix_pr`) and the one the CLI registers only in code mode (`exec`): one listed all
+  the same is named `qwen-ask-rules-not-active` on the session's state lane, once a tool, and the
+  session opens and goes on. A call to a tool the settings deny is refused by that name before anyone
+  is asked; a call to `exec` is asked about like any other.
+- Changed: the agent SDK is `@anthropic-ai/claude-agent-sdk` 0.3.325, pinned exactly, bundling Claude
+  Code 2.1.325 (was 0.3.284 and 2.1.284). The hello's catalog is the one the new CLI offers. Its one new
+  message, `system/session_writes_lost` (the CLI could not save transcript lines or its own
+  configuration because the disk was full), rides the update lane and moves no state. Its one new
+  built-in tool, `OfferChromeSetup`, names no path and runs no command, and is `other`. No hook event
+  was added.
+- Changed: `@anthropic-ai/sdk`, which only the agent SDK's type definitions read, is `>=0.93.0` (was
+  `^0.129.0`): the range the agent SDK's own manifest asks, so a consumer on either major installs. This
+  package's lockfile resolves 1.8.0, which is published under the Apache-2.0 licence and brings
+  `@opentelemetry/api` with it.
+- Security: the local gate places a path a tool names where the operating system puts it, then checks
+  it. On Windows a path with one leading separator (`\Users\x`, `/Users/x`) is rooted at the drive the
+  call runs on and `C:name` on that drive is beneath the call's directory; on every system `~` is the
+  home directory for a read, a write and a patch, as it was for a search. Each was joined under the
+  call's directory as text, so the gate judged a file inside the workspace while the tool opened
+  another: a read of a protected file, or a write outside the session's roots, passed. Two forms cannot
+  be placed and are refused with a new reason, `path-unplaceable`: a drive-relative path on another
+  drive, and another user's home (`~name/...`). Under a POSIX call directory nothing new is refused.
+- Security: a Claude session's relative read or search path is checked where the call runs. `Grep` and
+  `Glob` take a relative `path`, and the local gate resolved it against the host process's own
+  directory, so a path that climbed out of the session's directory into a protected folder was judged
+  as some other folder and passed. `PeriscopeHost` now places it under the call's directory, as it does
+  for every other runtime. A write is unchanged.
+- Security: the local gate reads the NT namespace prefix. `\??\C:\...` is the system's own name for the
+  drive path after it, and Windows opens it as that path when a program hands it over unchanged. The
+  gate placed it as a folder named `??` at the root of the drive, so a protected file named that way had
+  no local refusal: on the pinned Copilot runtime, whose `view` and `create` open that spelling, a
+  protected file was read through it. It is now the drive path after it, as a device prefix is
+  (`\??\UNC\server\share\...` is that share), so a protected file is refused, a write outside the
+  session's roots is refused, and a file in the workspace named that way is written where it was refused
+  as outside. A form under it that maps to no drive path (`\??\GLOBALROOT\...`, a volume) is refused
+  `path-unplaceable`. With forward slashes it is no prefix and is read as before.
+- Security: the local gate reads the other ways Windows spells one file. A device prefix
+  (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it, so a long-path spelling of a workspace file
+  is now written where it was refused as outside the workspace, and one of a protected file is refused
+  where it passed. A share that names this machine's own drive (`\\localhost\C$\...`, a loopback
+  address, the host name or `COMPUTERNAME`) is that drive's path. The protected set is compared with
+  trailing dots and spaces and a stream name (`id_rsa.`, `id_rsa::$DATA`) folded away, and a path with a
+  segment shaped like a generated short name (`CREDEN~1.JSO`) is also compared as the file system names
+  it. A device or volume form that maps to no drive path is refused `path-unplaceable`. Still outside
+  the gate: a link, a short name set by hand, and a share reached by a name the host does not know as
+  its own.
+- Security: the local gate reads a drive path written from the root. On Windows `/c/Users/x` and
+  `/cygdrive/c/Users/x` name drive C to Git Bash, Cygwin and the agent CLI's own tools, and the folder
+  `c` at the root of the current drive to Windows itself. A read or a search is now compared with the
+  protected set in both readings, and the shell scan matches a protected path on a drive written as
+  `/c/...`, `/cygdrive/c/...` or `/mnt/c/...`; `cat /c/Users/x/.ssh/id_rsa` in a Git Bash shell named no
+  protected path before. The write limits keep Windows' reading.
+- Added: `LocalGateOptions.localNames` and `LocalGateOptions.realPath` (and the same two on
+  `JailOptions`), with `machineNames` and `canonicalPath` exported to fill them: the names this machine
+  answers to as a file server, and a path as the file system names it. `PeriscopeHost` passes both.
+- Security: nothing a controller hands an opencode session's MCP servers is followed as a reference.
+  opencode replaces `{file:path}` with a file's content, and `{env:NAME}` with a variable's value,
+  in its configuration's text before it parses it, and a controller's MCP URL, headers, arguments and
+  variables are in that text: on the pinned SDK a header naming a file was sent to its server as the
+  file's content. The host now writes the text so it holds neither reference, and each value is
+  parsed back as written.
+- Security: an opencode `shell` call is decided before it runs, whole. The `shell` tool asks only about
+  the commands the runtime's own reading finds in a line, so a line it finds none in ran with nothing
+  asked: on Windows, a PowerShell assignment through a provider path writes a file that way. Each
+  session's server is now created with one plugin of this host's, whose pre-call hook holds every
+  `shell` call, a subagent's included, until the host's own gate and the controller have decided the
+  whole line; refused, the call fails with the refusal's words and never runs. A call allowed there is
+  asked about once: the requests it then raises are held to the host's own gate alone. The read-back
+  admits that one plugin, by its id and its source.
+- Fixed: a new run of an opencode or a Copilot session says the subagents settled in the run before
+  stand no longer. The settled list was cleared and no `tasks` fact was sent, so a controller went on
+  showing them until some later task moved. The cleared fact is sent once, and only when one had
+  settled, as it is for a Claude, a Codex and a Qwen Code session.
+- Fixed: a session home an opencode host left behind when it did not close its session is cleared by
+  the next opencode session to open, its database kept for a resume first. It stayed under the base
+  for good, and the session in it could not be resumed.
+- Fixed: a closing opencode session's database replaces the older copy the base keeps without deleting
+  it first, so a copy that fails leaves the older one for a resume.
+- Fixed: an opencode host process is started with the one environment switch the pinned SDK reads,
+  `OPENCODE_DISABLE_FREE_MODELS`. Four more were set that no file of the SDK reads; they did nothing and
+  are gone, and the documents say what turns each of those things off (an option the server is created
+  with, or the session's configuration).
+- Fixed: an approval an opencode session's server takes from an answer this host did not give is named
+  `gate-mode-widened` when the host is still deciding that request too, and the wait ends; it was named
+  only when no decision was pending. An answer sent for a request the server had already settled (one
+  refused with another, or dropped with an interrupt) is no longer reported as an answer that was not
+  delivered.
+- Fixed: the close of an opencode session ends what its commands started. The server's own close ends
+  its shells and not their children, and the host process then exits by itself, so on Windows a process
+  a background command had started was under nothing a tree kill could find, and outlived the session.
+  The close now ends everything under the host process before it asks the process to exit.
+- Fixed: an opencode request too large for one line is no longer lost. A line over 8 MiB from the host
+  process was dropped whole and named nowhere, and an edit's request carries the whole text it writes,
+  so a large write could wait unseen for good. The host process now cuts the longest texts of a line
+  that would be too long, marking each cut, so the request arrives and is decided; a held `shell` call
+  whose line is too long to send whole is refused by name; and a line that is dropped is named
+  `rpc-line-too-large` on the session.
+- Fixed: an opencode interrupt reaches the session's subagents. It reached the session's own run alone,
+  and a subagent with a run under way went on, its pending decision with it. An interrupt now goes to
+  every subagent session with a run under way and ends the decisions the session's sessions wait on.
+- Fixed: an opencode request is decided whichever of the server's sessions raised it. One from a session
+  the process did not see created was dropped, never decided and never named, and its call waited for
+  good: after a resume that was every subagent of the earlier run, which the server restarts by itself
+  as soon as it is created. A request raised before the open is proven now waits for the proof, one
+  raised before the stream was read is found at the open, and a resumed session takes the earlier
+  process's subagent sessions as its own.
+- Fixed: an opencode call that ran with no decision is named however it leaves. It was named only when
+  it succeeded; one that failed, was interrupted or was still running at the close was never named.
+  The pre-call hook now tells the host of every call the server begins, so each is named
+  `gate-hook-missing` when it leaves undecided, and a success the server states again to a resumed
+  session for a call an earlier process ran is not named as this one's.
+- Fixed: what the opencode gate keeps for a call is kept by its session and its id together. It was
+  kept by the bare call id, so a subagent's call that shared an id with one of the session's could be
+  decided on the other's input, or pass as decided when it was not.
+- Added: `outcome` on an ended `compaction` fact, optional, on protocol 20: `completed` or `failed`
+  (`COMPACTION_OUTCOMES`), where the source that ended the compaction says how it came out. A failed
+  compaction was reported `ended`, the same as one that worked, and the fact had no member to tell
+  them apart. Claude, Copilot, pi and opencode state it; Codex states neither and its fact carries no
+  `outcome`. A controller on an older version ignores the member.
+- Security: Claude's `Artifact` tool is in a family of the local gate. It publishes the local files its
+  input names and saves the files it fetches, and it was in no family, so a credential file could be
+  named as the page, as an upload or as the place a fetched file is saved and no local check read the
+  path. Every path its input names is now held to the protected set, and to nothing else: the write
+  limits do not bound it. `ToolFamilies` gains the optional `publish` family for an embedder's own
+  such tools.
+- Security: Claude's `Monitor` tool is a shell tool. It runs the command its input names, so the local
+  gate reads that command as it reads `Bash`'s (a push, a protected path) and a decision request names
+  it `shell` with the `posix` dialect; it reached the gate as `other` and its command was never read. A
+  `Monitor` call that watches a socket runs no command and is `web`, since it opens a connection to an
+  address the model chose. Only `Monitor` is read that way: a shell call of any other tool, on any
+  runtime, that carries a `ws` and no command is refused `shell-command-missing` as before this
+  release. Which shell `Monitor` runs on a Windows host whose shell tool is PowerShell is not measured.
+- Security: the env floor holds the agent CLI's session-service credentials and remote route,
+  `CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`, `CLAUDE_BG_SESSION_CREDENTIAL` and `CLAUDE_CODE_REMOTE_SDK_URL`,
+  so no controller can set them. A `PERISCOPE_CONTROLLER_ENV_KEYS` that declares one now refuses the
+  start, by name.
+- Security: the env floor holds `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS`, the agent CLI's
+  switch that lets its dangerous `rm` commands run without a prompt in bypass mode, and nine more of
+  its switches, each of which its own code shows turning off a prompt, a refusal or a trust check: the
+  `rm` prompts (`CLAUDE_CODE_DISABLE_SUBSTITUTION_RM_PROMPT`, `CLAUDE_CODE_DISABLE_INLINE_SHELL_RM_PROMPT`,
+  `CLAUDE_CODE_DISABLE_MOUNTED_DRIVE_RM_PROMPT`), `CLAUDE_CODE_DISABLE_POWERSHELL_CMD_RM_DENY`,
+  `CLAUDE_CODE_DISABLE_EXPORTED_VARIABLE_PROMPT`, the trust switches (`CLAUDE_CODE_SANDBOXED`,
+  `CLAUDE_BG_WORKSPACE_TRUSTED`, `CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK`) and
+  `CLAUDE_BG_SESSION_PERMISSION_RULES`. No controller can set one. A `PERISCOPE_CONTROLLER_ENV_KEYS`
+  that declares one now refuses the start, by name.
+- Added: `parentId` on every conversation item (`AgentItem`), optional: the call that spawned the agent
+  whose turn the item is from. A Claude subagent's messages now fill items, each naming its spawning
+  call's `tool_use` id; an item of the session's own thread names none, which reads as null, so it is
+  the item 1.10.0 sent. A link negotiated below 20 is sent no subagent's item, since its controller
+  reads no parent: there they ride `agent_message` alone, as before.
+- Added: what a task reported of itself, on each `tasks` entry, running or settled (`TaskReport`, all
+  optional): the call that started it (`toolUseId`), its latest `summary`, its `usage` (`TaskUsage`:
+  `tokens`, `toolUses`, `durationMs`, each optional and nullable, so a usage can state its tokens alone)
+  and its `outputFile`, each stated only where the runtime reported it. Claude's are read from `task_started`, `task_progress` and `task_notification`; every text a
+  Claude entry carries, its `description` included, is now cut at `MAX_FACT_TEXT_LENGTH`, on a code
+  point boundary, where an over-long description made a frame the codec refused.
+- Changed: a `tasks` fact is sent at once when a task starts, ends or changes its summary, and a change
+  in a task's usage alone is sent at most once in five seconds for the session
+  (`TASKS_USAGE_PACE_MS`). Every `task_progress` message re-sent the whole list on the lane that is
+  never dropped, because a running subagent's usage moves with each one. Held figures go out with the
+  first message after the pace and with the turn's result, and a task's end carries its last figures.
+- Fixed: a `tasks` fact always fits a frame. Its lists are held to `MAX_TASKS_FACT_BYTES` on every
+  runtime (`fitTasks`): text is cut first, the longest first, and entries are left out last, the oldest
+  settled first. A session with many settled tasks made a fact past the frame limit, which the codec
+  refused, so nothing about any task arrived for the rest of the turn; a Claude session's lists also
+  had no entry bound.
+- Added: every Claude session asks for its subagents' progress summaries (`agentProgressSummaries`): a
+  running subagent states what it is doing about every 30 seconds, on its own model, and the summary
+  rides its task's entry. Each summary is one more model call, so the operator can turn them off:
+  `PERISCOPE_AGENT_PROGRESS_SUMMARIES=off` in the environment or the config file (a new config-file
+  key; `on` is the default, any other word refuses start), or `agentProgressSummaries: false` on
+  `PeriscopeHost` or `SessionRegistry`. No controller and no session can set it.
+- Security: every Claude session is started refusing messages another session on the machine sends it
+  (`crossSessionInbound: 'refuse'`). Unset, the CLI delivered one when the two sessions' modes matched,
+  so a bypass-mode session elsewhere on the machine could reach a session this host runs in bypass.
+  This host's own prompts are not that lane. The live probe of what the CLI does with a message that
+  names another session (`mid-turn-delivery.live.test.ts`) now fails when the turn never ran, the
+  message was not pushed mid-turn or the transcript was not found; it runs with the release's live
+  probes.
+- Fixed: a Claude compaction that fails ends. The status message that says so
+  (`compact_result: 'failed'`) closes the compaction entry, so the `compaction` fact reports `ended`
+  and the next compaction reports `started`; the entry stayed open, no `ended` was sent and the next
+  `started` was suppressed. A compaction that succeeds still ends at its boundary, with its token
+  counts.
+- Changed: Codex is pinned at 0.169.0 (was 0.162.1); a binary that reports any other version, 0.162.1
+  included, is listed unavailable by name, so the operator installs `@openai/codex@0.169.0` before a Codex
+  session runs. `contracts/codex-protocol-names.json` is the 0.169.0 release's. Its two new
+  notifications are declined: `thread/section/changed` is opted out at `initialize`, and
+  `thread/readState/changed` is experimental. Its new client methods are not called.
+- Changed: a Codex shell call's decision request carries the command's own working directory as its
+  `cwd`, where it carried the session's: Codex 0.169.0 names a local shell call's working directory in its
+  hook's input, and the call's input carries the command alone.
+- Security: a Codex shell command that runs inside the protected set is refused there, whatever its
+  command names: the local gate reads the directory a Codex shell call runs in as it reads a Qwen Code
+  shell call's `directory` (`checksShellCwd`). Either directory is read in every spelling a path is: a
+  relative one is placed under the session's directory, and one the call does not state is read as the
+  session's. Neither is refused for its form, only for where it lands. The directory is read as text,
+  as every path is: one that reaches the protected set through a link is not seen
+  ([SECURITY.md](SECURITY.md) says what falls through).
+- Security: a Codex command approval of the kind `humanCommand`, a command Codex's own requirements mark
+  for a fresh decision, is decided fresh and never answered from the hook's decision for the same call.
+  The app-server sends one only to a connection that opted into experimental API, which this host never
+  does, and with none it refuses the call itself.
+- Added: a Codex sub-agent's thread fills conversation items, each naming as its `parentId` the call
+  that started the thread: the `collabAgentToolCall` that spawned or resumed it, or the `subAgentActivity`
+  that started it, whose id is the spawning call's. A sub-agent's own spawn names its child the same way. A
+  sub-agent that speaks before the call that spawned it reports it is held, a bounded while, and filled
+  once the call names it; one no call names fills nothing. Its turns stay apart from the session's own: a
+  sub-agent's turn ending moves none of the session's state and records no turn of the session's. As for
+  Claude, a link negotiated below 20 is sent none of a sub-agent's items.
+- Added: a Codex `tasks` entry names the call that started its sub-agent (`toolUseId`), and a settled
+  entry carries the message Codex reported for its end as its `summary` (a completed agent's final
+  answer, an errored one's error), cut at `MAX_FACT_TEXT_LENGTH` on a code point boundary. No `usage` is
+  stated: a sub-agent's thread reports a token total, but one spawned with its parent's context
+  (`fork_context`) counts on from the parent's running total, and nothing the host receives says which
+  spawn did. Codex reports no output file for a sub-agent, so none is stated.
+- Fixed: a Codex sub-agent's fragments name the call that started its thread and keep it: a later call
+  about the same agent (a message, a wait, a close) no longer takes the parent over.
+- Changed: Qwen Code is pinned at 0.27.3 (was 0.25.1); a CLI that reports any other version, 0.25.1
+  included, is listed unavailable by name, so the operator installs `@qwen-code/qwen-code@0.27.3` before a
+  Qwen Code session runs. `contracts/qwen-code-names.json` is the 0.27.3 release's: its new system message
+  `mod_prompt` rides the native message only, its two new control requests (`get_workflow_mode`,
+  `set_workflow_mode`) are never sent, and its new tool `autofix_pr` has an ask rule like every other and
+  reads as `other`.
+- Security: a Qwen Code session's settings deny `autofix_pr`, which runs the CLI's own pull-request helpers
+  by name and so pushes a branch or posts a reply under a decision request no reading of a command
+  recognises as a push. A deny outranks every scope's ask and allow, so no repository's rule turns it back
+  on, and the read-back refuses the open `qwen-ask-rules-not-active` when the deny is missing. Turning it
+  back on is a later release's change to `QWEN_DENIED_TOOLS`.
+- Security: the read-back of a Qwen Code session's settings also refuses the open
+  `qwen-ask-rules-not-active` when they do not keep code mode off (`tools.codeModeOnly: false`). Code mode
+  is the only way the 0.27.3 CLI registers `exec`, whose script makes tool calls of its own, so no session
+  is offered it.
+- Added: a Qwen Code sub-agent's tool calls and their results, the only messages of a sub-agent the CLI
+  writes, fill conversation items, each naming its spawning call's `tool_use` id as its `parentId`; a link
+  negotiated below 20 is sent none of them.
+- Added: a Qwen Code `tasks` entry names the call that started its task (`toolUseId`) where the CLI says
+  which, and a settled agent task carries its `usage` (`tokens`, `toolUses`, `durationMs`) when the CLI
+  reports all three counts. The CLI reports no summary and no output file for a task, so neither is
+  stated.
+- Fixed: a failing foreground Qwen Code sub-agent no longer ends the session's turn. When a foreground sub-agent
+  fails or is cancelled the CLI writes a `result` of its own that names no call (the error subtype, no
+  turns and no time); while the main thread's `agent` call is still open that `result` now moves none of
+  the session's state, closes none of its tool entries, fills no turn item, records no `turn_record` and
+  frees no queued prompt, where it errored the session and filed a zero running total. A background
+  sub-agent writes no `result` of its own: the 0.27.3 CLI tells its end, a failure included, as a
+  `task_notification`, which the `tasks` fact carries.
+- Changed: pi is pinned at 1.5.2 (was 1.2.0); a CLI that reports any other version, 1.2.0 included, is
+  listed unavailable by name, so the operator installs `@earendil-works/pi-coding-agent@1.5.2` (Node 22.19
+  or later) before a pi session runs. `contracts/pi-names.json` is the 1.5.2 release's, and it names the
+  same events, commands, records, dialogs, deltas and tools as 1.2.0's.
+- Fixed: `scripts/derive-qwen-names.mjs` also reads the service modules the CLI's stream-json path
+  imports, so the contract keeps `ui_log`, which the 0.27.3 CLI still emits from its mod session there.
+- Added: GitHub Copilot as a fifth runtime. With `PERISCOPE_COPILOT_SDK` (a directory the operator
+  installed `@github/copilot-sdk` 1.0.34 into, which pins the Copilot runtime 1.0.112) and
+  `PERISCOPE_COPILOT_HOME` (a base of the runner's own) set, the hello's `agents` lists `copilot` after pi,
+  at `intercepted-with-residual`, with its runtime and SDK versions, the permission modes `default` and
+  `plan`, the efforts `low` to `max` and no thinking switch; its pack row is `bare`, `per-session`. A
+  `session_new` naming `runtime: "copilot"` runs one Copilot runtime for the session, in a fresh home under
+  the base, signed in as nobody until the host hands it a token. The read at start reads the install's
+  files and starts nothing; an install that is absent, off the pin or missing this platform's runtime is
+  listed unavailable with the reason.
+- Added: the SDK is the operator's, never this package's. It is a development dependency at exactly
+  1.0.34, for its types and the tests, and the published package neither carries nor resolves it: a
+  session imports it from the operator's directory by path when it opens. `src/host/copilot-sdk.ts` is
+  the one module that names it; its structural types are held to the SDK's own by a pin.
+- Added: the Copilot gate joins the runtime's two halves. Its pre-tool hook answers `ask` for every
+  call, at once, and the `hook` permission request that raises is decided by the gate every runtime
+  shares, with one-time answers only and no input rewrite. A sub-agent's call takes the same route.
+  Before the first prompt the runtime is read back (the `manual` permission mode, the agent mode asked
+  for, no approve-all grant, no approved path, only the session's own directories, no plugin, none of
+  the tools turned off) and one probe call is run through the hook and the request; an open that does
+  not hold is refused with the new reason `copilot-gate-not-active`. Mid-session the gate names
+  `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call` and `gate-mode-widened` with Copilot's
+  meanings ([gate.md](docs/gate.md)); a machine-wide policy hook is named `gate-hook-foreign` at the open.
+  The look asks the runtime itself which hooks it finds, on every platform, beside the host's own read
+  of the Windows policy directory and key, and a source that could not be read is named as one that may
+  hold a hook, never counted as none. A session's home also holds the runtime's cache directory on
+  every platform (`COPILOT_CACHE_HOME`), so off Windows the runtime's caches no longer stay in the
+  operator's own.
+- Docs: [protocol.md](docs/protocol.md) says where a sub-agent's tokens are counted. A Codex
+  sub-agent's are in no total a controller is sent; a Claude task's are already inside the session's
+  `totals`, so its entry's `usage` is a part of that figure and is not added to it.
+- Fixed: a state transition always fits a frame. A cause's `detail` was unbounded, and a failure whose
+  own words ran past a frame made its transition one the codec refused, so the `errored` that carried
+  it never arrived. Such a detail is now cut by as much as the transition is over and says it was cut;
+  a transition that fits is sent as before.
+- Fixed: a text or a word a fact carries is never cut inside a character that takes two code units.
+- Fixed: a degrade past the 4096 a Codex, a Qwen Code, a pi or an opencode session's state lane keeps
+  reaches the host's log, each time it occurs, as a Copilot session's does. It was dropped before
+  anything heard of it.
+- Fixed, in a Copilot session:
+  - a degrade past the 4096 a session's state lane keeps reaches the host's log, each time it occurs;
+    it was dropped before anything heard of it;
+  - a call is decided on the arguments its pre-tool hook announced, and a permission request that
+    carries others is named `gate-hook-missing` (the call is still decided);
+  - an MCP call's item is named `mcp__server__tool` from the server and tool its own start event
+    states, the first call to a server included;
+  - a sub-agent's events no longer move the session's registers: its model change, mode change, skill
+    and server lists leave the session's receipt alone, and its cache reads are reported on its own
+    usage samples, not the session's;
+  - a model provider named in more than 64 characters no longer makes that step's spend unsendable;
+  - a command's exit code is stated when it is negative;
+  - an SDK import that failed is tried again by the next session, without a restart;
+  - a closing session's kept state replaces the older copy without deleting it first, so a move that
+    fails leaves the older copy for a resume;
+  - what the runtime writes to its standard error reaches the session's `onStderr` lane.
+- Fixed: a Copilot decision is never held past `decisionTimeoutMs`. Learning an attached server's tool
+  list, which a call's `mcp__server__tool` spelling is read from, ran before the decision's deadline
+  began and could take 30 seconds a server. The tools are now learned at the open from the runtime's
+  own list; a server that had listed none is asked inside the decision's deadline, for at most 10
+  seconds or a quarter of it, and the wait ends with the decision.
+- Added: a new degrade, `gate-tool-unnamed`. A Copilot session is offered every built-in the runtime
+  has, and one the host's tables do not name reached the gate as `other`, in no family, with nothing
+  said. It is now named once per tool, when the session opens or at its first call. The session opens
+  and the call is decided like any other; nothing is refused or turned off for it.
+- Added: `write_powershell`, `write_bash` and `manage_schedule` are turned off in every Copilot session:
+  left out of its tools, read back absent at the open, and refused at the gate.
+- Added: a Copilot session's `decisionTimeoutMs` may be at most 240,000ms, the wait the runtime was
+  measured holding a permission request with no timeout of its own; a longer one is refused
+  `gate-deadlines-inverted`.
+- Security: a Copilot session signs in to `github.com` alone. The operator's token is given only when
+  the runtime asks for that host, and `GH_HOST` is taken out of the runtime's environment as the GitHub
+  token variables are, so a controller an operator lets set `GH_HOST` cannot have the token sent to a
+  host of its choosing.
+- Added: `PERISCOPE_COPILOT_SDK`, `PERISCOPE_COPILOT_HOME` and `PERISCOPE_COPILOT_TOKEN_FILE`, config-file
+  keys never settable over the link. The token is read from the file when the runtime asks for it and
+  handed over the SDK's pipe; an endpoint whose `runtimes` name `copilot` is the session's own provider,
+  its key in the session's request. Neither is ever in the runtime's environment, from which every GitHub
+  token variable and every `COPILOT_` variable are stripped.
+- Added: Copilot's session events are covered name by name. `contracts/copilot-names.json`, derived by
+  `scripts/derive-copilot-names.mjs` from an install of the release, lists the 158 events SDK 1.0.34
+  declares; `COPILOT_COVERAGE` wires or declines each, and `AGENT_EVENTS` gains the 31 `copilot:` names its
+  wired rows cause. A Copilot session's events ride as `agent_message` with `runtime: "copilot"`; its
+  facts (`session_handle`, `agent_receipt`, a `turn_record` per model call and its totals at the end,
+  unpriced, `usage_sample`, `tasks` for its sub-agents, `compaction`) and its items are lifted from them.
+- Changed: the protected set gains the whole of `PERISCOPE_COPILOT_HOME`, `PERISCOPE_COPILOT_SDK` and
+  `PERISCOPE_COPILOT_TOKEN_FILE`, and the operator's own `~/.copilot` and `COPILOT_HOME`; the agents'
+  records gain Copilot's session states. `credentialPaths` and `agentTranscriptPaths` take the new
+  options.
+- Changed: `EXTRA_ENV_FLOOR` gains `COPILOT_*`.
+- Changed: a search tool that names its roots in `paths` (Copilot's `grep` and `glob`), as one string or
+  as a list, is read as searching under each of them, and a patch tool whose whole input is the patch
+  (Copilot's `apply_patch`) is held to the files the patch names.
+- Changed: an endpoint only Copilot reaches reports its `env` among its ignored members: Copilot reads
+  its provider from the session, and the variables would reach the agent's shell.
+- Added: opencode as a sixth runtime. With `PERISCOPE_OPENCODE_SDK` (a directory the operator installed
+  `@opencode/sdk` 2.3.0 into) and `PERISCOPE_OPENCODE_HOME` (a base of the runner's own) set, the hello's
+  `agents` lists `opencode` after Copilot, at `intercepted-with-residual`, with its SDK version, the
+  permission modes `default` and `plan`, no efforts and no thinking switch; its pack row is `bare`,
+  `per-session`. A `session_new` naming `runtime: "opencode"` runs one opencode server for the session, in
+  a host process of its own and a fresh home under the base, and reaches a model only through an endpoint
+  whose `runtimes` name `opencode`, over `openai-chat`. The read at start reads the install's files and
+  starts nothing; an install that is absent, off the pin or whose release's server, core or client is of
+  another version is listed unavailable with the reason.
+- Added: opencode needs Node 24 or later. The SDK's own tree uses explicit resource management (`await
+using`), which Node 22 cannot parse, so the SDK cannot load there at all. The host tests the syntax, never
+  a version string, and on a Node that fails the test lists opencode unavailable, naming the Node and why.
+  Everything else this package does still runs on Node 22, which stays the floor; the opencode tests that
+  run the SDK skip on Node 22, saying why.
+- Added: the SDK is the operator's, never this package's. It is a development dependency at exactly 2.3.0,
+  for its types and the tests, and the published package neither carries nor resolves it: a session's host
+  process imports it from the operator's directory by path. `src/host/opencode-sdk.ts` is the one module
+  that names it; its structural types are held to the SDK's own by a pin that compiles a program of its
+  own, since the SDK's declarations import one another without extensions, which this package's resolution
+  does not follow, and reference a library that would change this package's own types.
+- Added: each session's server runs in a host process this package starts (`dist/host/opencode-host.js`),
+  with its own Node, no shell and no window, spoken to over its stdio; it opens no listener. Its environment
+  is written whole, its home and data directories inside the session's home, and the session's
+  configuration, an endpoint's key among it, crosses its stdin into its memory, never an environment, a
+  file or a command line.
+- Added: the opencode gate. Every session is created with rules that ask for every action and deny each
+  tool this host turns off; every permission request the server raises, the session's own or a subagent's,
+  is decided by the gate every runtime shares and answered once, `once` or `reject` with words. Before the
+  first prompt the server is read back (the session's rules, every agent's, no saved approval, only the
+  runtime's own plugins and none turned off, only the session's MCP servers, no configuration outside the
+  session's home, no model but the endpoint provider's); an open that does not hold is refused with the new
+  reason `opencode-gate-not-active`. Mid-session the gate names `gate-unhooked-call`, `gate-hook-missing`,
+  `gate-mode-widened` and `gate-foreign-extension` with opencode's meanings ([gate.md](docs/gate.md)).
+- Added: `execute` (Code Mode), `question`, `experimental_image_generate`, `browser`, the session, worktree
+  and model-catalogue tools that run without asking, and the artifact and schedule tools are denied in every
+  opencode session's rules, and refused at the gate; the browser, image, schedule, artifact and MCP-event
+  plugins are turned off. The title opencode names a session with is turned off, so no model call is made
+  outside a run, and every form the server raises (a web search's provider choice, an MCP server's request
+  for input) is cancelled as it is raised, since no interface of this host answers one.
+- Added: `PERISCOPE_OPENCODE_SDK` and `PERISCOPE_OPENCODE_HOME`, config-file keys never settable over the
+  link. The agent's shell runs with the session's spawn environment, none of the operator's `OPENCODE_`
+  variables, `NODE_OPTIONS` or this host's variables but `PERISCOPE_WORKTREE_*` among it.
+- Added: opencode's events are covered name by name. `contracts/opencode-names.json`, derived by
+  `scripts/derive-opencode-names.mjs` from an install of the release, lists the 100 events SDK 2.3.0's stream
+  declares; `OPENCODE_COVERAGE` wires or declines each, and `AGENT_EVENTS` gains the 31 `opencode:` names
+  its wired rows cause. An opencode session's events ride as `agent_message` with `runtime: "opencode"`; its
+  facts (`session_handle`, `agent_receipt`, a `turn_record` per model call, its input uncached and priced
+  only where opencode reports a cost above zero, `tasks` for its subagents, `compaction`) and its items are
+  lifted from them.
+- Changed: a decision its caller ends with words is refused `permission-decision-unavailable` with those
+  words; any other abort keeps the words it had. On opencode, a request the runtime refused together with
+  another this host refused is recorded so.
+- Changed: the protected set gains the whole of `PERISCOPE_OPENCODE_HOME` and `PERISCOPE_OPENCODE_SDK`, the
+  operator's own opencode data, configuration and state directories (under the home and under
+  `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME`), and opencode's machine-wide configuration
+  directory; the agents' records gain opencode's session databases. `credentialPaths` and
+  `agentTranscriptPaths` take the new options.
+- Changed: `EXTRA_ENV_FLOOR` gains `OPENCODE_*`.
+- Changed: an endpoint only Copilot or opencode reaches reports its `env` among its ignored members.
+
 ## [1.10.0] - 2026-11-11
 
 Protocol 19; the window is `[18, 19]`, so a version-18 controller is still spoken to. Version 19 lets a

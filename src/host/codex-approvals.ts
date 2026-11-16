@@ -14,11 +14,13 @@
  * server asks for is declined, and a question for a person gets no answers, because nobody sits on this
  * lane to type one.
  *
- * Two shapes cannot be answered from the hook's decision. Input written to a running command reaches
+ * Three shapes are not answered from the hook's decision. Input written to a running command reaches
  * Codex as an approval carrying the command's own item id, which the hook decided as a launch, so it is
- * always decided fresh. And an MCP tool approval names no call: it is tied to the call that started on
- * the same server, and when several are pending there, each is decided and the approval is accepted only
- * if every one of them was allowed.
+ * always decided fresh. A command Codex's own requirements mark for a fresh decision (`humanCommand`) is
+ * decided fresh too; the app-server sends one only to a connection that opted into experimental API,
+ * which this host never does, and refuses the call otherwise. And an MCP tool approval names no call: it
+ * is tied to the call that started on the same server, and when several are pending there, each is
+ * decided and the approval is accepted only if every one of them was allowed.
  */
 import type { JsonObject } from '../control/frames.js';
 import type { RefusalReason } from '../core/refusal.js';
@@ -271,6 +273,14 @@ export class CodexApprovals {
       return word;
     }
     const cached = this.#options.cache.take(turnId, itemId);
+    if (params['kind'] === 'humanCommand') {
+      // A checkpoint Codex asks to be decided afresh is never answered from the hook's decision for the
+      // same call: it is decided fresh, under the approval's own id where it carries one.
+      const approvalId = text(params['approvalId']) ?? itemId;
+      return decisionWord(
+        await this.#fresh(this.#request('Bash', approvalId, { command, cwd }, cwd), signal),
+      );
+    }
     if (cached !== null && cached.request.toolName === 'Bash') return decisionWord(cached);
     return decisionWord(await this.#fresh(this.#request('Bash', itemId, { command, cwd }, cwd), signal));
   }

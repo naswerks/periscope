@@ -13,7 +13,17 @@
  * from the arguments it asked about, so an allow that rewrites them is refused rather than half applied
  * (`canRewriteInput: false`). A deny carries its reason, which the model is told.
  *
+ * The file the session's settings were read back from is the one this host wrote, so the read-back cannot
+ * say what the CLI made of it. What the CLI registered is said by its first list of tools, and that list
+ * is held to what the settings turn off: a tool they deny, or one the CLI registers only in code mode,
+ * that is listed all the same is named, and the session goes on. A call to a tool the settings deny is
+ * refused here by name, before the host's other checks and before anyone is asked; a call to the code-mode
+ * tool is asked about like any other.
+ *
  * What it names, each a degrade raised once per (name, key):
+ * - `qwen-ask-rules-not-active`: the CLI's first list of tools names one the session's settings turn off
+ *   (a denied tool, or the code-mode tool while code mode is off), or the CLI asks about a call to a tool
+ *   they deny;
  * - `gate-tool-unruled`: the CLI's first list of tools names one the ask rules do not, so a call to it
  *   that the CLI allows by default runs without asking;
  * - `gate-mode-widened`: the CLI reports a permission mode other than `default` or `plan`;
@@ -22,6 +32,7 @@
  */
 import type { JsonObject } from '../control/frames.js';
 import type { RefusalReason } from '../core/refusal.js';
+import { refusal } from '../core/refusal.js';
 import type { CallDecision } from '../gate/call-decision.js';
 import { createCallDecision } from '../gate/call-decision.js';
 import type { Decider, DecisionRequest, ShellDialect } from '../gate/decision.js';
@@ -44,8 +55,11 @@ export const QWEN_PERMISSION_MARGIN_MS = 5_000;
 /** The permission modes this host admits on Qwen Code, in Qwen's own words. */
 export const QWEN_ADMITTED_MODES: readonly string[] = ['default', 'plan'];
 
-/** How many distinct degrades one session raises at most; past it, the host's own log still has each. */
-const MAX_RAISED_DEGRADES = 4096;
+/**
+ * How many distinct degrades one session raises on its state lane at most. One past it is handed to
+ * `onDegradePastCap` instead, each time it occurs, so the host's own log still has it.
+ */
+export const MAX_RAISED_DEGRADES = 4096;
 
 /**
  * Why a Qwen session's decision deadline cannot sit inside the CLI's permission timeout: the timeout is
@@ -82,7 +96,10 @@ export interface QwenSessionGate {
    * the local gate reads its path variables.
    */
   spawnedWith(env: Readonly<Record<string, string | undefined>>): void;
-  /** Told every `system/init`'s tools and mode; the first one's tools are checked against the rules. */
+  /**
+   * Told every `system/init`'s tools and mode; the first one's tools are checked against the rules and
+   * against what the session's settings turn off.
+   */
   observeInit(tools: readonly string[] | null, mode: string | null): void;
   /** A named degrade on the session's state lane, once per (name, key). */
   raise(name: RefusalReason, detail: string, key: string): void;
@@ -100,10 +117,22 @@ export interface QwenSessionGateOptions {
   readonly holdAfterMs: number;
   /** The ask rules the session's settings carry: a listed tool none of them names is unruled. */
   readonly askRules: readonly string[];
+  /**
+   * The tools the session's settings deny. The CLI registers none of them, so one it lists is named and a
+   * call to one is refused. Absent: none.
+   */
+  readonly deniedTools?: readonly string[];
+  /**
+   * The tools the CLI registers only in code mode, which the session's settings keep off. One it lists is
+   * named; a call to it is asked about like any other. Absent: none.
+   */
+  readonly codeModeTools?: readonly string[];
   /** Told every gate outcome: the session's machine, its items, the embedder. */
   readonly onOutcome: (outcome: GateOutcome) => void;
   /** A degrade for the session's state lane. */
   readonly onDegrade: (name: RefusalReason, detail: string) => void;
+  /** A degrade the session's lane takes no more of: for the host's log alone. */
+  readonly onDegradePastCap?: (name: RefusalReason, detail: string) => void;
   /** The degrades known at the open, for the opening tier. */
   readonly onSpawnDegrades: (names: readonly RefusalReason[]) => void;
   /** Told every environment the session's process is started with, for the local gate. */
@@ -141,13 +170,23 @@ export function createQwenSessionGate(options: QwenSessionGateOptions): QwenSess
   // Read again from the CLI's own environment once it is spawned; this host's is the stand-in until then.
   let shellDialect: ShellDialect = qwenShellDialect(platform, process.env);
   const rules = new Set(options.askRules);
+  const denied = new Set(options.deniedTools ?? []);
+  const codeMode = new Set(options.codeModeTools ?? []);
   const raised = new Set<string>();
   let sessionId = '';
   let toolsChecked = false;
 
   const raise = (name: RefusalReason, detail: string, key: string): void => {
     const id = `${name}\u0000${key}`;
-    if (raised.has(id) || raised.size >= MAX_RAISED_DEGRADES) return;
+    if (raised.has(id)) return;
+    if (raised.size >= MAX_RAISED_DEGRADES) {
+      try {
+        options.onDegradePastCap?.(name, detail);
+      } catch {
+        // A log that throws must not stop the gate answering the call this was raised beside.
+      }
+      return;
+    }
     raised.add(id);
     try {
       options.onDegrade(name, detail);
@@ -156,12 +195,23 @@ export function createQwenSessionGate(options: QwenSessionGateOptions): QwenSess
     }
   };
 
+  // The CLI registers no tool the session's settings deny, so it asks about none. A request for one says
+  // the deny is not in force: the call is refused by name before any other check, and before anyone is asked.
+  const localGate: LocalGate = (request) => {
+    if (denied.has(request.toolName)) {
+      const detail = `this session's settings deny ${request.toolName}, which is turned off in every session this host runs, and Qwen Code asked about a call to it all the same`;
+      raise('qwen-ask-rules-not-active', `${detail}; the call is refused`, `denied:${request.toolName}`);
+      return refusal('qwen-ask-rules-not-active', detail);
+    }
+    return options.localGate?.(request) ?? null;
+  };
+
   const decide: CallDecision = createCallDecision({
     decide: options.decide,
     onOutcome: options.onOutcome,
     sessionKey: options.sessionKey,
     runtime: QWEN_RUNTIME,
-    ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+    localGate,
     decisionTimeoutMs: options.decisionTimeoutMs,
     holdAfterMs: options.holdAfterMs,
     // The CLI runs the call it built from the arguments it asked about, whatever an allow carries.
@@ -213,6 +263,19 @@ export function createQwenSessionGate(options: QwenSessionGateOptions): QwenSess
       if (toolsChecked || tools === null) return;
       toolsChecked = true;
       for (const tool of tools) {
+        if (denied.has(tool)) {
+          raise(
+            'qwen-ask-rules-not-active',
+            `Qwen Code lists the tool ${tool}, which this session's settings deny: the deny is not in force. A call to it is refused here`,
+            `denied:${tool}`,
+          );
+        } else if (codeMode.has(tool)) {
+          raise(
+            'qwen-ask-rules-not-active',
+            `Qwen Code lists the tool ${tool}, which it registers only in code mode, and this session's settings keep code mode off: the setting is not in force. A call to it is asked about like any other`,
+            `code-mode:${tool}`,
+          );
+        }
         if (!ruleNames(rules, tool)) {
           raise(
             'gate-tool-unruled',

@@ -26,6 +26,7 @@ import type {
 } from './frames.js';
 import {
   CACHE_TTLS,
+  COMPACTION_OUTCOMES,
   COMPACTION_STATUSES,
   COMPACTION_TRIGGERS,
   COST_BASES,
@@ -283,6 +284,21 @@ const spendFactsSchema = z.looseObject({
   byModel: z.array(modelSpendFactSchema).max(MAX_FACT_LIST_ENTRIES).nullable().optional(),
 });
 
+/** What a task entry reports beyond its id and type (protocol 20), running or settled. */
+const taskReportMembers = {
+  toolUseId: factTextSchema.nullable().optional(),
+  summary: factTextSchema.nullable().optional(),
+  usage: z
+    .looseObject({
+      tokens: z.number().int().nonnegative().nullable().optional(),
+      toolUses: z.number().int().nonnegative().nullable().optional(),
+      durationMs: z.number().int().nonnegative().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
+  outputFile: factTextSchema.nullable().optional(),
+};
+
 /** One schema per fact kind this build models, each holding the members that kind declares. */
 const FACT_SCHEMAS: Readonly<Record<AgentFact['kind'], z.ZodType>> = {
   session_handle: z.looseObject({
@@ -358,6 +374,7 @@ const FACT_SCHEMAS: Readonly<Record<AgentFact['kind'], z.ZodType>> = {
           taskId: factTextSchema.nullable().optional(),
           type: factWordSchema.nullable().optional(),
           description: factTextSchema.nullable().optional(),
+          ...taskReportMembers,
         }),
       )
       .max(MAX_FACT_LIST_ENTRIES)
@@ -369,6 +386,7 @@ const FACT_SCHEMAS: Readonly<Record<AgentFact['kind'], z.ZodType>> = {
           taskId: factTextSchema.nullable().optional(),
           type: factWordSchema.nullable().optional(),
           status: factWordSchema.nullable().optional(),
+          ...taskReportMembers,
         }),
       )
       .max(MAX_FACT_LIST_ENTRIES)
@@ -381,6 +399,7 @@ const FACT_SCHEMAS: Readonly<Record<AgentFact['kind'], z.ZodType>> = {
     trigger: factWordSchema.nullable().optional(),
     tokensBefore: z.number().int().nonnegative().nullable().optional(),
     tokensAfter: z.number().int().nonnegative().nullable().optional(),
+    outcome: factWordSchema.nullable().optional(),
   }),
 };
 
@@ -413,11 +432,12 @@ const agentFragmentBodySchema = z.looseObject({
 // count is spelled out as `<member>: z.number().int()` for the reason the facts' counts are.
 // ---------------------------------------------------------------------------
 
-/** The members every item carries, whatever its kind. */
+/** The members every item carries, whatever its kind; `parentId` from protocol 20. */
 const itemMembers = {
   itemId: factTextSchema.nullable().optional(),
   turnId: factTextSchema.nullable().optional(),
   truncated: z.boolean().nullable().optional(),
+  parentId: factTextSchema.nullable().optional(),
 };
 
 const itemTextSchema = z.string().nullable().optional();
@@ -1188,7 +1208,8 @@ function undeclaredFactWord(frame: Frame): UndeclaredWord | null {
     case 'compaction':
       return (
         wordOutside('fact.status', members['status'], COMPACTION_STATUSES) ??
-        wordOutside('fact.trigger', members['trigger'], COMPACTION_TRIGGERS)
+        wordOutside('fact.trigger', members['trigger'], COMPACTION_TRIGGERS) ??
+        wordOutside('fact.outcome', members['outcome'], COMPACTION_OUTCOMES)
       );
     default:
       return null;

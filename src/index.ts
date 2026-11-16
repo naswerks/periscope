@@ -65,7 +65,9 @@ export * from './sessions/index.js';
 export type { BulkPostReceipt, BulkPostRequest, MachineFacts } from './host/index.js';
 export {
   agentTranscriptPaths,
+  canonicalPath,
   credentialPaths,
+  machineNames,
   nodePathResolver,
   periscopeCredentialDir,
   postBulk,

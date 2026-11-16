@@ -92,6 +92,21 @@ test('the tested CLI version is the one the installed SDK bundles', () => {
   );
 });
 
+test("the range this package asks of the agent SDK's peer is the range the agent SDK's own manifest asks", () => {
+  const manifest = JSON.parse(readFileSync(INSTALLED_MANIFEST, 'utf8')) as {
+    peerDependencies?: Record<string, string>;
+  };
+  const own = JSON.parse(readFileSync(at('../../package.json'), 'utf8')) as {
+    dependencies?: Record<string, string>;
+  };
+  const peer = '@anthropic-ai/sdk';
+  const asked = manifest.peerDependencies?.[peer];
+  assert.ok(typeof asked === 'string' && asked !== '', `the agent SDK's manifest names no range for ${peer}`);
+  // Only the agent SDK's type definitions read the peer, so a narrower range here would refuse a consumer
+  // an install the agent SDK itself takes.
+  assert.equal(own.dependencies?.[peer], asked);
+});
+
 test('deliberate: no type-definition file lives under contracts/, only the hash', () => {
   const copies = readdirSync(CONTRACTS_DIR, { recursive: true })
     .map(String)

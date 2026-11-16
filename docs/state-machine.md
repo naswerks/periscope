@@ -84,7 +84,10 @@ two are not symmetric.
   `RefusalReason`; a transition that cannot name its cause does not compile.
 - `refusal` is the sixth kind because a denial and an outage cannot be told apart with five: a deny
   is `control/permission_denied`, an outage is `refusal/permission-decision-unavailable`, different
-  in kind and in event, never only in prose. `detail` is for people and is never branched on.
+  in kind and in event, never only in prose. `detail` is for people and is never branched on. It is
+  sent whole where the transition fits a frame. A transition that would not fit (a failure whose own
+  words run past a frame, most often on `errored`) has its detail cut by as much as it is over and
+  ends ` [cut to fit a frame]`, so the transition itself always arrives.
 - `agent-event` is the seventh: an event a runtime other than Claude reported in its own vocabulary,
   named `{runtime}:{native name}`. Codex's are `codex:` and the notification's method, one per
   notification `CODEX_COVERAGE` wires (`AGENT_EVENTS`); an item's kind rides `detail`, never the
@@ -93,8 +96,14 @@ two are not symmetric.
   requests by its subtype (`qwen-code:initialize`, the answer that makes it `ready`), one per row
   `QWEN_COVERAGE` wires. pi's are `pi:` and the event's type (`pi:agent_start`, `pi:agent_settled`),
   or the host's own command its answer is to (`pi:get_state`, the answer that makes it `ready`), one
-  per event or command row `PI_COVERAGE` wires. A hook event such a runtime reports in Claude's
-  spelling keeps the kind `hook`.
+  per event or command row `PI_COVERAGE` wires. Copilot's are `copilot:` and the session event's type
+  (`copilot:user.message`, which starts a run, and `copilot:session.idle`, which ends it), one per row
+  `COPILOT_COVERAGE` wires; its first `ready` is named by the `session.start` or `session.resume` its
+  proven open followed. opencode's are `opencode:` and the event's type
+  (`opencode:session.execution.started`, which starts a run, and `opencode:session.execution.succeeded`,
+  `failed` or `interrupted`, which end it), one per row `OPENCODE_COVERAGE` wires; its first `ready` is
+  named `opencode:session.created`, once its open is proven. A hook event such a runtime reports in
+  Claude's spelling keeps the kind `hook`.
 - `kind` and `event` are validated independently, never as a pair: `nameable()`
   (`src/state/machine.ts`) accepts `{ kind: 'hook', event: 'permission_denied' }` although it is
   incoherent. Coherence is the author's job, stated at `CONTROL_EVENTS`.
@@ -177,20 +186,45 @@ positive control on the parser; and `observationHooks()` derives its registratio
 pinned to match. An event absent from the table is a gap, not a default.
 
 The table answers "does this move the machine". `MESSAGE_ROUTING` (`src/control/stream-routing.ts`)
-answers "does this go on the wire". They disagree in both directions on purpose (`assistant` is
+answers "does this go on the wire". They disagree in both directions on purpose (`stream_event` is
 declined here and forwarded there; `session_state_changed` is wired here and declined there) and
 must never be merged. The fact lift is a third reader with rows of its own: it reads messages this
-table declines (`assistant`, `system/background_tasks_changed`, `stream_event`) for the facts they
+table declines (`system/background_tasks_changed`, `stream_event`) for the facts they
 carry, and they still move nothing here ([protocol.md](protocol.md), the fact layer).
 
+A model request is one entry, `requesting`. The CLI states its start (`system/status` with
+`status: 'requesting'`, at every request) and sends no status at its end: a null status arrives for a
+compaction's end and for a permission-mode change, not for a request (read from the bundled CLI's
+code and recorded on Claude Code 2.1.325). So the request is closed by its answer, the session's own
+`assistant` message (a sub-agent's closes nothing), and a request that got no answer is closed by the
+turn's end, `Stop` or `result`, whichever arrives. A session never carries an open model request
+after its turn.
+
+A status names no thread (`SDKStatusMessage` carries no parent id), so if the CLI sent `requesting`
+for a sub-agent's model requests the session would read as requesting for the sub-agent's whole run.
+It does not: the status is built from the session's own query alone (the bundled CLI's code), and a
+recorded turn on Claude Code 2.1.325 whose sub-agent made its own model requests carried two
+statuses, the session's own two, with none between the sub-agent's start and its stop. The trace
+live probe's sub-agent test holds that, so a CLI that starts sending them turns it red.
+
 The runtime wins over the types. Four wired events are measured not to fire under an SDK-hosted
-session: `SessionStart` (take the start receipt from `system/init`), `PermissionRequest` and
-`PermissionDenied` (a hook-authored deny blocks while both stay silent), and
+session whose calls the hooks decide: `SessionStart` (take the start receipt from `system/init`),
+`PermissionRequest` and `PermissionDenied` (a hook-authored deny blocks while both stay silent), and
 `system/session_state_changed` (`Stop` and `result` are the observed turn boundaries). Measured
-again on Claude Code 2.1.284: a turn whose Bash call the hook denied fired `UserPromptSubmit`,
+again on Claude Code 2.1.325: a turn whose Bash call the hook denied fired `UserPromptSubmit`,
 `PreToolUse`, `PostToolBatch` and `Stop`, and none of the four. The rows stay wired, because "wired
 and not observed" is a question and "declined" closes one, and each says "measured not to fire" at
 the row. Re-measure before relying on any of the four (`agent-controls.live.test.ts`).
+
+`PermissionRequest` does fire where a hook leaves a call to the CLI's own permission flow: the gate
+allowed without granting (`grantOnAllow: false`) in a mode that asks. Recorded on Claude Code 2.1.325,
+in this order for one call: its `PreToolUse`, then `PermissionRequest`, then either the
+`system/permission_denied` message and an error result when nobody grants it (the `PermissionDenied`
+hook stays silent), or the tool's `PostToolUse` when a hook grants it. So the `permission:<toolName>`
+entry that `PermissionRequest` opens is closed by the denial, whichever of the message and the hook
+reports it, once; or by the end of a call of that tool, which is the sign it was granted. A call's
+`PreToolUse` closes no permission: it comes before that call's own request, so one outstanding then is
+another call's. `PeriscopeHost` grants on allow, so its sessions open none of these entries.
 
 `src/state/codex-coverage.ts` does the same for Codex: `CODEX_COVERAGE` lists every notification,
 server request and item kind the pinned app-server declares, wired or declined with a reason, an
@@ -210,7 +244,20 @@ reason. `pins/pi-coverage.test.ts` holds it to `contracts/pi-names.json` in both
 the `pi:*` entries of `AGENT_EVENTS` equal to the wired event and command rows, and drives every
 transition the arm makes through a real machine.
 
-A Codex, Qwen Code or pi session's gate records on the same machine. Its decisions take the five outcomes' causes, as a
+`src/state/copilot-coverage.ts` does the same for Copilot: `COPILOT_COVERAGE` lists every session event
+the pinned SDK declares, wired or declined with a reason. `pins/copilot-coverage.test.ts` holds it to
+`contracts/copilot-names.json` in both directions, holds the `copilot:*` entries of `AGENT_EVENTS` equal
+to the wired rows, and drives every transition the arm makes through a real machine. Only the session's
+own thread moves its state: an event a sub-agent sent rides its native message alone.
+
+`src/state/opencode-coverage.ts` does the same for opencode: `OPENCODE_COVERAGE` lists every event the
+pinned SDK's stream declares, wired or declined with a reason. `pins/opencode-coverage.test.ts` holds it to
+`contracts/opencode-names.json` in both directions, holds the `opencode:*` entries of `AGENT_EVENTS` equal
+to the wired rows, and drives every transition the arm makes through a real machine. Only the session's own
+events move its state: an event of a subagent's session, or of the server itself, rides its native message
+alone.
+
+A Codex, Qwen Code, pi, Copilot or opencode session's gate records on the same machine. Its decisions take the five outcomes' causes, as a
 Claude call's do; a residual path it names (a degrade) is a same-state transition with cause
 `refusal/<degrade>`, recorded once per call (`observer.refused`, the lane a refused configure uses);
 and the degrades known when the session opens join the tier its first `ready` states

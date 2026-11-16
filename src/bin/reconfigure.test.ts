@@ -12,7 +12,12 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { candidateProblem, overriddenByEnvironment, reconfigureHost } from './reconfigure.js';
+import {
+  candidateProblem,
+  configValueProblem,
+  overriddenByEnvironment,
+  reconfigureHost,
+} from './reconfigure.js';
 import { readConfigFile } from '../host/config-file.js';
 import { GitWorktreeProvider } from '../workspace/git-worktree.js';
 
@@ -406,6 +411,25 @@ test('regression: PERISCOPE_CONTROLLER_ENV_KEYS over the wire refuses config-key
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('PERISCOPE_AGENT_PROGRESS_SUMMARIES over the wire refuses config-key-unknown and writes nothing; typed by the operator it takes on or off', async () => {
+  const { env, dir } = await scratchEnv();
+  try {
+    const outcome = reconfigureHost(
+      env,
+      [{ key: 'PERISCOPE_AGENT_PROGRESS_SUMMARIES', value: 'off' }],
+      false,
+    );
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) assert.equal(outcome.refusal.reason, 'config-key-unknown');
+    assert.equal(await fileBytes(dir), null, 'nothing was written');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  assert.equal(configValueProblem('PERISCOPE_AGENT_PROGRESS_SUMMARIES', 'on'), null);
+  assert.equal(configValueProblem('PERISCOPE_AGENT_PROGRESS_SUMMARIES', 'off'), null);
+  assert.match(configValueProblem('PERISCOPE_AGENT_PROGRESS_SUMMARIES', 'no') ?? '', /must be on or off/);
 });
 
 test('regression: PERISCOPE_MODEL_ENDPOINTS over the wire refuses config-key-unknown and writes nothing', async () => {

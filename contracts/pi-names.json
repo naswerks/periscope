@@ -1,6 +1,6 @@
 {
-  "release": "v1.2.0",
-  "version": "1.2.0",
+  "release": "v1.5.2",
+  "version": "1.5.2",
   "agentEvents": [
     "agent_start",
     "agent_end",

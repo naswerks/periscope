@@ -16,7 +16,7 @@ import { SessionStateMachine } from '../state/machine.js';
 import { SessionObserver } from '../state/observer.js';
 import { decode, encode } from './codec.js';
 import type { JsonObject, SessionPayload } from './frames.js';
-import { readAgentFacts, readAgentFragment } from './frames.js';
+import { readAgentFacts, readAgentFragment, readStateTransition } from './frames.js';
 import type { FrameSink } from './stream.js';
 import { forwardSession } from './stream.js';
 import { fakeAgents, initMessage, settle } from '../test-support/fake-agent.js';
@@ -193,7 +193,28 @@ test("a compaction's fact follows the transition that recorded it, and names no 
     trigger: 'auto',
     tokensBefore: 100,
     tokensAfter: 10,
+    outcome: 'completed',
   });
+});
+
+test('a transition whose detail is larger than a frame reaches the controller, its detail cut to fit', async () => {
+  const wired = wire(false);
+  const words = `the hook failed: ${'a very long line of what it printed\n'.repeat(5_000)}`;
+  wired.observer.refused({ kind: 'refusal', event: 'gate-hook-unspawnable', detail: words });
+  await settle();
+  const update = wired.sink.sent.find(
+    (payload) => (payload as { body: { update?: string } }).body.update === 'state_transition',
+  );
+  assert.ok(update !== undefined, 'no transition was sent');
+  const encoded = encode({ frame: 'session', sessionId: 'handle-1', seq: 1, at: AT, payload: update });
+  assert.ok(
+    encoded.ok,
+    encoded.ok ? '' : `the transition is one no frame carries: ${encoded.refusal.reason}`,
+  );
+  const sent = readStateTransition((update as { body: JsonObject }).body);
+  assert.equal(sent?.cause.event, 'gate-hook-unspawnable');
+  assert.ok(sent.cause.detail.startsWith('the hook failed: a very long line'));
+  assert.ok(sent.cause.detail.length < words.length);
 });
 
 test('every frame the lift adds encodes and decodes back unchanged', async () => {

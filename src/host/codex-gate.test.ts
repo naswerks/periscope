@@ -33,6 +33,7 @@ import { fakeAgents } from '../test-support/fake-agent.js';
 import { FAKE_HOOK_HASH, FAKE_MODELS, fakeCodex } from '../test-support/fake-codex.js';
 import type { FakeCodex, FakeCodexOptions } from '../test-support/fake-codex.js';
 import type { CodexSessionGate } from './codex-gate.js';
+import { MAX_RAISED_DEGRADES, createCodexSessionGate } from './codex-gate.js';
 import { CODEX_HOME_VARIABLE } from './codex-process.js';
 import { availableCodexEntry, codexHostModel } from './codex-runtime.js';
 import type { HostLink } from './host.js';
@@ -90,6 +91,40 @@ async function until(check: () => boolean, what: string, ms = 4000): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
 }
+
+test("a degrade past the session's cap is kept off its lane and still reaches the host's log, each time it occurs", () => {
+  const onLane: string[] = [];
+  const logged: string[] = [];
+  const built = createCodexSessionGate({
+    sessionKey: 'k',
+    cwd: 'C:/work',
+    decide: () => Promise.resolve({ behavior: 'allow' }),
+    decisionTimeoutMs: 1_000,
+    holdAfterMs: 10_000,
+    hooksPath: 'C:/runner/codex-home/hooks.json',
+    version: 'test',
+    onOutcome: () => undefined,
+    onDegrade: (_name, detail) => onLane.push(detail),
+    onDegradePastCap: (name, detail) => logged.push(`${name}: ${detail}`),
+    onSpawnDegrades: () => undefined,
+  });
+  try {
+    for (let index = 0; index < MAX_RAISED_DEGRADES; index += 1) {
+      built.raise('gate-hook-missing', `call ${index}`, `call_${index}`);
+    }
+    assert.equal(onLane.length, MAX_RAISED_DEGRADES);
+    assert.deepEqual(logged, [], 'a degrade under the cap went to the log alone');
+    built.raise('gate-unhooked-call', 'one more', 'call_past');
+    built.raise('gate-unhooked-call', 'one more', 'call_past');
+    assert.equal(onLane.length, MAX_RAISED_DEGRADES, 'the lane took a degrade past its cap');
+    assert.deepEqual(logged, ['gate-unhooked-call: one more', 'gate-unhooked-call: one more']);
+    // One raised before the cap is still said once.
+    built.raise('gate-hook-missing', 'call 0', 'call_0');
+    assert.equal(logged.length, 2);
+  } finally {
+    built.close();
+  }
+});
 
 /** A host with Codex on a fake app-server, its decider recording what it is asked. */
 async function gateHost(
@@ -576,6 +611,40 @@ test("input for a running command is always decided fresh, never answered from t
     asked.map((request) => request.toolName),
     ['Bash', 'write_stdin'],
   );
+  host.stop();
+});
+
+// `humanCommand` is the approval kind the app-server protocol declares at rust-v0.169.0
+// (`CommandExecutionApprovalKind`) for a command Codex's own requirements mark for a fresh decision, with an
+// `approvalId` of its own.
+test("a command Codex marks for a fresh decision is decided fresh, never answered from the hook's decision", async () => {
+  const { host, link, fake, asked } = await gateHost({
+    decide: (request) =>
+      request.toolUseId === 'approval-human'
+        ? { behavior: 'deny', message: 'decided afresh' }
+        : { behavior: 'allow' },
+  });
+  open(link);
+  await ready(link);
+  await askHook(fake, hookEvent('call_human'));
+  const answered = await fake.server.ask(
+    'item/commandExecution/requestApproval',
+    commandApproval('call_human', { kind: 'humanCommand', approvalId: 'approval-human' }),
+  );
+  assert.deepEqual(answered['result'], { decision: 'decline' });
+  assert.deepEqual(
+    asked.map((request) => request.toolUseId),
+    ['call_human', 'approval-human'],
+    'the checkpoint was answered from the hook decision',
+  );
+  // Control: an ordinary approval after its hook call is answered from the hook's decision, asking nobody again.
+  await askHook(fake, hookEvent('call_plain'));
+  const plain = await fake.server.ask(
+    'item/commandExecution/requestApproval',
+    commandApproval('call_plain', { kind: 'command' }),
+  );
+  assert.deepEqual(plain['result'], { decision: 'accept' });
+  assert.equal(asked.length, 3, 'an ordinary approval asked the decider again');
   host.stop();
 });
 

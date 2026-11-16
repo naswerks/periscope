@@ -7,6 +7,7 @@ import type { Decider, DecisionRequest } from '../gate/decision.js';
 import type { GateOutcome } from '../gate/outcome.js';
 import { isCodexSessionGate } from './codex-gate.js';
 import {
+  MAX_RAISED_DEGRADES,
   QWEN_MAX_PERMISSION_TIMEOUT_MS,
   createQwenSessionGate,
   isQwenSessionGate,
@@ -31,7 +32,9 @@ function gate(decide: Decider, platform = 'win32') {
     },
     decisionTimeoutMs: 1_000,
     holdAfterMs: 10_000,
-    askRules: ['run_shell_command', 'read_file', 'mcp__nas'],
+    askRules: ['run_shell_command', 'read_file', 'mcp__nas', 'autofix_pr', 'exec'],
+    deniedTools: ['autofix_pr'],
+    codeModeTools: ['exec'],
     onOutcome: (outcome) => outcomes.push(outcome),
     onDegrade: (name, detail) => raised.push({ name, detail }),
     onSpawnDegrades: () => undefined,
@@ -139,6 +142,87 @@ test('a tool the first init lists with no rule is named once; a server rule name
   assert.equal(ruleNames(new Set(['mcp__nas']), 'mcp__nas__seat_read'), true);
   assert.equal(ruleNames(new Set(['mcp__nas']), 'mcp__nasty__x'), false);
   assert.equal(ruleNames(new Set(['mcp__nas']), 'mcp__nas'), true);
+});
+
+test("a tool the session's settings turn off that the first init lists all the same is named once, and the session goes on", () => {
+  const run = gate(() => Promise.resolve({ behavior: 'allow' }));
+  run.built.observeInit(['read_file', 'autofix_pr', 'exec'], 'default');
+  run.built.observeInit(['read_file', 'autofix_pr', 'exec'], 'default');
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['qwen-ask-rules-not-active', 'qwen-ask-rules-not-active'],
+  );
+  assert.match(run.raised[0]?.detail ?? '', /lists the tool autofix_pr, which this session's settings deny/);
+  assert.match(run.raised[0]?.detail ?? '', /A call to it is refused here/);
+  assert.match(run.raised[1]?.detail ?? '', /lists the tool exec, which it registers only in code mode/);
+  assert.match(run.raised[1]?.detail ?? '', /asked about like any other/);
+  // Control: a list that holds neither names nothing.
+  const plain = gate(() => Promise.resolve({ behavior: 'allow' }));
+  plain.built.observeInit(['read_file', 'run_shell_command'], 'default');
+  assert.deepEqual(plain.raised, []);
+});
+
+test("a call to a tool the session's settings deny is refused by name and nobody is asked; a call to the code-mode tool is asked about like any other", async () => {
+  const run = gate(() => Promise.resolve({ behavior: 'allow' }));
+  const signal = new AbortController().signal;
+  const refused = await run.built.decide(ask('autofix_pr', { helper: 'push' }, 'call_fix'), signal);
+  assert.equal('response' in refused && refused.response['behavior'], 'deny');
+  assert.match(
+    textOf('response' in refused ? refused.response['message'] : ''),
+    /^qwen-ask-rules-not-active: this session's settings deny autofix_pr/,
+  );
+  assert.equal(run.requests.length, 0, 'the decider was asked about a tool the settings deny');
+  const [outcome] = run.outcomes;
+  assert.equal(outcome?.kind, 'refused');
+  assert.equal(outcome?.kind === 'refused' ? outcome.refusal.reason : null, 'qwen-ask-rules-not-active');
+  assert.equal(outcome?.request.toolUseId, 'call_fix');
+  // Named once, whether the list or a call said it first.
+  await run.built.decide(ask('autofix_pr', { helper: 'reply' }, 'call_fix_2'), signal);
+  run.built.observeInit(['autofix_pr'], 'default');
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['qwen-ask-rules-not-active'],
+  );
+  assert.match(run.raised[0]?.detail ?? '', /asked about a call to it all the same; the call is refused/);
+
+  // The code-mode tool, and every other, goes for a decision as before.
+  const exec = await run.built.decide(ask('exec', { script: 'x' }, 'call_exec'), signal);
+  assert.equal('response' in exec && exec.response['behavior'], 'allow');
+  const read = await run.built.decide(ask('read_file', { file_path: 'a.txt' }, 'call_read'), signal);
+  assert.equal('response' in read && read.response['behavior'], 'allow');
+  assert.deepEqual(
+    run.requests.map((request) => request.toolName),
+    ['exec', 'read_file'],
+  );
+});
+
+test("a degrade past the session's cap is kept off its lane and still reaches the host's log, each time it occurs", () => {
+  const onLane: string[] = [];
+  const logged: string[] = [];
+  const built = createQwenSessionGate({
+    sessionKey: 'k',
+    cwd: 'C:/work',
+    decide: () => Promise.resolve({ behavior: 'allow' }),
+    decisionTimeoutMs: 1_000,
+    holdAfterMs: 10_000,
+    askRules: [],
+    onOutcome: () => undefined,
+    onDegrade: (_name, detail) => onLane.push(detail),
+    onDegradePastCap: (name, detail) => logged.push(`${name}: ${detail}`),
+    onSpawnDegrades: () => undefined,
+  });
+  for (let index = 0; index < MAX_RAISED_DEGRADES; index += 1) {
+    built.raise('gate-hook-missing', `call ${index}`, `call_${index}`);
+  }
+  assert.equal(onLane.length, MAX_RAISED_DEGRADES);
+  assert.deepEqual(logged, [], 'a degrade under the cap went to the log alone');
+  built.raise('gate-unhooked-call', 'one more', 'call_past');
+  built.raise('gate-unhooked-call', 'one more', 'call_past');
+  assert.equal(onLane.length, MAX_RAISED_DEGRADES, 'the lane took a degrade past its cap');
+  assert.deepEqual(logged, ['gate-unhooked-call: one more', 'gate-unhooked-call: one more']);
+  // One raised before the cap is still said once.
+  built.raise('gate-hook-missing', 'call 0', 'call_0');
+  assert.equal(logged.length, 2);
 });
 
 test('a widened mode is named once per mode; default and plan are not', () => {

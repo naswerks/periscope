@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { decode } from '../control/codec.js';
 import type { AgentFact, JsonObject } from '../control/frames.js';
+import { MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
 import { CodexFactLift, codexFactSourceId } from './codex-facts.js';
 import type { CodexMessage } from './codex-wire.js';
 
@@ -274,8 +276,8 @@ test('the running tasks: spawned sub-agents join, a closed or settled one leaves
       kind: 'tasks',
       runtime: 'codex',
       running: [
-        { taskId: 'agent-a', type: 'subagent', description: 'Review it.' },
-        { taskId: 'agent-b', type: 'subagent', description: 'Review it.' },
+        { taskId: 'agent-a', type: 'subagent', description: 'Review it.', toolUseId: 'call-1' },
+        { taskId: 'agent-b', type: 'subagent', description: 'Review it.', toolUseId: 'call-1' },
       ],
       settled: [],
     },
@@ -407,7 +409,7 @@ test('settled sub-agents: an errored agent failed, an interrupted one stopped, a
         },
       }),
     ),
-    [[{ taskId: 'agent-a', type: 'subagent', status: 'failed' }]],
+    [[{ taskId: 'agent-a', type: 'subagent', status: 'failed', toolUseId: 'call-1', summary: 'it broke' }]],
   );
   assert.deepEqual(
     settledOf(
@@ -425,7 +427,7 @@ test('settled sub-agents: an errored agent failed, an interrupted one stopped, a
     ),
     [
       [
-        { taskId: 'agent-a', type: 'subagent', status: 'failed' },
+        { taskId: 'agent-a', type: 'subagent', status: 'failed', toolUseId: 'call-1', summary: 'it broke' },
         { taskId: 'agent-b', type: 'subagent', status: 'stopped' },
       ],
     ],
@@ -439,5 +441,43 @@ test('settled sub-agents: an errored agent failed, an interrupted one stopped, a
     settledOf(notification('turn/started', { threadId: THREAD, turn: { id: 't3', status: 'inProgress' } })),
     [],
     'nothing settled, nothing said',
+  );
+});
+
+test('a tasks fact always fits a frame: eighty sub-agents settled with full-length answers still decode, every one kept', () => {
+  const { lift } = openedLift();
+  const answerOf = (index: number): string => `${index}:`.padEnd(MAX_FACT_TEXT_LENGTH, 'y');
+  let last: AgentFact | undefined;
+  for (let index = 0; index < 80; index += 1) {
+    const facts = lift.fromMessage(
+      notification('item/completed', {
+        threadId: THREAD,
+        turnId: 't',
+        item: {
+          type: 'collabAgentToolCall',
+          id: `call-${index}`,
+          tool: 'wait',
+          receiverThreadIds: [],
+          agentsStates: { [`agent-${index}`]: { status: 'completed', message: answerOf(index) } },
+        },
+      }),
+    ).facts;
+    last = facts.findLast((fact) => fact.kind === 'tasks') ?? last;
+  }
+  assert.ok(last?.kind === 'tasks', 'no tasks fact was sent, so there is nothing to measure');
+  const decoded = decode(
+    JSON.stringify({
+      frame: 'session',
+      sessionId: 's-1',
+      seq: 1,
+      at: '2000-01-01T00:00:00.000Z',
+      payload: { kind: 'session_update', body: { update: 'agent_facts', fact: last, sourceId: null } },
+    }),
+  );
+  assert.ok(decoded.ok, decoded.ok ? '' : `${decoded.refusal.reason}: ${decoded.refusal.detail}`);
+  assert.equal(last.settled?.length, 80, 'a sub-agent was left out while its answer could still be cut');
+  assert.ok(
+    last.settled?.every((task, index) => task.summary?.startsWith(`${index}:`) === true),
+    'each answer keeps its head',
   );
 });

@@ -747,6 +747,68 @@ test('regression: every model-route, identity, proxy and certificate name the ag
   }
 });
 
+test('regression: the session-service credentials, the remote route and the rm switch the agent CLI 2.1.325 reads are beneath the floor, by exact name', () => {
+  // Names from the bundled CLI's strings that 2.1.284's did not carry, each naming who the agent signs
+  // in as, where its turns go, or whether its dangerous `rm` commands run without a prompt in bypass.
+  const added = [
+    'CLAUDE_CODE_SESSIONS_OAUTH_TOKEN',
+    'CLAUDE_BG_SESSION_CREDENTIAL',
+    'CLAUDE_CODE_REMOTE_SDK_URL',
+    'CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS',
+  ];
+  assert.deepEqual(envKeysBeneathFloor(added, EXTRA_ENV_FLOOR), added);
+  for (const key of added) assert.ok(EXTRA_ENV_FLOOR.includes(key), `${key} is not an exact floor entry`);
+  // A new credential name of the model route's family is covered by its pattern already.
+  assert.deepEqual(envKeysBeneathFloor(['ANTHROPIC_WORK_SECRET'], EXTRA_ENV_FLOOR), [
+    'ANTHROPIC_WORK_SECRET',
+  ]);
+  // Control: exact names, not a family. A name beside them stays above the floor.
+  assert.deepEqual(
+    envKeysBeneathFloor(
+      ['CLAUDE_CODE_SESSIONS_ENABLED', 'CLAUDE_BG_SESSION_TITLE', 'CLAUDE_CODE_REMOTE'],
+      EXTRA_ENV_FLOOR,
+    ),
+    [],
+  );
+});
+
+test("the agent CLI's switches that turn off a prompt, a refusal or a trust check are beneath the floor, by exact name", () => {
+  // Each read off the bundled CLI's own code: the name guards the check it switches off.
+  const switches = [
+    'CLAUDE_CODE_DISABLE_SUBSTITUTION_RM_PROMPT',
+    'CLAUDE_CODE_DISABLE_INLINE_SHELL_RM_PROMPT',
+    'CLAUDE_CODE_DISABLE_MOUNTED_DRIVE_RM_PROMPT',
+    'CLAUDE_CODE_DISABLE_POWERSHELL_CMD_RM_DENY',
+    'CLAUDE_CODE_DISABLE_EXPORTED_VARIABLE_PROMPT',
+    'CLAUDE_CODE_SANDBOXED',
+    'CLAUDE_BG_WORKSPACE_TRUSTED',
+    'CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK',
+    'CLAUDE_BG_SESSION_PERMISSION_RULES',
+  ];
+  assert.deepEqual(envKeysBeneathFloor(switches, EXTRA_ENV_FLOOR), switches);
+  for (const key of switches) assert.ok(EXTRA_ENV_FLOOR.includes(key), `${key} is not an exact floor entry`);
+  // In another case too, as an environment on Windows reads a name.
+  assert.deepEqual(envKeysBeneathFloor(['claude_code_sandboxed'], EXTRA_ENV_FLOOR), [
+    'claude_code_sandboxed',
+  ]);
+  // Control: exact names, not a family. A switch that turns a check on, one that makes trust stricter, and
+  // names the CLI's code does not show turning a prompt or a trust check off stay above the floor.
+  assert.deepEqual(
+    envKeysBeneathFloor(
+      [
+        'CLAUDE_CODE_STRICT_INLINE_SHELL_RM_PROMPT',
+        'CLAUDE_CODE_IGNORE_PERSISTED_TRUST',
+        'CLAUDE_CODE_DISABLE_DANGEROUS_RM_TIMEOUT',
+        'CLAUDE_CODE_DISABLE_TERMINAL_TITLE',
+        'CLAUDE_BG_SESSION_TITLE',
+        'IS_SANDBOX',
+      ],
+      EXTRA_ENV_FLOOR,
+    ),
+    [],
+  );
+});
+
 test('a declaration is exact names compared case-insensitively, and an empty one declares nothing', () => {
   assert.deepEqual(envKeysUndeclared(['https_proxy', 'NAS_Y'], ['HTTPS_PROXY']), ['NAS_Y']);
   assert.deepEqual(envKeysUndeclared(['NAS_Y'], []), ['NAS_Y']);

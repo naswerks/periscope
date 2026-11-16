@@ -8,18 +8,36 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { hostname } from 'node:os';
 import { isAbsolute, join, sep } from 'node:path';
 
 import {
   agentTranscriptPaths,
   credentialPaths,
   defaultAgentHome,
+  machineNames,
   nodePathResolver,
   periscopeCredentialDir,
   tokenCachePath,
 } from './paths.js';
 
 const windows = sep === '\\';
+
+test("the machine's names are its host name and the name its environment states, each once whatever its case", () => {
+  const own = hostname();
+  const named = machineNames({ COMPUTERNAME: 'Runner-7' });
+  assert.ok(named.includes('Runner-7'), named.join(', '));
+  assert.ok(
+    named.some((name) => name.toLowerCase() === own.toLowerCase()),
+    named.join(', '),
+  );
+  assert.deepEqual(
+    machineNames({ COMPUTERNAME: own.toUpperCase() }),
+    [own],
+    'one name in two cases is one name',
+  );
+  assert.deepEqual(machineNames({ COMPUTERNAME: '   ' }), [own], 'a blank name is no name');
+});
 
 test('the resolver returns an absolute path for an absolute input', () => {
   const input = windows ? 'C:\\repo\\src\\a.ts' : '/repo/src/a.ts';

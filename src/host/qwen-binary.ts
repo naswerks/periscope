@@ -15,7 +15,7 @@ import type { RunVersion } from './codex-binary.js';
 import { runVersion } from './codex-binary.js';
 
 /** The Qwen Code release this host is built and tested against. A CLI reporting any other is refused. */
-export const QWEN_PINNED_VERSION = '0.25.1';
+export const QWEN_PINNED_VERSION = '0.27.3';
 
 /** How long `--version` may take before the CLI is reported as not answering. */
 export const QWEN_VERSION_TIMEOUT_MS = 10_000;

@@ -21,6 +21,7 @@ import type {
   SdkPluginConfig,
   SessionStore,
   SessionStoreFlush,
+  AgentProcessPosture,
   SettingSource,
   SpawnAgentProcess,
   ThinkingConfig,
@@ -226,7 +227,15 @@ export interface SessionRegistryOptions {
    * shape a runtime supplies can change without a major version.
    * @internal
    */
-  readonly startProcess?: (request: AgentProcessRequest) => AgentProcess;
+  readonly startProcess?: (request: AgentProcessRequest, posture: AgentProcessPosture) => AgentProcess;
+  /**
+   * Whether a Claude session asks for its subagents' progress summaries: a running subagent states what it
+   * is doing about every 30 seconds, and the summary rides its task's entry in the tasks fact. Each
+   * summary is one more model call on the subagent's own model, so an operator who would rather not pay
+   * for them sets this false; the task list, its usage and each task's end are reported either way.
+   * Defaults to true. No session and no frame can set it.
+   */
+  readonly agentProgressSummaries?: boolean;
   /**
    * The runtimes this registry starts by a process of their own, by name. A request naming one is
    * started by it; a request naming any other runtime, or none, is started by `startProcess`.
@@ -276,7 +285,8 @@ export class SessionRegistry {
   readonly #homeDir: string;
   readonly #clock: Clock;
   readonly #startTimeoutMs: number;
-  readonly #startProcess: (request: AgentProcessRequest) => AgentProcess;
+  readonly #startProcess: (request: AgentProcessRequest, posture: AgentProcessPosture) => AgentProcess;
+  readonly #posture: AgentProcessPosture;
   readonly #runtimes: Readonly<Record<string, NativeRuntime>>;
 
   constructor(options: SessionRegistryOptions) {
@@ -285,6 +295,7 @@ export class SessionRegistry {
     this.#clock = options.clock ?? systemClock;
     this.#startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
     this.#startProcess = options.startProcess ?? startAgentProcess;
+    this.#posture = { agentProgressSummaries: options.agentProgressSummaries ?? true };
     this.#runtimes = options.runtimes ?? {};
     this.#maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
   }
@@ -409,7 +420,7 @@ export class SessionRegistry {
     request.spawnedWith?.(processRequest.env);
     const session = new HostedSession<unknown>(
       native === null
-        ? this.#startProcess(processRequest)
+        ? this.#startProcess(processRequest, this.#posture)
         : native.start(processRequest, (detail) => session.degrade('runtime_degraded', detail), {
             endpoint: request.endpoint ?? null,
             gate: request.nativeGate ?? null,

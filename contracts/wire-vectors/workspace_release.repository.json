@@ -18,6 +18,6 @@
     }
   },
   "name": "workspace_release.repository",
-  "protocolVersion": 19,
+  "protocolVersion": 20,
   "wire": "{\"frame\":\"session\",\"sessionId\":\"session-1\",\"seq\":1,\"at\":\"2000-01-01T00:00:00.000Z\",\"payload\":{\"kind\":\"workspace_release\",\"requestId\":\"request-5\",\"workspaceKey\":\"effort-1\",\"path\":null,\"deleteBranch\":false,\"force\":false,\"repository\":\"tools\"}}"
 }

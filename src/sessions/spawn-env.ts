@@ -75,6 +75,28 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'ANTHROPIC_BASE_URL',
   'CLAUDE_CODE_OAUTH_TOKEN',
   'ANTHROPIC_API_KEY',
+  // The agent CLI's session-service credentials and the remote route it dials a session over: who it
+  // signs in as, and where its turns go.
+  'CLAUDE_CODE_SESSIONS_OAUTH_TOKEN',
+  'CLAUDE_BG_SESSION_CREDENTIAL',
+  'CLAUDE_CODE_REMOTE_SDK_URL',
+  // The agent CLI's switch that lets its dangerous `rm` commands run without a prompt in bypass mode.
+  'CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS',
+  // Its switches that each turn off one check it guards a deletion or a command with: the prompt for an
+  // `rm` whose target is a command's output, for one inside an inline script, for one on a mounted drive;
+  // the refusal of a `cmd` deletion run through PowerShell; and the prompt for a command an allow rule
+  // covers that reads an exported variable.
+  'CLAUDE_CODE_DISABLE_SUBSTITUTION_RM_PROMPT',
+  'CLAUDE_CODE_DISABLE_INLINE_SHELL_RM_PROMPT',
+  'CLAUDE_CODE_DISABLE_MOUNTED_DRIVE_RM_PROMPT',
+  'CLAUDE_CODE_DISABLE_POWERSHELL_CMD_RM_DENY',
+  'CLAUDE_CODE_DISABLE_EXPORTED_VARIABLE_PROMPT',
+  // Its switches that answer a workspace trust check with yes, or turn one off.
+  'CLAUDE_CODE_SANDBOXED',
+  'CLAUDE_BG_WORKSPACE_TRUSTED',
+  'CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK',
+  // The permission rules, allows among them, it takes for a background session from its environment.
+  'CLAUDE_BG_SESSION_PERMISSION_RULES',
   // The model route and the identity it uses: the endpoint, its token and headers, its socket, every
   // provider's base URL, region and project.
   'ANTHROPIC_*',
@@ -164,6 +186,13 @@ export const EXTRA_ENV_FLOOR: readonly string[] = [
   'AZURE_OPENAI_*',
   'AWS_*',
   'CLOUDFLARE_*',
+  // Copilot's own variables: its home, the runtime it would start in place of the pinned one, its
+  // sign-in, its model route and the rest of its process settings.
+  'COPILOT_*',
+  // opencode's own variables: its configuration and where it is read from, its database, its feature flags
+  // (which turn on tools that never ask), the program its terminals run through, its keys and the rest of
+  // its process settings. This host sets the ones it means for each session.
+  'OPENCODE_*',
 ];
 
 /**

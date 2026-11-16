@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { AgentFact, JsonObject } from '../control/frames.js';
+import { PI_PINNED_VERSION } from './pi-binary.js';
 import { PiFactLift } from './pi-facts.js';
 import type { PiHello } from './pi-extension.js';
 import type { PiHostCommand, PiMessage } from './pi-wire.js';
@@ -79,7 +80,7 @@ test("the open yields the session's handle and pi's own receipt: its model, thin
     {
       kind: 'agent_receipt',
       runtime: 'pi',
-      runtimeVersion: '1.2.0',
+      runtimeVersion: PI_PINNED_VERSION,
       model: 'deepseek/deepseek-chat',
       permissionMode: null,
       effort: 'medium',

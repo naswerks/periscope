@@ -30,7 +30,15 @@ endpoint the operator declared, every call it makes is asked about through the s
 pi's RPC mode, when its operator points it at the CLI and a home of the runner's own
 ([configuration](docs/configuration.md#pi)); pi has no permission system, so periscope's own
 extension, loaded into pi, asks the same gate about every call before it runs, at tier `intercepted`,
-and a pi session that finds code it did not load names it.
+and a pi session that finds code it did not load names it. And it can offer GitHub Copilot, through the
+Copilot SDK its operator installs and a home of the runner's own
+([configuration](docs/configuration.md#copilot)); Copilot's pre-tool hook asks for every call and the
+gate decides each request, at tier `intercepted-with-residual`, with the runtime read back and its route
+proven before the first prompt. And it can offer opencode, through the opencode SDK its operator installs,
+hosting each session's server in a process of its own with no listener, and a home of the runner's own
+([configuration](docs/configuration.md#opencode)); every action a session takes asks and the gate decides
+each request, at tier `intercepted-with-residual`, with the server read back before the first prompt.
+opencode needs Node 24 or later.
 
 ## Run a host
 
@@ -60,12 +68,12 @@ PERISCOPE_CONTROLLER_URL and PERISCOPE_DECISION_URL written to the config file -
 The fourth starts the host, in the foreground, until you stop it:
 
 ```
-[host] periscope 1.8.1 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
+[host] periscope 1.11.0 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
 [credential] paired as ph-8cb226ae… - the paired credential is presented on every dial
-[agent] Claude Code 2.1.284 (agent SDK 0.3.284), 12 model(s) in the hello
+[agent] Claude Code 2.1.325 (agent SDK 0.3.325), 12 model(s) in the hello
 [link] idle -> connecting (start_requested)
 [link] connecting -> open (socket_connected)
-[link] open -> accepted (hello_completed) — protocol v17
+[link] open -> accepted (hello_completed) — protocol v20
 ```
 
 Before it dials, the host asks the agent which models it offers, without sending a prompt, and the
@@ -141,14 +149,17 @@ weekly. Both operating systems are load-bearing: Windows is where `USERPROFILE`,
 env matching and path handling are observable, and Linux is the only place POSIX file modes mean
 anything. The figure for a release is in [`CHANGELOG.md`](CHANGELOG.md).
 
-|                                  |                                       |
-| -------------------------------- | ------------------------------------- |
-| `@anthropic-ai/claude-agent-sdk` | **0.3.284**, pinned exactly, no caret |
-| Claude Code CLI                  | **2.1.284** (bundled with that SDK)   |
-| Codex app-server                 | **0.162.1**, pinned, when configured  |
-| Qwen Code CLI                    | **0.25.1**, pinned, when configured   |
-| pi CLI                           | **1.2.0**, pinned, when configured    |
-| Node                             | 22 or later; CI proves 22 and 24      |
+|                                  |                                                                              |
+| -------------------------------- | ---------------------------------------------------------------------------- |
+| `@anthropic-ai/claude-agent-sdk` | **0.3.325**, pinned exactly, no caret                                        |
+| Claude Code CLI                  | **2.1.325** (bundled with that SDK)                                          |
+| Codex app-server                 | **0.169.0**, pinned, when configured                                         |
+| Qwen Code CLI                    | **0.27.3**, pinned, when configured                                          |
+| pi CLI                           | **1.5.2**, pinned, when configured                                           |
+| `@github/copilot-sdk`            | **1.0.34**, the operator's install, pinned, when configured                  |
+| Copilot runtime                  | **1.0.112** (pinned by that SDK)                                             |
+| `@opencode/sdk`                  | **2.3.0**, the operator's install, pinned, when configured; Node 24 or later |
+| Node                             | 22 or later; CI proves 22 and 24                                             |
 
 The SDK is pre-1.0, so the SHA-256 of its installed type definitions is kept in
 `contracts/sdk.sha256` and CI fails on any drift; a bump cannot land without someone reading what

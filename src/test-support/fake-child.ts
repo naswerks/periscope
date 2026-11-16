@@ -33,6 +33,8 @@ export interface FakeChild {
   exit(code: number | null, signal?: NodeJS.Signals | null): void;
   /** Whether the peer ended the child's stdin. */
   readonly stdinEnded: boolean;
+  /** Whether the child has exited and its `close` has fired. */
+  readonly closed: boolean;
 }
 
 export function fakeChild(pid = 4242): FakeChild {
@@ -44,6 +46,7 @@ export function fakeChild(pid = 4242): FakeChild {
   let pending = '';
   let stdinEnded = false;
   let exited = false;
+  let closed = false;
 
   const stdin = new Writable({
     write(chunk: Buffer, _encoding, callback) {
@@ -97,10 +100,16 @@ export function fakeChild(pid = 4242): FakeChild {
       stdout.end();
       stderr.end();
       // `close` follows the streams' end, as a real child's does.
-      setImmediate(() => emitter.emit('close', code, signal));
+      setImmediate(() => {
+        closed = true;
+        emitter.emit('close', code, signal);
+      });
     },
     get stdinEnded() {
       return stdinEnded;
+    },
+    get closed() {
+      return closed;
     },
   };
   return fake;

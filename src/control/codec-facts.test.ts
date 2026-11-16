@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { decode, encode } from './codec.js';
-import type { AgentFact, Frame } from './frames.js';
+import type { AgentFact, Frame, TasksFact, TaskUsage } from './frames.js';
 import { agentFactsUpdate } from './frames.js';
 
 const AT = '2000-01-01T00:00:00.000Z';
@@ -109,6 +109,41 @@ test('an older peer that omits every new member is read, and so is a fact whose 
   );
   assert.ok(decode(factWire({ kind: 'tasks' })).ok, 'a fact that states only its kind');
   assert.ok(decode(wireOf({ update: 'agent_facts', fact: { kind: 'session_handle' } })).ok, 'no sourceId');
+});
+
+test("a task's usage states what the runtime reported: its tokens alone travel as sent, and a task with no count states none", () => {
+  const tokensAlone: TaskUsage = { tokens: 52000 };
+  const fact: TasksFact = {
+    kind: 'tasks',
+    runtime: 'codex',
+    running: [],
+    settled: [
+      { taskId: 'agent-1', type: 'subagent', status: 'completed', usage: tokensAlone },
+      {
+        taskId: 'agent-2',
+        type: 'subagent',
+        status: 'completed',
+        usage: { tokens: 9, toolUses: null, durationMs: null },
+      },
+      { taskId: 'agent-3', type: 'subagent', status: 'completed' },
+    ],
+  };
+  const frame: Frame = {
+    frame: 'session',
+    sessionId: 'session-1',
+    seq: 1,
+    at: AT,
+    payload: agentFactsUpdate(fact, 'm-1'),
+  };
+  const encoded = encode(frame);
+  assert.ok(encoded.ok, 'a usage of tokens alone encodes');
+  const decoded = decode(encoded.value);
+  assert.ok(decoded.ok, 'and decodes');
+  const body = (decoded.value.payload as unknown as { body: { fact: TasksFact } }).body;
+  assert.deepEqual(
+    body.fact.settled?.map((entry) => entry.usage ?? null),
+    [{ tokens: 52000 }, { tokens: 9, toolUses: null, durationMs: null }, null],
+  );
 });
 
 test('only the bodies the fact layer added are checked; every other body stays open JSON', () => {

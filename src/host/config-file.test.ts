@@ -229,6 +229,16 @@ test('PERISCOPE_CONTROLLER_ENV_KEYS is a config-file key and never settable over
   );
 });
 
+test('PERISCOPE_AGENT_PROGRESS_SUMMARIES is a config-file key and never settable over the wire', () => {
+  // Each summary is a model call the operator pays for, so only the operator turns them on or off.
+  assert.ok((CONFIG_KEYS as readonly string[]).includes('PERISCOPE_AGENT_PROGRESS_SUMMARIES'));
+  assert.equal(
+    (WIRE_CONFIGURABLE_KEYS as readonly string[]).includes('PERISCOPE_AGENT_PROGRESS_SUMMARIES'),
+    false,
+    'PERISCOPE_AGENT_PROGRESS_SUMMARIES must not be settable over the wire',
+  );
+});
+
 test('PERISCOPE_MODEL_ENDPOINTS is a config-file key and never settable over the wire', () => {
   // The file of model endpoints is the operator's: it names the address and the credential a
   // session's model calls use.

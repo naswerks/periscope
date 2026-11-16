@@ -16,7 +16,13 @@ import type { DecisionRequest } from './decision.js';
 import type { GateOutcome } from './outcome.js';
 import { gateTransitions } from './outcome.js';
 import { permissionHooks } from './gate.js';
-import { localGate } from './local.js';
+import {
+  CODEX_TOOL_FAMILIES,
+  COPILOT_TOOL_FAMILIES,
+  PI_TOOL_FAMILIES,
+  QWEN_TOOL_FAMILIES,
+  localGate,
+} from './local.js';
 
 const WORKSPACE = 'C:/repo';
 const CREDENTIALS = 'C:/Users/agent/.claude';
@@ -67,6 +73,97 @@ test('a boundary command is refused locally, by name', () => {
 
 test('a shell call with no command refuses rather than being read as an empty one', () => {
   assert.equal(gate(request({ toolInput: {} }))?.reason, 'shell-command-missing');
+});
+
+test('regression: a Monitor command is read as a shell command, so a push it would run is refused locally, by name', () => {
+  const monitor = (toolInput: Record<string, unknown>): DecisionRequest =>
+    request({ toolName: 'Monitor', toolInput: { description: 'watch', timeout_ms: 60_000, ...toolInput } });
+  assert.equal(gate(monitor({ command: 'git push origin main' }))?.reason, 'shell-boundary-command');
+  assert.equal(gate(monitor({ command: 'tail -f build.log' })), null, 'an ordinary command gets no opinion');
+  assert.equal(
+    gate(monitor({ command: `cat ${CREDENTIALS}/token` }))?.reason,
+    gate(request({ toolInput: { command: `cat ${CREDENTIALS}/token` } }))?.reason,
+    'a Monitor command naming a protected path refuses as the same Bash command does',
+  );
+  // A Monitor that watches a socket runs no command: no shell opinion, and not a missing command.
+  assert.equal(gate(monitor({ ws: { url: 'wss://example.invalid/events' } })), null);
+  // Only Monitor watches a socket. Any other shell tool's call that carries one and no command has
+  // nothing to classify, and is refused as the missing command it is.
+  assert.equal(
+    gate(request({ toolName: 'Bash', toolInput: { ws: { url: 'wss://example.invalid/events' } } }))?.reason,
+    'shell-command-missing',
+  );
+  for (const [families, tool] of [
+    [CODEX_TOOL_FAMILIES, 'Bash'],
+    [COPILOT_TOOL_FAMILIES, 'powershell'],
+    [QWEN_TOOL_FAMILIES, 'monitor'],
+    [PI_TOOL_FAMILIES, 'bash'],
+  ] as const) {
+    const other = localGate({
+      workspaceRoot: WORKSPACE,
+      resolve: fakeResolve,
+      protectedPaths: [CREDENTIALS],
+      toolFamilies: families,
+    });
+    assert.equal(
+      other(request({ toolName: tool, toolInput: { ws: { url: 'wss://example.invalid/events' } } }))?.reason,
+      'shell-command-missing',
+      `${tool} with a socket and no command skipped every shell check`,
+    );
+  }
+  // Control: with neither a command nor a socket it is the missing command it always was.
+  assert.equal(gate(monitor({}))?.reason, 'shell-command-missing');
+});
+
+test('a publishing tool may read and save anywhere but in credential material: every path its input names is held to the protected set alone', () => {
+  const artifact = (toolInput: Record<string, unknown>): DecisionRequest =>
+    request({ toolName: 'Artifact', toolInput });
+  const secret = `${CREDENTIALS}/.credentials.json`;
+  for (const [what, toolInput] of [
+    ['the page it publishes', { file_path: secret }],
+    [
+      'a file it uploads',
+      { url: 'https://example.invalid/a', asset: true, file_paths: ['C:/work/a.png', secret] },
+    ],
+    ['a supporting file, by its source', { file_path: 'C:/work/page.html', files: { 'data.json': secret } }],
+    [
+      'a supporting file, by its from',
+      { file_path: 'C:/work/page.html', files: { 'a.js': { from: secret } } },
+    ],
+    ['a supporting file in a list', { file_path: 'C:/work/page.html', files: [{ path: secret }] }],
+    [
+      'a relative source under a protected root',
+      { file_path: 'C:/work/page.html', root: CREDENTIALS, files: { 'a.json': '.credentials.json' } },
+    ],
+    [
+      'the directory a fetched file is saved into',
+      { action: 'read', path: 'index.html', out_dir: CREDENTIALS },
+    ],
+  ] as const) {
+    assert.equal(gate(artifact(toolInput))?.reason, 'credential-path-denied', what);
+  }
+  // Control: none of these names a protected path, and the workspace does not bound them.
+  for (const toolInput of [
+    { file_path: 'C:/elsewhere/page.html' },
+    { file_path: 'C:/work/page.html', files: { 'a.js': 'assets/a.js', gone: null } },
+    {
+      file_path: 'C:/work/page.html',
+      files: { 'a.js': { artifact: 'https://example.invalid/b', path: 'a.js' } },
+    },
+    { action: 'read', path: 'index.html', out_dir: 'C:/elsewhere/saved' },
+    { action: 'list' },
+    {},
+  ]) {
+    assert.equal(gate(artifact(toolInput)), null, JSON.stringify(toolInput));
+  }
+  // A family that names no such tool gives a call of that name no opinion.
+  const without = localGate({
+    workspaceRoot: WORKSPACE,
+    resolve: fakeResolve,
+    protectedPaths: [CREDENTIALS],
+    toolFamilies: CODEX_TOOL_FAMILIES,
+  });
+  assert.equal(without(artifact({ file_path: secret })), null);
 });
 
 test('a write outside the workspace refuses', () => {
@@ -141,6 +238,22 @@ test('a glob pattern that names a protected place refuses, absolute or climbing'
   );
 });
 
+test("a search's paths is a root when it is one string, as each entry of a list is; any other shape names no root", () => {
+  const search = (paths: unknown): ReturnType<typeof gate> =>
+    gate(request({ toolName: 'Grep', toolInput: { pattern: 'token', paths } }));
+  assert.equal(search(`${CREDENTIALS}/sub`)?.reason, 'credential-path-denied');
+  assert.equal(
+    search('C:/Users/agent')?.reason,
+    'credential-path-denied',
+    'a root that holds a protected path',
+  );
+  assert.equal(search([`${CREDENTIALS}/sub`])?.reason, 'credential-path-denied');
+  assert.equal(search('C:/Program Files/nodejs'), null);
+  // A shape that is neither names no root: the workspace alone is judged, as with no `paths` at all.
+  assert.equal(search(42), null);
+  assert.equal(search({ first: CREDENTIALS }), null);
+});
+
 test('a workspace that holds a protected path refuses a search that names no root', () => {
   const home = localGate({
     workspaceRoot: 'C:/Users/agent',
@@ -208,6 +321,21 @@ test("regression: the session's spawn environment is read at each decision, so a
       ?.reason,
     'credential-path-denied',
   );
+});
+
+test('a shell command naming a protected drive path from the root, as a POSIX shell on Windows writes it, refuses', () => {
+  for (const command of [
+    'cat /c/Users/agent/.claude/.credentials.json',
+    'cat /C/Users/Agent/.claude/.credentials.json',
+    'cat /cygdrive/c/Users/agent/.claude/.credentials.json',
+    'wsl cat /mnt/c/Users/agent/.claude/.credentials.json',
+    'tar -C /c/Users/agent -czf out.tgz .claude/.credentials.json /c/Users/agent/.claude',
+  ]) {
+    assert.equal(gate(request({ toolInput: { command } }))?.reason, 'credential-path-denied', command);
+  }
+  // Control: the same spellings of a place that is not protected are no credential matter.
+  assert.equal(gate(request({ toolInput: { command: 'cat /c/repo/notes.txt' } })), null);
+  assert.equal(gate(request({ toolInput: { command: 'ls /c/Users/agent/Documents' } })), null);
 });
 
 test('control: the expansion is what refuses; with no home known the same command has no credential opinion', () => {

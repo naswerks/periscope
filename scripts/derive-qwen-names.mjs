@@ -5,7 +5,7 @@
  * binary.
  *
  *   node scripts/derive-qwen-names.mjs <qwen-code clone> <tag>
- *   node scripts/derive-qwen-names.mjs C:/src/qwen-code v0.25.1
+ *   node scripts/derive-qwen-names.mjs C:/src/qwen-code v0.27.3
  *
  * Needs git on the path. Every list holds identifiers only: interface facts, never copied text.
  * - `tools`: every value of `ToolNames` (`packages/core/src/tools/tool-names.ts`), in declaration order.
@@ -16,13 +16,16 @@
  *   from the same file.
  * - `systemSubtypes`: every literal subtype the CLI's stream-json path emits on a `system` message:
  *   the first argument of `emitSystemMessage(…)` and the `subtype` beside `type: 'system'`, in
- *   `packages/cli/src/nonInteractiveCli.ts` and `packages/cli/src/nonInteractive/`.
+ *   `packages/cli/src/nonInteractiveCli.ts`, `packages/cli/src/nonInteractive/`, and the modules under
+ *   `packages/cli/src/services/` those files import (one level), since a service the stream-json path
+ *   drives, such as the mod session, emits on it too.
  * - `streamEvents` and `streamDeltas`: the event and delta kinds `StreamJsonOutputAdapter.ts` writes.
  * - `hostControlRequests`: the subtypes the CLI's control dispatcher routes (`getControllerForRequest`).
  * - `cliControlRequests`: the subtypes the CLI's controllers send the host (`sendControlRequest`).
  */
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import { posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const [clone, tag] = process.argv.slice(2);
@@ -86,8 +89,22 @@ function protocol() {
   return { messageTypes, resultSubtypes, contentBlocks };
 }
 
+/** The modules under `packages/cli/src/services/` that `files` import, as paths at the tag. */
+function importedServices(files) {
+  const services = new Set(listed('packages/cli/src/services'));
+  const imported = new Set();
+  for (const file of files) {
+    for (const match of show(file).matchAll(/from '(\.{1,2}\/[^']+)\.js'/g)) {
+      const path = posix.normalize(posix.join(posix.dirname(file), `${match[1]}.ts`));
+      if (services.has(path) && !files.includes(path)) imported.add(path);
+    }
+  }
+  return [...imported].sort();
+}
+
 function systemSubtypes() {
-  const files = ['packages/cli/src/nonInteractiveCli.ts', ...listed('packages/cli/src/nonInteractive')];
+  const stream = ['packages/cli/src/nonInteractiveCli.ts', ...listed('packages/cli/src/nonInteractive')];
+  const files = [...stream, ...importedServices(stream)];
   const found = [];
   for (const file of files) {
     const source = show(file);

@@ -19,7 +19,9 @@
  *   - `usage_sample`: each answer to `get_context_usage`, sent after each result: the CLI's own count of
  *     the context and its window, and the last main-thread call's cache reads.
  *   - `tasks`: the background tasks the CLI reports started and settled; the settled ones are cleared at
- *     the next init, the start of the next turn.
+ *     the next init, the start of the next turn. Each names the call that started it (`toolUseId`) where
+ *     the CLI says which, and a settled agent task carries its `usage` when the CLI reports all three of
+ *     its counts. The CLI reports no summary and no output file for a task, so neither is stated.
  * And one fragment per content-block delta: text, thinking, or a tool's input.
  */
 import type {
@@ -32,11 +34,15 @@ import type {
   SettledTaskEntry,
   SpendFacts,
   TaskSettlement,
+  TaskUsage,
 } from '../control/frames.js';
+import { cutText, factText } from '../control/fact-text.js';
+import { fitTasks } from '../control/tasks-budget.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import { QWEN_RUNTIME } from '../sessions/runtimes.js';
 import type { CompactionReport } from '../state/observer.js';
+import { QwenSpawnWatch } from '../state/qwen-observer.js';
 import type { QwenMessage } from './qwen-wire.js';
 import {
   AssistantMessage,
@@ -101,6 +107,8 @@ export class QwenFactLift implements FactLift<QwenMessage> {
   readonly #running = new Map<string, RunningTaskEntry>();
   readonly #settled = new Map<string, SettledTaskEntry>();
   #tasksSent = JSON.stringify([[], []]);
+  /** The main thread's sub-agent calls still running, to tell a sub-agent's end from the turn's. */
+  readonly #spawns = new QwenSpawnWatch();
 
   constructor(options: QwenFactLiftOptions = {}) {
     this.#undelivered = options.undeliveredPlugins ?? [];
@@ -113,6 +121,12 @@ export class QwenFactLift implements FactLift<QwenMessage> {
     if (message.kind === 'answer') return this.#fromAnswer(message);
     if (message.kind !== 'message') return NOTHING;
     const body = message.message;
+    const lifted = this.#fromStream(body);
+    this.#spawns.observe(body);
+    return lifted;
+  }
+
+  #fromStream(body: Extract<QwenMessage, { kind: 'message' }>['message']): LiftedFacts {
     switch (qwenMessageKey(body)) {
       case 'system/init':
         return this.#fromInit(body);
@@ -127,7 +141,8 @@ export class QwenFactLift implements FactLift<QwenMessage> {
         return NOTHING;
       }
       case 'result':
-        return this.#fromResult(body);
+        // A foreground sub-agent's own end records no turn of the session's: its counts are not the session's.
+        return this.#spawns.isSubagentEnd(body) ? NOTHING : this.#fromResult(body);
       case 'system/task_started':
         return this.#fromTaskStarted(body);
       case 'system/task_notification':
@@ -156,6 +171,7 @@ export class QwenFactLift implements FactLift<QwenMessage> {
         trigger: report.trigger,
         tokensBefore: report.tokensBefore,
         tokensAfter: report.tokensAfter,
+        ...(report.outcome === undefined ? {} : { outcome: report.outcome }),
       },
     ];
   }
@@ -341,6 +357,7 @@ export class QwenFactLift implements FactLift<QwenMessage> {
       taskId: text(task.task_id),
       type: BACKGROUND_TASK_TYPE,
       description: typeof task.description === 'string' ? text(task.description) : null,
+      ...startedBy(task.tool_use_id),
     });
     return facts(this.#tasksIfChanged());
   }
@@ -357,6 +374,7 @@ export class QwenFactLift implements FactLift<QwenMessage> {
           taskId: text(task.task_id),
           type: BACKGROUND_TASK_TYPE,
           description: null,
+          ...startedBy(task.tool_use_id),
         });
       }
       return facts(this.#tasksIfChanged());
@@ -364,18 +382,20 @@ export class QwenFactLift implements FactLift<QwenMessage> {
     const was = this.#running.get(task.task_id);
     this.#running.delete(task.task_id);
     if (!this.#settled.has(task.task_id)) {
+      const usage = taskUsageOf(task.usage);
       this.#settled.set(task.task_id, {
         taskId: text(task.task_id),
         type: was?.type ?? null,
         status: settled,
+        ...startedBy(task.tool_use_id ?? was?.toolUseId ?? null),
+        ...(usage === null ? {} : { usage }),
       });
     }
     return facts(this.#tasksIfChanged());
   }
 
   #tasksIfChanged(): AgentFact[] {
-    const running = bounded([...this.#running.values()]);
-    const settled = bounded([...this.#settled.values()]);
+    const { running, settled } = fitTasks([...this.#running.values()], [...this.#settled.values()]);
     const key = JSON.stringify([running, settled]);
     if (key === this.#tasksSent) return [];
     this.#tasksSent = key;
@@ -409,6 +429,25 @@ export class QwenFactLift implements FactLift<QwenMessage> {
   }
 }
 
+/** The call that started a task, as its `toolUseId`, where the CLI named one; nothing otherwise. */
+function startedBy(toolUseId: string | null | undefined): { readonly toolUseId?: string } {
+  return typeof toolUseId === 'string' && toolUseId !== '' ? { toolUseId: factText(toolUseId) } : {};
+}
+
+/** A task's counts as the wire carries them, or null unless the CLI states all three as whole counts. */
+function taskUsageOf(usage: unknown): TaskUsage | null {
+  if (typeof usage !== 'object' || usage === null) return null;
+  const counts = usage as { total_tokens?: unknown; tool_uses?: unknown; duration_ms?: unknown };
+  const whole = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const tokens = whole(counts.total_tokens);
+  const toolUses = whole(counts.tool_uses);
+  const durationMs = whole(counts.duration_ms);
+  return tokens === null || toolUses === null || durationMs === null
+    ? null
+    : { tokens, toolUses, durationMs };
+}
+
 function facts(list: readonly AgentFact[]): LiftedFacts {
   return list.length === 0 ? NOTHING : { facts: list, fragments: [] };
 }
@@ -418,7 +457,7 @@ function bounded<T>(list: readonly T[]): T[] {
 }
 
 function text(value: string): string {
-  return value.length <= MAX_FACT_TEXT_LENGTH ? value : value.slice(0, MAX_FACT_TEXT_LENGTH);
+  return cutText(value, MAX_FACT_TEXT_LENGTH);
 }
 
 /** A reported count as the wire carries it: a non-negative integer. */

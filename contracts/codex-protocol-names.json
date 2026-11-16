@@ -1,6 +1,6 @@
 {
-  "release": "rust-v0.162.1",
-  "version": "0.162.1",
+  "release": "rust-v0.169.0",
+  "version": "0.169.0",
   "notifications": [
     {
       "method": "error",
@@ -13,6 +13,10 @@
     {
       "method": "thread/status/changed",
       "experimental": false
+    },
+    {
+      "method": "thread/readState/changed",
+      "experimental": true
     },
     {
       "method": "thread/archived",
@@ -40,6 +44,10 @@
     },
     {
       "method": "thread/name/updated",
+      "experimental": false
+    },
+    {
+      "method": "thread/section/changed",
       "experimental": false
     },
     {
@@ -456,6 +464,14 @@
       "experimental": false
     },
     {
+      "method": "thread/sample",
+      "experimental": true
+    },
+    {
+      "method": "thread/sample/cancel",
+      "experimental": true
+    },
+    {
       "method": "thread/archive",
       "experimental": false
     },
@@ -549,6 +565,10 @@
     },
     {
       "method": "thread/memoryMode/set",
+      "experimental": true
+    },
+    {
+      "method": "thread/memory/read",
       "experimental": true
     },
     {
@@ -660,6 +680,10 @@
       "experimental": false
     },
     {
+      "method": "thread/readState/update",
+      "experimental": true
+    },
+    {
       "method": "thread/turns/list",
       "experimental": false
     },
@@ -668,8 +692,20 @@
       "experimental": false
     },
     {
+      "method": "thread/items/read",
+      "experimental": true
+    },
+    {
+      "method": "thread/guardianReview",
+      "experimental": true
+    },
+    {
       "method": "thread/inject_items",
       "experimental": false
+    },
+    {
+      "method": "thread/prepareApprovedPlan",
+      "experimental": true
     },
     {
       "method": "skills/list",
@@ -864,6 +900,14 @@
       "experimental": false
     },
     {
+      "method": "modelProvider/list",
+      "experimental": false
+    },
+    {
+      "method": "modelProvider/config/write",
+      "experimental": false
+    },
+    {
       "method": "modelProvider/capabilities/read",
       "experimental": false
     },
@@ -976,6 +1020,10 @@
       "experimental": true
     },
     {
+      "method": "account/gcp/setup",
+      "experimental": true
+    },
+    {
       "method": "account/bedrock/checkGovCloudRequirements",
       "experimental": true
     },
@@ -984,7 +1032,19 @@
       "experimental": false
     },
     {
+      "method": "accountSession/list",
+      "experimental": true
+    },
+    {
+      "method": "accountSession/switch",
+      "experimental": true
+    },
+    {
       "method": "account/logout",
+      "experimental": false
+    },
+    {
+      "method": "account/securitySetup/read",
       "experimental": false
     },
     {
@@ -1009,6 +1069,10 @@
     },
     {
       "method": "feedback/upload",
+      "experimental": false
+    },
+    {
+      "method": "feedback/save",
       "experimental": false
     },
     {

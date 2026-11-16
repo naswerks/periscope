@@ -43,6 +43,8 @@ export interface PiArmOutcome {
     readonly status: 'started' | 'ended';
     readonly trigger: 'manual' | 'auto';
     readonly tokensBefore: number | null;
+    /** On `ended`: failed for one pi aborted or ends with an error, completed for one that ends with its result. */
+    readonly outcome?: 'completed' | 'failed';
   } | null;
 }
 
@@ -212,6 +214,14 @@ export function piRequestsFor(message: PiMessage, arm: PiArmState, view: PiArmVi
           trigger: triggerOf(event['reason']),
           tokensBefore:
             typeof before === 'number' && Number.isFinite(before) && before >= 0 ? Math.floor(before) : null,
+          // A compaction pi aborted, or that ends with an error, compacted nothing; one that ends with its
+          // result did.
+          ...(event['aborted'] === true ||
+          (typeof event['errorMessage'] === 'string' && event['errorMessage'] !== '')
+            ? { outcome: 'failed' as const }
+            : typeof event['result'] === 'object' && event['result'] !== null
+              ? { outcome: 'completed' as const }
+              : {}),
         },
       };
     }

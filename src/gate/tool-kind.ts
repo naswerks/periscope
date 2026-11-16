@@ -1,5 +1,6 @@
 /**
- * Each runtime's tool names, read as tool kinds: Claude's, then Codex's, then Qwen Code's, then pi's.
+ * Each runtime's tool names, read as tool kinds: Claude's, then Codex's, then Qwen Code's, then pi's, then
+ * Copilot's.
  *
  * Claude's names are the agent SDK's own, as a `PreToolUse` input's `tool_name` carries them: the tools its
  * input schemas describe, and the gate's own families (`DEFAULT_TOOL_FAMILIES`). A tool the table does
@@ -8,10 +9,16 @@
  */
 import type { ShellDialect, ToolKind } from './decision.js';
 
-/** The kind of each Claude tool this table names. Every other name is `other`. */
+/**
+ * The kind of each Claude tool this table names. Every other name is `other`. `Monitor` runs the shell
+ * command its input names and reports each line it prints, so it is a shell tool; a `Monitor` call that
+ * watches a socket instead names no command, opens a connection to the address its input names, and is
+ * `web` (`isSocketWatch`).
+ */
 export const CLAUDE_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   Bash: 'shell',
   PowerShell: 'shell',
+  Monitor: 'shell',
   Read: 'file_read',
   Grep: 'file_read',
   Glob: 'file_read',
@@ -24,23 +31,62 @@ export const CLAUDE_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   WebSearch: 'web',
 };
 
-/** The grammar each Claude shell tool runs its command in: `Bash` a POSIX shell, `PowerShell` PowerShell. */
+/**
+ * The grammar each Claude shell tool runs its command in: `Bash` a POSIX shell, `PowerShell` PowerShell,
+ * and `Monitor` the grammar `Bash` runs. Which shell `Monitor` runs on a Windows host whose shell tool is
+ * PowerShell is not measured.
+ */
 export const CLAUDE_SHELL_DIALECTS: Readonly<Record<string, ShellDialect>> = {
   Bash: 'posix',
   PowerShell: 'powershell',
+  Monitor: 'posix',
 };
 
-/** The dialect of the Claude shell tool named `toolName`, or null for a tool that runs no command. */
-export function claudeShellDialect(toolName: string): ShellDialect | null {
+/**
+ * Whether a tool's input watches a socket and runs no command: it names a `ws` object and no `command`.
+ * A `Monitor` call takes one or the other, never both.
+ */
+export function watchesSocketOnly(toolInput: unknown): boolean {
+  if (typeof toolInput !== 'object' || toolInput === null || Array.isArray(toolInput)) return false;
+  const input = toolInput as Record<string, unknown>;
+  const ws = input['ws'];
+  return input['command'] === undefined && typeof ws === 'object' && ws !== null && !Array.isArray(ws);
+}
+
+/** The shell tools that can watch a socket instead of running a command: Claude's `Monitor`, and no other. */
+export const SOCKET_WATCH_TOOLS: readonly string[] = ['Monitor'];
+
+/**
+ * Whether a call is a socket watch: a tool that can watch one (`SOCKET_WATCH_TOOLS`), with an input that
+ * names a `ws` object and no command. Any other shell tool's call that carries a `ws` and no command is a
+ * shell call with no command.
+ */
+export function isSocketWatch(toolName: string, toolInput: unknown): boolean {
+  return SOCKET_WATCH_TOOLS.includes(toolName) && watchesSocketOnly(toolInput);
+}
+
+/**
+ * The dialect of the Claude shell tool named `toolName`, or null for a tool that runs no command. A
+ * `Monitor` call whose input (`toolInput`, where it is known) watches a socket runs none.
+ */
+export function claudeShellDialect(toolName: string, toolInput?: unknown): ShellDialect | null {
+  if (toolInput !== undefined && isSocketWatch(toolName, toolInput)) return null;
   return Object.hasOwn(CLAUDE_SHELL_DIALECTS, toolName) ? (CLAUDE_SHELL_DIALECTS[toolName] ?? null) : null;
 }
 
 /** The prefix every MCP tool name carries. */
 const MCP_TOOL_PREFIX = 'mcp__';
 
-/** The kind of the Claude tool named `toolName`: its row in the table, `mcp` by prefix, else `other`. */
-export function claudeToolKind(toolName: string): ToolKind {
-  if (Object.hasOwn(CLAUDE_TOOL_KINDS, toolName)) return CLAUDE_TOOL_KINDS[toolName] ?? 'other';
+/**
+ * The kind of the Claude tool named `toolName`: its row in the table, `mcp` by prefix, else `other`. A
+ * `Monitor` call whose input (`toolInput`, where it is known) watches a socket runs no command and
+ * reaches the network, at an address the model chose: it is `web`.
+ */
+export function claudeToolKind(toolName: string, toolInput?: unknown): ToolKind {
+  if (Object.hasOwn(CLAUDE_TOOL_KINDS, toolName)) {
+    const kind = CLAUDE_TOOL_KINDS[toolName] ?? 'other';
+    return kind === 'shell' && toolInput !== undefined && isSocketWatch(toolName, toolInput) ? 'web' : kind;
+  }
   if (toolName.startsWith(MCP_TOOL_PREFIX)) return 'mcp';
   return 'other';
 }
@@ -168,6 +214,205 @@ export const PI_SHELL_DIALECTS: Readonly<Record<string, ShellDialect>> = {
 /** The dialect of the pi shell tool named `toolName`, or null for a tool that runs no command. */
 export function piShellDialect(toolName: string): ShellDialect | null {
   return Object.hasOwn(PI_SHELL_DIALECTS, toolName) ? (PI_SHELL_DIALECTS[toolName] ?? null) : null;
+}
+
+/**
+ * Copilot's built-in tool names, read as tool kinds: the names its pre-tool hook carries. `powershell` runs a
+ * command on Windows and `bash` elsewhere; `view` reads a path; `create` writes one; `edit`,
+ * `str_replace_editor` and `apply_patch` change one; `grep`, `rg` and `glob` read under theirs; `web_fetch` fetches
+ * a URL. Every MCP tool reaches this host as `mcp__{server}__{tool}` (`copilot-gate.ts` spells it) and is
+ * `mcp` by that prefix. Every other built-in is `other`, and is named in `COPILOT_OTHER_TOOLS`.
+ */
+export const COPILOT_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
+  powershell: 'shell',
+  bash: 'shell',
+  view: 'file_read',
+  grep: 'file_read',
+  // The search tool a session is offered in place of `grep` under some models (the `gpt-` family on the
+  // pinned runtime): the same pattern and `paths`.
+  rg: 'file_read',
+  glob: 'file_read',
+  create: 'file_write',
+  edit: 'file_edit',
+  str_replace_editor: 'file_edit',
+  apply_patch: 'file_edit',
+  web_fetch: 'web',
+};
+
+/**
+ * The built-ins of the pinned Copilot runtime that are `other` by name: each one a tool the runtime offers
+ * that runs no command and reads or writes no path its input names. Two of them act on more than their
+ * input says: `dynamic_workflows_manage` writes a workflow's code into the session's own extension and
+ * loads it, and `run_dynamic_workflow` runs one. Each call of either asks like any other, as `other`, so
+ * it is the controller's to decide. Together with `COPILOT_TOOL_KINDS` and `COPILOT_EXCLUDED_TOOLS` the
+ * list names every built-in the runtime lists on Windows and on a POSIX host (`copilot-local.test.ts`
+ * holds the three to the runtime's own list); a built-in none of the three names is named to the
+ * controller when a session opens (`gate-tool-unnamed`).
+ */
+export const COPILOT_OTHER_TOOLS: readonly string[] = [
+  'read_powershell',
+  'stop_powershell',
+  'list_powershell',
+  'read_bash',
+  'stop_bash',
+  'list_bash',
+  'task',
+  'skill',
+  'ask_user',
+  'task_complete',
+  'exit_plan_mode',
+  'update_todo',
+  'context_board',
+  'read_inbox',
+  'send_inbox',
+  'list_agents',
+  'read_agent',
+  'write_agent',
+  'sql',
+  'generic_tool_search',
+  'tool_search_tool',
+  'semantic_code_search',
+  'fetch_copilot_cli_documentation',
+  'dynamic_workflows_manage',
+  'run_dynamic_workflow',
+];
+
+/**
+ * The built-ins this host turns off in every Copilot session: each is left out of the session's tools and
+ * the open is refused if the runtime offers it anyway (`copilot-process.ts`).
+ *
+ * - `write_powershell` and `write_bash` type input into a shell already running, so a call carries text a
+ *   running program reads, never a command any reading of a command can see. A controller cannot govern a
+ *   command it cannot see as one.
+ * - `manage_schedule` schedules a prompt to run later, outside the queue a controller sends prompts into.
+ *
+ * Lifting one is a later release's change to this list, once a decision request can say what such a call
+ * runs.
+ */
+export const COPILOT_EXCLUDED_TOOLS: readonly string[] = [
+  'write_powershell',
+  'write_bash',
+  'manage_schedule',
+];
+
+/** The kind of the Copilot tool named `toolName`: its row in the table, `mcp` by prefix, else `other`. */
+export function copilotToolKind(toolName: string): ToolKind {
+  if (Object.hasOwn(COPILOT_TOOL_KINDS, toolName)) return COPILOT_TOOL_KINDS[toolName] ?? 'other';
+  if (toolName.startsWith(MCP_TOOL_PREFIX)) return 'mcp';
+  return 'other';
+}
+
+/** The grammar each Copilot shell tool runs its command in: `powershell` PowerShell, `bash` a POSIX shell. */
+export const COPILOT_SHELL_DIALECTS: Readonly<Record<string, ShellDialect>> = {
+  powershell: 'powershell',
+  bash: 'posix',
+};
+
+/** The dialect of the Copilot shell tool named `toolName`, or null for a tool that runs no command. */
+export function copilotShellDialect(toolName: string): ShellDialect | null {
+  return Object.hasOwn(COPILOT_SHELL_DIALECTS, toolName) ? (COPILOT_SHELL_DIALECTS[toolName] ?? null) : null;
+}
+
+/**
+ * opencode's permission actions, read as tool kinds: the action a permission request names, which is what a
+ * decision request carries as the tool's name. `shell` runs a command; `edit` writes a path (the `write`,
+ * `edit` and `patch` tools all ask it, once per call, naming each file, and `opencode_worktree_remove` asks it
+ * naming the worktree it deletes); `read` reads one; `glob` and `grep` read under one; `webfetch` fetches a
+ * URL and `websearch` searches the web. The tools that ask as `edit` are named here as well, by their own
+ * names, which the conversation's items carry. Every MCP tool reaches this host as `mcp__{server}__{tool}`
+ * (`opencode-gate.ts` spells it) and is `mcp` by that prefix. Every other action is `other`, and is named in
+ * `OPENCODE_OTHER_TOOLS`.
+ */
+export const OPENCODE_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
+  shell: 'shell',
+  edit: 'file_edit',
+  write: 'file_edit',
+  patch: 'file_edit',
+  opencode_worktree_remove: 'file_edit',
+  read: 'file_read',
+  glob: 'file_read',
+  grep: 'file_read',
+  webfetch: 'web',
+  websearch: 'web',
+};
+
+/**
+ * The actions of the pinned opencode release that ask and are `other` by name: `external_directory`, asked
+ * first for any path outside the session's location (the directory a call goes to); `subagent`, the start of
+ * another session under this one; `skill`, a skill's instructions read; `todowrite`, the session's own list;
+ * the MCP resource tools; and the MCP event watch. The list of a server's resources asks about each server
+ * it would list, so in a session with no server attached it asks about none, lists nothing, and is named
+ * as a call that ran with no decision (`opencode-gate.ts`). Together with `OPENCODE_TOOL_KINDS` and
+ * `OPENCODE_DENIED_TOOLS` it names every tool the runtime offers a session (`opencode-local.test.ts` holds
+ * them to the runtime's own list).
+ */
+export const OPENCODE_OTHER_TOOLS: readonly string[] = [
+  'external_directory',
+  'subagent',
+  'skill',
+  'todowrite',
+  'opencode_list_mcp_resources',
+  'opencode_read_mcp_resource',
+  'opencode_watch_mcp_event',
+];
+
+/**
+ * The tools of the pinned opencode release that offer a call the gate cannot decide, by the action that
+ * turns each off: every session is created with each denied, so the runtime never offers it, the open is
+ * refused if it does, and a request naming one is refused by this host's gate without asking anyone.
+ *
+ * - `execute` (Code Mode) runs a program whose tool calls share its own call id; denied, every tool is
+ *   offered directly and each call keeps its own id in the record.
+ * - `question` waits on a form with no timeout; an agent asks through the controller's MCP server instead.
+ * - `experimental_image_generate` writes its image under a name it chooses after the call was asked.
+ * - `browser` is every browser tool's action; the browser's own plugin writes allow rules into the session
+ *   when a browser attaches.
+ * - The `opencode_` session and worktree tools other than `opencode_worktree_remove`, and `opencode_models`,
+ *   run without asking at all: a worktree created, a session moved or renamed, the model catalogue read.
+ * - The artifact and schedule tools run without asking at all, and a schedule runs a prompt later, outside
+ *   the queue a controller sends prompts into. Both are off unless a feature flag turns them on.
+ *
+ * Lifting one is a later release's change to this list, once a decision request can say what such a call
+ * does.
+ */
+export const OPENCODE_DENIED_TOOLS: readonly string[] = [
+  'execute',
+  'question',
+  'experimental_image_generate',
+  'browser',
+  'opencode_session_rename',
+  'opencode_session_move',
+  'opencode_worktree_create',
+  'opencode_worktree_list',
+  'opencode_models',
+  'opencode_artifact_create',
+  'opencode_artifact_read',
+  'opencode_artifact_update',
+  'opencode_artifact_delete',
+  'opencode_schedule_create',
+  'opencode_schedule_list',
+  'opencode_schedule_pause',
+  'opencode_schedule_resume',
+  'opencode_schedule_delete',
+];
+
+/** The kind of the opencode action named `action`: its row in the table, `mcp` by prefix, else `other`. */
+export function opencodeToolKind(action: string): ToolKind {
+  if (Object.hasOwn(OPENCODE_TOOL_KINDS, action)) return OPENCODE_TOOL_KINDS[action] ?? 'other';
+  if (action.startsWith(MCP_TOOL_PREFIX)) return 'mcp';
+  return 'other';
+}
+
+/**
+ * The grammar opencode's `shell` tool runs a command in, by the shell this host names in the session's
+ * configuration: PowerShell for `pwsh` and `powershell`, `cmd.exe` for `cmd`, and a POSIX shell for every
+ * other (`bash`, `sh`, `zsh`, Git Bash). Read from the shell's file name, so the word says what runs.
+ */
+export function opencodeShellDialect(shell: string): ShellDialect {
+  const name = (shell.split(/[\\/]/).pop() ?? shell).toLowerCase().replace(/\.exe$/, '');
+  if (name === 'pwsh' || name === 'powershell') return 'powershell';
+  if (name === 'cmd') return 'cmd';
+  return 'posix';
 }
 
 /** A variable read as Windows reads it, without regard to the case of its name. */

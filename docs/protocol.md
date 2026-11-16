@@ -88,8 +88,22 @@ and either can move first.
 
 A hello with no range does not decode: `protocolRange` is a declared member there. A new value in
 the open `capabilities` list needs no version bump; a new hello member does. The window today is
-`[18, 19]`. Version 19 adds the repositories a host serves beside its home one, and a session's own
-worktree of each, every member optional:
+`[19, 20]`. Version 20 adds, every member optional:
+
+- `parentId` on a conversation item: the call that spawned the agent whose turn the item is from; an
+  item of the session's own thread names none, which reads as null, so it is the item version 19 carried
+  ([The conversation item stream](#the-conversation-item-stream));
+- on each entry of a `tasks` fact, running or settled: the spawning call (`toolUseId`), the task's own
+  `summary`, its `usage` and the `outputFile` its output is written to ([The fact layer](#the-fact-layer)).
+
+It adds no payload kind. A version-19 controller reads what this build sends: each new member rides a
+kind it already reads and is carried as an unknown key. A sub-agent's items are composed only on a link
+negotiated at 20 or above: a controller at 19 reads no `parentId`, so a sub-agent's item would read as
+the session's own, and it is sent none, as version 19 sent none. Every frame a version-19 controller
+sends decodes here unchanged.
+
+Version 19 added the repositories a host serves beside its home one, and a session's own worktree of
+each, every member optional:
 
 - `configuration.repositories` in the hello and the configure answer (below);
 - `session_new.additionalRepositories`, the further repositories a session also writes in
@@ -99,19 +113,14 @@ worktree of each, every member optional:
 - the refusal reason `repository-unknown`, answered to a `session_new` or a release naming a
   repository the host does not serve.
 
-It adds no payload kind. A version-18 controller reads what this build sends: each new member rides a
-kind it already reads and is carried as an unknown key, and a controller at 18 names no further
-repository, so the transition and inventory members reach it only on a host it asked nothing of. Every
-frame a version-18 controller sends decodes here unchanged. Version 14 narrowed `session_new.request.env`
-(below), and the narrowing holds at every version the host negotiates. `src/host/protocol-window.test.ts`
-holds both directions over a real link: every frame this host sends, a Claude session's, a Codex
-session's, a Qwen Code session's and a pi session's on one link, its answers to the retired asks and to a
-`repository_read`, and the hello of a host serving several repositories, decodes with the protocol-18
-decoder v1.9.2 shipped, and every decision request it posts reads as that release's `DecisionRequest`;
-each vector version 19 adds that a host sends decodes with that decoder; and a version-18 controller's
-`session_new` and `session_configure` decode here and apply. A controller must check the version, or the
-hello's `repositories`, before it names a further repository: a host at 18 carries the unknown member and
-opens the session with no second place to write.
+Version 14 narrowed `session_new.request.env` (below), and the narrowing holds at every version the host
+negotiates. `src/host/protocol-window.test.ts` holds both directions over a real link: every frame this
+host sends, a Claude session's, a Codex session's, a Qwen Code session's and a pi session's on one link,
+its answers to the retired asks and to a `repository_read`, and the hello of a host serving several
+repositories, decodes with the protocol-19 decoder v1.10.0 shipped, and every decision request it posts
+reads as that release's `DecisionRequest`; each vector version 20 adds that a host sends decodes with that
+decoder; at 19 a sub-agent's message fills no item, and at 20 it fills one naming its parent; and a
+version-19 controller's `session_new` and `session_configure` decode here and apply.
 
 From v19, `configuration.repositories` lists the repositories the host serves, one `HostRepository` each
 (`name`, `root`, `defaultBranch`), the home one (the repository `repositoryRoot` names) first, at most
@@ -158,11 +167,13 @@ A `host_configure_result` carries the same `agent`.
 From v15, `configuration.agents` lists the runtimes the host can spawn sessions on, one
 `HostAgentEntry` each, at most `MAX_AGENT_ENTRIES`, and is optional:
 
-- `runtime`: the name a `session_new` names it by (`claude`, `codex`, `qwen-code`, `pi`).
+- `runtime`: the name a `session_new` names it by (`claude`, `codex`, `qwen-code`, `pi`, `copilot`,
+  `opencode`).
 - `version` and `sdkVersion`: the runtime's own version, and the version of the library the host
   drives it through, null when there is none. Claude's are `agent`'s `claudeCodeVersion` and
   `sdkVersion`; Codex's `version` is its app-server's, Qwen Code's and pi's their CLIs', and the
-  `sdkVersion` of each is null.
+  `sdkVersion` of each is null. Copilot's `version` is its runtime's and its `sdkVersion` the SDK's
+  that pins that runtime; opencode's are both its SDK's, which is the server a session runs.
 - `models`: the models it offers, each a `HostModel` as above.
 - `vocabularies`: `{ permissionModes, efforts, thinking }`, the words a `session_new` or
   `session_configure` may name for it, and whether it takes a thinking control.
@@ -172,7 +183,7 @@ From v15, `configuration.agents` lists the runtimes the host can spawn sessions 
   `session_new` naming it is refused `runtime-unavailable`. Claude is always available.
 
 This host lists Claude, built from the same catalog read `agent` carries, then Codex, then Qwen
-Code and then pi when its operator configured each ([configuration](configuration.md)), so `agents` is null when
+Code, then pi, then Copilot and then opencode when its operator configured each ([configuration](configuration.md)), so `agents` is null when
 `agent` is null and absent when it is absent. Codex's entry is its pinned version, the models its app-server
 lists, the permission modes `default`, `dontAsk` and `bypassPermissions`, the efforts its models
 list, `thinking` true only when a listed model takes the effort `none`, and the tier
@@ -184,7 +195,14 @@ an endpoint's, and the session names it), the permission modes `bypassPermission
 `provider/id` (read at start from a pi with nothing of its own and no session; none when that read
 fails or is past the hello's bounds), each listing the six efforts when it reasons and none when it
 does not, no permission modes, the efforts `minimal`, `low`, `medium`, `high`, `xhigh` and `max`
-(pi's thinking levels), `thinking` true, and the tier `intercepted`. The whole list is held to `MAX_AGENT_CATALOG_BYTES` as JSON. Claude's entry is placed first, and a later
+(pi's thinking levels), `thinking` true, and the tier `intercepted`. Copilot's entry is its pinned
+runtime and SDK versions, no models (Copilot lists its models only once signed in, and the read at start
+signs nothing in, so a session names its model, or its endpoint's, or none and opens on the runtime's
+own default, reported as `auto`), the permission modes `default` and
+`plan`, the efforts `low`, `medium`, `high`, `xhigh` and `max`, `thinking` false, and the tier
+`intercepted-with-residual`. opencode's entry is its pinned SDK version, no models (an opencode
+session's model is an endpoint's, and the session names it), the permission modes `default` and `plan`,
+no efforts, `thinking` false, and the tier `intercepted-with-residual`. The whole list is held to `MAX_AGENT_CATALOG_BYTES` as JSON. Claude's entry is placed first, and a later
 entry that would push the list past the budget rides with `models: []`, named once, so one
 runtime's catalog never empties another's; a list Claude's entry alone cannot fit takes the catalog
 with it, both riding null. A `host_configure_result` carries the same `agents`.
@@ -197,7 +215,8 @@ From v15, `configuration.endpoints` lists the model endpoints the host's operato
   `openai-responses`, `openai-chat`). A wire API a newer peer adds is read; the host sends only the
   ones it declares.
 - `runtimes`: the runtimes that can reach it. Each speaks the endpoint's wire API (Claude speaks
-  `anthropic-messages`, Codex `openai-responses`, Qwen Code and pi all three), and the host refuses
+  `anthropic-messages`, Codex `openai-responses`, Qwen Code, pi and Copilot all three, opencode `openai-chat`), and
+  the host refuses
   at start
   an endpoint naming
   one that does not, and lists a runtime only where it routes it and it speaks the API, so a
@@ -229,8 +248,12 @@ Claude is `namespaced`, `per-session`: the agent CLI's plugin directories. Codex
 `per-process`: each directory is a skill root of the session's own app-server. Qwen Code is `bare`,
 `per-session`: each directory's `skills/` is a skill directory in the session's own settings, and the
 CLI lists its skills by name alone. pi is `bare`, `per-session`: each directory's `skills/` is handed
-to the session's pi as a skill directory on its command line, and pi lists its skills by name alone. A word a newer peer
-adds is read; the host sends only the words it declares.
+to the session's pi as a skill directory on its command line, and pi lists its skills by name alone.
+Copilot is `bare`, `per-session`: each directory's `skills/` is one of the session's skill directories,
+every other skill source off, and Copilot lists its skills by name alone.
+opencode is `bare`, `per-session`: each directory's `skills/` is a skill path in the session's own
+configuration, and opencode lists its skills by name alone. A word a newer peer adds is read; the host sends
+only the words it declares.
 
 ## The credential on the three transports
 
@@ -313,6 +336,12 @@ after a drop, because a minted number must be accounted for or the receiver hold
 never fill. A delta never enters a durable store; the two halves of that rule point opposite ways
 and both are pinned (`stream-replay.test.ts`).
 
+A Claude turn's text arrives as fragments before the assistant message that settles it. The markers
+that end a block and a message (`content_block_stop`, `message_delta`, `message_stop`) ride the same
+lane and are not text: Claude Code 2.1.325 sends them after that assistant message (recorded, and
+printed by `stream.live.test.ts`), so the last delta of a response is not its last fragment of text,
+and a view that waits for `message_stop` before it shows the settled message waits past it.
+
 `MESSAGE_ROUTING` (`src/control/stream-routing.ts`) names the lane for every SDK message
 discriminator: delta, update or declined with a reason. `forwardSession` puts each message on its
 lane, then the facts and fragments it carries (below), then the transitions that message caused,
@@ -364,6 +393,29 @@ path pi prints after it; the answer to a `prompt` is `success: false` with an `e
 starting `No API key found for ` or `Authentication failed for `; or a run's answer is a
 `message_end` whose `stopReason` is `error`, its `errorMessage` the provider's own refusal.
 
+A Copilot session's messages carry `runtime: "copilot"`, and each `message` is one session event as
+the runtime sent it: `{ id, parentId, timestamp, type, agentId?, ephemeral?, data }`, with `agentId`
+set on an event of a sub-agent's. A streamed delta (`assistant.message_delta`,
+`assistant.reasoning_delta`, `assistant.streaming_delta`, `assistant.tool_call_delta`) rides the delta
+lane, and only for a session that asked for partial messages; everything else the update lane. The
+events of the call the host runs at the open to prove its route are not forwarded. The runtime also
+sends kinds outside the SDK's declared union (its `model.*` events among them), which ride as they
+came. Which events move the session is `COPILOT_COVERAGE` ([state-machine.md](state-machine.md)). A
+session with no GitHub token and no endpoint opens, and its first prompt ends on a `session.error`
+whose `errorType` is `query` and whose `message` is `Execution failed: InvalidArg, No GitHub OAuth
+token or Copilot HMAC key provided`, sent before the runtime takes the prompt: the session goes to
+`errored` with that detail, and no turn item is filled for the run.
+
+An opencode session's messages carry `runtime: "opencode"`, and each `message` is one event of the
+session's server as it sent it: `{ id, type, data, ... }`. The server's stream is the whole server's, so it
+carries the session's own events, those of the sessions its subagents start (each names its own
+`data.sessionID`), and the server's own. A streamed delta (`session.text.delta`, `session.reasoning.delta`,
+`session.tool.input.delta`, `session.compaction.delta`) rides the delta lane; everything else the update
+lane. Which events move the session is `OPENCODE_COVERAGE` ([state-machine.md](state-machine.md)); only the
+session's own move it. An endpoint that refuses the key fails the first run: the step and the run each end
+on an `error` whose `type` is `provider.auth` and whose `message` is the provider's own words (`status`
+401), with no retry, and the session goes to `errored` with that detail.
+
 A forwarded message's body, on either lane, carries `observedAt` (v12): the instant, ISO-8601 in
 UTC, this host took the message off the agent's stream. Date a message by it rather than by its
 arrival: a message replayed after a reconnect arrives late, and a clock started at arrival runs
@@ -394,19 +446,53 @@ them into typed members and puts each on the update lane as an `agent_facts` bod
 `{ update: 'agent_facts', fact, sourceId?, observedAt? }`, right behind the message it came from.
 The message still rides; a consumer that wants it whole still has it.
 
-| `fact.kind`      | What it states                                                                                                             | Claude's source                                                              |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `session_handle` | `handle`: the runtime's own resumable id                                                                                   | `system/init.session_id`, when it first appears or changes                   |
-| `agent_receipt`  | the version, model, approval mode, effort, skills, plugins, plugin errors and MCP servers                                  | `system/init`, when any member differs from the last receipt                 |
-| `turn_record`    | `totals` and `turn`, each a `SpendFacts`, with `turnScope`, `numTurns`, `durationMs`                                       | each `result`                                                                |
-| `usage_sample`   | `contextTokens`, `contextWindow`, `cacheTtl`, `cacheReadTokens` and `mainThread` for one model call                        | each main-thread `assistant` call, once per API message id                   |
-| `tasks`          | `running`: every task running now, whole, and `settled`: the tasks ended since the turn began; each fact replaces the last | `background_tasks_changed` and the task edges, composed; `task_notification` |
-| `compaction`     | `status` (`started`, `ended`), `trigger`, `tokensBefore`, `tokensAfter`                                                    | the observer's compaction entry opening and closing                          |
+| `fact.kind`      | What it states                                                                                                             | Claude's source                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `session_handle` | `handle`: the runtime's own resumable id                                                                                   | `system/init.session_id`, when it first appears or changes                                             |
+| `agent_receipt`  | the version, model, approval mode, effort, skills, plugins, plugin errors and MCP servers                                  | `system/init`, when any member differs from the last receipt                                           |
+| `turn_record`    | `totals` and `turn`, each a `SpendFacts`, with `turnScope`, `numTurns`, `durationMs`                                       | each `result`                                                                                          |
+| `usage_sample`   | `contextTokens`, `contextWindow`, `cacheTtl`, `cacheReadTokens` and `mainThread` for one model call                        | each main-thread `assistant` call, once per API message id                                             |
+| `tasks`          | `running`: every task running now, whole, and `settled`: the tasks ended since the turn began; each fact replaces the last | `background_tasks_changed` and the task edges, composed; `task_notification`; from v20 `task_progress` |
+| `compaction`     | `status` (`started`, `ended`), `trigger`, `tokensBefore`, `tokensAfter`, `outcome` (optional, v20)                         | the observer's compaction entry opening and closing                                                    |
+
+From v20 a `tasks` entry, running or settled, may also carry what the runtime reported of the task: the
+call that started it (`toolUseId`), its latest `summary`, its `usage` (`tokens`, `toolUses`,
+`durationMs`) and the `outputFile` its output is written to (a path only). Each is stated only where the
+runtime reported it, so an absent one reads as null, a `usage` member included (a usage can state its
+tokens alone), and each text is held to `MAX_FACT_TEXT_LENGTH`, as the codec holds it. Claude's come from `task_started`, `task_progress` (the summary a running subagent
+writes about every 30 seconds) and `task_notification`. Codex's name the call that started the sub-agent
+(`toolUseId`, where a call named its thread) and, on a settled entry, the message Codex reported for its
+end as its `summary` (a completed agent's final answer, an errored one's error). Qwen Code's name the call that started the task where the CLI says which, and a settled agent task its `usage` when the CLI reports all three counts. Copilot's name the call that spawned the sub-agent, which is also the task's id, a settled one its `usage` in the counts the runtime reports and, failed, the runtime's error as its `summary`. opencode's name the call that started the subagent's session and, failed, the run's error as its `summary`; opencode reports no counts for a subagent's run, so its entry states no `usage`. Qwen Code, Copilot and opencode report no output file. A Codex entry states no `usage`:
+a sub-agent's thread reports a token total, but one spawned with its parent's context (`fork_context`)
+counts on from the parent's running total, and nothing the host receives says which spawn did. Codex
+reports no output file for a sub-agent. So a Codex sub-agent's tokens are in no total a controller is
+sent: `totals` is the session's own thread alone, and no task entry states a `usage`. They are seen
+only as that thread's `usage_sample` facts (`mainThread: false`), which are its context, not its spend.
+
+**When a `tasks` fact is sent.** A task that starts or ends, and a task whose summary or any other
+member but its usage changes, is sent at once, and every entry in that fact carries its latest usage. A
+change in usage alone is sent too, but at most once in `TASKS_USAGE_PACE_MS` (five seconds) for the
+session: a running subagent's usage moves with every progress message, and each fact is the whole list
+on the lane that is never dropped. Figures that were held go out with the first message of any kind
+after the pace has passed and with the turn's `result`, and a task's end always carries its last
+figures, so no figure is lost; a reader sees a running task's usage at most five seconds late. Only
+Claude reports a usage while a task runs, so only its facts are paced.
+
+**The tasks budget.** A `tasks` fact's two lists take at most `MAX_TASKS_FACT_BYTES` as JSON
+(`fitTasks`, `src/control/tasks-budget.ts`), on every runtime, so the fact always fits a frame however
+many tasks a session ran. Each list is held to `MAX_FACT_LIST_ENTRIES`, the newest settled entries kept.
+Past the budget, text is cut first: every `description`, `summary` and `outputFile` longer than one
+length is cut to it, that length the longest at which the fact fits, so the longest texts give first and
+a short one gives nothing. Only when every text is down to sixteen characters are entries left out, the
+oldest settled first, and a running task only after every settled one. An id is never cut. The fact has
+no member that says it was cut: a text shorter than the runtime wrote, in a fact near the budget, is
+one.
 
 Codex's sources: `session_handle` is the thread id the opening answer names; `agent_receipt` is
 built from the opening answers, so it rides before `ready`, and sent again on a reroute, a skills
 change, an MCP server's status, and a setter applied on a `turn/start` (`source: 'host'`);
-`turn_record` is each `turn/completed`, its `totals` the newest `thread/tokenUsage/updated` and its
+`turn_record` is each `turn/completed` on the session's own thread, its `totals` the newest
+`thread/tokenUsage/updated` for that thread (a sub-agent's thread adds nothing to it) and its
 `turn` and `turnScope` null, because Codex's per-call figure is not a turn; `usage_sample` is each
 `thread/tokenUsage/updated`, the last call's total as the context; `tasks` is the running
 sub-agents, and the sub-agents settled since the turn began. Codex's usage names no model, so its
@@ -417,11 +503,17 @@ Qwen Code's sources: `session_handle` is the session id the answer to the host's
 and again when an init names another (a resume or a fork); `agent_receipt` is composed by the host at
 that answer (`source: 'host'`, the skills it handed over), then the CLI's own once its context usage
 lists the skills it found (`source: 'runtime'`), and again whenever an init moves a member, the
-permission mode in Qwen Code's own word; `turn_record` is each `result`, its `totals` the CLI's
+permission mode in Qwen Code's own word; `turn_record` is each `result` of the session's own (not the one
+the CLI writes when a foreground sub-agent fails or is cancelled, which carries no parent, the error
+subtype, no turns and no time while the main thread's `agent` call is still open; a background
+sub-agent writes no `result` of its own, and its end, a failure included, is a `task_notification`, which the
+`tasks` fact reports), its `totals` the CLI's
 running total for the session and its `turn` and `turnScope` null, a resumed or forked session's total
 including the source's tokens, with no cost and no cache writes; `usage_sample` is each answer to the
 context-usage request the host sends after each `result`; `tasks` is the background tasks the CLI
-reports started and settled. `inputTokens` is the CLI's input less its cached input, floored at zero.
+reports started and settled, each naming the call that started it (`toolUseId`) where the CLI says which,
+and a settled agent task carrying its `usage` when the CLI reports all three counts (it reports no summary
+and no output file). `inputTokens` is the CLI's input less its cached input, floored at zero.
 
 pi's sources: `session_handle` is the session id the answer to the host's `get_state` names;
 `agent_receipt` is pi's own (`source: 'runtime'`) once the session opens: the model and thinking
@@ -430,7 +522,9 @@ MCP servers the host's extension registered, with no permission mode. It is sent
 its thinking level moved, and one composed by the host (`source: 'host'`) follows a model the host
 set, for which pi writes no event. `turn_record` is the answer to `get_session_stats`, which the host
 asks after each run: its `totals` are pi's running totals for the session, tokens and a cost in US
-dollars pi estimates from its own model catalogue (`costBasis: 'catalogue-estimated'`, never a bill),
+dollars pi estimates from its own model catalogue (`costBasis: 'catalogue-estimated'`), except that on an
+OpenRouter model pi takes the cost OpenRouter reported for each call it accounted for, so the total can
+be partly billed while its basis claims no bill,
 and its `turn` and `turnScope` null. pi counts every entry of the session's file, its compacted
 history, abandoned branches, failed retries and compaction calls included, so a total can exceed what
 the visible conversation used, and a resumed or forked session's includes the source's.
@@ -438,6 +532,38 @@ the visible conversation used, and a resumed or forked session's includes the so
 figure. `usage_sample` is the same answer's context usage; `compaction` is each compaction pi
 reports, its `tokensAfter` null, since pi states only an estimate; `tasks` is not sent. pi's messages
 carry no id, so a pi fact's `sourceId` is null.
+
+Copilot's sources: `session_handle` is the session id the open names; `agent_receipt` is the
+runtime's own (`source: 'runtime'`) once the open is proven: the model and effort `session.start` or
+`session.resume` named, the agent mode as `permissionMode` (`interactive` or `plan`; the runtime's
+permission mode is always `manual`), the skills `session.skills_loaded` names (the ones the host
+handed over until then) and the servers `session.mcp_servers_loaded` names, each with its status in
+the runtime's word. It is sent again when the model, the effort, the agent mode, the skills or a
+server's status moves. `turn_record` is filed per model call: each `assistant.usage` is one step's
+figure (`turn`, `turnScope: 'step'`, `totals` null), and the session's end (`session.shutdown`) files
+its totals per model (`totals`, `turn` null). Neither is priced: Copilot's `cost` is a multiplier and
+its credit totals a unit of its own, so `cost` is null and `costBasis` is `unreported`. `inputTokens`
+is the runtime's input less its cache reads, floored at zero, since the runtime counts the cached
+input inside its input. `usage_sample` is each `session.usage_info`, the context's tokens and the
+model's window as the runtime counts them; `tasks` is each sub-agent the runtime starts, named by the
+call that spawned it (`taskId` and `toolUseId`), its type the agent's name, settled `completed`,
+`stopped` (cancelled) or `failed` with the tokens, tool calls and time the runtime reports; `compaction`
+is each compaction the runtime reports, with the tokens before and after. A Copilot fact's `sourceId`
+is the event's own `id`.
+
+opencode's sources: `session_handle` is the session id the open names; `agent_receipt` is the runtime's
+own (`source: 'runtime'`) once the open is proven: the model the session runs on, its agent as
+`permissionMode` (`build` or `plan`), and the skills the host handed over; it is sent again when the model
+or the agent moves. `turn_record` is filed per model call: each `session.step.ended`, and each
+`session.step.failed` that reports tokens, is that call's figure (`turn`, `turnScope: 'step'`, `totals`
+null), the session's own or a subagent's, under the model the step started on. `inputTokens` is opencode's
+input as it reports it, which leaves its cache reads out. The cost is opencode's, in US dollars, and is
+`provider-reported` only when it is above zero: opencode prices a call from its own catalogue, which does
+not know an endpoint's models, so a zero is `cost` null and `costBasis` `unreported`. The model call a
+compaction makes is counted in the session's running total (`session.usage.updated`, which rides its
+native message alone) and in no step. `tasks` is each subagent's session, named by the call that started
+it, running from its run's start to its end; `compaction` is each compaction, with no token figures.
+An opencode fact's `sourceId` is the event's own `id`.
 
 Every fact carries `runtime`. `sourceId` is the id of the native message the fact was lifted from
 (Claude: the message's `uuid`, the same id its `agent_message` carries) and null for a fact lifted
@@ -455,6 +581,9 @@ a call's context by: input, cache reads and cache writes.
   `turnScope` names: `turn` a whole turn, `step` one model step inside a turn. `turnScope` is null
   exactly when `turn` is.
 - Claude's `totals` is the result's `total_cost_usd` in `USD`, with one row per `modelUsage` key.
+  By the SDK's own types `modelUsage` holds every model call of the session, its subagents' and its
+  compactions' included, so a task's tokens are already inside `totals`: a task entry's `usage` in
+  the `tasks` fact is a part of that figure, never to be added to it.
   Claude's `turn` is the result's own `usage`, which covers the turn's main loop and names no model:
   the host files it under the model the latest `system/init` reported, as attribution, with no cost
   and the basis `unreported`. With no init seen yet, `turn` and `turnScope` are null; the host never
@@ -499,7 +628,17 @@ when no effort will be sent; Codex's thread answer always states it.
 
 `compaction` reports `started` when the observer's compaction entry opens and `ended` when it
 closes, with what the source that moved it stated: the compaction hooks state the trigger, the
-`compact_boundary` message the trigger and both token counts, the status message nothing.
+`compact_boundary` message the trigger and both token counts, the status message nothing. A Claude
+compaction that fails ends at the status message that says so (`compact_result: 'failed'`), since no
+boundary follows it, so its `ended` states no trigger and no counts.
+
+From v20 an `ended` fact carries `outcome`, optional: `completed` or `failed`, where the source that
+ended the compaction says how it came out. On Claude a boundary or the hook after a compaction is
+`completed` and a status message stating `compact_result: 'failed'` is `failed`; Copilot states its
+`success`; pi is `failed` for a compaction it aborted or that ends with an error and `completed` for
+one that ends with its result; opencode ends a compaction with one of two events, by how it came out.
+Codex states neither, and its fact carries no `outcome`. A `started` fact never carries it. A
+controller that negotiated an older version reads the fact as before and ignores the member.
 
 **Whole numbers.** `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
 `reasoningTokens`, `contextTokens`, `contextWindow`, `numTurns`, `durationMs`, `tokensBefore` and
@@ -517,7 +656,8 @@ and reads as null through `readAgentFacts`.
 
 **Bounds.** A fact's lists hold at most `MAX_FACT_LIST_ENTRIES` entries, its free text at most
 `MAX_FACT_TEXT_LENGTH` characters and its words at most `MAX_FACT_WORD_LENGTH`; `MAX_FRAME_BYTES`
-stays the outer guard.
+stays the outer guard. A `tasks` fact, the one fact whose lists carry free text, is also held to the
+tasks budget above, so it never meets that guard.
 
 Every member a fact declares is optional on the wire: a peer that omits one is read as not stating
 it. Only `fact` itself and its `kind` are required in an `agent_facts` body.
@@ -538,7 +678,8 @@ consumer folds every runtime's conversation with one reader; the native message 
 an addition: every other frame a session sends is the same with them or without them
 (`src/host/claude-wire-replay.test.ts` holds Claude's recorded wire both ways).
 
-An item is tagged by `kind`, and every item carries `itemId`, `turnId` and `truncated`:
+An item is tagged by `kind`, and every item carries `itemId`, `turnId` and `truncated`, and from v20 may
+carry `parentId` (below):
 
 | `item.kind`   | Its members                                                                                                            |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -570,9 +711,20 @@ An item is tagged by `kind`, and every item carries `itemId`, `turnId` and `trun
 - **The budget.** An item takes at most `MAX_AGENT_ITEM_BYTES` as JSON. A text member past it is cut
   at a character and the item says so in `truncated`; a tool call's `input` past it is left out whole
   (`input: null`, `truncated: true`), never cut. The codec refuses an item past the budget.
-- **The main thread.** Items state the session's own conversation. A subagent's (Claude) or a
-  sub-agent thread's (Codex) messages ride `agent_message` and fill no item; its call and result in
-  the main conversation do.
+- **The parent.** From v20 an item a subagent's turn produced names `parentId`, the call that
+  spawned the subagent (Claude's `tool_use` id; for Codex, the item id of the `collabAgentToolCall`
+  that spawned or resumed the sub-agent's thread, or of the `subAgentActivity` that started it, whose id
+  is the spawning call's); an item of the session's own thread names none,
+  which reads as null. On a link negotiated below 20 a subagent's messages fill no item, since such a
+  controller reads no parent and would fold them into the main conversation; they ride
+  `agent_message`, and the subagent's call and result in the main conversation are items. Claude's
+  subagents fill items at 20, and so does a Codex sub-agent's thread, its turns apart from the session's
+  own (a sub-agent's turn ending moves none of the session's state), and so do a Qwen Code
+  subagent's tool calls and their results, the only messages of a subagent the CLI writes, each naming
+  its spawning call's `tool_use` id. A Copilot sub-agent's events fill items at 20, each naming the
+  call its event says spawned it (`parentToolCallId`), and one that names none fills nothing. An
+  opencode subagent runs in a session of its own, and its events fill items at 20, each naming the call
+  that started that session; one whose starting call is not known fills nothing.
 
 Claude's items come from `UserPromptSubmit` (the turn's start and its prompt), each assistant
 `text`, `thinking`, `redacted_thinking` and `tool_use` block, each `tool_result` block, each `result`
@@ -583,7 +735,13 @@ turn and item notifications, its plan updates and its notices (`CODEX_ITEM_FILLS
 running from `agent_start` to `agent_settled` (a pi turn is one model call, so the conversation's turn
 is the whole run a prompt starts), its user and assistant `message_end`s, each `tool_execution_end`,
 and its retries, failed compactions, extension errors and notifications (`PiItemFill`,
-`src/host/pi-items.ts`, and each `PI_COVERAGE` row's note); a pi item's `turnId` is null.
+`src/host/pi-items.ts`, and each `PI_COVERAGE` row's note); a pi item's `turnId` is null. Copilot's come
+from its session events: a run from the first prompt the runtime takes to `session.idle`, each prompt,
+each `assistant.message` and `assistant.reasoning`, each tool's start and end, and its errors and
+warnings (`CopilotItemFill`, `src/host/copilot-items.ts`). opencode's come from the server's stream: a
+run of the session's own from its start to its end, each queued prompt, each finished text and
+reasoning part, each call the server announces and its end, and a run's or a model call's failure
+(`OpencodeItemFill`, `src/host/opencode-items.ts`). A Copilot and an opencode item's `turnId` is null.
 
 A kind or a vocabulary word a newer peer adds is read on the way in and refused on the way out; an
 item kind this build does not model decodes and reads as null through `readAgentItem`. Every member
@@ -616,8 +774,12 @@ session is `intercepted`: pi has no permission system, and periscope's extension
 every tool call meets, asks the gate about each before it runs; its opening `degrades` name
 `gate-foreign-extension` when code this host did not load is in the session, and
 `gate-credential-in-shell` when the endpoint's own variables would reach the agent's shell, and
-either lowers its level to `intercepted-with-residual`. The tier is stated, never negotiated, and the
-host decides nothing by it.
+either lowers its level to `intercepted-with-residual`. A Copilot session is
+`intercepted-with-residual`: the runtime's pre-tool hook answers `ask` for every call and the gate
+decides the request that raises, and its opening `degrades` name `gate-hook-foreign` when a
+machine-wide policy hook is on the machine, or when a place one can sit could not be read. An opencode session is `intercepted-with-residual`: its rules
+ask for every action, and the gate decides every request they raise. The tier is stated, never negotiated, and the host decides
+nothing by it.
 
 **Degrades raised mid-session.** A degrade is a `RefusalReason` that names a path where a call ran
 undecided, or where the session lost a guarantee; it never means the call was stopped, and it never
@@ -631,12 +793,30 @@ with their detail. A Codex session's transport refusals (`rpc-*`) ride the same 
 Qwen Code's are `gate-tool-unruled` (its first init lists a tool no ask rule names, so a call to it
 the CLI allows by default runs without asking; once per tool) and `gate-mode-widened` (the CLI reports
 a mode other than `default` or `plan`; once per mode); the one known at the open is also raised once,
-with its detail. pi's two are known at the open, and each is raised once, with its detail. None of these is `permission-decision-unavailable`, which means the tool did not run.
+with its detail. pi's two are known at the open, and each is raised once, with its detail.
+Copilot's are `gate-hook-missing` (a permission request the hook did not raise, refused; a hook the
+runtime reports as failed; a call that finished with no decision behind it, or ran against a refusal,
+the runtime's own read of a finished background command's output among them; once per call),
+`gate-hook-foreign` (a
+hook this host did not install answered a request; also known at the open, for a machine-wide policy
+hook), `gate-unhooked-call` (a tool the model's provider ran itself; once per kind) and
+`gate-mode-widened` (a permission mode other than `manual`, or an agent mode other than `interactive`
+and `plan`; once per mode; and, at the open, a directory the runtime allows that is none of the session's) and `gate-tool-unnamed` (a built-in the host's tables do not name is offered
+or called; once per tool; the session opens and the call is decided like any other). opencode's are `gate-unhooked-call` (a tool the model's provider ran itself;
+once per call), `gate-hook-missing` (a call that ran with no request for it; once per call),
+`gate-mode-widened` (the rules of one of the session's sessions are no longer this host's, or an answer this
+host never gave approved a request) and `gate-foreign-extension` (a plugin that is not the runtime's own,
+loaded after the open). None of these is `permission-decision-unavailable`, which means the tool did not run;
+on opencode a request the runtime refused together with another this host refused is recorded so, with the
+runtime's words.
 A Codex open whose hook is not trusted and enabled is refused `codex-hook-not-active`, and a Qwen Code
-open whose settings could not be written, or do not read back asking about every built-in tool with
-every hook off, is refused `qwen-ask-rules-not-active`, and a pi open whose extension did not say
-hello in time, or that pi would not load, is refused `pi-extension-not-active`: a refusal transition
-on this lane, then the session's end.
+open whose settings could not be written, or do not read back asking about every built-in tool,
+denying the tools the host turns off, keeping code mode off, with every hook off, is refused `qwen-ask-rules-not-active`, and a pi open whose extension did not say
+hello in time, or that pi would not load, is refused `pi-extension-not-active`, and a Copilot open
+whose runtime does not read back in the posture the host started it in, or whose probe call did not
+reach the host through the hook and the request both, is refused `copilot-gate-not-active`, and an
+opencode open whose server does not read back in the posture the host created it in is refused
+`opencode-gate-not-active`: a refusal transition on this lane, then the session's end.
 
 A level outside `CONTROL_TIER_LEVELS` is read on the way in, so a newer peer's added level survives,
 and refused on the way out. The codec checks a transition's `controlTier` and nothing else in it.
@@ -783,6 +963,56 @@ On `pi`, every other member is read as pi's own:
   changes nothing.
 - `endpoint` opens the session on that endpoint as pi's provider, over any of the three wire APIs;
   its credential is written only into the agent home's `models.json`.
+
+On `copilot`, every other member is read as Copilot's own:
+
+- `permissionMode` takes `default` (Copilot's `interactive` agent mode) and `plan`; any other is
+  refused `request-key-unsupported`. The runtime's permission mode is always `manual`. `effort` takes
+  the entry's words; `thinking` other than adaptive is refused, since Copilot has no thinking switch.
+- A member that is Claude's alone is refused `request-key-unsupported`, naming it: `settingSources`,
+  `hooks`, `spawn`, a store, `strictMcpConfig: false`, and a `systemPrompt` that is a string or the
+  `claude_code` preset. The `runtime-default` preset's `append` is added to Copilot's own prompt.
+  `forwardSubagentText` streams a sub-agent's deltas too.
+- `resume` names a session whose state the host kept when it closed; any other is refused
+  `request-key-unsupported`, naming `resume`. `fork` forks that state into a new session.
+- `plugins` reach Copilot as skill directories, each directory's `skills/`. A directory without one is
+  named among the receipt's `pluginErrors`.
+- `mcpServers` ride the session's request over the SDK's pipe: an HTTP server's `headers` beside its
+  URL, a stdio server's command, arguments and environment. Copilot names a server's tool
+  `<server>-<tool>`; the decision request names it `mcp__<server>__<tool>` when exactly one attached
+  server lists such a tool, and keeps Copilot's spelling otherwise. A server Copilot has no form for
+  here (SSE, an in-process server, a name outside letters, digits, `-` and `_`) is refused
+  `mcp-descriptor-invalid`, naming it.
+- `endpoint` opens the session on that endpoint as Copilot's provider, over any of the three wire APIs;
+  its credential rides the session's request, never the runtime's environment, and the endpoint's own
+  `env` is set nowhere.
+- `gate.decisionTimeoutMs` above 240,000ms is refused `gate-deadlines-inverted`: the runtime holds a
+  permission request with no timeout of its own, measured to 240 seconds and no further.
+
+On `opencode`, every other member is read as opencode's own:
+
+- `permissionMode` takes `default` (opencode's `build` agent) and `plan` (its `plan` agent); any other is
+  refused `request-key-unsupported`. Every call asks either way. `effort` is refused, since opencode sets
+  reasoning through a model's variants and this host's endpoints declare none; `thinking` other than
+  adaptive is refused, since opencode has no thinking switch. A model or a mode set mid-session applies
+  from the session's next model call.
+- A member that is Claude's alone is refused `request-key-unsupported`, naming it: `settingSources`,
+  `hooks`, `spawn`, a store, `strictMcpConfig: false`, and a `systemPrompt` that is a string or the
+  `claude_code` preset. The `runtime-default` preset's `append` is added to opencode's own instructions.
+- `model` names one of the endpoint's models; a model with no endpoint is refused, since an opencode
+  session reaches a model only through one.
+- `resume` names a session whose database the host kept when it closed; any other is refused
+  `request-key-unsupported`, naming `resume`. `fork` forks it into a new session.
+- `plugins` reach opencode as skill directories, each directory's `skills/`. A directory without one is
+  named among the receipt's `pluginErrors`.
+- `mcpServers` ride the session's configuration, which crosses into its host process over its stdin: an
+  HTTP server's `headers` beside its URL, with no OAuth flow offered, and a stdio server's command,
+  arguments and environment. opencode names a server's tool `<server>_<tool>`; the decision request names
+  it `mcp__<server>__<tool>` by the attached servers' names. A server opencode has no form for here (SSE,
+  an in-process server), a name outside letters, digits, `-` and `_`, and a name that with an `_` begins
+  another's are refused `mcp-descriptor-invalid`, naming it.
+- `endpoint` opens the session on that endpoint as its one provider, over `openai-chat`; its key rides the
+  session's configuration, never an environment, and the endpoint's own `env` is set nowhere.
 
 `endpoint` names the model endpoint the session's model traffic goes to, by a name the hello's
 `endpoints` lists. Null or absent is the runtime's own route. A controller names an endpoint and
@@ -1043,34 +1273,37 @@ learn it before it can answer with it. Count the entries in the file; never carr
 
 The reasons a controller meets most, and what each is not:
 
-| reason                                                                                                                                                                                                                                                                                 | names                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frame-not-json`, `frame-malformed`, `frame-too-large`                                                                                                                                                                                                                                 | the codec's three; the last names the bulk lane                                                                                                                                                                                                                                                                                                                                                                       |
-| `seq-gap`, `seq-regressed`                                                                                                                                                                                                                                                             | the receiver's inbound lane; the refusal's `expected` is where to resume                                                                                                                                                                                                                                                                                                                                              |
-| `link-unauthorized`                                                                                                                                                                                                                                                                    | the peer refused this host's identity at the door; terminal, never retried. Not `link-send-failed`, which names a transport that faltered                                                                                                                                                                                                                                                                             |
-| `session-unknown`                                                                                                                                                                                                                                                                      | a handle that does not and never will exist, or a held turn over the bound                                                                                                                                                                                                                                                                                                                                            |
-| `session-configure-failed`                                                                                                                                                                                                                                                             | the agent refused one of a `session_configure`'s controls; the detail names the member, and the members before it were applied. Not `frame-malformed`, which is the host refusing a value                                                                                                                                                                                                                             |
-| `permission-decision-unavailable`, `permission-decision-unrecognised`                                                                                                                                                                                                                  | an outage, and a decision this build does not know; neither is an allow                                                                                                                                                                                                                                                                                                                                               |
-| `transcripts-not-served`                                                                                                                                                                                                                                                               | the answer to a `transcript_list`, a `transcript_tail` and a `claude-transcript:` locator, and to a repository or workspace read, or a resolver's bulk file, at or beneath an agent's session records (`agentTranscriptPaths`), whatever the root: the host does not serve them. Not `bulk-target-invalid`, which names a locator no resolver serves, and not `credential-path-denied`, which names the protected set |
-| `bulk-target-not-controller`, `bulk-target-invalid`                                                                                                                                                                                                                                    | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                                                                                                                                                                                                                                                       |
-| `resume-cwd-not-honoured`                                                                                                                                                                                                                                                              | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                                                                                                                                                                                                                                                      |
-| `repository-unknown`                                                                                                                                                                                                                                                                   | a `session_new` or a release named a repository the host does not serve beside its home one, or named the home one in `additionalRepositories`; refused before anything is claimed                                                                                                                                                                                                                                    |
-| `runtime-unavailable`                                                                                                                                                                                                                                                                  | a `session_new` naming a runtime the host cannot spawn: unknown, or listed `available: false`; the detail names it and what the host offers                                                                                                                                                                                                                                                                           |
-| `codex-hook-not-active`                                                                                                                                                                                                                                                                | a Codex open whose periscope hook is not trusted and enabled, whose hook channel could not listen, or whose hook command fails its probe; the detail says what to fix. Without the hook nothing enforces the protected set on Codex                                                                                                                                                                                   |
-| `gate-hook-timed-out`, `gate-hook-unspawnable`, `gate-hook-output-rejected`, `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call`, `gate-approval-unanswered`, `gate-approval-auto-reviewed`, `gate-approval-ambiguous`, `gate-project-config-active`, `gate-sandbox-absent` | degrades on a Codex session's state lane: a call went on undecided, or the session lost a guarantee ([The control tier](#the-control-tier)). Never a stop                                                                                                                                                                                                                                                             |
-| `qwen-ask-rules-not-active`                                                                                                                                                                                                                                                            | a Qwen Code open whose settings could not be written, or do not read back asking about every built-in tool and every attached MCP server with every hook off; the detail names the file and what it lacks. Without them a call the CLI allows by default runs undecided                                                                                                                                               |
-| `gate-tool-unruled`, `gate-mode-widened`, `gate-credential-in-shell`                                                                                                                                                                                                                   | degrades on a Qwen Code session's state lane: a tool no ask rule names, a mode that approves calls itself, a variables file or endpoint variable that reaches the agent's shell ([The control tier](#the-control-tier)). Never a stop                                                                                                                                                                                 |
-| `pi-extension-not-active`                                                                                                                                                                                                                                                              | a pi open whose extension did not say hello over the session's channel within `PI_HELLO_DEADLINE_MS`, or that pi would not load, or whose channel or configuration could not be made; no prompt was written. Without it every pi tool call would run undecided                                                                                                                                                        |
-| `gate-foreign-extension`                                                                                                                                                                                                                                                               | a degrade on a pi session's state lane, known at the open: a command, tool or MCP server from code this host did not load, which lowers the opening tier ([The control tier](#the-control-tier)). Never a stop                                                                                                                                                                                                        |
-| `request-key-unsupported`                                                                                                                                                                                                                                                              | a `session_new` member the named runtime does not honour, or a value of one its vocabularies lack; the detail names the key. Every member is Claude's own, so a session on Claude never meets it                                                                                                                                                                                                                      |
-| `plugins-undeliverable`                                                                                                                                                                                                                                                                | the runtime refused the call that hands it a session's plugin directories (Codex's `skills/extraRoots/set`); the open ends before `ready`, the detail carrying the runtime's answer. A directory that is not there is not this: it is named among the receipt's `pluginErrors`                                                                                                                                        |
-| `rpc-line-malformed`, `rpc-line-too-large`, `rpc-request-timed-out`, `rpc-request-failed`, `rpc-server-overloaded`                                                                                                                                                                     | a runtime's JSON-RPC peer: a line that is no JSON-RPC message, a line past what the host reads (dropped whole), a request with no answer by the host's deadline, an error answer, and the peer's own overload code. They reach a controller in a cause's detail, never as a wire refusal                                                                                                                              |
-| `endpoint-unknown`, `endpoint-incompatible`, `model-endpoint-mismatch`                                                                                                                                                                                                                 | a model endpoint the host's operator did not declare; one whose runtimes or wire API exclude the session's runtime; a `claude-` model id, or an alias the endpoint does not map, on an endpoint not marked as Anthropic's own route, at the open or on a later switch                                                                                                                                                 |
-| `settings-route-refused`                                                                                                                                                                                                                                                               | a repository settings file the session loads names a key beneath the env floor in its `env`; the detail names the file and the keys. Not `env-key-refused`, which is the controller's own lanes                                                                                                                                                                                                                       |
-| `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed`                                                                                                                                                                                                | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                                                                                                                                                                                                                                                 |
-| `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                                                                                                                                                                                                               | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force`                                                                                                                                                                                                                                 |
-| `repository-path-escape`, `repository-read-failed`                                                                                                                                                                                                                                     | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                                                                                                                                                                                                                                                  |
-| `workspace-path-escape`, `workspace-read-failed`                                                                                                                                                                                                                                       | the same two over a workspace's directory; the second also names an unusable key, an offset inside a character or past the end, and a file larger than the read serves                                                                                                                                                                                                                                                |
+| reason                                                                                                                                                                                                                                                                                 | names                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frame-not-json`, `frame-malformed`, `frame-too-large`                                                                                                                                                                                                                                 | the codec's three; the last names the bulk lane                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `seq-gap`, `seq-regressed`                                                                                                                                                                                                                                                             | the receiver's inbound lane; the refusal's `expected` is where to resume                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `link-unauthorized`                                                                                                                                                                                                                                                                    | the peer refused this host's identity at the door; terminal, never retried. Not `link-send-failed`, which names a transport that faltered                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `session-unknown`                                                                                                                                                                                                                                                                      | a handle that does not and never will exist, or a held turn over the bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `session-configure-failed`                                                                                                                                                                                                                                                             | the agent refused one of a `session_configure`'s controls; the detail names the member, and the members before it were applied. Not `frame-malformed`, which is the host refusing a value                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `permission-decision-unavailable`, `permission-decision-unrecognised`                                                                                                                                                                                                                  | an outage, and a decision this build does not know; neither is an allow                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `transcripts-not-served`                                                                                                                                                                                                                                                               | the answer to a `transcript_list`, a `transcript_tail` and a `claude-transcript:` locator, and to a repository or workspace read, or a resolver's bulk file, at or beneath an agent's session records (`agentTranscriptPaths`), whatever the root: the host does not serve them. Not `bulk-target-invalid`, which names a locator no resolver serves, and not `credential-path-denied`, which names the protected set                                                                                                                                                                                                            |
+| `bulk-target-not-controller`, `bulk-target-invalid`                                                                                                                                                                                                                                    | a well-formed target that is not the controller's origin, and a garbled one; a configuration mistake and an exfiltration attempt are kept apart                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `resume-cwd-not-honoured`                                                                                                                                                                                                                                                              | a resume naming a directory the workspace provider would not honour; the same resume at the repository root runs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `repository-unknown`                                                                                                                                                                                                                                                                   | a `session_new` or a release named a repository the host does not serve beside its home one, or named the home one in `additionalRepositories`; refused before anything is claimed                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `runtime-unavailable`                                                                                                                                                                                                                                                                  | a `session_new` naming a runtime the host cannot spawn: unknown, or listed `available: false`; the detail names it and what the host offers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `codex-hook-not-active`                                                                                                                                                                                                                                                                | a Codex open whose periscope hook is not trusted and enabled, whose hook channel could not listen, or whose hook command fails its probe; the detail says what to fix. Without the hook nothing enforces the protected set on Codex                                                                                                                                                                                                                                                                                                                                                                                              |
+| `gate-hook-timed-out`, `gate-hook-unspawnable`, `gate-hook-output-rejected`, `gate-hook-missing`, `gate-hook-foreign`, `gate-unhooked-call`, `gate-approval-unanswered`, `gate-approval-auto-reviewed`, `gate-approval-ambiguous`, `gate-project-config-active`, `gate-sandbox-absent` | degrades on a Codex session's state lane: a call went on undecided, or the session lost a guarantee ([The control tier](#the-control-tier)). Never a stop                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `qwen-ask-rules-not-active`                                                                                                                                                                                                                                                            | a Qwen Code open whose settings could not be written, or do not read back asking about every built-in tool and every attached MCP server, denying the tools the host turns off, keeping code mode off, with every hook off; the detail names the file and what it lacks. Without them a call the CLI allows by default runs undecided. Also a degrade on the state lane of a session that opened, when the CLI's first list of tools names one the settings turn off (a tool they deny, or `exec` while code mode is off): never a stop. And the refusal of one call, when the CLI asks about a call to a tool the settings deny |
+| `gate-tool-unruled`, `gate-mode-widened`, `gate-credential-in-shell`                                                                                                                                                                                                                   | degrades on a Qwen Code session's state lane: a tool no ask rule names, a mode that approves calls itself, a variables file or endpoint variable that reaches the agent's shell ([The control tier](#the-control-tier)). Never a stop                                                                                                                                                                                                                                                                                                                                                                                            |
+| `pi-extension-not-active`                                                                                                                                                                                                                                                              | a pi open whose extension did not say hello over the session's channel within `PI_HELLO_DEADLINE_MS`, or that pi would not load, or whose channel or configuration could not be made; no prompt was written. Without it every pi tool call would run undecided                                                                                                                                                                                                                                                                                                                                                                   |
+| `gate-foreign-extension`                                                                                                                                                                                                                                                               | a degrade on a pi session's state lane, known at the open: a command, tool or MCP server from code this host did not load, which lowers the opening tier ([The control tier](#the-control-tier)). Never a stop                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `copilot-gate-not-active`                                                                                                                                                                                                                                                              | a Copilot open whose runtime, read back before the first prompt, is not in the posture the host started it in (its permission mode, its agent mode, an approve-all grant, an approved path, a plugin, a tool the host turns off), or whose probe call did not reach the host through the pre-tool hook and the permission request both; no prompt was sent. Without the joined route a call the runtime allows by default would run undecided                                                                                                                                                                                    |
+| `gate-tool-unnamed`                                                                                                                                                                                                                                                                    | a degrade on a Copilot session's state lane: the runtime offers, or the model called, a built-in tool the host's tables do not name. The session opens and each call of it is asked about like any other, as kind `other`; once per tool                                                                                                                                                                                                                                                                                                                                                                                         |
+| `opencode-gate-not-active`                                                                                                                                                                                                                                                             | an opencode open whose server, read back before the first prompt, is not in the posture the host created it in (the session's rules, an agent's rules, a saved approval, a plugin not the runtime's own or one the host turns off, an MCP server, configuration outside the session's home, a model of another provider), or a session with no gate; no prompt was sent. Without this host's rules a call opencode allows by default would run undecided                                                                                                                                                                         |
+| `request-key-unsupported`                                                                                                                                                                                                                                                              | a `session_new` member the named runtime does not honour, or a value of one its vocabularies lack; the detail names the key. Every member is Claude's own, so a session on Claude never meets it                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `plugins-undeliverable`                                                                                                                                                                                                                                                                | the runtime refused the call that hands it a session's plugin directories (Codex's `skills/extraRoots/set`); the open ends before `ready`, the detail carrying the runtime's answer. A directory that is not there is not this: it is named among the receipt's `pluginErrors`                                                                                                                                                                                                                                                                                                                                                   |
+| `rpc-line-malformed`, `rpc-line-too-large`, `rpc-request-timed-out`, `rpc-request-failed`, `rpc-server-overloaded`                                                                                                                                                                     | a runtime's JSON-RPC peer: a line that is no JSON-RPC message, a line past what the host reads (dropped whole), a request with no answer by the host's deadline, an error answer, and the peer's own overload code. They reach a controller in a cause's detail, never as a wire refusal                                                                                                                                                                                                                                                                                                                                         |
+| `endpoint-unknown`, `endpoint-incompatible`, `model-endpoint-mismatch`                                                                                                                                                                                                                 | a model endpoint the host's operator did not declare; one whose runtimes or wire API exclude the session's runtime; a `claude-` model id, or an alias the endpoint does not map, on an endpoint not marked as Anthropic's own route, at the open or on a later switch                                                                                                                                                                                                                                                                                                                                                            |
+| `settings-route-refused`                                                                                                                                                                                                                                                               | a repository settings file the session loads names a key beneath the env floor in its `env`; the detail names the file and the keys. Not `env-key-refused`, which is the controller's own lanes                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `config-key-unknown`, `config-value-invalid`, `config-host-busy`, `config-write-failed`                                                                                                                                                                                                | a key the host does not accept over the link, a value it cannot use, a root change while a session is open, a config file that could not be written (nothing applied)                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `workspace-list-failed`, `workspace-release-failed`, `branch-not-merged`                                                                                                                                                                                                               | the inventory failed (an empty disk is an empty list, not a refusal); a removal was attempted and failed; a branch the default does not contain, nothing removed, repeat with `force`                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `repository-path-escape`, `repository-read-failed`                                                                                                                                                                                                                                     | a path that left the repository root under either containment check; a path inside it that could not be read as text                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `workspace-path-escape`, `workspace-read-failed`                                                                                                                                                                                                                                       | the same two over a workspace's directory; the second also names an unusable key, an offset inside a character or past the end, and a file larger than the read serves                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 `protocol_version_rejected` is not a refusal reason but a link cause: the windows did not overlap,
 and the link's state reports it.
@@ -1154,6 +1387,7 @@ Over the link:
 | `src/host/claude-facts.ts`                                           | The Claude lift: the fact layer read out of the agent's own messages                                                                                                                                                                                                                                                                                                                                                 |
 | `src/sessions/item-fill.ts`                                          | `ItemFill`: what a runtime's conversation item fill is                                                                                                                                                                                                                                                                                                                                                               |
 | `src/control/item-budget.ts`                                         | `fitAgentItem`: an item held to `MAX_AGENT_ITEM_BYTES`, its cut said in `truncated`                                                                                                                                                                                                                                                                                                                                  |
+| `src/control/tasks-budget.ts`                                        | `fitTasks`: a `tasks` fact held to `MAX_TASKS_FACT_BYTES`, text cut before an entry is left out                                                                                                                                                                                                                                                                                                                      |
 | `src/host/claude-items.ts`                                           | The Claude fill, `CLAUDE_ITEM_COVERAGE` and `CLAUDE_BLOCK_ITEMS`: the items read out of the agent's messages and its prompt hook                                                                                                                                                                                                                                                                                     |
 | `src/host/codex-items.ts`                                            | The Codex fill and `CODEX_ITEM_FILLS`: the items read out of the app-server's notifications                                                                                                                                                                                                                                                                                                                          |
 | `src/host/bulk-post.ts`                                              | The streamed outbound POST behind `bulk_request` and its origin bind                                                                                                                                                                                                                                                                                                                                                 |

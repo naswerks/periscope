@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { JsonObject } from '../control/frames.js';
+import { CODEX_PINNED_VERSION } from './codex-binary.js';
 import { CODEX_NAMES } from './codex-names.js';
 import { FAKE_MODELS, fakeCodex } from '../test-support/fake-codex.js';
 import type { FakeCodex, FakeCodexOptions } from '../test-support/fake-codex.js';
@@ -217,7 +218,9 @@ test('a server on another version is refused at initialize, by name, with the ve
   const error = await session.ended;
   assert.match(
     error?.message ?? '',
-    /^runtime-unavailable: the Codex app-server is Codex 0\.163\.0; this host is pinned to Codex 0\.162\.1/,
+    new RegExp(
+      `^runtime-unavailable: the Codex app-server is Codex 0\\.163\\.0; this host is pinned to Codex ${CODEX_PINNED_VERSION.replace(/\./g, '\\.')}`,
+    ),
   );
   assert.equal(
     session.fake.server.requestsOf('thread/start').length,

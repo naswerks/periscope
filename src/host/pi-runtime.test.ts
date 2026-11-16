@@ -85,7 +85,10 @@ test('another version, or none, is unavailable by name; a model list that cannot
   await withTempDir('pi-read', async (base) => {
     const off = await readPiRuntime({ binary: BINARY, base, env: {}, runVersion: answering('1.1.0\n') });
     assert.equal(off.entry.available, false);
-    assert.match(off.entry.unavailableReason ?? '', /is pi 1\.1\.0; this host is pinned to pi 1\.2\.0/);
+    assert.equal(
+      off.entry.unavailableReason,
+      `the pi CLI ${BINARY} is pi 1.1.0; this host is pinned to pi ${PI_PINNED_VERSION}`,
+    );
     const absent = await readPiRuntime({
       binary: BINARY,
       base,
@@ -97,7 +100,7 @@ test('another version, or none, is unavailable by name; a model list that cannot
       binary: BINARY,
       base,
       env: {},
-      runVersion: answering('1.2.0'),
+      runVersion: answering(PI_PINNED_VERSION),
       readModels: () => Promise.resolve({ error: 'No models available. Use /login' }),
     });
     assert.equal(unread.entry.available, true, 'a model list that could not be read made pi unavailable');
@@ -107,7 +110,7 @@ test('another version, or none, is unavailable by name; a model list that cannot
       binary: BINARY,
       base,
       env: {},
-      runVersion: answering('1.2.0'),
+      runVersion: answering(PI_PINNED_VERSION),
       readModels: () =>
         Promise.resolve({
           models: Array.from({ length: MAX_AGENT_MODELS + 1 }, (_one, index) => model(index)),

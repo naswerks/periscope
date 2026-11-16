@@ -42,11 +42,17 @@ allow, and that an explicit allow skips only the permission mode, the allow rule
 (<https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks>). The operator's deny
 and ask rules survive it.
 
-That claim is documented, not measured, and the package's standing rule is that the runtime beats
-the documentation. The probe that would settle it is written in `gate.live.test.ts` (does a hook
-allow override an operator deny rule) and is not exercised: run from inside an agent session it is
-contaminated by the enclosing harness's tool surface, so it must be run on a machine that is not
-itself an agent session. Do not upgrade the claim without that receipt.
+The package's standing rule is that the runtime beats the documentation, so the claim is measured
+by a probe in `gate.live.test.ts` (an operator deny rule is applied before any hook is asked). On
+Claude Code 2.1.325 a deny rule is applied before the hook is asked at all. A rule that names the
+whole tool (`Write`) takes the tool from the model: it is not in the tools the CLI offers, and no call
+is made. A rule that names a path (`Edit(canary.txt)`) refuses the call, and `PreToolUse` never fires
+for it. With a hook that allows every call, neither wrote the file, and with no rule the same hook's
+allow did. So a call an operator's deny rule refuses never reaches the gate: the controller is asked
+nothing about it, and sees the call and its error result on the stream. The probe's control is that
+`Write` is the one tool the model calls; a run in which it called another, or none where a call was
+due, measured nothing and is reported as skipped. Run it on a machine that is not itself an agent
+session, where the enclosing session's tools cannot stand in for the denied one.
 
 ## `grantOnAllow`
 
@@ -89,8 +95,38 @@ What refuses locally, and only locally: a write that lands outside every root th
 (`credential-path-denied`), and a git invocation whose verb is not on the allow-list. Reads are not
 jailed: a read goes anywhere the host's OS user can read except the protected set. A search (`Grep`,
 `Glob`) is refused when its root (`path`, else the workspace) is at or beneath a protected path and
-also when a protected path sits beneath its root. The shell scan matches a protected path written
-literally, through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}`
+also when a protected path sits beneath its root. A path a read, a write, a patch or a search names is
+placed before any of this reads it, where the operating system puts it for a tool running in the call's
+directory (`src/gate/placement.ts`): under a call directory spelled the Windows way, a path with one
+leading separator (`\Users\x`, `/Users/x`) starts at that directory's drive or share, and `C:name` on
+the directory's own drive is beneath the directory; under any call directory `~`, `~/x` and `~\x` are
+the home directory when one is known. Under any other call directory a backslash or a drive-shaped name
+is the file name it is written as. A plain relative path is placed under the call's directory where the
+gate is told to (`resolvesAgainstCallCwd`, `resolvesWritesAgainstCallCwd`): `PeriscopeHost` sets the
+first for every runtime, Claude included, so a relative read or search is checked where the call runs
+and never where the host process happens to be, and the second for the runtimes whose tools write
+relative to where they run. Under Windows rules a form that maps to a drive path by its text is
+mapped before it is checked: a device prefix (`\\?\C:\...`, `\\.\C:\...`) is the drive path after it,
+and so is the NT namespace prefix (`\??\C:\...`, with backslashes), which Windows opens as that drive
+path when a program hands it over unchanged and which Copilot's `view` and `create` were measured
+opening on the pinned runtime (Node's own file calls do not);
+`\\?\UNC\server\share\...` and `\??\UNC\server\share\...` are that share, and a share that names this machine's own drive
+(`\\localhost\C$\...`, a loopback address, or a name in `LocalGateOptions.localNames`, which the host
+fills with its host name and `COMPUTERNAME`) is that drive's path. Three forms cannot be placed and are
+refused `path-unplaceable`: a drive-relative path on another drive, whose directory no call states;
+another user's home (`~name/...`); and a device or volume form that maps to no drive path
+(`\\?\Volume{...}\`, `\\.\PhysicalDrive0`, `\??\GLOBALROOT\...`). The protected set is compared with a Windows path whose
+segments have lost what Windows ignores (trailing dots and spaces, a stream after a colon), and, for a
+path with a segment shaped like a generated short name (`PROGRA~1`), also with the path as the file
+system names it (`LocalGateOptions.realPath`; the host passes `canonicalPath`). A short name is never
+refused for its shape, and the write limits stay textual: a short name cannot leave its own folder, so
+a temp folder handed over in short form is written as before. A rooted path whose first segment is one
+letter (`/c/Users/x`, `/cygdrive/c/Users/x`, `/proc/cygdrive/c/Users/x`) is compared with the protected
+set in both its readings under Windows rules: the folder Windows reads, and the drive that letter names,
+which is how a POSIX layer on Windows and the agent CLI's own tools read it; the write limits keep
+Windows' reading. The shell scan matches a protected path written
+literally, or, for one on a drive, from the root as a POSIX shell on Windows writes it (`/c/...`,
+`/cygdrive/c/...`, `/mnt/c/...`), through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}`
 spellings or `%USERPROFILE%`, or through a variable of the session's spawn environment whose value is
 one absolute path (`$NAME`, `${NAME}`, `$env:NAME`, `${env:NAME}`, `%NAME%`; PowerShell's and `cmd`'s
 names read without regard to case, a POSIX shell's exactly), and every protected-path comparison folds
@@ -169,7 +205,7 @@ the decision deadline.
   `.git/config`, where `core.hooksPath` or `core.sshCommand` runs code in every worktree), and `send-pack`
   with the rest of the publishing plumbing.
 - Optional in the type, supplied by default by `PeriscopeHost`: writes jailed to the session's own
-  roots (above), with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome, piHome })` as the protected set and the home directory
+  roots (above), with `credentialPaths(env, { agentHome, modelEndpointFiles, codexHome, qwenHome, piHome, copilotHome, copilotSdk, copilotTokenFile, opencodeHome, opencodeSdk })` as the protected set and the home directory
   the shell scan expands from `homeDirectory(env)`, and the session's spawn environment its path
   variables are read from. That set, stated once (`src/host/paths.ts`): the
   host's own config directory (`PERISCOPE_CONFIG_DIR` or `~/.periscope`, which holds the token
@@ -187,8 +223,22 @@ the decision deadline.
   in an operator's own `QWEN_HOME`; `~/.env`, which Qwen Code loads into its own environment
   whatever its home; the whole of pi's runner home (`PERISCOPE_PI_HOME`: its agent home with the
   sign-in and the endpoints' keys, the session store every pi session's file is kept in, and each
-  session's run directory with its channel's token); and pi's sign-in, MCP token and models files
-  (`auth.json`, `mcp-auth.json`, `models.json`) in `~/.pi/agent`. The rest of the CLI's home (its settings, skills and tool output) is the agent's to
+  session's run directory with its channel's token); pi's sign-in, MCP token and models files
+  (`auth.json`, `mcp-auth.json`, `models.json`) in `~/.pi/agent`; the whole of Copilot's runner base
+  (`PERISCOPE_COPILOT_HOME`: each session's home, which is its `COPILOT_HOME` and holds the
+  `COPILOT_CACHE_HOME`, `LOCALAPPDATA` and `APPDATA` it starts with, and every session state kept for a
+  resume), the
+  operator's Copilot SDK install (`PERISCOPE_COPILOT_SDK`, the runtime every session starts from) and
+  the token file (`PERISCOPE_COPILOT_TOKEN_FILE`); the operator's own `~/.copilot` and
+  `COPILOT_HOME`, whole; the whole of opencode's runner base (`PERISCOPE_OPENCODE_HOME`: each session's
+  home, with its database, and every database kept for
+  a resume; an endpoint's key is in none of them, since the configuration that carries it crosses into
+  the host process over its stdin and is never written to a file) and the operator's opencode SDK install (`PERISCOPE_OPENCODE_SDK`, the server every session's
+  host process loads); the operator's own opencode directories (`~/.local/share/opencode`,
+  `~/.config/opencode`, `~/.local/state/opencode`, and each under `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and
+  `XDG_STATE_HOME` when set), whole; and opencode's machine-wide configuration directory
+  (`%ProgramData%\opencode`, `/Library/Application Support/opencode`, `/etc/opencode`), which every
+  opencode process reads and no setting turns off. The rest of the CLI's home (its settings, skills and tool output) is the agent's to
   read, and so is the rest of the operator's own `~/.codex` and the runner home's rollouts and state,
   and the Qwen Code base's shared `runtime` directory, where the chats a resume reads are kept.
   The host's own cache location derives from the same function, so the two cannot disagree about
@@ -264,9 +314,10 @@ rather than a throw, enforced in two places from one declaration (`deadlineOrder
 A decision taking longer than `holdAfterMs` opens a `permission:<toolUseId>` entry through the
 state machine and closes it at resolution; a synchronous allow or deny opens nothing, because an
 entry opened and closed in one tick is noise in the one signal it carries. It is keyed by
-`tool_use_id`, so a second `PreToolUse` for the same tool name cannot close a live hold; the
-observer's `permission:<toolName>` lane is single-writer and effectively dormant (only the
-never-firing `PermissionRequest` opens it). Emission rides outside the deny path's `try/catch`: a
+`tool_use_id`, so another call of the same tool cannot close a live hold; the
+observer's `permission:<toolName>` lane is single-writer, and dormant wherever the gate's allow is the
+grant (`grantOnAllow`, as `PeriscopeHost` sets it): only `PermissionRequest` opens it, and that hook
+fires for a call the hooks left to the CLI's own permission flow ([state-machine.md](state-machine.md)). Emission rides outside the deny path's `try/catch`: a
 gate that fails closed still says it did.
 
 The hold reaches the wire. `forwardSession` subscribes to `machine.onTransition` and emits every
@@ -291,9 +342,14 @@ be correlated without re-deriving it from transport state. It also carries `tool
 session's runtime, which the composer passes in beside `sessionKey` (`PermissionGateOptions.runtime`).
 A decider can hold one policy per kind across runtimes; `toolName` is unchanged and still says
 exactly which tool it is. The map names the shell, file and web tools and every `mcp__` tool; a tool
-it does not name is `other`, whatever its input carries, and never left without a kind. A shell call
+it does not name is `other`, whatever its input carries, and never left without a kind. Claude's
+`Monitor` runs the command its input names, so it is `shell` and in the shell family; a `Monitor` call
+that watches a socket (`ws`, no `command`) runs none and is `web`: it opens a connection to an address
+the model chose. Only `Monitor` watches a socket; any other shell tool's call with a `ws` and no command,
+on any runtime, is a shell call with no command and is refused `shell-command-missing`. A shell call
 also carries `shellDialect` (`SHELL_DIALECTS`: `posix` or `powershell`), the grammar its command runs
-in: Claude's `Bash` is `posix` and its `PowerShell` is `powershell`; Qwen Code's `run_shell_command`
+in: Claude's `Bash` and `Monitor` are `posix` and its `PowerShell` is `powershell` (which shell
+`Monitor` runs on a Windows host whose shell tool is PowerShell is not measured); Qwen Code's `run_shell_command`
 is `cmd` on Windows, unless the environment the CLI starts with names Git Bash (`posix`) or PowerShell
 (`powershell`) as its shell, and `posix` elsewhere. For Claude it is data for the decider only; the
 local gate reads Claude's commands as it always has. Both are
@@ -340,16 +396,22 @@ hook channel, and Codex's approval channel.
   after its hook, and waits with no deadline of its own. An approval for a call the hook decided is
   answered from that decision; one the hook did not decide is decided fresh; at the host's deadline it
   is declined and `gate-approval-unanswered` is raised. Input written to a running command is always
-  decided fresh. An MCP tool approval names no call, so it is tied to the call pending on that server;
+  decided fresh, and so is a command Codex's own requirements mark for a fresh decision (`humanCommand`),
+  which the app-server sends only to a connection that opted into experimental API, which this host never
+  does; with no such connection Codex refuses the call itself. An MCP tool approval names no call, so it is tied to the call pending on that server;
   with several pending, each is decided and the approval is accepted only when every one was allowed
   (`gate-approval-ambiguous` otherwise). The answers are `accept`, `decline` and `cancel`, never a
   grant for the session, an amendment to Codex's rules, or a root.
 - **An allow that rewrites the input is refused on Codex** (`permission-decision-unrecognised`):
   Codex's hook can only let a call proceed as asked or block it, and running half the decision would
   run arguments nobody approved.
-- **Codex's tools in the local gate** (`CODEX_TOOL_FAMILIES`): `Bash` through the shell rules,
-  `apply_patch` with every file its patch names (`src/gate/patch.ts`) through the jail, `view_image`
-  through the protected set, relative paths resolved where the call runs. Codex's `Bash` runs
+- **Codex's tools in the local gate** (`CODEX_TOOL_FAMILIES`): `Bash` through the shell rules, the
+  directory it runs in through the protected set (`checksShellCwd`: Codex's hook input names a local shell
+  call's own working directory as its `cwd`, and the call's input carries the command alone; a relative
+  one is placed under the session's directory and one the call does not state is read as the session's,
+  so neither skips the check and neither is refused for its form), `apply_patch`
+  with every file its patch names (`src/gate/patch.ts`) through the jail, `view_image` through the
+  protected set, relative paths resolved where the call runs. Codex's `Bash` runs
   PowerShell on Windows, so its commands are read both ways and refused when either reading refuses
   (`readsShellDialect`): the POSIX reading of `<# note #> git push` hides the push behind what it takes
   for a comment.
@@ -384,10 +446,32 @@ is the settings file this host writes for each session (`src/host/qwen-home.ts`)
   `scripts/derive-qwen-names.mjs`) and `mcp__<server>` for each attached server; `disableAllHooks`
   turns off every hook a settings file could add. The operator's own `~/.qwen` is never the session's
   home.
+- **One tool is turned off** (`QWEN_DENIED_TOOLS`, `src/host/qwen-home.ts`). `autofix_pr` runs the CLI's
+  own pull-request helpers by name (`push`, `reply` and `rerun` among them), so a call to it pushes a
+  branch or posts a reply while its decision request names only the tool and a helper, which no shell
+  rule and no reading of a command recognises as a push. The session's settings deny it: the CLI merges
+  each scope's rules into one list per kind and weighs a deny before any ask or allow, so no repository's
+  rule turns it back on, and a tool a whole-tool deny names is never registered. Turning it back on is a
+  later release's change to that list, once a decision request can say what such a call publishes.
+- **Code mode stays off, so `exec` is never a session's tool.** `exec` runs a JavaScript script whose own
+  tool calls the CLI schedules as calls of their own; that each of them reaches this host's decision is
+  not shown. The CLI registers `exec` only in code mode (`registerExecIfEnabled`,
+  `packages/core/src/config/config.ts` at 0.27.3), and takes code mode from `tools.codeModeOnly === true`
+  in its merged settings alone (`packages/cli/src/config/config.ts`). The session's settings set it
+  `false` at the system scope, merged last, so no repository's `true` turns it on. Turning it on is a
+  later release's change, once each call a script makes is shown to ask this host as its own call.
 - **Read back before the CLI starts.** The host reads the file back through the environment the CLI
-  will start with: the environment names it, it parses, its ask rules cover every name, and its hooks
-  are off. Anything else refuses the open `qwen-ask-rules-not-active`, and no process starts.
+  will start with: the environment names it, it parses, its ask rules cover every name, it denies every
+  tool turned off, it keeps code mode off, and its hooks are off. Anything else refuses the open `qwen-ask-rules-not-active`, and
+  no process starts.
   `QWEN_CODE_SAFE_MODE`, which would drop every rule, is removed from the CLI's environment.
+- **What the CLI registered is read from its first list of tools.** The read-back reads the file this
+  host wrote, so it cannot say what the CLI made of it. The first `system/init` lists the tools the CLI
+  registered, and the host holds that list to the settings: a tool they deny (`QWEN_DENIED_TOOLS`), or
+  `exec` while code mode is off, that is listed all the same is named `qwen-ask-rules-not-active` on
+  the session's state lane, once a tool. The session opens and goes on. A call to a tool the settings
+  deny is refused `qwen-ask-rules-not-active` before anyone is asked; a call to `exec` is asked about
+  like any other.
 - **One decision per call** (`src/host/qwen-gate.ts`). A `can_use_tool` request becomes a
   `DecisionRequest` (`toolName`, `tool_use_id`, the input, the session id, the call's own directory
   where the input names one, `toolKind`, `shellDialect`) and goes through the same call decision as
@@ -399,7 +483,8 @@ is the settings file this host writes for each session (`src/host/qwen-home.ts`)
 - **Qwen Code's tools in the local gate** (`QWEN_TOOL_FAMILIES`): `write_file`, `edit` and
   `notebook_edit` through the jail; `read_file`, `zoom_image`, `display_image` and `list_directory`
   through the protected set; `run_shell_command` and `monitor` through the shell rules, the
-  `directory` a command runs in through the protected set (`checksShellDirectory`); `glob` and
+  `directory` a command runs in through the protected set (`checksShellDirectory`; a relative one placed
+  under the session's directory); `glob` and
   `grep_search` through the protected set, relative paths placed where the call runs. A `cmd` command
   is read both ways, in `cmd`'s grammar (`readCmdCommand`, `src/gate/command.ts`: carets are escapes
   outside double quotes, a `#` is no comment, and there is no heredoc) and as POSIX, and refused when
@@ -478,9 +563,364 @@ it is loaded, that it is the last handler a call meets, and that nothing else is
 - **The residual known at the open.** `gate-foreign-extension` (above), and `gate-credential-in-shell`
   when the session's endpoint has variables of its own, which pi's environment carries to every
   command the agent runs; the detail names the variables, never their values.
+- **What it does not hold.** On Windows a program the agent's shell started can outlive the session's
+  close. The close ends pi's stdin and waits a grace for pi to exit, and ends the process tree of a pi
+  that has not. What ends a tree on Windows, this host's kill and pi's own, walks the process table by
+  parent (`taskkill /T`), and pi's shell there is Git for Windows. Measured on the pinned pi, on a stub
+  model:
+  - A command the shell put in the background and left (`... &`) had no running parent before the
+    close, and was running after it. pi's shell tool had returned when its shell exited; pi 1.5.2's own
+    shell code says of such processes that "Windows cannot find them once the shell pid is gone". The
+    live probe holds this one (`pi.live.test.ts`), so a pi or a host that ends such a command is
+    noticed.
+  - With a command still running when the close came, pi and its shells were gone after it. The
+    program the shell was running (`sleep`) was not: before the close its parent in the table was
+    already a process that had ended, so it was under neither shell.
+
+  Each ran on until it ended by itself. Reaching either takes a way to hold a process and everything
+  it starts that does not go by parent (on Windows, a job object), which this host does not have. Not
+  measured off Windows.
 
 pi is advertised at `intercepted` (`CONTROL_TIERS`); a session with either degrade known at its open
 opens at `intercepted-with-residual`.
+
+## The Copilot gate
+
+Copilot has two places a call can be stopped, and neither holds on its own. Its pre-tool hook is called
+for every tool call, but it fails open: a hook that throws, times out or has no route lets the call
+proceed. Its permission service fails closed, waiting on silence and refusing on a failed answer, but it
+asks only where its own rules say to ask. So the gate joins them (`src/host/copilot-gate.ts`): the hook
+answers `ask` for every call, at once and with no I/O, and the permission request that answer raises is
+the one this host decides.
+
+- **One decision per call.** The hook records the call by its id (`toolCallId`) and answers `ask`. The
+  `hook` permission request that follows names the same id, and the host reads the pair as a
+  `DecisionRequest`: the tool's name in this host's spelling, the call id, the input, the directory the
+  call runs in, the sub-agent that made it, `toolKind`, `shellDialect`, through the same call decision as
+  a Claude call (the local gate, then the decider, with the session's deadline and hold). The input is
+  the one the hook announced, which is the call's own. On the pinned runtime the request carried the
+  same arguments by value for every tool measured (a shell line, `view`, `create`, `apply_patch`,
+  `task`, a skill, an MCP tool, a sub-agent's call); a request that carries others is named
+  `gate-hook-missing`, and the call is still decided, on the hook's. The answer is
+  one call approved, or refused with the outcome's words, which the model reads. Nothing broader is ever
+  sent: no approval for the session, for a location or for good. An allow that rewrites the input is
+  refused: the rewrite would live only in the fail-open hook (`canRewriteInput: false`).
+- **What the model is told of the machine's folders** (`copilotSystemMessage`,
+  `src/host/copilot-process.ts`). Its working directory, and nothing of the runner's home. The session's
+  system message is the runtime's, with two of its sections named:
+  - `environment_context` is asked for (`preserve`). The SDK's `empty` client mode removes it unless
+    the caller names it (`getSystemMessageConfigForMode` in the SDK's own client), and with it the
+    working directory, the git root, the operating system and the tools found. The file tools take
+    only absolute paths, so a model told no directory has to make one up.
+  - `runtime_instructions` passes through `copilotWithoutSessionFolder`, which takes out the runtime's
+    account of its session folder (`<session_context>`): a folder under the session's home, in the
+    protected set, which the runtime offers the model for its own files.
+
+  Measured on the pinned runtime, in what it sends a model, driven by a stub model: before, the
+  message named the session folder and never the working directory; now it names the working
+  directory and nothing under the home (`copilot-local.test.ts`, and the live probe reads the same
+  from the system message a real turn shows). On a real model, two first turns in six had named a file
+  under the home, each refused `credential-path-denied`. A sub-agent's system message is built by the
+  runtime and passes through none of this: it carries the environment section and the session folder
+  both, and the SDK has no option for it short of turning infinite sessions off, which turns the
+  runtime's own compaction off with them. A sub-agent's call that names the folder is refused like any
+  other call into the home.
+
+- **Sub-agents' calls take the same route.** A call a sub-agent makes fires the same hook and raises
+  the same request, naming the call that spawned it; it is decided like the session's own. Shown
+  against the pinned runtime driven by a stub model on a loopback port (`copilot-local.test.ts`), and by
+  the release's live probe against a real model.
+- **Proven before the first prompt** (`copilotReadBackProblem`, `src/host/copilot-home.ts`, and the
+  probe in `src/host/copilot-process.ts`). The session is created in the `manual` permission mode with
+  discovery off, and read back: the mode applied and still `manual`; the agent mode `interactive`, or
+  `plan` for a plan open; no approve-all grant (`active`, `autoApproval`, a stored approval, a runtime
+  override, or a baseline for tools, paths or URLs); no path approved for the session; no plugin;
+  none of the tools below offered. The directories the runtime allows are read too, and refuse nothing
+  (`copilotOutsideDirectories`): the runtime allows its temp folder by itself, and its list is not
+  what bounds a write, since the hook asks about every call and the host's own gate holds a write to
+  the session's write limits. One that is none of the session's (not its own directory, a further
+  worktree, the temp folder where that is one of its write roots, or inside its home) is named
+  `gate-mode-widened`, once, and the session opens. Then one probe call runs through the session: `view` on the
+  session's own directory, under an id the host minted. Its hook must fire and its `hook` request reach
+  the host, which refuses it without asking anyone, so nothing runs. Anything else refuses the open
+  `copilot-gate-not-active`, naming what differed.
+- **The tools turned off** (`COPILOT_EXCLUDED_TOOLS`). Each is left out of the session's tools, the
+  open is refused if the runtime offers it anyway, and a call of it that reaches the gate is refused
+  without asking anyone:
+  - `write_powershell` and `write_bash` type input into a shell already running. A call carries text a
+    running program reads, never a command any reading of a command can see. Turning one back on needs
+    a decision request that can say what the running program does with the text.
+  - `manage_schedule` schedules a prompt to run later, outside the queue a controller sends prompts
+    into. Turning it back on needs the schedule to be a controller's, on the wire.
+- **The deadline is held to what was measured** (`copilotDeadlineOrderRefusal`). The runtime holds a
+  permission request with no timeout of its own: one was measured waiting 240 seconds on runtime
+  1.0.112 (SDK 1.0.34) on 2026-11-15, and nothing longer has been measured. A session whose
+  `decisionTimeoutMs` is above 240,000ms is refused `gate-deadlines-inverted` at the open. The hook's
+  own timeout was not reached within 130 seconds on the same pin; the hook answers at once, so that
+  timeout bounds only the fail-open residual below. Everything the host does between the request and
+  its answer is inside that one deadline, the wait for a server's tool list (below) included: what the
+  wait takes comes out of the time the decision has, so a request is never held longer than
+  `decisionTimeoutMs`.
+- **Where a server's tools are learned.** At the open, from the runtime's own list of the tools it
+  offers, which names each tool's server and its name there. A server that had listed nothing by then
+  is asked when a call first names it, and that wait is the decision's own: it ends with the decision,
+  and after 10 seconds or a quarter of `decisionTimeoutMs`, whichever is shorter
+  (`COPILOT_TOOL_LIST_WAIT_MS`). A list that has not arrived by then leaves the call asked about under
+  Copilot's spelling, as a list that fails does, and is kept for the next call when it does arrive.
+- **The MCP spelling.** Copilot names a server's tool `<server>-<tool>`, and a server's name and a
+  tool's may each hold a hyphen. The gate maps the name to `mcp__<server>__<tool>` by the tools each
+  attached server lists: exactly one pair that spells the name maps it. None, or more than one, keeps
+  Copilot's spelling, so a controller holds the call as a stranger's. It never splits on a hyphen. A
+  call's item needs no list: the event that starts the call states its server and its tool, and the
+  item is named `mcp__<server>__<tool>` from those, the first call to a server included.
+- **Copilot's tools in the local gate** (`COPILOT_TOOL_FAMILIES`): `create`, `edit` and
+  `str_replace_editor` through the jail, with a relative path placed where the call runs
+  (`resolvesWritesAgainstCallCwd`); every command of `str_replace_editor`, its `view` included, is held
+  as a write; `view` through the protected set; `powershell` and `bash` through the shell rules, read
+  in their own grammars (`powershell` and `posix`); `grep`, `rg` (the search tool offered in place of `grep` under some models) and `glob` through the protected set, their
+  `paths` a root when it is one string and each entry a root when it is a list (any other shape names no
+  root here, and the tool rejects it); `apply_patch` through the jail, by the files its patch names. The
+  runtime's own home is in the environment the local gate reads, so `$env:COPILOT_HOME` is read as the
+  protected path it is.
+- **What the reused names mean on Copilot.** Each is raised once per call, request or mode:
+  - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the
+    hook did not ask; the request is refused, never decided), a `hook` request whose call no hook
+    announced, a `hook` request whose arguments are not the ones its hook announced (decided on the
+    hook's), a pre-tool hook the runtime reports as failed (after which it lets the call proceed), or
+    a call that finished with no decision of this host's behind it: none at all, one still awaited, or
+    a refusal the call ran against. Each call's answer is kept by its call id until
+    `tool.execution_complete` and forgotten then, so an id a provider hands out again is a new call; only
+    the probe id this gate minted is exempt, never an id that merely starts the same. The detail names
+    the call's tool, which the runtime states at the call's start and not at its end. One such call is
+    the runtime's own: when a command started in the shell's background mode ends
+    (`system.notification`, `shell_completed`), the pinned runtime reads its output with a
+    `read_powershell` call under an id of its own, which fires no hook and raises no request (measured
+    on a real model). It is named, with the shell it read, as the runtime's own read.
+  - `gate-hook-foreign`: a hook this host did not install answered a request (`resolvedByHook`), or a
+    machine-wide policy hook was found at the open, which lowers the opening tier. The runtime is asked
+    for the hooks it finds and the machine's managed settings (`hooks.discover`, `managedSettings.read`)
+    on every platform, and on Windows the host also reads `policy.d\*.json` under
+    `%ProgramData%\GitHub\Copilot` and the `HKLM\Software\Policies\GitHub\Copilot` key. A source
+    that could not be read is named too, as one that may hold a hook; the session opens either way.
+  - `gate-unhooked-call`: a tool the model's provider ran itself (`assistant.server_tool_progress`),
+    which no hook sees.
+  - `gate-mode-widened`: the runtime reports a permission mode other than `manual`, or an agent mode
+    other than `interactive` and `plan`; or, at the open, it allows a directory that is none of the
+    session's (the detail names each). Measured on the pinned runtime: in `allow-all` a call still
+    asks while the hook answers `ask`. A sub-agent's events carry its id, session-scoped kinds included
+    (measured: a sub-agent's `session.model_change` arrives under its id), so a mode a sub-agent reports
+    is named as that sub-agent's, by its id, and never as the session's. No sub-agent was seen to
+    report a mode on the pinned runtime.
+  - `gate-tool-unnamed`: the runtime offers the session, or the model called, a built-in none of the
+    three tables names (`COPILOT_TOOL_KINDS`, `COPILOT_OTHER_TOOLS`, `COPILOT_EXCLUDED_TOOLS`). The
+    session opens all the same, and each call of that tool asks like any other, as kind `other` with no
+    local family; the name is said once per tool, at the open or at its first call, so the tables can
+    learn it. A tool the runtime lists as an attached server's is never taken for one.
+- **The close.** The runtime lets a call proceed when its hook has no route, and a disconnected session's
+  hook has none. So the close ends every waiting decision, then everything the runtime started
+  (`killDescendants`), then the turn (`abort`) and its background sub-agents
+  (`cancelAllBackgroundAgents`), and only then disconnects the session, ends the runtime's process
+  tree and stops the client. A call that arrives while the turn winds down is asked through the hook as
+  any other and refused, since its decision is already ended. A turn that does not end within the
+  close's grace is never disconnected while it runs: its process tree is ended first. That the runtime
+  would run a disconnected turn's call was not measured: the order rests on the SDK's own account of
+  its hook.
+
+  What the runtime started goes before the turn because ending the turn makes the runtime end its
+  shells, each without the command it is running. Measured on the pinned runtime, driven by a stub
+  model, with PowerShell 7 as the runtime's shell: before the close a command a turn had started in the
+  shell's background mode was under the shell, under the runtime; after it the shell and the runtime
+  were gone and the command was not, its parent a process that had ended, which no walk from the
+  runtime finds. With Windows PowerShell as the shell the same close left nothing: that shell is still
+  there when the tree is ended. The real-runtime test puts PowerShell 7 on its search path where the
+  machine has one (`copilot-local.test.ts`).
+
+- **What it does not hold.** A command the agent detaches from its shell on purpose (on Windows,
+  `Start-Process`, measured on the pinned runtime) is in no process tree of the session, so it outlives
+  the session's close. A command the session's shell still runs, in the foreground or the background,
+  ends with it, while the runtime is there to root its tree. A runtime that exits on its own leaves what
+  it had started: the close ends a process tree only by the id of a runtime that is still running,
+  since the id of one that exited may be another process's, and the session says a tree was not ended.
+  A Windows Credential Manager entry an operator's own `copilot login` left on the
+  machine is no file, so the protected set does not hold it: a session's runtime never reads or writes
+  one (the SDK's `empty` mode turns the keyring off), but it is readable by any program running as the
+  same user, a command the agent runs included.
+
+Copilot is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
+
+## The opencode gate
+
+opencode decides every call by its permission rules: an action and a resource, each a wildcard, and the
+effect of the last rule that matches, `allow`, `deny` or `ask`. A call whose rule asks raises a
+permission request on the server's stream (`permission.asked`) and waits on its answer with no timeout of
+its own. So the gate (`src/host/opencode-gate.ts`) writes the rules every session runs under, and answers
+every request they raise.
+
+- **Every action asks.** Every session is created with this host's rules (`opencodeRuleset`,
+  `src/host/opencode-home.ts`): `* * ask`, then a denial for each tool turned off below. The same rules are
+  the session's configuration's, which opencode places after each agent's own, so whatever an agent allows
+  by itself, the last rule a call matches asks. A subagent's session inherits the rules at its creation,
+  and a fork copies them. Shown on the pinned SDK driven by a stub model on a loopback port
+  (`opencode-local.test.ts`): a subagent's call and a forked session's call each ask.
+- **A shell call is decided before it runs.** The `shell` tool raises a request only for the commands
+  the runtime's own reading finds in a line; a line it finds none in (on PowerShell, an assignment
+  through a provider path such as `${C:\path\file} = 'x'`) raises nothing and would run undecided. So
+  each session's server is created with one plugin of this host's (`periscope.gate`, handed to the SDK's
+  `create`, so it is set up before any run starts), which registers the SDK's pre-call hook
+  (`execute.before`). The server runs that hook before every tool call it runs itself, a subagent's
+  included, and a hook that rejects fails that call alone with its words. For a call of a tool in
+  `OPENCODE_HELD_TOOLS` (`shell`) the hook asks this host and waits: the host reads the call as a
+  `DecisionRequest` (the whole line as its input, its directory, its dialect, the subagent that made
+  it) and decides it by the same call decision as any other. It has no deadline of its own beyond the
+  session's `decisionTimeoutMs`, and ends refused when the turn is interrupted, the session closes or
+  the host is gone. A call that reaches the hook before the open is proven waits for the proof, and is
+  refused only if the proof fails. A call allowed there is not asked about again: each request it then
+  raises (`external_directory` for its directory, `shell` for a command the runtime found) is held to
+  this host's own gate alone, which still reads every path the request names. Every other tool keeps
+  the route below, since each raises its request. Shown on the pinned SDK (`opencode-local.test.ts`):
+  a line with no command, refused, writes nothing; allowed, it runs after one decision; a subagent's
+  line is decided the same way.
+- **One decision per request.** A request names its own id, the session it asks for, its action, the
+  resources it names (a path, a command, a URL), and the call that raised it (`source.id`). The host reads it
+  as a `DecisionRequest`: the tool's name in this host's spelling (a built-in's action, an MCP tool as
+  below), the call's id, its input (an MCP request's `metadata.input`, else the input the stream announced
+  for the call, else the request's resources), the directory a shell call runs in, the subagent's session and
+  agent, `toolKind` and `shellDialect`, through the same call decision as a Claude call (the local gate,
+  then the decider, with the session's deadline and hold). The answer is `once`, or `reject` with the
+  outcome's words, which the model reads and goes on from; a reject never goes without words, since one
+  without would end the turn. Nothing broader is ever sent: no `always`. An allow that rewrites the input
+  is refused (`canRewriteInput: false`).
+- **Every session of the server is the session's.** One server runs one session of this host's, so a
+  request is decided whichever of the server's sessions raised it: the session's own, a subagent's, and
+  one an earlier process of the same session started, which a resumed session never sees created. The
+  server restarts what an earlier process left running as soon as it is created, before the open is
+  proven, so a request raised before the proof waits for it and is refused only where it fails; and a
+  request raised before this host read the stream at all is found by asking the server for every
+  request still waiting, once the open is proven. A resumed session also reads the sessions the
+  database holds and takes each whose line of parents reaches it as its own, so their commands run
+  with the shell's environment, as a subagent started now does.
+- **No request is lost to its size.** This host reads a line of the host process's of at most 8 MiB and
+  drops a longer one whole, and an edit's request carries the whole text it writes, so a very large
+  write would have asked in a line that was dropped: nothing decided, nothing named, the call waiting
+  for good. The host process sends no such line. A line over half the bound has its longest texts cut,
+  each cut marked ` [cut: longer than one line to this host carries]`, until it fits; an id is never
+  that long, so the request arrives and is decided, on an input that says it was cut. A held `shell`
+  call is the exception: its line is what the host's own gate reads, so one too long to send whole is
+  refused by the hook, `rpc-line-too-large`, and never runs. A line this host does drop is named on the
+  session, `rpc-line-too-large`, once, and in the host's log each time.
+- **A subagent's call can come after the session's own run has ended.** A subagent always runs in the
+  background (the SDK's own `subagent` tool says so): the call that starts it returns at once, and the
+  session's run ends when its model has answered, whatever the subagent is still doing. Measured on
+  the pinned SDK on a stub model whose subagent answers late: the session's run ended with no call of
+  the subagent asked, the subagent's read reached this host four seconds later, named as the
+  subagent's, and was decided like any other; the session was then told its subagent had gone idle and
+  ran again. A session closed in between ends its subagent before the subagent makes a call, and
+  nothing of it runs.
+- **An interrupt reaches the subagents.** A subagent runs in a session of its own, and the server does
+  not interrupt it with the session that started it: measured on the pinned SDK, an interrupt of the
+  session left a subagent waiting on its decision untouched. So an interrupt goes to the session and to
+  every subagent session with a run under way, and ends the decisions any of the session's sessions
+  still waits on, each refused. Shown on the pinned SDK: the subagent's run ends and its decision ends
+  refused. A command a shell still runs in the background is not a run of any session; whether an
+  interrupt ends it was not measured, and it ends at the close.
+- **One call can ask twice.** A path outside the session's location asks `external_directory` for its
+  directory first, then its own action; decisions are kept by the request's id, so each is decided once.
+  A `shell` call is the exception: it was decided whole before it ran, so its requests ask nobody.
+- **A request refused with another.** When this host refuses one request, opencode refuses every other
+  request of the same session still waiting, with the same words. Each such decision still pending here is
+  ended, recorded as refused (`permission-decision-unavailable`, with the words the runtime refused it
+  with), and never answered twice. The runtime also drops a session's waiting requests with its
+  interrupt (measured on the pinned SDK: an answer sent afterwards finds no request). In each case the
+  request was settled by the runtime before this host answered, so the answer that finds it gone is not
+  reported as one that failed to arrive; an answer of this host's own that the server refuses still is.
+- **Proven before the first prompt** (`opencodeReadBackProblem`, and the open in
+  `src/host/opencode-process.ts`). Once the server's plugins are active, the server is read back: the
+  session's rules are exactly this host's; every agent's rules end with them; no approval is saved; every
+  plugin is the runtime's own or this host's pre-call gate (by its id and the source the server states
+  for a plugin handed to `create`, `sdk`, both), and none turned off runs; the MCP servers are the session's; every
+  configuration place it read is inside the session's home; and no model but the endpoint provider's is
+  offered. Anything else refuses the open `opencode-gate-not-active`, naming what differed, and no prompt
+  is sent. A planted allow rule and a second provider are each refused on the pinned SDK.
+- **The tools turned off** (`OPENCODE_DENIED_TOOLS`, one list the rules, the read-back, the census of the
+  tools a model is offered and the gate all read). Each is denied by the rules, so the runtime never offers
+  it, and a request naming one is refused without asking anyone:
+  - `execute` (Code Mode) runs a program whose tool calls share its own call id. Denied, every tool is
+    offered directly and each call keeps its own id in the record.
+  - `question` waits on a form with no timeout; an agent asks through the controller's MCP server instead.
+  - `experimental_image_generate` writes its image under a name it chooses after the call was asked.
+  - `browser` is every browser tool's action; the browser's own plugin writes allow rules into the session
+    when a browser attaches.
+  - `opencode_session_rename`, `opencode_session_move`, `opencode_worktree_create`,
+    `opencode_worktree_list` and `opencode_models` run without asking at all.
+  - The artifact and schedule tools run without asking at all, and a schedule runs a prompt later, outside
+    the queue a controller sends prompts into.
+    Turning any of them back on needs a decision request that can say what it does. The built-in plugins
+    behind the browser and the image, schedule, artifact and MCP-event tools are turned off in the
+    configuration as well, so their code never runs.
+- **Forms are cancelled.** A web search's provider choice and an MCP server's request for input each wait on
+  a form with no timeout, which no interface of this host answers; each is cancelled as it is raised, and
+  what asked fails with words.
+- **The deadline.** opencode waits on a request with no timeout of its own, so the session's
+  `decisionTimeoutMs` is the only deadline: a decision nobody gives ends refused at it, and the call does
+  not run (shown on the pinned SDK).
+- **The MCP spelling.** opencode names a server's tool `<server>_<tool>`, and a server's name and a tool's
+  may each hold an underscore. The open refuses a server name opencode would rewrite, and one that with an
+  `_` begins another's, so the gate reads the server out of a tool's name by the attached servers' names:
+  exactly one that, with an `_`, begins the name maps it to `mcp__<server>__<tool>`. None keeps opencode's
+  spelling, so a controller holds the call as a stranger's. It never splits on an underscore.
+- **opencode's tools in the local gate** (`OPENCODE_TOOL_FAMILIES`): `edit` (the action the `write`,
+  `edit`, `patch` and `opencode_worktree_remove` tools ask) through the jail, each path the request names
+  checked one at a time, a relative one placed in the session's location; `read` and `external_directory`
+  (`<directory>/*` read as the directory) through the protected set; `shell` through the shell rules, in the
+  grammar of the shell this host names (`powershell` on Windows, or `cmd` where Windows PowerShell is not at
+  its fixed path; `posix` elsewhere); `glob` and `grep` through the protected set. The variables a command's
+  paths are read with are the agent's shell's. opencode's own reading of a line is a POSIX one whatever the
+  shell, so where the shell is `cmd.exe` the commands its requests name can differ from what `cmd` runs;
+  this host decides the whole line, in the `cmd` grammar, before it runs.
+- **What the reused names mean on opencode.** Each is raised once per call, request or session:
+  - `gate-unhooked-call`: a tool the model's provider ran itself (`session.tool.called` with
+    `executed: true`), which raises no request.
+  - `gate-hook-missing`: a call the server began to run with no decision of this host's behind it. The
+    pre-call hook tells this host of every call the server begins (a held one by asking, any other by
+    a notification), so such a call is named however it leaves: when it succeeds, when it fails, when
+    its turn is interrupted, and at the close if it is still running. A success for a call this process
+    never saw begin is one an earlier process ran, which the server states again to a resumed session,
+    and is not named. At the open the same name says this host's pre-call gate is missing from the
+    server's plugins; then no call is known to have begun, and a call is named on its success alone, as
+    a shell line that names no command would be. One call the pinned SDK runs this way with the gate in
+    place: `opencode_list_mcp_resources` asks about each MCP server it would list (the SDK's own
+    source), so in a session with no server attached it asks about none, lists nothing, and is named
+    (seen on a real model). What is kept for a call (its input, whether it was
+    decided, whether it runs) is kept by its session and its id together, since one server runs a
+    session and its subagents and a provider may hand two of them the same call id.
+  - `gate-mode-widened`: the rules of one of the session's sessions changed after the open and are no
+    longer this host's (`session.permissions`), or an answer this host never gave approved a request
+    (`permission.replied`): one it had answered nothing about, or one it was still deciding, whose
+    wait then ends, since nothing it decides can stop a call already approved. On the pinned SDK a
+    session's rules are published only when something sets them (`Session.setPermissions`); a
+    subagent's creation publishes none, so a subagent starting is no change of rules.
+  - `gate-foreign-extension`: a plugin that is neither the runtime's own nor this host's pre-call gate
+    loaded after the open (`plugin.updated`, after which the plugins are read again).
+- **What it does not hold.**
+  - A `webfetch` the gate allows follows the redirects the site sends, up to opencode's limit: the decision
+    request names the URL asked for, and opencode holds each redirect only to the rules' denials, which
+    this host's rules never make of a URL, so a redirect is followed without a request of its own.
+  - A tool the model's provider runs itself raises no request, so it is named after the fact
+    (`gate-unhooked-call`), never decided.
+  - The workspace's `.opencode` and `.agents` folders are not protected: project configuration is off, so
+    the server never loads them, but a session may write there.
+  - opencode's process daemon, which runs the shell's commands, accepts its owner over a Unix socket or a
+    named pipe registered under the session's home, with a token; it opens no port. A command the agent's
+    shell runs could reach it, as the same user, and start a process through it, as the shell itself can.
+  - A command the agent detaches from its shell on purpose was not measured on opencode. A command the
+    session's shell still runs, in the foreground or the background, ends with the session, and so does
+    a process such a command started and still waits on (both shown on the pinned SDK). The server's own
+    close ends its shells and not what they started, and the host process then exits by itself, after
+    which nothing on Windows is under it for a tree kill to find. So the close ends everything under the
+    host process first, while it is still there to root the walk, and only then asks it to exit. On
+    Windows that walk reads the process table through PowerShell, about a second at each close.
+
+opencode is advertised at `intercepted-with-residual` (`CONTROL_TIERS`).
 
 ## What is deliberately not covered
 
@@ -577,6 +1017,9 @@ opens at `intercepted-with-residual`.
 | `src/host/pi-gate.ts`                      | One pi session's gate: the channel, the hello, the check for code this host did not load                          |
 | `src/gate/pi-request.ts`                   | pi's `tool_call` event read as a decision request                                                                 |
 | `src/host/pi-home.ts`                      | The pi base: its agent home's files, a session's run directory, a resume resolved to its file                     |
+| `src/host/opencode-home.ts`                | An opencode session's home, its two environments, its rules and configuration, and the read-back                  |
+| `src/host/opencode-gate.ts`                | One opencode session's gate: each request, its answer, a request refused with another, the degrades               |
+| `src/host/opencode-host.ts`                | An opencode session's host process: the server in its own memory, its fixed calls, no listener                    |
 | `src/host/codex-gate-watch.ts`             | The residual, watched and named as it happens                                                                     |
 | `src/gate/outcome.ts`                      | `GateOutcome` (`holding`, `allow`, `deny`, `refused`, `expired`) to transitions, pure; `recordGateOutcome`        |
 | `src/gate/escalate.ts`                     | `escalatingDecider()`: status before body, `EscalationUnavailable`; the HTTP lane the link does not carry         |

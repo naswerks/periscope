@@ -3,7 +3,9 @@
  * messages that never drops one, a close that waits for the process to let go of its directory, and a
  * scratch directory's removal that never throws over the test's own result.
  */
-import { rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /** A receipt line's writer, the test's own record of what was measured. */
 export type Receipt = (what: string, data: Record<string, unknown>) => void;
@@ -66,14 +68,89 @@ export async function closeAndWait<M>(
   receipt('closed', { ended: stream.ended, error: stream.error });
 }
 
+/** How often a scratch directory's removal is tried, and how long it waits between tries. */
+const SCRATCH_TRIES = 40;
+const SCRATCH_WAIT_MS = 250;
+
+/** Wait without yielding: a removal is a step of a test's own clean-up, in the order the test wrote it. */
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 /**
- * Remove a scratch directory, retrying while a process that ran in it lets go. A removal that still
- * fails is a receipt, never a throw: it must not stand in for the test's own result.
+ * Remove a scratch directory, waiting while a process that ran in it lets go. A command a close has just
+ * ended holds its working directory for a moment more, and on Windows a directory cannot be removed while
+ * it is a process's working directory: the removal fails there at once, and the retry `rmSync` offers
+ * does not wait that failure out. So the removal is tried again here, for up to ten seconds, and says in a
+ * receipt when it had to wait and for how long. One that still fails then was held by something that
+ * stayed, which is worth knowing: it is a receipt, never a throw, so it cannot stand in for the test's
+ * own result.
  */
 export function removeScratch(dir: string, receipt: Receipt): void {
-  try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-  } catch (error) {
-    receipt('scratch directory left behind', { dir, error: String(error) });
+  const began = Date.now();
+  let failure: unknown = null;
+  for (let tries = 1; tries <= SCRATCH_TRIES; tries += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      if (tries > 1)
+        receipt('scratch directory removed after a wait', { dir, tries, ms: Date.now() - began });
+      return;
+    } catch (error) {
+      failure = error;
+      if (tries < SCRATCH_TRIES) pause(SCRATCH_WAIT_MS);
+    }
   }
+  receipt('scratch directory left behind', { dir, error: String(failure), ms: Date.now() - began });
+}
+
+/**
+ * End each process a listing named, by the pid its line starts with, and on Windows what runs under it.
+ * A probe that found a command still running after its session's close leaves none of it behind.
+ */
+export function endListed(lines: readonly string[]): void {
+  for (const line of lines) {
+    const pid = Number(/^\s*(\d+)/.exec(line)?.[1]);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    try {
+      if (process.platform === 'win32') {
+        execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      } else {
+        process.kill(pid, 'SIGKILL');
+      }
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
+/** The file a session's command writes its environment to, in the session's directory. */
+export const ENVIRONMENT_FILE = 'environment.txt';
+
+/**
+ * Write, into a session's directory, a script that writes the environment it runs in to
+ * `ENVIRONMENT_FILE` beside it, and return the shell line that runs it. A probe reads that file itself,
+ * so what it measures is the command's environment and not a model's account of it: a model asked to
+ * print every variable may decline, since they can hold secrets, or spell the line so that it prints an
+ * error, and either leaves a probe that reads the tool's output with nothing of an environment to read.
+ */
+export function environmentScript(dir: string): string {
+  if (process.platform === 'win32') {
+    writeFileSync(join(dir, 'write-environment.cmd'), `@set > "%~dp0${ENVIRONMENT_FILE}"\r\n`);
+    return '.\\write-environment.cmd';
+  }
+  writeFileSync(join(dir, 'write-environment.sh'), `env > "$(dirname "$0")/${ENVIRONMENT_FILE}"\n`);
+  return 'sh ./write-environment.sh';
+}
+
+/** The variable names of an environment listing, one `NAME=value` a line, as `set` and `env` write it. */
+export function environmentNames(listing: string): string[] {
+  return listing
+    .split(/\r?\n/)
+    .map((line) => line.split('=')[0] ?? '')
+    .filter((name) => name !== '');
+}
+
+/** Whether a listing's names are an environment's: the search path is among them, under either spelling. */
+export function isEnvironment(names: readonly string[]): boolean {
+  return names.some((name) => name.toLowerCase() === 'path');
 }

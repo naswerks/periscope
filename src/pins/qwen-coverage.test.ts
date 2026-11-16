@@ -29,6 +29,8 @@ import type { TransitionCause } from '../state/model.js';
 import { SessionObserver } from '../state/observer.js';
 import { QWEN_COVERAGE, qwenWiredEvents } from '../state/qwen-coverage.js';
 import { piWiredEvents } from '../state/pi-coverage.js';
+import { copilotWiredEvents } from '../state/copilot-coverage.js';
+import { opencodeWiredEvents } from '../state/opencode-coverage.js';
 
 /** The names one side has and the other lacks, both ways. */
 function difference(
@@ -103,11 +105,17 @@ test("Qwen Code's cause events are its wired message and answer rows, exactly, b
   for (const event of qwenEvents) assert.ok(isCauseEvent(event), `${event} is not a declared cause event`);
 });
 
-test("every agent event belongs to one runtime's table: Codex's wired notifications, Qwen Code's wired rows or pi's", () => {
+test("every agent event belongs to one runtime's table: Codex's wired notifications, Qwen Code's wired rows, pi's, Copilot's or opencode's", () => {
   const owned = new Set([
     ...codexWiredNotifications().map((method) => `codex:${method}`),
     ...qwenWiredEvents().map((name) => `qwen-code:${name}`),
     ...piWiredEvents().map((name) => `pi:${name}`),
+    // A runtime added beside these owns its own events through its own table: Copilot's wired rows
+    // own the `copilot:` names, as `pins/copilot-coverage.test.ts` holds both ways.
+    ...copilotWiredEvents().map((name) => `copilot:${name}`),
+    // opencode's wired rows own the `opencode:` names, as `pins/opencode-coverage.test.ts` holds both
+    // ways.
+    ...opencodeWiredEvents().map((name) => `opencode:${name}`),
   ]);
   const orphans = AGENT_EVENTS.filter((event) => !owned.has(event));
   assert.deepEqual(orphans, [], `agent events no runtime's table holds: ${orphans.join(', ')}`);

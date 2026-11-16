@@ -19,7 +19,14 @@
  *     cache reads the call reported.
  *   - `tasks`: the running set, composed from the level message and the task edges, and the tasks
  *     settled since the turn began, from each `task_notification`'s status; the next turn's init
- *     clears them.
+ *     clears them. Each entry carries what the task messages reported of it and nothing else: the
+ *     call that started it (`task_started`, `task_progress`, `task_notification`), its latest summary
+ *     and usage (`task_progress`, `task_notification`) and its output file (`task_notification`).
+ *     Every text is cut at its bound (`factText`), and the whole fact is held to the tasks budget
+ *     (`fitTasks`). A task that starts or ends, or whose summary or any other member but its usage
+ *     moves, is sent at once with the latest usage of every task. A change in usage alone is sent at
+ *     most once in `TASKS_USAGE_PACE_MS`: held figures go out with the first message after the pace has
+ *     passed and with the turn's result, so the last figures always arrive.
  *   - `compaction`: the observer's report, not a message.
  * And one fragment per `content_block_delta` that carries text, thinking or a tool's arguments.
  */
@@ -34,11 +41,17 @@ import type {
   RunningTaskEntry,
   SettledTaskEntry,
   SpendFacts,
+  TaskReport,
   TaskSettlement,
+  TaskUsage,
   TurnRecordFact,
   UsageSampleFact,
 } from '../control/frames.js';
+import { factText } from '../control/fact-text.js';
 import { DEFAULT_RUNTIME, TASK_SETTLEMENTS } from '../control/frames.js';
+import { fitTasks } from '../control/tasks-budget.js';
+import type { Ticker } from '../core/time.js';
+import { systemTicker } from '../core/time.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import type { CompactionReport } from '../state/observer.js';
 import type { ModelSpend } from '../telemetry/usage.js';
@@ -54,6 +67,13 @@ const SUBAGENT_TASK_TYPE = 'local_agent';
 
 /** The currency every figure Claude reports is in. */
 const CLAUDE_CURRENCY = 'USD';
+
+/**
+ * The least time between two `tasks` facts that differ only in a task's usage. A running subagent's
+ * usage moves with every progress message, and each fact is the whole list on the lane that is never
+ * dropped, so a change a person would not see as a change waits for this long since the last send.
+ */
+export const TASKS_USAGE_PACE_MS = 5_000;
 
 /**
  * Claude's own words for a figure's basis, as the wire's. `unknown` is a guess at a default model's
@@ -105,8 +125,20 @@ export class ClaudeFactLift implements FactLift {
   #edges: readonly RunningTaskEntry[] = [];
   /** The tasks settled since the turn began, each with how it ended. */
   #settled: readonly SettledTaskEntry[] = [];
+  /** What the task messages reported of each task beyond its id, type and description, by task id. */
+  readonly #reports = new Map<string, TaskReport>();
   /** The tasks fact last sent, as its key: none yet reads as nothing running and nothing settled. */
   #running = tasksKey([], []);
+  /** The same fact with every usage left out: what a person would see as the task list. */
+  #seen = tasksKey([], []);
+  /** When the last tasks fact was sent, and whether figures newer than it are held. */
+  #tasksSentAt = Number.NEGATIVE_INFINITY;
+  #usageHeld = false;
+  readonly #ticker: Ticker;
+
+  constructor(options: { readonly ticker?: Ticker } = {}) {
+    this.#ticker = options.ticker ?? systemTicker;
+  }
 
   fromMessage(message: SDKMessage): LiftedFacts {
     const facts: AgentFact[] = [];
@@ -120,7 +152,8 @@ export class ClaudeFactLift implements FactLift {
       facts.push(this.#turnRecord(message, spend.totalCostUsd, spend.byModel));
       this.#windows = spend.byModel;
       this.#edges = [];
-      this.#tasksIfChanged(facts);
+      // The turn's end carries whatever figures were held.
+      this.#tasksIfChanged(facts, true);
     }
 
     if (message.type === 'assistant') this.#sample(message, facts);
@@ -133,6 +166,7 @@ export class ClaudeFactLift implements FactLift {
           .filter((task): task is RunningTaskEntry => task !== null);
         this.#tasksIfChanged(facts);
       } else if (message.subtype === 'task_started') {
+        this.#report(message.task_id, { toolUseId: message.tool_use_id });
         const started = runningTask(message.task_id, message.task_type, message.description);
         if (
           started !== null &&
@@ -143,7 +177,20 @@ export class ClaudeFactLift implements FactLift {
           this.#edges = [...this.#edges, started];
           this.#tasksIfChanged(facts);
         }
+      } else if (message.subtype === 'task_progress') {
+        this.#report(message.task_id, {
+          toolUseId: message.tool_use_id,
+          summary: message.summary,
+          usage: message.usage,
+        });
+        this.#tasksIfChanged(facts);
       } else if (message.subtype === 'task_notification') {
+        this.#report(message.task_id, {
+          toolUseId: message.tool_use_id,
+          summary: message.summary,
+          usage: message.usage,
+          outputFile: message.output_file,
+        });
         this.#settle(message.task_id, message.status);
         this.#edges = this.#edges.filter((edge) => edge.taskId !== message.task_id);
         this.#tasksIfChanged(facts);
@@ -153,6 +200,12 @@ export class ClaudeFactLift implements FactLift {
     if (message.type === 'stream_event') {
       const fragment = fragmentOf(message);
       if (fragment !== null) fragments.push(fragment);
+    }
+
+    // Held figures go out with the first message after the pace has passed, whatever that message is.
+    // The clock is read first: a message inside the pace, a streamed fragment among them, composes nothing.
+    if (this.#usageHeld && this.#ticker() - this.#tasksSentAt >= TASKS_USAGE_PACE_MS) {
+      this.#tasksIfChanged(facts);
     }
 
     return { facts, fragments };
@@ -167,6 +220,7 @@ export class ClaudeFactLift implements FactLift {
         trigger: report.trigger,
         tokensBefore: report.tokensBefore,
         tokensAfter: report.tokensAfter,
+        ...(report.outcome === undefined ? {} : { outcome: report.outcome }),
       },
     ];
   }
@@ -265,27 +319,79 @@ export class ClaudeFactLift implements FactLift {
       taskId,
       type: started === undefined || started.type === '' ? null : started.type,
       status: status as TaskSettlement,
+      ...this.#reports.get(taskId),
     };
     this.#settled = [...this.#settled.filter((task) => task.taskId !== taskId), entry];
+    this.#reports.delete(taskId);
   }
 
   /**
-   * The running set (the level, then each start edge the level lacks, by id) and the settled set.
-   * Reported when either changed.
+   * What one task message reported of task `taskId`, kept for its entries: each member the message
+   * carried replaces the one kept, and a member it did not carry leaves the kept one as it was. Text is
+   * cut at its bound, and a usage that is not three whole counts is not kept.
    */
-  #tasksIfChanged(facts: AgentFact[]): void {
+  #report(
+    taskId: string,
+    reported: { toolUseId?: unknown; summary?: unknown; usage?: unknown; outputFile?: unknown },
+  ): void {
+    if (typeof taskId !== 'string' || taskId === '') return;
+    const kept = this.#reports.get(taskId) ?? {};
+    const toolUseId = textOrNull(reported.toolUseId);
+    const summary = textOrNull(reported.summary);
+    const usage = taskUsageOf(reported.usage);
+    const outputFile = textOrNull(reported.outputFile);
+    this.#reports.set(taskId, {
+      ...kept,
+      ...(toolUseId === null ? {} : { toolUseId: factText(toolUseId) }),
+      ...(summary === null ? {} : { summary: factText(summary) }),
+      ...(usage === null ? {} : { usage }),
+      ...(outputFile === null ? {} : { outputFile: factText(outputFile) }),
+    });
+  }
+
+  /**
+   * The running set (the level, then each start edge the level lacks, by id) and the settled set, within
+   * the tasks budget. Reported at once when anything but a usage changed, with every task's latest usage.
+   * When only a usage changed it is reported once the pace has passed since the last report, or now when
+   * `flush` says so; until then the figures are held, and the next call reports them.
+   */
+  #tasksIfChanged(facts: AgentFact[], flush = false): void {
     const listed = new Set(this.#level.map((task) => task.taskId));
-    const running = [...this.#level, ...this.#edges.filter((edge) => !listed.has(edge.taskId))];
-    const written = tasksKey(running, this.#settled);
-    if (written === this.#running) return;
+    const { running, settled } = fitTasks(
+      [...this.#level, ...this.#edges.filter((edge) => !listed.has(edge.taskId))].map((task) => ({
+        ...task,
+        ...this.#reports.get(task.taskId),
+      })),
+      this.#settled,
+    );
+    const written = tasksKey(running, settled);
+    if (written === this.#running) {
+      this.#usageHeld = false;
+      return;
+    }
+    const seen = tasksKey(running.map(withoutUsage), settled.map(withoutUsage));
+    const now = this.#ticker();
+    if (!flush && seen === this.#seen && now - this.#tasksSentAt < TASKS_USAGE_PACE_MS) {
+      this.#usageHeld = true;
+      return;
+    }
     this.#running = written;
-    facts.push({ kind: 'tasks', runtime: RUNTIME, running, settled: this.#settled });
+    this.#seen = seen;
+    this.#tasksSentAt = now;
+    this.#usageHeld = false;
+    facts.push({ kind: 'tasks', runtime: RUNTIME, running, settled });
   }
 }
 
 /** What a tasks fact states, as one string: the running and the settled sets. */
-function tasksKey(running: readonly RunningTaskEntry[], settled: readonly SettledTaskEntry[]): string {
+function tasksKey(running: readonly TaskReport[], settled: readonly TaskReport[]): string {
   return JSON.stringify([running, settled]);
+}
+
+/** A task's entry with its usage left out: the part of it a person would see change. */
+function withoutUsage<T extends TaskReport>(entry: T): Omit<T, 'usage'> {
+  const { usage: _usage, ...seen } = entry;
+  return seen;
 }
 
 /** The receipt an init message states. `effort` and `pluginErrors` are absent from `readInitFacts`. */
@@ -445,14 +551,26 @@ function withoutSelector(id: string): string {
   return open > 0 ? id.slice(0, open) : id;
 }
 
-/** One running task, or null for an entry with no id. */
+/** One running task, or null for an entry with no id. Its description is cut at its bound. */
 function runningTask(taskId: unknown, type: unknown, description: unknown): RunningTaskEntry | null {
   if (typeof taskId !== 'string' || taskId.trim() === '') return null;
   return {
     taskId,
     type: typeof type === 'string' ? type : '',
-    description: typeof description === 'string' ? description : null,
+    description: typeof description === 'string' ? factText(description) : null,
   };
+}
+
+/** A task message's usage as the wire carries it, or null unless it states three whole counts. */
+function taskUsageOf(usage: unknown): TaskUsage | null {
+  if (typeof usage !== 'object' || usage === null) return null;
+  const counts = usage as { total_tokens?: unknown; tool_uses?: unknown; duration_ms?: unknown };
+  const tokens = wholeOrNull(counts.total_tokens);
+  const toolUses = wholeOrNull(counts.tool_uses);
+  const durationMs = wholeOrNull(counts.duration_ms);
+  return tokens === null || toolUses === null || durationMs === null
+    ? null
+    : { tokens, toolUses, durationMs };
 }
 
 /** The fragment a streamed content delta carries, or null for every other stream event. */

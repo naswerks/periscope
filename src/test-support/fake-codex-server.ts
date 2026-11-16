@@ -6,6 +6,7 @@
  * that names `app-server` serves line-delimited JSON on stdio until stdin ends. The arguments it was
  * started with are written to stderr, one line, so a test can read them.
  */
+import { CODEX_PINNED_VERSION } from '../host/codex-binary.js';
 import { FakeCodexServer } from './fake-codex.js';
 import type { FakeCodexOptions } from './fake-codex.js';
 
@@ -15,7 +16,7 @@ const options = JSON.parse(process.env['PERISCOPE_FAKE_CODEX'] ?? '{}') as FakeC
 const args = process.argv.slice(2);
 
 if (args.includes('--version')) {
-  process.stdout.write(`${options.versionLine ?? `codex-cli ${options.version ?? '0.162.1'}`}\n`);
+  process.stdout.write(`${options.versionLine ?? `codex-cli ${options.version ?? CODEX_PINNED_VERSION}`}\n`);
   process.exit(0);
 }
 

@@ -92,8 +92,10 @@ export type {
   SkillNaming,
   SpendFacts,
   StateTransitionUpdate,
+  TaskReport,
   TasksFact,
   TaskSettlement,
+  TaskUsage,
   ThinkingItem,
   ToolCallItem,
   ToolResultItem,
@@ -170,6 +172,7 @@ export {
 
 export {
   CACHE_TTLS,
+  COMPACTION_OUTCOMES,
   COMPACTION_STATUSES,
   COMPACTION_TRIGGERS,
   COST_BASES,

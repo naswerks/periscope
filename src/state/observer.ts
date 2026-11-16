@@ -31,17 +31,24 @@ import type { QwenMessage } from '../host/qwen-wire.js';
 import { QwenArmState, qwenRequestsFor } from './qwen-observer.js';
 import type { PiMessage } from '../host/pi-wire.js';
 import { PiArmState, piRequestsFor } from './pi-observer.js';
+import type { CopilotMessage } from '../host/copilot-wire.js';
+import { CopilotArmState, copilotRequestsFor } from './copilot-observer.js';
+import type { OpencodeMessage } from '../host/opencode-wire.js';
+import { OpencodeArmState, opencodeRequestsFor } from './opencode-observer.js';
 
 /**
  * How this observer keys a permission entry. `PermissionRequest` carries no tool_use_id — see below.
  *
- * The name key belongs to this file's own lane — `PermissionRequest` opens it,
- * `PermissionDenied` or the `PreToolUse` close below exits it — and to nobody else. The gate keys
- * its hold entry by tool_use_id (`gate/outcome.ts`) precisely so the close below can never touch a
- * hold whose decision is still outstanding: a second `PreToolUse` for the same tool would
- * otherwise close the first call's live hold and record a resolution that never happened.
+ * The name key belongs to this file's own lane and to nobody else. `PermissionRequest` opens it. A
+ * denial exits it, reported by the `PermissionDenied` hook or by the `system/permission_denied`
+ * message, whichever the CLI sends; a grant exits it at the end of a call of that tool, since the CLI
+ * asks after a call's `PreToolUse` and runs the tool only once it is granted. The gate keys its hold
+ * entry by tool_use_id (`gate/outcome.ts`), so nothing here can touch a hold whose decision is still
+ * outstanding.
  */
 const permissionEntry = (toolName: string): string => `permission:${toolName}`;
+/** How many denials one session remembers having recorded, to tell a denial's second report from a new one. */
+const MAX_REPORTED_DENIALS = 512;
 /** One compaction at a time per session, from either of the two sources that report it. */
 const COMPACTION_ENTRY = 'compaction';
 /** The model-request lane, driven by SDKStatus. */
@@ -60,6 +67,12 @@ export interface CompactionReport {
   readonly trigger: 'manual' | 'auto' | null;
   readonly tokensBefore: number | null;
   readonly tokensAfter: number | null;
+  /**
+   * On `ended`, whether the compaction completed or failed, where the source that ended it says: the
+   * status message states its result, and a boundary or the hook after a compaction means it completed.
+   * Absent on `started`, and from a source that states neither.
+   */
+  readonly outcome?: 'completed' | 'failed';
   /**
    * The native id of what reported the compaction, where the source has one: a Codex compaction is
    * an item, and its fact names the item. Absent for Claude, whose sources are hooks and messages.
@@ -92,6 +105,8 @@ export class SessionObserver {
   readonly #machine: SessionStateMachine;
   /** task_id -> the entryId that task's work is recorded under. */
   readonly #taskEntries = new Map<string, string>();
+  /** The calls whose denial has been recorded, by tool_use_id: the CLI may report one denial twice. */
+  readonly #reportedDenials = new Set<string>();
   /** Whether the agent has reported itself; only its first init message says the session is ready. */
   #reported = false;
   readonly #compactionListeners = new Set<CompactionListener>();
@@ -102,6 +117,10 @@ export class SessionObserver {
   readonly #qwen = new QwenArmState();
   /** What the pi lane remembers; untouched on any other session. */
   readonly #pi = new PiArmState();
+  /** What the Copilot lane remembers; untouched on any other session. */
+  readonly #copilot = new CopilotArmState();
+  /** What the opencode lane remembers; untouched on any other session. */
+  readonly #opencode = new OpencodeArmState();
 
   constructor(machine: SessionStateMachine, options: SessionObserverOptions = {}) {
     this.#machine = machine;
@@ -257,6 +276,61 @@ export class SessionObserver {
         trigger: outcome.compaction.trigger,
         tokensBefore: outcome.compaction.tokensBefore,
         tokensAfter: null,
+        ...(outcome.compaction.outcome === undefined ? {} : { outcome: outcome.compaction.outcome }),
+      };
+      for (const listener of this.#compactionListeners) listener(report);
+    }
+    return recorded;
+  }
+
+  /**
+   * Every message a Copilot process yields: Copilot's lane, translated by `copilot-observer.ts` and recorded
+   * here, so its first `ready` carries the tier and its compaction is reported like any other. Returns what
+   * it recorded.
+   */
+  observeCopilotMessage(message: CopilotMessage): Result<SessionTransition>[] {
+    const outcome = copilotRequestsFor(message, this.#copilot, {
+      state: this.#machine.state,
+      controlTier: this.#controlTier,
+      isOpen: (entryId) => this.#isOpen(entryId),
+    });
+    if (outcome.requests.some((request) => request.to === 'ready')) this.#reported = true;
+    const recorded = outcome.requests.map((request) => this.#machine.record(request));
+    if (outcome.compaction !== null) {
+      // Copilot states the trigger, the tokens before and, at the end, the tokens after and its success.
+      const report: CompactionReport = {
+        status: outcome.compaction.status,
+        trigger: outcome.compaction.trigger,
+        tokensBefore: outcome.compaction.tokensBefore,
+        tokensAfter: outcome.compaction.tokensAfter,
+        ...(outcome.compaction.outcome === undefined ? {} : { outcome: outcome.compaction.outcome }),
+      };
+      for (const listener of this.#compactionListeners) listener(report);
+    }
+    return recorded;
+  }
+
+  /**
+   * Every message an opencode process yields: opencode's lane, translated by `opencode-observer.ts` and
+   * recorded here, so its first `ready` carries the tier and its compaction is reported like any other.
+   * Returns what it recorded.
+   */
+  observeOpencodeMessage(message: OpencodeMessage): Result<SessionTransition>[] {
+    const outcome = opencodeRequestsFor(message, this.#opencode, {
+      state: this.#machine.state,
+      controlTier: this.#controlTier,
+      isOpen: (entryId) => this.#isOpen(entryId),
+    });
+    if (outcome.requests.some((request) => request.to === 'ready')) this.#reported = true;
+    const recorded = outcome.requests.map((request) => this.#machine.record(request));
+    if (outcome.compaction !== null) {
+      // opencode states the trigger and no token figures; its end is one of two events, by how it came out.
+      const report: CompactionReport = {
+        status: outcome.compaction.status,
+        trigger: outcome.compaction.trigger,
+        tokensBefore: null,
+        tokensAfter: null,
+        ...(outcome.compaction.outcome === undefined ? {} : { outcome: outcome.compaction.outcome }),
       };
       for (const listener of this.#compactionListeners) listener(report);
     }
@@ -267,7 +341,11 @@ export class SessionObserver {
   #reportCompaction(wasCompacting: boolean, figures: CompactionFigures): void {
     const compacting = this.#isOpen(COMPACTION_ENTRY);
     if (compacting === wasCompacting) return;
-    const report: CompactionReport = { status: compacting ? 'started' : 'ended', ...figures };
+    // An outcome is an end's: a source that opens the compaction says nothing of how it comes out.
+    const { outcome, ...stated } = figures;
+    const report: CompactionReport = compacting
+      ? { status: 'started', ...stated }
+      : { status: 'ended', ...stated, ...(outcome === undefined ? {} : { outcome }) };
     for (const listener of this.#compactionListeners) listener(report);
   }
 
@@ -302,7 +380,7 @@ export class SessionObserver {
     }
 
     if (message.type === 'system' && message.subtype === 'status') {
-      return statusRequests(message.status, (detail) => cause('system/status', detail));
+      return statusRequests(message, (detail) => cause('system/status', detail));
     }
 
     if (message.type === 'system' && message.subtype === 'session_state_changed') {
@@ -381,15 +459,97 @@ export class SessionObserver {
       ];
     }
 
+    if (message.type === 'system' && message.subtype === 'permission_denied') {
+      // The CLI's own report that it denied a call it had asked about, which is the only report where
+      // the `PermissionDenied` hook does not fire. It closes the permission the `PermissionRequest`
+      // hook opened. With none of this lane's open (a denial this host's own gate made), the gate's
+      // outcome is the record and this says nothing more.
+      const held = permissionEntry(message.tool_name);
+      if (!this.#isOpen(held) || !this.#firstReportOfDenial(message.tool_use_id)) return [];
+      const kind =
+        typeof message.decision_reason_type === 'string' ? ` (${message.decision_reason_type})` : '';
+      return [
+        {
+          to: 'working',
+          entry: { op: 'close', entryId: held },
+          cause: cause(
+            'system/permission_denied',
+            `${message.tool_name} was denied${kind}: ${message.decision_reason ?? message.message}`,
+          ),
+        },
+      ];
+    }
+
+    if (message.type === 'assistant') {
+      // The CLI states a model request's start (`status: 'requesting'`) and nothing at its end, so the
+      // answer is the end: the session's own assistant message closes the request it answers.
+      //
+      // A status names no thread: `SDKStatusMessage` carries no parent id. The CLI sends one for the
+      // session's own model requests only, and none for a sub-agent's (measured on the pinned CLI, and
+      // held by the trace probe's sub-agent test), so the entry a status opens is always a request of
+      // the session's own, and the session's own next answer is the nearest one there is. A sub-agent's
+      // message answers a request of the sub-agent's, which opened no entry here, and closes nothing.
+      if (message.parent_tool_use_id !== null || !this.#isOpen(REQUEST_ENTRY)) return [];
+      return [
+        {
+          to: 'working',
+          entry: { op: 'close', entryId: REQUEST_ENTRY },
+          cause: cause('assistant', 'the model answered, so its request finished'),
+        },
+      ];
+    }
+
     if (message.type === 'result') {
       const clean = message.subtype === 'success';
       const why = clean
         ? `the turn completed in ${message.duration_ms}ms`
         : `the turn ended ${message.subtype}${'terminal_reason' in message && message.terminal_reason !== undefined ? ` (${message.terminal_reason})` : ''}`;
-      return [{ to: clean ? 'idle' : 'errored', cause: cause('result', why) }];
+      return [
+        {
+          to: clean ? 'idle' : 'errored',
+          ...this.#requestLeftOpen(),
+          cause: cause('result', why),
+        },
+      ];
     }
 
     return [];
+  }
+
+  /**
+   * The close of a model request still open when its turn ends: one that was interrupted, or failed,
+   * got no answer to close it. Nothing when none is open, so a turn's end names no entry it did not close.
+   */
+  #requestLeftOpen(): { readonly entry?: EntryOp } {
+    return this.#isOpen(REQUEST_ENTRY) ? { entry: { op: 'close', entryId: REQUEST_ENTRY } } : {};
+  }
+
+  /**
+   * The close of a permission outstanding for `toolName` when a call of that tool has run: the CLI asks
+   * after a call's `PreToolUse` and runs the tool only once it is granted, so the tool's own end is the
+   * grant's sign. Nothing when none is outstanding.
+   */
+  #grantedPermission(toolName: string, cause: (detail: string) => TransitionCause): TransitionRequest[] {
+    const held = permissionEntry(toolName);
+    if (!this.#isOpen(held)) return [];
+    return [
+      {
+        to: 'working',
+        entry: { op: 'close', entryId: held },
+        cause: cause(`the permission for ${toolName} was granted and the tool ran`),
+      },
+    ];
+  }
+
+  /** Whether this is the first report of the denial of call `toolUseId`; remembers it when it is. */
+  #firstReportOfDenial(toolUseId: string): boolean {
+    if (this.#reportedDenials.has(toolUseId)) return false;
+    if (this.#reportedDenials.size >= MAX_REPORTED_DENIALS) {
+      const oldest = this.#reportedDenials.values().next().value;
+      if (oldest !== undefined) this.#reportedDenials.delete(oldest);
+    }
+    this.#reportedDenials.add(toolUseId);
+    return true;
   }
 
   #taskUpdateRequests(
@@ -448,33 +608,25 @@ export class SessionObserver {
     });
 
     switch (input.hook_event_name) {
-      case 'PreToolUse': {
-        // Two records, in order: the tool running means any outstanding permission for it
-        // resolved, and that resolution is the permission entry's exit on the allow path.
-        const requests: TransitionRequest[] = [];
-        const held = permissionEntry(input.tool_name);
-        if (this.#isOpen(held)) {
-          requests.push({
+      case 'PreToolUse':
+        // A call's `PreToolUse` comes before its own permission request, so a permission outstanding
+        // here is another call's: this call starting says nothing of it, and it is left open.
+        return [
+          {
             to: 'working',
-            entry: { op: 'close', entryId: held },
-            cause: cause(`the permission for ${input.tool_name} resolved and the tool is running`),
-          });
-        }
-        requests.push({
-          to: 'working',
-          entry: {
-            op: 'open',
-            entryId: input.tool_use_id,
-            activity: { kind: 'tool', name: input.tool_name },
-            agentId: input.agent_id ?? null,
+            entry: {
+              op: 'open',
+              entryId: input.tool_use_id,
+              activity: { kind: 'tool', name: input.tool_name },
+              agentId: input.agent_id ?? null,
+            },
+            cause: cause(`${input.tool_name} started`),
           },
-          cause: cause(`${input.tool_name} started`),
-        });
-        return requests;
-      }
+        ];
 
       case 'PostToolUse':
         return [
+          ...this.#grantedPermission(input.tool_name, cause),
           {
             to: 'working',
             entry: { op: 'close', entryId: input.tool_use_id },
@@ -484,6 +636,7 @@ export class SessionObserver {
 
       case 'PostToolUseFailure':
         return [
+          ...this.#grantedPermission(input.tool_name, cause),
           {
             to: 'working',
             entry: { op: 'close', entryId: input.tool_use_id },
@@ -509,6 +662,7 @@ export class SessionObserver {
         return [
           {
             to: 'idle',
+            ...this.#requestLeftOpen(),
             cause: cause(
               `the turn ended cleanly${
                 input.background_tasks !== undefined && input.background_tasks.length > 0
@@ -625,7 +779,9 @@ export class SessionObserver {
         // A denial. An outage in the same path arrives as cause kind `refusal` with a refusal
         // reason — two independent discriminators apart, because an infrastructure failure
         // wearing a denial's clothes impersonates a human "no", and that is the most expensive
-        // confusion a controller can make.
+        // confusion a controller can make. The CLI reports one denial here, as a
+        // `system/permission_denied` message, or as both: the first report is the record.
+        if (!this.#firstReportOfDenial(input.tool_use_id)) return [];
         return [
           {
             to: 'working',
@@ -674,7 +830,17 @@ const elicitationEntry = (elicitationId: string | undefined, server: string): st
 /** What a compaction-source message states about the compaction, or null for any other message. */
 function messageCompactionFigures(message: SDKMessage): CompactionFigures | null {
   if (message.type === 'system' && message.subtype === 'status') {
-    return { trigger: null, tokensBefore: null, tokensAfter: null };
+    const result = (message as { compact_result?: unknown }).compact_result;
+    return {
+      trigger: null,
+      tokensBefore: null,
+      tokensAfter: null,
+      ...(result === 'failed'
+        ? { outcome: 'failed' as const }
+        : result === 'success'
+          ? { outcome: 'completed' as const }
+          : {}),
+    };
   }
   if (message.type === 'system' && message.subtype === 'compact_boundary') {
     const metadata = message.compact_metadata;
@@ -682,6 +848,8 @@ function messageCompactionFigures(message: SDKMessage): CompactionFigures | null
       trigger: metadata.trigger,
       tokensBefore: metadata.pre_tokens,
       tokensAfter: metadata.post_tokens ?? null,
+      // A boundary is written only by a compaction that produced its summary.
+      outcome: 'completed',
     };
   }
   return null;
@@ -689,19 +857,37 @@ function messageCompactionFigures(message: SDKMessage): CompactionFigures | null
 
 /** What a compaction hook states about the compaction, or null for any other hook. */
 function hookCompactionFigures(input: HookInput): CompactionFigures | null {
-  if (input.hook_event_name === 'PreCompact' || input.hook_event_name === 'PostCompact') {
+  if (input.hook_event_name === 'PreCompact') {
     return { trigger: input.trigger, tokensBefore: null, tokensAfter: null };
+  }
+  if (input.hook_event_name === 'PostCompact') {
+    // The hook after a compaction carries the summary it produced.
+    return { trigger: input.trigger, tokensBefore: null, tokensAfter: null, outcome: 'completed' };
   }
   return null;
 }
 
+/** What a status message states: the SDK's status, and on the one that ends a compaction, its outcome. */
+interface StatusReport {
+  readonly status: 'compacting' | 'requesting' | null;
+  readonly compact_result?: 'success' | 'failed';
+  readonly compact_error?: string;
+}
+
 /**
  * `SDKStatus` -> the request/compaction lanes. Null is the exit, not an absence of information.
+ *
+ * A null status that says a compaction failed (`compact_result: 'failed'`) closes the compaction entry
+ * as well as the request: a failed compaction is followed by no boundary and, as the SDK's types read,
+ * by no `PostCompact` (whose input carries the summary a compaction produced), so this is the only exit
+ * it has. A compaction that succeeded is closed by its boundary or its hook, so its end is
+ * reported with the token counts the boundary states.
  */
 function statusRequests(
-  status: 'compacting' | 'requesting' | null,
+  report: StatusReport,
   cause: (detail: string) => TransitionCause,
 ): TransitionRequest[] {
+  const status = report.status;
   if (status === 'requesting') {
     return [
       {
@@ -722,11 +908,24 @@ function statusRequests(
     ];
   }
 
-  return [
+  const closed: TransitionRequest[] = [
     {
       to: 'working',
       entry: { op: 'close', entryId: REQUEST_ENTRY },
       cause: cause('the model request finished'),
+    },
+  ];
+  if (report.compact_result !== 'failed') return closed;
+  const error =
+    typeof report.compact_error === 'string' && report.compact_error !== ''
+      ? `: ${report.compact_error}`
+      : '';
+  return [
+    ...closed,
+    {
+      to: 'working',
+      entry: { op: 'close', entryId: COMPACTION_ENTRY },
+      cause: cause(`the compaction failed${error}`),
     },
   ];
 }

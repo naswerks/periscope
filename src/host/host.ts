@@ -66,6 +66,7 @@ import type {
   WorkspaceReleaseEntry,
   WorkspaceReleaseEntryResult,
 } from '../control/frames.js';
+import { fitTransition } from '../control/transition-budget.js';
 import {
   WORKSPACE_PAGE_SIZE,
   hostConfigureResult,
@@ -104,7 +105,7 @@ import { QWEN_PINNED_VERSION } from './qwen-binary.js';
 import { qwenEndpointEnv, qwenEndpointRoutes } from './qwen-endpoints.js';
 import { QwenFactLift } from './qwen-facts.js';
 import { createQwenSessionGate, qwenDeadlineOrderRefusal } from './qwen-gate.js';
-import { qwenAskRules } from './qwen-home.js';
+import { QWEN_CODE_MODE_TOOLS, QWEN_DENIED_TOOLS, qwenAskRules } from './qwen-home.js';
 import { QwenItemFill } from './qwen-items.js';
 import { qwenMcpServers } from './qwen-mcp.js';
 import { qwenHandedOverSkills, qwenSkillDirectories } from './qwen-pack.js';
@@ -124,10 +125,41 @@ import type { PiRuntimeConfig } from './pi-process.js';
 import type { PiRuntimeRead } from './pi-runtime.js';
 import { PI_MESSAGE_BINDING, piNativeRuntime, unavailablePiEntry } from './pi-runtime.js';
 import type { PiMessage } from './pi-wire.js';
+import { copilotEndpointEnv, copilotEndpointRoutes } from './copilot-endpoints.js';
+import { CopilotFactLift } from './copilot-facts.js';
+import { copilotDeadlineOrderRefusal, createCopilotSessionGate } from './copilot-gate.js';
+import { CopilotItemFill } from './copilot-items.js';
+import { copilotMcpServers } from './copilot-mcp.js';
+import { copilotSkillDirectories } from './copilot-pack.js';
+import type { CopilotRuntimeConfig } from './copilot-process.js';
+import type { CopilotRuntimeRead } from './copilot-runtime.js';
+import { COPILOT_MESSAGE_BINDING, copilotNativeRuntime, unavailableCopilotEntry } from './copilot-runtime.js';
+import type { CopilotMessage } from './copilot-wire.js';
+import { opencodeEndpointEnv, opencodeEndpointRoutes } from './opencode-endpoints.js';
+import { OpencodeFactLift } from './opencode-facts.js';
+import { createOpencodeSessionGate } from './opencode-gate.js';
+import { OpencodeItemFill } from './opencode-items.js';
+import { opencodeMcpServers } from './opencode-mcp.js';
+import { opencodeSkillDirectories } from './opencode-pack.js';
+import type { OpencodeRuntimeConfig } from './opencode-process.js';
+import type { OpencodeRuntimeRead } from './opencode-runtime.js';
+import {
+  OPENCODE_MESSAGE_BINDING,
+  opencodeNativeRuntime,
+  unavailableOpencodeEntry,
+} from './opencode-runtime.js';
+import type { OpencodeMessage } from './opencode-wire.js';
 import type { Decider } from '../gate/decision.js';
 import type { LocalGate } from '../gate/local.js';
 import type { ToolFamilies } from '../gate/local.js';
-import { CODEX_TOOL_FAMILIES, PI_TOOL_FAMILIES, QWEN_TOOL_FAMILIES, localGate } from '../gate/local.js';
+import {
+  CODEX_TOOL_FAMILIES,
+  COPILOT_TOOL_FAMILIES,
+  OPENCODE_TOOL_FAMILIES,
+  PI_TOOL_FAMILIES,
+  QWEN_TOOL_FAMILIES,
+  localGate,
+} from '../gate/local.js';
 import type { GateOutcome } from '../gate/outcome.js';
 import { recordGateOutcome } from '../gate/outcome.js';
 import {
@@ -146,6 +178,8 @@ import { factLiftFor } from '../sessions/fact-lift.js';
 import { composeSpawnEnv } from '../sessions/spawn-env.js';
 import {
   CODEX_RUNTIME,
+  COPILOT_RUNTIME,
+  OPENCODE_RUNTIME,
   PI_RUNTIME,
   QWEN_RUNTIME,
   agentSkillsFor,
@@ -172,7 +206,8 @@ import {
   readRepositoryFile,
   readWorkspaceFile,
 } from './repository-read.js';
-import { agentTranscriptPaths, homeDirectory, nodePathResolver } from './paths.js';
+import { canonicalPath } from './canonical-path.js';
+import { agentTranscriptPaths, homeDirectory, machineNames, nodePathResolver } from './paths.js';
 import { sessionTempRoots } from './write-roots.js';
 import {
   QWEN_MODE_MAP,
@@ -291,6 +326,13 @@ export interface ComposeSessionOptions {
    * @internal
    */
   readonly spawnedWith?: (env: Readonly<Record<string, string | undefined>>) => void;
+  /**
+   * The protocol the link negotiated, read as each item is composed; null before the first handshake,
+   * and absent on a session no link carries. A spawned agent's items are composed only on a link that
+   * carries an item's parent (`itemParentsAtLinkVersion`).
+   * @internal
+   */
+  readonly linkVersion?: () => number | null;
 }
 
 /** One composed session: the handle, its machine, and how to take the wiring back down. */
@@ -389,10 +431,21 @@ export function composeSession(options: ComposeSessionOptions): Result<ComposedS
   if (runtime === PI_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
     return composePiSession(options, machine, observer, clock);
   }
+  if (runtime === COPILOT_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
+    return composeCopilotSession(options, machine, observer, clock);
+  }
+  if (runtime === OPENCODE_RUNTIME && options.registry.nativeRuntime(runtime) !== null) {
+    return composeOpencodeSession(options, machine, observer, clock);
+  }
 
   // The conversation items: read from the session's messages, with the prompt its hook reports and the
   // calls this host's gate refused, which end in a `blocked` result.
-  const items = runtime === DEFAULT_RUNTIME ? new ClaudeItemFill(options.sessionKey) : null;
+  const items =
+    runtime === DEFAULT_RUNTIME
+      ? new ClaudeItemFill(options.sessionKey, {
+          spawnedItems: () => itemParentsAtLinkVersion(options.linkVersion?.() ?? null),
+        })
+      : null;
 
   // The gate records every outcome on the machine. That emission is what makes a deny, an outage and
   // an expiry visible off-box at all, so it is unconditional and the embedder's listener is extra.
@@ -494,7 +547,10 @@ function composeCodexSession(
   const inverted = codexDeadlineOrderRefusal(decisionTimeoutMs);
   if (inverted !== null) return refuse<ComposedSession>('gate-deadlines-inverted', inverted);
 
-  const items = new CodexItemFill();
+  // A sub-agent's thread fills items only on a link that carries an item's parent.
+  const items = new CodexItemFill({
+    spawnedItems: () => itemParentsAtLinkVersion(options.linkVersion?.() ?? null),
+  });
   // The channel's own refusals (a request with the wrong token, a malformed line) reach the host's log
   // through the session once it exists.
   let reportChannel: (detail: string) => void = () => undefined;
@@ -520,6 +576,7 @@ function composeCodexSession(
       observer.refused({ kind: 'refusal', event: name, detail });
       options.onRefusal?.(refusal(name, detail));
     },
+    onDegradePastCap: (name, detail) => options.onRefusal?.(refusal(name, detail)),
     onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
     onChannelRefused: (detail) => reportChannel(detail),
     ...spawnedWithOf(options),
@@ -577,7 +634,10 @@ function composeQwenSession(
   const inverted = qwenDeadlineOrderRefusal(decisionTimeoutMs);
   if (inverted !== null) return refuse<ComposedSession>('gate-deadlines-inverted', inverted);
 
-  const items = new QwenItemFill(options.sessionKey);
+  // A sub-agent's message fills items only on a link that carries an item's parent.
+  const items = new QwenItemFill(options.sessionKey, {
+    spawnedItems: () => itemParentsAtLinkVersion(options.linkVersion?.() ?? null),
+  });
   const gate = createQwenSessionGate({
     sessionKey: options.sessionKey,
     cwd: options.cwd,
@@ -586,6 +646,8 @@ function composeQwenSession(
     decisionTimeoutMs,
     holdAfterMs: options.gate?.holdAfterMs ?? DEFAULT_HOLD_AFTER_MS,
     askRules: qwenAskRules(Object.keys(options.request?.mcpServers ?? {})),
+    deniedTools: QWEN_DENIED_TOOLS,
+    codeModeTools: QWEN_CODE_MODE_TOOLS,
     onOutcome: (outcome) => {
       recordGateOutcome(machine, outcome);
       if (outcome.kind === 'deny' || outcome.kind === 'refused' || outcome.kind === 'expired') {
@@ -599,6 +661,7 @@ function composeQwenSession(
       observer.refused({ kind: 'refusal', event: name, detail });
       options.onRefusal?.(refusal(name, detail));
     },
+    onDegradePastCap: (name, detail) => options.onRefusal?.(refusal(name, detail)),
     onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
     ...spawnedWithOf(options),
   });
@@ -675,6 +738,7 @@ function composePiSession(
       observer.refused({ kind: 'refusal', event: name, detail });
       options.onRefusal?.(refusal(name, detail));
     },
+    onDegradePastCap: (name, detail) => options.onRefusal?.(refusal(name, detail)),
     onSpawnDegrades: (names, level) => observer.stateSpawnDegrades(names, level),
     onChannelRefused: (detail) => reportChannel(detail),
     ...spawnedWithOf(options),
@@ -709,6 +773,171 @@ function composePiSession(
       items,
     },
     PI_MESSAGE_BINDING,
+  );
+  observer.created(`a session was requested in ${options.cwd}`);
+  return ok({ sessionKey: options.sessionKey, session: created.value, machine, observer, detach });
+}
+
+/**
+ * `composeSession` for a session on Copilot: no SDK hooks, Copilot's own forwarding, and the session's gate:
+ * the runtime's pre-tool hook answers `ask` for every call, and the permission request that raises asks the
+ * gate. The gate's decision is the one a Claude call gets: the same local gate, decider, deadlines and
+ * outcome record.
+ */
+function composeCopilotSession(
+  options: ComposeSessionOptions,
+  machine: SessionStateMachine,
+  observer: SessionObserver,
+  clock: Clock,
+): Result<ComposedSession> {
+  const decisionTimeoutMs = options.gate?.decisionTimeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS;
+  const inverted = copilotDeadlineOrderRefusal(decisionTimeoutMs);
+  if (inverted !== null) return refuse<ComposedSession>('gate-deadlines-inverted', inverted);
+
+  // The items name each tool as the gate spells it, so the gate is read once it exists.
+  let spell: (name: string) => string = (name) => name;
+  // A sub-agent's event fills items only on a link that carries an item's parent.
+  const items = new CopilotItemFill(options.sessionKey, {
+    spawnedItems: () => itemParentsAtLinkVersion(options.linkVersion?.() ?? null),
+    toolName: (name) => spell(name),
+  });
+  const gate = createCopilotSessionGate({
+    sessionKey: options.sessionKey,
+    cwd: options.cwd,
+    decide: options.decide,
+    ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+    decisionTimeoutMs,
+    holdAfterMs: options.gate?.holdAfterMs ?? DEFAULT_HOLD_AFTER_MS,
+    servers: Object.keys(options.request?.mcpServers ?? {}),
+    onOutcome: (outcome) => {
+      recordGateOutcome(machine, outcome);
+      if (outcome.kind === 'deny' || outcome.kind === 'refused' || outcome.kind === 'expired') {
+        items.gateBlocked(outcome.request.toolUseId);
+      }
+      options.onOutcome?.(outcome);
+    },
+    // A degrade is recorded on the session's own machine, so it rides the wire as the session's state,
+    // and reaches the host's log beside it.
+    onDegrade: (name, detail) => {
+      observer.refused({ kind: 'refusal', event: name, detail });
+      options.onRefusal?.(refusal(name, detail));
+    },
+    onDegradePastCap: (name, detail) => options.onRefusal?.(refusal(name, detail)),
+    onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
+    ...spawnedWithOf(options),
+  });
+  spell = (name) => gate.toolName(name);
+
+  const created = options.registry.create({
+    ...(options.request ?? {}),
+    cwd: options.cwd,
+    nativeGate: gate,
+    ...spawnedWithOf(options),
+  });
+  if (!created.ok) return refuse<ComposedSession>(created.refusal.reason, created.refusal.detail);
+  // The registry started this session on Copilot's own runtime, so its messages are Copilot's.
+  const session = created.value as unknown as HostedSession<CopilotMessage>;
+  // The session's plugin directories as the runtime takes them: their skills by name, and the directories
+  // it could not take, reported in the receipt.
+  const skills = copilotSkillDirectories((options.request?.plugins ?? []).map((plugin) => plugin.path));
+  const lift = new CopilotFactLift({
+    undeliveredPlugins: skills.problems,
+    handedOverSkills: qwenHandedOverSkills(skills.directories),
+  });
+  const detach = forwardNativeSession(
+    {
+      sessionKey: options.sessionKey,
+      session,
+      observer,
+      sink: options.sink,
+      clock,
+      ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
+      lift,
+      items,
+    },
+    COPILOT_MESSAGE_BINDING,
+  );
+  observer.created(`a session was requested in ${options.cwd}`);
+  return ok({ sessionKey: options.sessionKey, session: created.value, machine, observer, detach });
+}
+
+/**
+ * `composeSession` for a session on opencode: no SDK hooks, opencode's own forwarding, and the session's gate:
+ * every session is created with rules that send every action to ask, and each permission request the server
+ * raises asks the gate. The gate's decision is the one a Claude call gets: the same local gate, decider,
+ * deadlines and outcome record. opencode waits on a request with no timeout of its own, so this host's deadline
+ * is always the one that ends a wait.
+ */
+function composeOpencodeSession(
+  options: ComposeSessionOptions,
+  machine: SessionStateMachine,
+  observer: SessionObserver,
+  clock: Clock,
+): Result<ComposedSession> {
+  const decisionTimeoutMs = options.gate?.decisionTimeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS;
+
+  // The items name each tool as the gate spells it, so the gate is read once it exists.
+  let spell: (name: string) => string = (name) => name;
+  // A subagent's event fills items only on a link that carries an item's parent.
+  const items = new OpencodeItemFill(options.sessionKey, {
+    spawnedItems: () => itemParentsAtLinkVersion(options.linkVersion?.() ?? null),
+    toolName: (name) => spell(name),
+  });
+  const gate = createOpencodeSessionGate({
+    sessionKey: options.sessionKey,
+    cwd: options.cwd,
+    decide: options.decide,
+    ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+    decisionTimeoutMs,
+    holdAfterMs: options.gate?.holdAfterMs ?? DEFAULT_HOLD_AFTER_MS,
+    servers: Object.keys(options.request?.mcpServers ?? {}),
+    onOutcome: (outcome) => {
+      recordGateOutcome(machine, outcome);
+      if (outcome.kind === 'deny' || outcome.kind === 'refused' || outcome.kind === 'expired') {
+        items.gateBlocked(outcome.request.toolUseId, outcome.request.agentId ?? null);
+      }
+      options.onOutcome?.(outcome);
+    },
+    // A degrade is recorded on the session's own machine, so it rides the wire as the session's state,
+    // and reaches the host's log beside it.
+    onDegrade: (name, detail) => {
+      observer.refused({ kind: 'refusal', event: name, detail });
+      options.onRefusal?.(refusal(name, detail));
+    },
+    onDegradePastCap: (name, detail) => options.onRefusal?.(refusal(name, detail)),
+    onSpawnDegrades: (names) => observer.stateSpawnDegrades(names),
+    ...spawnedWithOf(options),
+  });
+  spell = (name) => gate.toolName(name);
+
+  const created = options.registry.create({
+    ...(options.request ?? {}),
+    cwd: options.cwd,
+    nativeGate: gate,
+    ...spawnedWithOf(options),
+  });
+  if (!created.ok) return refuse<ComposedSession>(created.refusal.reason, created.refusal.detail);
+  // The registry started this session on opencode's own runtime, so its messages are opencode's.
+  const session = created.value as unknown as HostedSession<OpencodeMessage>;
+  // The session's plugin directories as the runtime takes them: their skills by name, and the directories
+  // it could not take, reported in the receipt.
+  const skills = opencodeSkillDirectories((options.request?.plugins ?? []).map((plugin) => plugin.path));
+  const lift = new OpencodeFactLift({
+    undeliveredPlugins: skills.problems,
+    handedOverSkills: qwenHandedOverSkills(skills.directories),
+  });
+  const detach = forwardNativeSession(
+    {
+      sessionKey: options.sessionKey,
+      session,
+      observer,
+      sink: options.sink,
+      clock,
+      ...(options.onRefusal === undefined ? {} : { onRefusal: options.onRefusal }),
+      lift,
+      items,
+    },
+    OPENCODE_MESSAGE_BINDING,
   );
   observer.created(`a session was requested in ${options.cwd}`);
   return ok({ sessionKey: options.sessionKey, session: created.value, machine, observer, detach });
@@ -897,6 +1126,13 @@ export interface PeriscopeHostOptions {
    */
   readonly maxSessions?: number;
   /**
+   * Whether a Claude session asks for its subagents' progress summaries (a running subagent states what
+   * it is doing about every 30 seconds; each summary is one more model call on the subagent's own model).
+   * Defaults to true. An operator's own setting: no controller and no session can move it. Ignored when a
+   * `registry` is supplied, which carries its own.
+   */
+  readonly agentProgressSummaries?: boolean;
+  /**
    * Where sessions run. With a provider the controller's `cwd` is advisory: the provider decides,
    * and the session's `spawning` transition carries the directory it actually got, so the
    * controller learns where its session is rather than assuming.
@@ -1019,6 +1255,26 @@ export interface PeriscopeHostOptions {
    * @internal
    */
   readonly pi?: PeriscopePiOptions;
+  /**
+   * Copilot, offered beside Claude: how a Copilot session's runtime is started through the operator's SDK
+   * install, and the read at start that decides its entry in the hello (`readCopilotRuntime`). The host
+   * builds its registry with Copilot's own runtime when it builds one; an embedder passing its own
+   * `registry` gives it the runtime itself. Omitted, the hello does not list Copilot and a session naming
+   * `copilot` is refused `runtime-unavailable`. The daemon composes it from its config keys.
+   *
+   * @internal
+   */
+  readonly copilot?: PeriscopeCopilotOptions;
+  /**
+   * opencode, offered beside Claude: how an opencode session's host process is started from the operator's
+   * SDK install, and the read at start that decides its entry in the hello (`readOpencodeRuntime`). The host
+   * builds its registry with opencode's own runtime when it builds one; an embedder passing its own
+   * `registry` gives it the runtime itself. Omitted, the hello does not list opencode and a session naming
+   * `opencode` is refused `runtime-unavailable`. The daemon composes it from its config keys.
+   *
+   * @internal
+   */
+  readonly opencode?: PeriscopeOpencodeOptions;
   readonly registry?: SessionRegistry;
   /** How the link is built. Defaults to the real `ControllerLink`. See `HostLink`. */
   readonly link?: (handlers: LinkHandlers) => HostLink;
@@ -1065,6 +1321,30 @@ export interface PeriscopePiOptions {
   readonly runtime: PiRuntimeConfig;
   /** The read at start; the binary composes `readPiRuntime` over the same CLI and base home. */
   readonly read: () => Promise<PiRuntimeRead>;
+}
+
+/**
+ * Copilot, as a host offers it.
+ *
+ * @internal
+ */
+export interface PeriscopeCopilotOptions {
+  /** The SDK install, the base home and the seams a session's runtime starts with. */
+  readonly runtime: CopilotRuntimeConfig;
+  /** The read at start; the binary composes `readCopilotRuntime` over the same install and base home. */
+  readonly read: () => Promise<CopilotRuntimeRead>;
+}
+
+/**
+ * opencode, as a host offers it.
+ *
+ * @internal
+ */
+export interface PeriscopeOpencodeOptions {
+  /** The SDK install, the base home and the seams a session's host process starts with. */
+  readonly runtime: OpencodeRuntimeConfig;
+  /** The read at start; the binary composes `readOpencodeRuntime` over the same install and base home. */
+  readonly read: () => Promise<OpencodeRuntimeRead>;
 }
 
 /** What a host reports. Data rather than log lines, so an embedder decides the format. */
@@ -1294,6 +1574,10 @@ export class PeriscopeHost {
   #qwenEntry: HostAgentEntry | undefined;
   /** pi's entry as its read at start left it; undefined on a host that does not offer pi. */
   #piEntry: HostAgentEntry | undefined;
+  /** Copilot's entry as its read at start left it; undefined on a host that does not offer Copilot. */
+  #copilotEntry: HostAgentEntry | undefined;
+  /** opencode's entry as its read at start left it; undefined on a host that does not offer opencode. */
+  #opencodeEntry: HostAgentEntry | undefined;
   /**
    * The entries the hello lists after Claude's, fitted to the runtimes list's bound with Claude's
    * first: an entry that would push the list past it rides with no models, so one runtime's catalog
@@ -1343,7 +1627,14 @@ export class PeriscopeHost {
         homeDir: options.homeDir ?? '',
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
-        ...(options.codex === undefined && options.qwen === undefined && options.pi === undefined
+        ...(options.agentProgressSummaries === undefined
+          ? {}
+          : { agentProgressSummaries: options.agentProgressSummaries }),
+        ...(options.codex === undefined &&
+        options.qwen === undefined &&
+        options.pi === undefined &&
+        options.copilot === undefined &&
+        options.opencode === undefined
           ? {}
           : {
               runtimes: {
@@ -1369,6 +1660,22 @@ export class PeriscopeHost {
                       [PI_RUNTIME]: piNativeRuntime({
                         ...options.pi.runtime,
                         endpoints: piEndpointRoutes(options.endpoints ?? []),
+                      }),
+                    }),
+                ...(options.copilot === undefined
+                  ? {}
+                  : {
+                      [COPILOT_RUNTIME]: copilotNativeRuntime({
+                        ...options.copilot.runtime,
+                        endpoints: copilotEndpointRoutes(options.endpoints ?? []),
+                      }),
+                    }),
+                ...(options.opencode === undefined
+                  ? {}
+                  : {
+                      [OPENCODE_RUNTIME]: opencodeNativeRuntime({
+                        ...options.opencode.runtime,
+                        endpoints: opencodeEndpointRoutes(options.endpoints ?? []),
                       }),
                     }),
               },
@@ -1438,12 +1745,16 @@ export class PeriscopeHost {
     const readCodex = this.#options.codex?.read;
     const readQwen = this.#options.qwen?.read;
     const readPi = this.#options.pi?.read;
+    const readCopilot = this.#options.copilot?.read;
+    const readOpencode = this.#options.opencode?.read;
     const servesHomeAlone = this.#repositories.size === 0;
     if (
       readCatalog === undefined &&
       readCodex === undefined &&
       readQwen === undefined &&
       readPi === undefined &&
+      readCopilot === undefined &&
+      readOpencode === undefined &&
       servesHomeAlone
     ) {
       this.#link.start();
@@ -1456,8 +1767,10 @@ export class PeriscopeHost {
       readCodex === undefined ? Promise.resolve(undefined) : settledCodexRead(readCodex),
       readQwen === undefined ? Promise.resolve(undefined) : settledQwenRead(readQwen),
       readPi === undefined ? Promise.resolve(undefined) : settledPiRead(readPi),
+      readCopilot === undefined ? Promise.resolve(undefined) : settledCopilotRead(readCopilot),
+      readOpencode === undefined ? Promise.resolve(undefined) : settledOpencodeRead(readOpencode),
       this.#readRepositoryList(),
-    ]).then(([catalog, codex, qwen, pi, repositories]) => {
+    ]).then(([catalog, codex, qwen, pi, copilot, opencode, repositories]) => {
       if (this.#pendingStart !== pending) return;
       this.#pendingStart = null;
       if (repositories !== undefined) {
@@ -1490,6 +1803,24 @@ export class PeriscopeHost {
           runtime: PI_RUNTIME,
           entry: pi.entry,
           detail: pi.detail,
+        });
+      }
+      if (copilot !== undefined) {
+        this.#copilotEntry = copilot.entry;
+        this.#report({
+          kind: 'runtime-catalog',
+          runtime: COPILOT_RUNTIME,
+          entry: copilot.entry,
+          detail: copilot.detail,
+        });
+      }
+      if (opencode !== undefined) {
+        this.#opencodeEntry = opencode.entry;
+        this.#report({
+          kind: 'runtime-catalog',
+          runtime: OPENCODE_RUNTIME,
+          entry: opencode.entry,
+          detail: opencode.detail,
         });
       }
       if (catalog !== undefined) this.#stampAgent(catalog);
@@ -1853,7 +2184,11 @@ export class PeriscopeHost {
             ? qwenEndpointEnv(endpoint)
             : requested.value.runtime === PI_RUNTIME
               ? piEndpointEnv(endpoint)
-              : endpointSpawnEnv(endpoint);
+              : requested.value.runtime === COPILOT_RUNTIME
+                ? copilotEndpointEnv()
+                : requested.value.runtime === OPENCODE_RUNTIME
+                  ? opencodeEndpointEnv()
+                  : endpointSpawnEnv(endpoint);
 
     const provider = this.#workspaces;
 
@@ -2071,6 +2406,16 @@ export class PeriscopeHost {
       const piServers = piMcpServers(servers.value);
       if (!piServers.ok) return giveBack(piServers.refusal);
     }
+    // A Copilot session takes them in Copilot's own form, the same way.
+    if (requested.value.runtime === COPILOT_RUNTIME) {
+      const copilotServers = copilotMcpServers(servers.value);
+      if (!copilotServers.ok) return giveBack(copilotServers.refusal);
+    }
+    // An opencode session takes them in opencode's own form, the same way.
+    if (requested.value.runtime === OPENCODE_RUNTIME) {
+      const opencodeServers = opencodeMcpServers(servers.value);
+      if (!opencodeServers.ok) return giveBack(opencodeServers.refusal);
+    }
 
     // The host's plugin directories, checked now: one that vanished since it was configured refuses
     // this open by name. The agent would report it in its init message's `plugin_errors`, but only
@@ -2139,6 +2484,7 @@ export class PeriscopeHost {
       sessionKey,
       cwd,
       sink: this.#link,
+      linkVersion: () => this.#link.negotiatedVersion ?? null,
       // A Qwen Code session's shell calls name `cmd`, a word a controller below protocol 17 does not
       // read; its decider is sent none for it there, and the local gate still reads it.
       decide:
@@ -2153,11 +2499,21 @@ export class PeriscopeHost {
         resolve: nodePathResolver,
         protectedPaths: this.#options.protectedPaths,
         home,
+        // A share that names this machine's own drive is that drive's path, and a short name is read as
+        // the folder the file system says it is.
+        localNames: machineNames(),
+        realPath: canonicalPath,
         spawnEnv: () => spawnEnv,
         // A Codex session's tools are Codex's: its own names, its shell read in the grammar it runs
-        // in, and its paths relative to where the call runs.
+        // in, the directory a command runs in held to the protected set, and its paths relative to where
+        // the call runs.
         ...(runtimeOf(requested.value) === CODEX_RUNTIME
-          ? { toolFamilies: CODEX_TOOL_FAMILIES, readsShellDialect: true, resolvesAgainstCallCwd: true }
+          ? {
+              toolFamilies: CODEX_TOOL_FAMILIES,
+              readsShellDialect: true,
+              checksShellCwd: true,
+              resolvesAgainstCallCwd: true,
+            }
           : runtimeOf(requested.value) === QWEN_RUNTIME
             ? // A Qwen Code session's tools are Qwen's: its own names, its shell read in the grammar it
               // runs in, the directory a command runs in held to the protected set, and its relative
@@ -2177,9 +2533,35 @@ export class PeriscopeHost {
                   resolvesAgainstCallCwd: true,
                   resolvesWritesAgainstCallCwd: true,
                 }
-              : this.#options.toolFamilies === undefined
-                ? {}
-                : { toolFamilies: this.#options.toolFamilies }),
+              : runtimeOf(requested.value) === COPILOT_RUNTIME
+                ? // A Copilot session's tools are Copilot's: its own names, its shell read in the grammar it
+                  // runs in, and its relative paths, read and written, placed where the call runs.
+                  {
+                    toolFamilies: COPILOT_TOOL_FAMILIES,
+                    readsShellDialect: true,
+                    resolvesAgainstCallCwd: true,
+                    resolvesWritesAgainstCallCwd: true,
+                  }
+                : runtimeOf(requested.value) === OPENCODE_RUNTIME
+                  ? // An opencode session's actions are opencode's: each path a request names checked one at a
+                    // time, its shell read in the grammar it runs in, the directory a command runs in held to
+                    // the protected set, and its relative paths, read and written, placed where the call runs.
+                    {
+                      toolFamilies: OPENCODE_TOOL_FAMILIES,
+                      readsShellDialect: true,
+                      checksShellCwd: true,
+                      resolvesAgainstCallCwd: true,
+                      resolvesWritesAgainstCallCwd: true,
+                    }
+                  : // A Claude session's tools are the agent SDK's: a relative path a read or a search names
+                    // is a path under where the call runs, not under this process's own directory. A write
+                    // is left to the resolver, as it was: the CLI hands the hook a write's path whole.
+                    {
+                      resolvesAgainstCallCwd: true,
+                      ...(this.#options.toolFamilies === undefined
+                        ? {}
+                        : { toolFamilies: this.#options.toolFamilies }),
+                    }),
       }),
       ...(this.#options.codex === undefined
         ? {}
@@ -2215,6 +2597,11 @@ export class PeriscopeHost {
         ...(sessionHostEnv === undefined ? {} : { hostEnv: sessionHostEnv }),
         ...(runtimeOf(requested.value) === CODEX_RUNTIME && codexRoots.length > 0
           ? { nativeWriteRoots: codexRoots }
+          : {}),
+        // Copilot's read-back holds every directory its runtime allows to the session's own, its temp
+        // folder and its further worktrees, so the open is told them.
+        ...(runtimeOf(requested.value) === COPILOT_RUNTIME && writeRoots.length > 0
+          ? { nativeWriteRoots: writeRoots }
           : {}),
       },
       ...(this.#options.clock === undefined ? {} : { clock: this.#options.clock }),
@@ -2923,6 +3310,8 @@ export class PeriscopeHost {
       ...(this.#codexEntry === undefined ? [] : [this.#codexEntry]),
       ...(this.#qwenEntry === undefined ? [] : [this.#qwenEntry]),
       ...(this.#piEntry === undefined ? [] : [this.#piEntry]),
+      ...(this.#copilotEntry === undefined ? [] : [this.#copilotEntry]),
+      ...(this.#opencodeEntry === undefined ? [] : [this.#opencodeEntry]),
     ];
   }
 
@@ -3224,7 +3613,7 @@ export class PeriscopeHost {
       cause: { kind: 'refusal', event: refused.reason, detail: refused.detail },
       where,
     };
-    const sent = this.#link.send(sessionKey, stateTransitionUpdate(transition));
+    const sent = this.#link.send(sessionKey, stateTransitionUpdate(fitTransition(transition)));
     if (!sent.ok) this.#report({ kind: 'refusal', refusal: sent.refusal, sessionKey });
   }
 
@@ -3263,6 +3652,20 @@ export function decideAtLinkVersion(decide: Decider, version: () => number | nul
     const { shellDialect: _dialect, ...older } = request;
     return decide(older, signal);
   };
+}
+
+/** The first protocol an item may name the call that spawned the agent whose turn it is from. */
+const FIRST_PROTOCOL_CARRYING_ITEM_PARENT = 20;
+
+/**
+ * Whether a link at `version` is sent a spawned agent's items: at 20 or above, and before the first
+ * handshake, as on a link that negotiates nothing. Below 20 an item's `parentId` is read as nothing, so a
+ * spawned agent's item would read as the session's own; such a link is sent none, as version 19 was.
+ *
+ * The version is read when the item is composed, and a frame retained for replay keeps that shape.
+ */
+export function itemParentsAtLinkVersion(version: number | null): boolean {
+  return version === null || version >= FIRST_PROTOCOL_CARRYING_ITEM_PARENT;
 }
 
 /** The first protocol a `repository_read_result` may carry `nextOffset` at. */
@@ -3304,6 +3707,26 @@ async function settledPiRead(read: () => Promise<PiRuntimeRead>): Promise<PiRunt
   } catch (error) {
     const reason = `the pi runtime could not be read: ${describe(error)}`;
     return { entry: unavailablePiEntry(PI_PINNED_VERSION, reason), detail: reason };
+  }
+}
+
+/** The Copilot read, settled: a read that throws is reported as an unavailable runtime, never a failed start. */
+async function settledCopilotRead(read: () => Promise<CopilotRuntimeRead>): Promise<CopilotRuntimeRead> {
+  try {
+    return await read();
+  } catch (error) {
+    const reason = `the Copilot runtime could not be read: ${describe(error)}`;
+    return { entry: unavailableCopilotEntry(reason), detail: reason };
+  }
+}
+
+/** The opencode read, settled: a read that throws is reported as an unavailable runtime, never a failed start. */
+async function settledOpencodeRead(read: () => Promise<OpencodeRuntimeRead>): Promise<OpencodeRuntimeRead> {
+  try {
+    return await read();
+  } catch (error) {
+    const reason = `the opencode runtime could not be read: ${describe(error)}`;
+    return { entry: unavailableOpencodeEntry(reason), detail: reason };
   }
 }
 

@@ -160,6 +160,12 @@ export const REFUSAL_REASONS = [
   //   path-input-missing        a path-taking tool whose input carries no readable path. A call
   //                             whose target cannot be found is not one that can be bounded.
   //   path-unresolvable         normalizing the path failed. Unresolvable is not provably inside.
+  //   path-unplaceable          the path is spelled in a form whose file this host cannot find: a
+  //                             drive-relative path on a drive other than the call's own, whose
+  //                             directory no call states; another user's home (`~name/...`); a device
+  //                             or volume form that maps to no drive path. Every other form is placed
+  //                             where the operating system puts it and checked there, so this names
+  //                             only what is left.
   //   credential-path-denied    the call targets the host's own credential material. The agent runs
   //                             as the same OS user as the host, so file permissions are not a
   //                             boundary against it and this is the only control that is.
@@ -172,6 +178,7 @@ export const REFUSAL_REASONS = [
   //                             a publish can match none of its patterns).
   'path-input-missing',
   'path-unresolvable',
+  'path-unplaceable',
   'credential-path-denied',
   'shell-command-missing',
   'shell-boundary-command',
@@ -548,14 +555,20 @@ export const REFUSAL_REASONS = [
   'gate-sandbox-absent',
 
   // The gate over a runtime that asks this host about every call its own rules send to ask (Qwen
-  // Code's `can_use_tool`), where the host writes those rules for each session. The first is a refusal;
-  // the others are degrades, raised on the session's state lane and never stopping it.
+  // Code's `can_use_tool`), where the host writes those rules for each session. The first is a refusal
+  // at the open and of one call, and a degrade beside; the others are degrades, raised on the session's
+  // state lane and never stopping it.
   //
   //   qwen-ask-rules-not-active    Refused: the open ends because the settings this host wrote for the
   //                                session, the rules that send every built-in tool to ask, did not read
   //                                back whole before the first prompt, or the runtime would not load
   //                                them. Without them a read the runtime allows by default runs
   //                                undecided, past the protected set. The detail says what is missing.
+  //                                Also a degrade, in a session that opened: the runtime's first list of
+  //                                tools names one the settings turn off (a tool they deny, or the one
+  //                                it registers only in code mode), so that part of them is not in
+  //                                force. The session goes on. And the refusal of one call: the runtime
+  //                                asked about a call to a tool the settings deny.
   //   gate-tool-unruled            The runtime listed a tool no ask rule names, so a call to it the
   //                                runtime allows by default runs without asking this host. Raised once
   //                                per tool, when the runtime first lists its tools.
@@ -587,6 +600,45 @@ export const REFUSAL_REASONS = [
   //                                opens; the detail names each source.
   'pi-extension-not-active',
   'gate-foreign-extension',
+
+  // The gate over a runtime whose pre-tool hook answers `ask` for every call and whose permission
+  // requests this host decides (Copilot): the first is a refusal. Its degrades are the names above:
+  // `gate-hook-missing` (a request the hook did not ask for, a hook that failed, a call no decision
+  // covered), `gate-hook-foreign` (a hook this host did not install decides, or a place a machine-wide
+  // policy hook can sit could not be read, so one is not ruled out), `gate-unhooked-call` (a
+  // provider-hosted tool ran) and `gate-mode-widened` (a mode in which the runtime approves calls itself),
+  // and one of its own, the last below.
+  //
+  //   copilot-gate-not-active      Refused: the open ends because the runtime, read back before the first
+  //                                prompt, is not in the posture this host started it in (its permission
+  //                                mode, its agent mode, an approve-all grant, a path approved for the
+  //                                session, a plugin, a tool this host turns off), or a probe call
+  //                                did not reach this host through the hook and the permission request
+  //                                both. Without the joined route a call the runtime allows by default
+  //                                runs undecided. The detail says which.
+  //   gate-tool-unnamed            A degrade: the runtime offers, or the model called, a built-in tool this
+  //                                host's tables do not name. It has no kind but `other` and no local
+  //                                family, so nothing this host knows of it bounds what it does. The
+  //                                session opens and each call to it is asked about like any other; the
+  //                                name is said once per tool, so the tables can learn it.
+  'copilot-gate-not-active',
+  'gate-tool-unnamed',
+
+  // The gate over a runtime this host hosts in a child process of its own, whose sessions this host creates
+  // with permission rules that send every action to ask and whose permission requests this host decides
+  // (opencode): the first is a refusal. Its degrades are the names above: `gate-unhooked-call` (a tool the
+  // model's provider ran itself), `gate-hook-missing` (a call that ran with no request for it, such as a
+  // shell line naming no command), `gate-mode-widened` (the session's rules changed after it opened, or an
+  // answer this host never gave approved a call) and `gate-foreign-extension` (a plugin that is not one of
+  // the runtime's own appeared).
+  //
+  //   opencode-gate-not-active     Refused: the open ends because the runtime, read back before the first
+  //                                prompt, is not in the posture this host created it in (the session's
+  //                                rules, an agent's rules, a saved approval, a plugin, a server, a
+  //                                configuration this host did not write, a model provider other than the
+  //                                session's). Without the rules a call the runtime allows by default runs
+  //                                undecided. The detail says which.
+  'opencode-gate-not-active',
 ] as const;
 
 export type RefusalReason = (typeof REFUSAL_REASONS)[number];

@@ -12,7 +12,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { fixedClock, fixedTicker } from '../core/time.js';
@@ -487,6 +490,20 @@ async function claudeAnswers(
   protectedPaths: readonly string[],
   commands: readonly string[],
 ): Promise<{ answers: string[]; causes: string[] }> {
+  return claudeCallAnswers(
+    baseEnv,
+    protectedPaths,
+    commands.map((command) => ['Bash', { command }]),
+  );
+}
+
+/** The same host and session, and what its gate answers for each tool call in `calls`. */
+async function claudeCallAnswers(
+  baseEnv: Readonly<Record<string, string>>,
+  protectedPaths: readonly string[],
+  calls: readonly (readonly [toolName: string, input: unknown])[],
+  cwd = 'C:/work',
+): Promise<{ answers: string[]; causes: string[] }> {
   const processes = fakeAgents();
   const link = new FakeLink();
   const host = new PeriscopeHost({
@@ -505,13 +522,13 @@ async function claudeAnswers(
       return link;
     },
   });
-  link.deliver('handle-1', sessionNew('C:/work'));
+  link.deliver('handle-1', sessionNew(cwd));
   await settle();
   const request = processes.started[0]?.request;
   assert.ok(request !== undefined, 'no session was started');
   const answers: string[] = [];
-  for (const command of commands) {
-    const output = await callHooks(request, preToolUse('Bash', { command }));
+  for (const [toolName, input] of calls) {
+    const output = await callHooks(request, { ...preToolUse(toolName, input), cwd });
     answers.push(
       (output as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput
         ?.permissionDecision ?? '',
@@ -541,6 +558,117 @@ test("regression: with CLAUDE_CONFIG_DIR set, its sign-in named through the vari
   const unset = await claudeAnswers({ PATH: 'p' }, [credentials], spellings);
   assert.deepEqual(unset.answers, ['allow', 'allow', 'allow']);
 });
+
+test("a Claude session's relative search and read are checked where the call runs, not where this process runs", async () => {
+  // The session runs beside the protected folder, and this process somewhere else entirely: a path that
+  // climbs out of the session's directory names the protected folder only when it is placed there.
+  const session = resolve('/operator/work/session-1');
+  const keys = resolve('/operator/keys');
+  const calls: (readonly [string, unknown])[] = [
+    ['Grep', { pattern: 'BEGIN', path: '../../keys' }],
+    ['Glob', { pattern: '*.pem', path: '../../keys' }],
+    ['Read', { file_path: '../../keys/id_rsa' }],
+  ];
+  const answered = await claudeCallAnswers({ PATH: 'p' }, [keys], calls, session);
+  assert.deepEqual(answered.answers, ['deny', 'deny', 'deny']);
+  assert.equal(
+    answered.causes.filter((cause) => cause === 'refusal/credential-path-denied').length,
+    calls.length,
+    answered.causes.join(', '),
+  );
+  // Control: a relative path that stays in the session's own tree is searched and read.
+  const inside = await claudeCallAnswers(
+    { PATH: 'p' },
+    [keys],
+    [
+      ['Grep', { pattern: 'x', path: 'src' }],
+      ['Read', { file_path: 'src/a.ts' }],
+    ],
+    session,
+  );
+  assert.deepEqual(inside.answers, ['allow', 'allow']);
+});
+
+test(
+  "a hosted session's gate reads a device prefix, and a share of this machine's own drive, as the drive path each names",
+  {
+    skip:
+      process.platform === 'win32'
+        ? false
+        : 'these spellings are Windows paths; on another system each is an ordinary file name',
+  },
+  async () => {
+    const keys = resolve('/operator/keys');
+    const drive = keys.slice(0, 1);
+    const beneath = `${keys.slice(2)}\\id_rsa`;
+    const spellings = [
+      `\\\\?\\${keys}\\id_rsa`,
+      `\\\\localhost\\${drive}$${beneath}`,
+      `\\\\${hostname()}\\${drive}$${beneath}`,
+    ];
+    const read = await claudeCallAnswers(
+      { PATH: 'p' },
+      [keys],
+      spellings.map((file_path) => ['Read', { file_path }]),
+    );
+    assert.deepEqual(read.answers, ['deny', 'deny', 'deny'], spellings.join(', '));
+    assert.equal(
+      read.causes.filter((cause) => cause === 'refusal/credential-path-denied').length,
+      spellings.length,
+      read.causes.join(', '),
+    );
+    // Control: the same spellings of a file outside the protected folder are read.
+    const open = await claudeCallAnswers(
+      { PATH: 'p' },
+      [keys],
+      [
+        ['Read', { file_path: `\\\\?\\${resolve('/operator/notes.txt')}` }],
+        ['Read', { file_path: `\\\\localhost\\${drive}$\\operator\\notes.txt` }],
+      ],
+    );
+    assert.deepEqual(open.answers, ['allow', 'allow']);
+  },
+);
+
+test(
+  "a hosted session's gate reads a short name as the folder the file system says it is",
+  {
+    skip: process.platform === 'win32' ? false : 'a short name is a second name only a Windows volume gives',
+  },
+  async (context) => {
+    const base = mkdtempSync(join(tmpdir(), 'periscope-short-'));
+    try {
+      const keys = join(base, 'operator credentials folder');
+      mkdirSync(keys);
+      writeFileSync(join(keys, 'key.pem'), 'x');
+      writeFileSync(join(base, 'notes on the build.txt'), 'x');
+      // The volume's own short spelling of each, asked of the shell that knows it.
+      const shortOf = (path: string): string =>
+        execSync(`for %I in ("${path}") do @echo %~sI`, { encoding: 'utf8', shell: 'cmd.exe' }).trim();
+      const shortKeys = shortOf(keys);
+      if (shortKeys === '' || shortKeys.toLowerCase() === keys.toLowerCase()) {
+        context.skip('this volume generates no short names');
+        return;
+      }
+      const answered = await claudeCallAnswers(
+        { PATH: 'p' },
+        [keys],
+        [
+          ['Read', { file_path: join(shortKeys, 'key.pem') }],
+          ['Grep', { pattern: 'x', path: shortKeys }],
+          ['Read', { file_path: shortOf(join(base, 'notes on the build.txt')) }],
+        ],
+      );
+      assert.deepEqual(
+        answered.answers,
+        ['deny', 'deny', 'allow'],
+        `the protected folder by its short name ${shortKeys}, then a file beside it by its own`,
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  },
+);
 
 test('a composed session refuses a relative cwd rather than resolving it against the host', () => {
   const composed = composeSession({
@@ -696,9 +824,16 @@ test('regression: toolFamilies reaches the local gate, so an embedder-named MCP 
 const SESSION_TEMP =
   process.platform === 'win32' ? 'C:\\Users\\agent\\AppData\\Local\\Temp' : '/var/agent-temp';
 
+/**
+ * The directory the call runs in, in this platform's spelling as the temp folder is. The gate reads the
+ * rules a path is placed by from it, so a temp folder spelled for one system is named from a call running
+ * on the same one.
+ */
+const CALL_DIRECTORY = process.platform === 'win32' ? 'C:\\work' : '/work';
+
 /** One `Write` through the session's own gate, answered by the cause the host records for it. */
 async function writeThroughGate(request: AgentProcessRequest, filePath: string): Promise<void> {
-  await callHooks(request, preToolUse('Write', { file_path: filePath }));
+  await callHooks(request, { ...preToolUse('Write', { file_path: filePath }), cwd: CALL_DIRECTORY });
   await settle();
 }
 

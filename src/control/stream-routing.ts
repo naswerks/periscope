@@ -12,7 +12,8 @@
  * questions and disagree in both directions:
  *   - `coverage.ts`: does this message move the state machine?
  *   - this table: does this message go on the wire, and on which lane?
- * `assistant` is declined there (it changes no state) and forwarded here (it is the turn's text).
+ * `stream_event` is declined there (it changes no state) and forwarded here (it is the turn's text as it
+ * arrives).
  * `system/session_state_changed` is wired there and declined here (the transition it causes already
  * carries the fact, and two names for one fact is how a vocabulary drifts apart). A single table
  * would have to pick one question and would silently answer the other one wrongly.
@@ -168,6 +169,10 @@ export const MESSAGE_ROUTING = {
   'system/informational': {
     lane: 'update',
     note: "an informational message from the agent. Forwarded for the same reason as notification: the judgement is the controller's.",
+  },
+  'system/session_writes_lost': {
+    lane: 'update',
+    note: 'the agent could not save transcript lines or its own configuration because the disk was full, so a resume may miss part of the conversation. A degrade, and the agent says so nowhere else on its stream, so it goes on the wire as mirror_error does.',
   },
   tool_use_summary: {
     lane: 'update',

@@ -63,11 +63,14 @@ export {
   credentialPaths,
   defaultAgentHome,
   homeDirectory,
+  machineNames,
   nodePathResolver,
   pairedCredentialPath,
   periscopeCredentialDir,
   tokenCachePath,
 } from './paths.js';
+// A path as the file system names it: what the gate compares a short-named path with.
+export { canonicalPath } from './canonical-path.js';
 // The model endpoints the operator declares: read and checked at start, offered in the hello by name,
 // applied to a session that names one.
 export type {

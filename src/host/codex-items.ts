@@ -1,8 +1,12 @@
 /**
  * The Codex fill: a Codex session's conversation, read into the wire's items from the notifications its
- * app-server sends. Only the session's own thread fills items: a sub-agent runs on a thread of its own,
- * and its turns and items ride their native messages, because an item has no member naming the call
- * that started the sub-agent.
+ * app-server sends. The session's own thread fills items with no parent. A sub-agent runs on a thread of
+ * its own, named by the `collabAgentToolCall` that spawned it (`receiverThreadIds`): when the fill is told
+ * a sub-agent's items are wanted (`spawnedItems`, which the host composes from the link's protocol), that
+ * thread's turns and items fill too, each naming the spawning call's item id as its `parentId`, so they
+ * stay apart from the session's own; a sub-agent's own spawn names its child in the same way. A thread no
+ * call is known to have spawned fills nothing, and with `spawnedItems` off no sub-agent's thread fills
+ * anything: its turns and items ride their native messages alone.
  *
  * What each item is read from:
  *   - `turn`: `turn/started` (started) and `turn/completed` (completed, interrupted or failed, its
@@ -35,7 +39,7 @@ import { codexItemToolName, codexToolKind } from '../gate/tool-kind.js';
 import type { ItemFill } from '../sessions/item-fill.js';
 import type { CODEX_ITEM_COVERAGE } from '../state/codex-coverage.js';
 import type { CodexMessage } from './codex-wire.js';
-import { ThreadOpenResponse, agentMessageStage, parsed } from './codex-wire.js';
+import { ThreadOpenResponse, agentMessageStage, codexStartedThreads, parsed } from './codex-wire.js';
 
 type Fields = Readonly<Record<string, unknown>>;
 
@@ -61,6 +65,20 @@ export const CODEX_ITEM_FILLS = {
   exitedReviewMode: [],
   contextCompaction: ['notice'],
 } as const satisfies Readonly<Record<keyof typeof CODEX_ITEM_COVERAGE, readonly AgentItem['kind'][]>>;
+
+/** Notifications that are the process's own: they name no thread. */
+const PROCESS_NOTICES: ReadonlySet<string> = new Set(['configWarning', 'deprecationNotice']);
+
+/** Notifications that are the process's own when they name no thread, and a thread's when they name one. */
+const THREADLESS_NOTICES: ReadonlySet<string> = new Set(['warning', 'guardianWarning']);
+
+/**
+ * How many threads, and how many notifications each, are held while no spawn names them. A sub-agent's
+ * thread can speak before the call that spawned it reports it; past the bound, a thread's later
+ * notifications fill nothing and ride their native messages alone.
+ */
+const MAX_HELD_THREADS = 16;
+const MAX_HELD_PER_THREAD = 64;
 
 /** The message stages Codex marks an agent message with, and what each says of the turn's answer. */
 const STAGE_FINAL: Readonly<Record<string, boolean>> = {
@@ -110,15 +128,32 @@ function errorText(error: Fields): string {
   return parts.join(' ');
 }
 
+export interface CodexItemFillOptions {
+  /**
+   * Whether a sub-agent's thread fills items now, read as each is composed. Absent, it does not: a
+   * sub-agent's turns ride their native messages alone.
+   */
+  readonly spawnedItems?: () => boolean;
+}
+
 export class CodexItemFill implements ItemFill<CodexMessage> {
+  readonly #spawnedItems: () => boolean;
   /** The session's own thread, from the answer that opened it. */
   #thread: string | null = null;
+  /** A sub-agent's thread, mapped to the item id of the call that spawned it. */
+  readonly #spawnedBy = new Map<string, string>();
+  /** Notifications from threads no spawn has named yet, by thread, while a sub-agent's items are wanted. */
+  readonly #held = new Map<string, { readonly method: string; readonly params: Fields }[]>();
   /** The tool items whose call this fill has stated. */
   readonly #called = new Set<string>();
   /** How many items with no native id each source has filled, for their names. */
   readonly #counts = new Map<string, number>();
   /** Calls this host's gate refused, by item id, which is the hook's call id. */
   readonly #blocked = new Set<string>();
+
+  constructor(options: CodexItemFillOptions = {}) {
+    this.#spawnedItems = options.spawnedItems ?? (() => false);
+  }
 
   /** This host's gate refused the call `toolUseId`, so its result is `blocked`, whatever Codex reports. */
   gateBlocked(toolUseId: string): void {
@@ -138,8 +173,46 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
       return [];
     }
     if (message.kind !== 'notification') return [];
-    const params = message.params as Fields;
-    switch (message.method) {
+    return this.#fromNotification(message.method, message.params);
+  }
+
+  /** The items one notification fills, then those of every thread it names a spawn for. */
+  #fromNotification(method: string, params: Fields): AgentItem[] {
+    const named = this.#learn(params);
+    const items = this.#placed(method, params);
+    return named.length === 0 ? items : [...items, ...this.#release(named)];
+  }
+
+  /**
+   * The items `method` fills, placed by its thread: the session's own thread fills them with no parent,
+   * a sub-agent's thread whose spawn is known fills them naming it, and one whose spawn is not yet known
+   * is held until a spawn names it. A notification naming no thread is the process's own.
+   */
+  #placed(method: string, params: Fields): AgentItem[] {
+    const thread = params['threadId'];
+    if (
+      PROCESS_NOTICES.has(method) ||
+      ((thread === null || thread === undefined) && THREADLESS_NOTICES.has(method))
+    ) {
+      return this.#compose(method, params, this.#thread ?? 'thread');
+    }
+    if (this.#thread === null || typeof thread !== 'string') return [];
+    if (thread === this.#thread) {
+      // A sub-agent no spawn has named by the time the session's own turn ends is never named.
+      if (method === 'turn/completed') this.#held.clear();
+      return this.#compose(method, params, thread);
+    }
+    if (!this.#spawnedItems()) return [];
+    const parent = this.#spawnedBy.get(thread);
+    if (parent === undefined) {
+      this.#hold(thread, method, params);
+      return [];
+    }
+    return this.#compose(method, params, thread).map((item) => ({ ...item, parentId: parent }));
+  }
+
+  #compose(method: string, params: Fields, anchor: string): AgentItem[] {
+    switch (method) {
       case 'turn/started':
         return this.#turnStarted(params);
       case 'turn/completed':
@@ -149,22 +222,58 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
       case 'item/completed':
         return this.#itemCompleted(params);
       case 'turn/plan/updated':
-        return this.#planUpdated(params);
+        return this.#planUpdated(params, anchor);
       case 'error':
-        return this.#errorNotice(params);
+        return this.#errorNotice(params, anchor);
       case 'warning':
       case 'guardianWarning':
-        return this.#warning(message.method, params);
+        return this.#warning(method, params, anchor);
       case 'configWarning':
       case 'deprecationNotice':
-        return this.#summaryNotice(message.method, params);
+        return this.#summaryNotice(method, params);
       default:
         return [];
     }
   }
 
-  #own(threadId: unknown): boolean {
-    return this.#thread !== null && threadId === this.#thread;
+  /**
+   * The threads an item on a thread this fill follows says a call started, named for the first time, each
+   * mapped to that call's item id (`codexStartedThreads`). The first call that names a thread stands; a
+   * later call about the same agent never moves it.
+   */
+  #learn(params: Fields): string[] {
+    const thread = params['threadId'];
+    if (this.#thread === null || typeof thread !== 'string') return [];
+    if (thread !== this.#thread && !this.#spawnedBy.has(thread)) return [];
+    const item = record(params['item']);
+    const id = textOrNull(item['id']);
+    if (id === null) return [];
+    const fresh = codexStartedThreads(item).filter(
+      (agent) => agent !== this.#thread && !this.#spawnedBy.has(agent),
+    );
+    for (const agent of fresh) this.#spawnedBy.set(agent, id);
+    return fresh;
+  }
+
+  /** Keep a notification from a thread no spawn has named yet, within the bounds. */
+  #hold(thread: string, method: string, params: Fields): void {
+    const held = this.#held.get(thread);
+    if (held !== undefined) {
+      if (held.length < MAX_HELD_PER_THREAD) held.push({ method, params });
+      return;
+    }
+    if (this.#held.size < MAX_HELD_THREADS) this.#held.set(thread, [{ method, params }]);
+  }
+
+  /** The items the notifications held for each newly named thread fill, in the order they arrived. */
+  #release(threads: readonly string[]): AgentItem[] {
+    const items: AgentItem[] = [];
+    for (const thread of threads) {
+      const held = this.#held.get(thread) ?? [];
+      this.#held.delete(thread);
+      for (const { method, params } of held) items.push(...this.#fromNotification(method, params));
+    }
+    return items;
   }
 
   /** A name for an item with no native id: its anchor, its source and the source's count. */
@@ -176,7 +285,6 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
   }
 
   #turnStarted(params: Fields): AgentItem[] {
-    if (!this.#own(params['threadId'])) return [];
     const id = textOrNull(record(params['turn'])['id']);
     if (id === null) return [];
     return [
@@ -192,7 +300,6 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
   }
 
   #turnCompleted(params: Fields): AgentItem[] {
-    if (!this.#own(params['threadId'])) return [];
     const turn = record(params['turn']);
     const id = textOrNull(turn['id']);
     const status = entryOf(TURN_END, textOrNull(turn['status']));
@@ -211,14 +318,12 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
   }
 
   #itemStarted(params: Fields): AgentItem[] {
-    if (!this.#own(params['threadId'])) return [];
     const item = record(params['item']);
     const call = this.#call(item, textOrNull(params['turnId']));
     return call === null ? [] : [call];
   }
 
   #itemCompleted(params: Fields): AgentItem[] {
-    if (!this.#own(params['threadId'])) return [];
     const item = record(params['item']);
     const id = textOrNull(item['id']);
     if (id === null) return [];
@@ -354,8 +459,7 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
     }
   }
 
-  #planUpdated(params: Fields): AgentItem[] {
-    if (!this.#own(params['threadId'])) return [];
+  #planUpdated(params: Fields, anchor: string): AgentItem[] {
     const turnId = textOrNull(params['turnId']);
     const lines: string[] = [];
     const explanation = textOrNull(params['explanation']);
@@ -368,7 +472,7 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
     return [
       {
         kind: 'plan',
-        itemId: this.#named(turnId ?? this.#thread ?? 'thread', 'plan'),
+        itemId: this.#named(turnId ?? anchor, 'plan'),
         turnId,
         text: lines.join('\n'),
         truncated: false,
@@ -376,26 +480,17 @@ export class CodexItemFill implements ItemFill<CodexMessage> {
     ];
   }
 
-  #errorNotice(params: Fields): AgentItem[] {
-    if (!this.#own(params['threadId'])) return [];
+  #errorNotice(params: Fields, anchor: string): AgentItem[] {
     const turnId = textOrNull(params['turnId']);
     const level = params['willRetry'] === true ? 'warning' : 'error';
     return [
-      notice(
-        this.#named(turnId ?? this.#thread ?? 'thread', 'error'),
-        turnId,
-        level,
-        errorText(record(params['error'])),
-      ),
+      notice(this.#named(turnId ?? anchor, 'error'), turnId, level, errorText(record(params['error']))),
     ];
   }
 
-  #warning(method: string, params: Fields): AgentItem[] {
-    const thread = params['threadId'];
-    // A warning that names no thread is the process's own; one naming another thread is a sub-agent's.
-    if (thread !== null && thread !== undefined && !this.#own(thread)) return [];
+  #warning(method: string, params: Fields, anchor: string): AgentItem[] {
     const text = textOrNull(params['message']) ?? '';
-    return [notice(this.#named(this.#thread ?? 'thread', method), null, 'warning', text)];
+    return [notice(this.#named(anchor, method), null, 'warning', text)];
   }
 
   #summaryNotice(method: string, params: Fields): AgentItem[] {

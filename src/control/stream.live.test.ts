@@ -76,7 +76,7 @@ class Collecting implements FrameSink {
 async function observeTurn(
   label: string,
   prompt: string,
-  options: { thinking?: ThinkingConfig; forwardSubagentText?: boolean } = {},
+  options: { thinking?: ThinkingConfig; effort?: string; forwardSubagentText?: boolean } = {},
 ): Promise<Observed> {
   const cwd = workspaceOutsideAnyRepo(label);
   const machine = new SessionStateMachine({
@@ -98,6 +98,7 @@ async function observeTurn(
   const created = registry.create({
     cwd,
     ...(options.thinking === undefined ? {} : { thinking: options.thinking }),
+    ...(options.effort === undefined ? {} : { effort: options.effort }),
     ...(options.forwardSubagentText === undefined
       ? {}
       : { forwardSubagentText: options.forwardSubagentText }),
@@ -120,13 +121,18 @@ async function observeTurn(
     onRefusal: (refusal) => refusals.push(refusal),
   });
 
-  const sent = session.prompt(prompt);
-  assert.equal(sent.ok, true);
-  const live = await session.whenLive(START_TIMEOUT_MS);
-  assert.equal(live.ok, true, `the agent never reported itself: ${live.ok ? '' : live.refusal.detail}`);
+  try {
+    const sent = session.prompt(prompt);
+    assert.equal(sent.ok, true);
+    const live = await session.whenLive(START_TIMEOUT_MS);
+    assert.equal(live.ok, true, `the agent never reported itself: ${live.ok ? '' : live.refusal.detail}`);
 
-  await waitForResult(discriminators, TURN_TIMEOUT_MS);
-  session.stop('the probe finished');
+    await waitForResult(discriminators, TURN_TIMEOUT_MS);
+  } finally {
+    // A turn that never started or never ended must not leave the agent running: this process could
+    // not exit.
+    registry.stopAll('the probe finished');
+  }
 
   return { frames: sink.sent, discriminators, refusals, cwd };
 }
@@ -216,23 +222,42 @@ test(
 
     // The ordering, asserted rather than narrated. Asserting only that an assistant message exists
     // somewhere on the durable lane would be true of a stream that settled first and fragmented
-    // afterwards, which is the failure the title is about.
-    const lastDeltaAt = observed.frames.findLastIndex((frame) => frame.payload.kind === 'session_delta');
-    const settledAt = observed.frames.findIndex((frame) => {
+    // afterwards, which is the failure the title is about. The property is the text's: the last
+    // fragment of text arrives before the assistant message that carries the text. The markers that
+    // end a block and a message (`content_block_stop`, `message_delta`, `message_stop`) ride the same
+    // lane and are no text; the CLI sends them after the message, and they are counted, not asserted.
+    const bodyOf = (frame: Observed['frames'][number]): Record<string, unknown> | null =>
+      readAgentMessage((frame.payload as unknown as { body: Record<string, never> }).body);
+    const lastTextAt = observed.frames.findLastIndex((frame) => {
+      if (frame.payload.kind !== 'session_delta') return false;
+      const event = bodyOf(frame)?.['event'] as { delta?: { type?: string } } | undefined;
+      return event?.delta?.type === 'text_delta';
+    });
+    const settledAt = observed.frames.findLastIndex((frame) => {
       if (frame.payload.kind !== 'session_update') return false;
-      const body = readAgentMessage((frame.payload as unknown as { body: Record<string, never> }).body);
-      return (body as unknown as { type?: string } | null)?.type === 'assistant';
+      const body = bodyOf(frame) as { type?: string; message?: { content?: { type?: string }[] } } | null;
+      return (
+        body?.type === 'assistant' && (body.message?.content ?? []).some((block) => block.type === 'text')
+      );
     });
 
     assert.ok(
       settledAt >= 0,
       'the assistant message that settles the fragments never reached the durable lane',
     );
-    assert.ok(lastDeltaAt >= 0, 'no delta reached the wire at all');
+    assert.ok(lastTextAt >= 0, 'no text fragment reached the wire at all');
     assert.ok(
-      lastDeltaAt < settledAt,
-      `a fragment arrived after the settling message (last delta ${lastDeltaAt}, settled ${settledAt})`,
+      lastTextAt < settledAt,
+      `a fragment of text arrived after the message that settles it (last text ${lastTextAt}, settled ${settledAt})`,
     );
+    const after = observed.frames
+      .slice(settledAt + 1)
+      .filter((frame) => frame.payload.kind === 'session_delta')
+      .map((frame) => {
+        const event = bodyOf(frame)?.['event'] as { type?: string; delta?: { type?: string } } | undefined;
+        return event?.delta?.type ?? event?.type ?? '(no event)';
+      });
+    console.log(`[render] deltas after the settling message: ${after.join(', ') || '(none)'}`);
 
     // Not asserted, and the reason is stated rather than left to a reader: that `joined` equals
     // the settled message's text. The fragments belong to one content block and a real turn may
@@ -287,7 +312,7 @@ test(
 test(
   'live: thinking prose arrives only with display:summarized — both legs, same prompt',
   { skip },
-  async () => {
+  async (t) => {
     // A prompt that has to be reasoned through rather than recalled. A question with a one-token
     // answer lets adaptive thinking decide not to think at all, which produces a zero that looks
     // like a knob failure and is not one: a trivial comparison returns 0/0 on both legs and proves
@@ -297,9 +322,15 @@ test(
       'back and forth between them until they meet. How far does the bird fly? Reason it through step ' +
       'by step, then give the number.';
 
-    const byDefault = await observeTurn('thinking-default', prompt, { thinking: { type: 'adaptive' } });
+    // Both legs at the highest effort: adaptive thinking decides for itself whether to think, and at
+    // the default effort it answered this prompt with no thinking block on either leg.
+    const byDefault = await observeTurn('thinking-default', prompt, {
+      thinking: { type: 'adaptive' },
+      effort: 'max',
+    });
     const summarized = await observeTurn('thinking-summarized', prompt, {
       thinking: { type: 'adaptive', display: 'summarized' },
+      effort: 'max',
     });
 
     const plain = thinkingProse(byDefault);
@@ -323,12 +354,13 @@ test(
     // about nothing, and reporting that as a knob failure would be worse than reporting no result.
     // `system/thinking_tokens` is digested from thinking deltas, so it is independent evidence that
     // thinking happened, which makes "no prose" and "no thinking" distinguishable rather than one
-    // ambiguous zero.
-    assert.ok(
-      plain.deltas + rich.deltas > 0 || tickers(byDefault) + tickers(summarized) > 0,
-      'NEITHER turn produced a thinking block, so this run says nothing about the display knob — ' +
-        'INCONCLUSIVE, not a negative result',
-    );
+    // ambiguous zero. Such a run is neither a pass nor a failure: it says so and is skipped.
+    if (plain.deltas + rich.deltas === 0 && tickers(byDefault) + tickers(summarized) === 0) {
+      return t.skip(
+        'neither turn produced a thinking block (adaptive thinking chose not to think), so this run ' +
+          'says nothing about the display knob: not measured',
+      );
+    }
 
     assert.ok(rich.chars > 0, 'display:summarized produced no reasoning prose at all');
     assert.ok(

@@ -159,18 +159,132 @@ test('regression: a denial and an outage in the same path leave different traces
   );
 });
 
-test('a granted permission still gets its exit, from the tool actually running', () => {
+test('a granted permission gets its exit from the call having run, in the order the CLI sends a call', () => {
   const { observer: o, machine, store } = observer();
 
-  o.observeHook(hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }));
-  o.observeHook(hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'tu-1' }));
+  // A call as the pinned CLI was recorded sending it: its PreToolUse, then the permission request, and,
+  // granted, the tool's own end.
+  o.observeHook(hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 'tu-1' }));
+  o.observeHook(hook({ hook_event_name: 'PermissionRequest', tool_name: 'Write', tool_input: {} }));
+  assert.deepEqual(machine.activity, { kind: 'permission', name: 'Write' });
+  o.observeHook(hook({ hook_event_name: 'PostToolUse', tool_name: 'Write', tool_use_id: 'tu-1' }));
 
-  assert.deepEqual(machine.activity, { kind: 'tool', name: 'Bash' });
-  assert.equal(
-    store.all().filter((transition) => transition.entryId === 'permission:Bash').length,
-    2,
-    'the permission entry opened and closed — an entry with no exit on the allow path would age forever',
+  assert.deepEqual(machine.openEntries(), [], 'an entry with no exit on the allow path would age forever');
+  const permission = store.all().filter((transition) => transition.entryId === 'permission:Write');
+  assert.equal(permission.length, 2, 'the permission entry opened and closed');
+  assert.equal(permission[1]?.cause.event, 'PostToolUse');
+  assert.match(permission[1]?.cause.detail ?? '', /the permission for Write was granted and the tool ran/);
+
+  // A tool that ran and failed had its permission granted all the same.
+  o.observeHook(hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 'tu-2' }));
+  o.observeHook(hook({ hook_event_name: 'PermissionRequest', tool_name: 'Write', tool_input: {} }));
+  o.observeHook(
+    hook({ hook_event_name: 'PostToolUseFailure', tool_name: 'Write', tool_use_id: 'tu-2', error: 'no' }),
   );
+  assert.deepEqual(machine.openEntries(), []);
+
+  // Control: a tool that ends with no permission outstanding records its own end and nothing else.
+  o.observeHook(hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 'tu-3' }));
+  const before = store.all().length;
+  o.observeHook(hook({ hook_event_name: 'PostToolUse', tool_name: 'Write', tool_use_id: 'tu-3' }));
+  assert.deepEqual(
+    store
+      .all()
+      .slice(before)
+      .map((transition) => transition.entryId),
+    ['tu-3'],
+  );
+});
+
+test("another call's start is no resolution: a permission outstanding for one call stays open when the same tool is called again", () => {
+  const { observer: o, machine, store } = observer();
+
+  o.observeHook(hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 'tu-a' }));
+  o.observeHook(hook({ hook_event_name: 'PermissionRequest', tool_name: 'Write', tool_input: {} }));
+  o.observeHook(hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 'tu-b' }));
+
+  assert.ok(
+    machine.openEntries().some((entry) => entry.activity.kind === 'permission'),
+    'the second call closed a permission nobody had answered',
+  );
+  assert.equal(
+    store.all().some((transition) => /resolved and the tool is running/.test(transition.cause.detail)),
+    false,
+    'the trace recorded a resolution that never happened',
+  );
+});
+
+test("the CLI's own report of a denial closes the permission it asked for, once, whichever of the message and the hook reports it", () => {
+  const denied = (toolUseId: string): SDKMessage =>
+    message({
+      type: 'system',
+      subtype: 'permission_denied',
+      tool_name: 'Write',
+      tool_use_id: toolUseId,
+      decision_reason_type: 'mode',
+      message: 'This command requires approval',
+    });
+  const deniedHook = (toolUseId: string): HookInput =>
+    hook({
+      hook_event_name: 'PermissionDenied',
+      tool_name: 'Write',
+      tool_input: {},
+      tool_use_id: toolUseId,
+      reason: 'not allowed here',
+    });
+  const { observer: o, machine, store } = observer();
+
+  // Two calls as the pinned CLI was recorded sending them when nobody grants: each call's PreToolUse, the
+  // permission request, and the denial as a message. The PermissionDenied hook does not fire.
+  for (const id of ['tu-a', 'tu-b']) {
+    o.observeHook(hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: id }));
+    o.observeHook(hook({ hook_event_name: 'PermissionRequest', tool_name: 'Write', tool_input: {} }));
+    assert.deepEqual(machine.activity, { kind: 'permission', name: 'Write' });
+    o.observeMessage(denied(id));
+    assert.equal(
+      machine.openEntries().some((entry) => entry.activity.kind === 'permission'),
+      false,
+      'the denial left its permission open',
+    );
+  }
+  const closes = store
+    .all()
+    .filter(
+      (transition) => transition.entryId === 'permission:Write' && /was denied/.test(transition.cause.detail),
+    );
+  assert.deepEqual(
+    closes.map((transition) => [transition.cause.kind, transition.cause.event]),
+    [
+      ['sdk-message', 'system/permission_denied'],
+      ['sdk-message', 'system/permission_denied'],
+    ],
+  );
+  assert.match(closes[0]?.cause.detail ?? '', /Write was denied \(mode\): This command requires approval/);
+  assert.equal(
+    store.all().some((transition) => /resolved and the tool is running/.test(transition.cause.detail)),
+    false,
+  );
+
+  // One denial reported both ways is one denial, in either order.
+  const count = (): number =>
+    store.all().filter((transition) => /was denied/.test(transition.cause.detail)).length;
+  for (const [id, first, second] of [
+    ['tu-c', () => o.observeHook(deniedHook('tu-c')), () => o.observeMessage(denied('tu-c'))],
+    ['tu-d', () => o.observeMessage(denied('tu-d')), () => o.observeHook(deniedHook('tu-d'))],
+  ] as const) {
+    o.observeHook(hook({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: id }));
+    o.observeHook(hook({ hook_event_name: 'PermissionRequest', tool_name: 'Write', tool_input: {} }));
+    const before = count();
+    first();
+    second();
+    assert.equal(count() - before, 1, `${id}: one denial was recorded twice`);
+  }
+
+  // Control: a denial with no permission of this lane's outstanding (one this host's own gate made)
+  // records nothing here: the gate's outcome is its record.
+  const before = store.all().length;
+  o.observeMessage(denied('tu-e'));
+  assert.equal(store.all().length, before);
 });
 
 test("regression: backgrounding rides the SDK's own caused moment, never a timer", () => {
@@ -231,6 +345,63 @@ test("the SDK's own status drives the request and compaction lanes", () => {
 
   o.observeMessage(message({ type: 'system', subtype: 'status', status: 'compacting' }));
   assert.deepEqual(machine.activity, { kind: 'compacting', name: null });
+});
+
+test("a model request is closed by the answer that arrives for it, and never outlives its turn: the CLI states a request's start and not its end", () => {
+  const { observer: o, machine, store } = observer();
+  const requesting = message({ type: 'system', subtype: 'status', status: 'requesting' });
+  const answer = (id: string, parent: string | null = null): SDKMessage =>
+    message({ type: 'assistant', parent_tool_use_id: parent, message: { id, content: [] } });
+  const result = (subtype = 'success'): SDKMessage => message({ type: 'result', subtype, duration_ms: 5 });
+  const open = (): string[] => machine.openEntries().map((entry) => entry.activity.kind);
+
+  // One turn as the pinned CLI was recorded sending it: a status at each request's start, the answer,
+  // the tool's hooks, a second request and its answer, the stop and the result. No status ends a request.
+  o.observeHook(hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' }));
+  o.observeMessage(requesting);
+  assert.deepEqual(machine.activity, { kind: 'requesting', name: null });
+  o.observeMessage(answer('msg-1'));
+  assert.deepEqual(open(), [], 'the request stayed open after its answer arrived');
+  const closed = store.all().at(-1);
+  assert.deepEqual(
+    [closed?.cause.kind, closed?.cause.event, closed?.to],
+    ['sdk-message', 'assistant', 'working'],
+    'the close is not named for the message that caused it',
+  );
+  o.observeHook(hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'tu-1' }));
+  o.observeHook(hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'tu-1' }));
+  o.observeMessage(requesting);
+  // A sub-agent's message is not the answer to the session's own request.
+  o.observeMessage(answer('msg-sub', 'toolu_task'));
+  assert.deepEqual(open(), ['requesting']);
+  o.observeMessage(answer('msg-2'));
+  assert.deepEqual(open(), []);
+  o.observeHook(hook({ hook_event_name: 'Stop' }));
+  o.observeMessage(result());
+  assert.equal(machine.state, 'idle');
+  assert.deepEqual(open(), [], 'a model request was still open after the turn');
+
+  // A request that gets no answer ends with its turn, by the stop or by the result, whichever arrives.
+  o.observeMessage(requesting);
+  o.observeHook(hook({ hook_event_name: 'Stop' }));
+  assert.deepEqual(open(), [], 'the stop left a model request open');
+  o.observeMessage(requesting);
+  o.observeMessage(result('error_during_execution'));
+  assert.deepEqual(open(), [], 'the result left a model request open');
+
+  // Control: with no request open, an answer records nothing, and a stop and a result name no entry.
+  const before = store.all().length;
+  o.observeMessage(answer('msg-3'));
+  assert.equal(store.all().length, before, 'an answer with no request open was recorded');
+  o.observeHook(hook({ hook_event_name: 'Stop' }));
+  o.observeMessage(result());
+  assert.deepEqual(
+    store
+      .all()
+      .slice(before)
+      .map((transition) => transition.entryId),
+    [null, null],
+  );
 });
 
 test('the turn-over signal moves the state, and requires_action does not invent a second one', () => {

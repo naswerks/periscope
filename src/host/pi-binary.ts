@@ -18,7 +18,7 @@ import type { RunVersion } from './codex-binary.js';
 import { runVersion } from './codex-binary.js';
 
 /** The pi release this host is built and tested against. A CLI reporting any other is refused. */
-export const PI_PINNED_VERSION = '1.2.0';
+export const PI_PINNED_VERSION = '1.5.2';
 
 /** How long `--version` may take before the CLI is reported as not answering. */
 export const PI_VERSION_TIMEOUT_MS = 10_000;

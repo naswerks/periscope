@@ -4,7 +4,7 @@
  * declare at one release, read from a clone of the pi repository at that release's tag, with no install.
  *
  *   node scripts/derive-pi-names.mjs <pi clone> <tag>
- *   node scripts/derive-pi-names.mjs C:/src/pi v1.2.0
+ *   node scripts/derive-pi-names.mjs C:/src/pi v1.5.2
  *
  * Needs git on the path. Every list holds identifiers only: interface facts, never copied text.
  * - `agentEvents`: the `type` of each member of `AgentEvent` (`packages/agent/src/types.ts`).

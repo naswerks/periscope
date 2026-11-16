@@ -13,8 +13,9 @@
  *   `-32601`.
  * - An item-kind row is `wired` when the kind moves the machine, feeds a fact or fills a conversation
  *   item (`CODEX_ITEM_FILLS`, `host/codex-items.ts`), and `declined` when it only rides inside the native
- *   `item/started` and `item/completed`. Only the session's own thread fills items: a sub-agent's thread
- *   rides its native messages, because an item has no member naming the call that started it.
+ *   `item/started` and `item/completed`. The session's own thread fills items with no parent; a
+ *   sub-agent's thread fills them naming the call that spawned it, on a link that carries an item's
+ *   parent, and rides its native messages alone on one that does not.
  *
  * Kept honest by `pins/codex-coverage.test.ts`: the keys of each table equal the names the release
  * declares (`contracts/codex-protocol-names.json`), in both directions; every experimental name is
@@ -70,6 +71,11 @@ export const CODEX_NOTIFICATION_COVERAGE = {
   'thread/environment/connected': { handling: 'declined', note: EXPERIMENTAL },
   'thread/environment/disconnected': { handling: 'declined', note: EXPERIMENTAL },
   'thread/settings/updated': { handling: 'declined', note: EXPERIMENTAL },
+  'thread/readState/changed': { handling: 'declined', note: EXPERIMENTAL },
+  'thread/section/changed': {
+    handling: 'declined',
+    note: `${OPTED_OUT}: this host files no thread into a section`,
+  },
   'thread/tokenUsage/updated': {
     handling: 'wired',
     note: 'a usage sample (context tokens are the last call total, Codex own rule); the newest one for a turn is that turn record totals, the thread running total: a resumed or forked thread includes the source thread tokens, which Codex restores from the rollout. It names no model, so the model is the session model register. inputTokens is input minus cached input, floored at zero: Codex own split, so it counts uncached input only',
@@ -352,11 +358,11 @@ export const CODEX_ITEM_COVERAGE = {
   dynamicToolCall: { handling: 'declined', note: `${ITEM_NATIVE_ONLY}: this host registers no dynamic tool` },
   collabAgentToolCall: {
     handling: 'wired',
-    note: 'opens and closes a tool entry named by its tool word; spawnAgent adds each receiver thread to the running tasks, and closeAgent or a settled agent state removes it and states how it settled; a tool_call (other) and a tool_result (interrupted reads failed)',
+    note: "opens and closes a tool entry named by its tool word; spawnAgent adds each receiver thread to the running tasks naming the call (toolUseId), and closeAgent or a settled agent state removes it and states how it settled with the state's message as its summary; spawnAgent and resumeAgent name the thread whose items fill with this call as their parent; a tool_call (other) and a tool_result (interrupted reads failed)",
   },
   subAgentActivity: {
     handling: 'wired',
-    note: 'started adds the agent thread to the running tasks; completed or interrupted removes it and states how it settled; an info notice item',
+    note: "started adds the agent thread to the running tasks and names the thread whose items fill with this item's id, the spawning call's, as their parent; completed or interrupted removes it and states how it settled; an info notice item",
   },
   webSearch: {
     handling: 'wired',

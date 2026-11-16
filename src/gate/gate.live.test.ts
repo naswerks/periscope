@@ -144,9 +144,14 @@ async function wire(
   assert.equal(opened.ok, true, `the probe session did not start: ${opened.ok ? '' : opened.refusal.detail}`);
   const session = opened.ok ? opened.value : (undefined as never);
 
-  session.onMessage((message) => observer.observeMessage(message));
-  const result = await waitForResult(session, TURN_TIMEOUT_MS);
-  session.stop('the probe finished');
+  let result: SDKMessage | null;
+  try {
+    session.onMessage((message) => observer.observeMessage(message));
+    result = await waitForResult(session, TURN_TIMEOUT_MS);
+  } finally {
+    // Whatever the turn did, the agent is ended here: a probe that left one running could not exit.
+    registry.stopAll('the probe finished');
+  }
 
   return { session, machine, transitions, outcomes, hookEvents, result, cwd };
 }
@@ -428,101 +433,138 @@ test(
 );
 
 // ---------------------------------------------------------------------------
-// The one claim this package asserts about the SDK and has never measured.
+// What an operator's deny rule does to a call a hook would allow.
 //
-// `grantOnAllow`'s safety argument rests on what an explicit hook allow skips. The Claude Code
-// permissions documentation states that deny and ask rules are evaluated whatever a PreToolUse
-// hook returns (https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks), so a
-// hook allow skips only the permission mode, the allow rules and `canUseTool`. This
-// package's standing rule is that the runtime beats the docs, so a documented order is not enough:
-// this is the probe that settles it by running it.
+// `grantOnAllow`'s safety argument rests on it: an explicit hook allow must not be able to override a
+// deny rule the operator wrote. The Claude Code permissions documentation says deny and ask rules are
+// evaluated whatever a PreToolUse hook returns
+// (https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks). This package's standing
+// rule is that the runtime beats the docs, so this probe runs it.
 //
-// It is not exercised, and the reason is recorded rather than glossed. Attempts made from inside
-// an agent session were contaminated: the child inherited the enclosing session's tool surface
-// (`ToolSearch`, `PowerShell`, `Bash` all appeared despite `allowedTools: ['Write']`), so the agent
-// satisfied the prompt with a tool the deny rule did not name and the denied `Write` was never
-// called. An observed "the write happened" was a Bash redirect, not a bypassed deny rule. A
-// measurement whose control was never exercised is not a measurement — so nothing was recorded,
-// and the claim stays documented-not-measured until this runs on a machine that is not itself an
-// agent session.
+// What Claude Code 2.1.325 was recorded doing, and what the probe asserts: a deny rule is applied before
+// any hook is asked. A rule that names the whole tool takes the tool from the model, so no call is made
+// at all. A rule that names a path refuses the call, and `PreToolUse` never fires for it. With a hook
+// that allows everything, neither wrote the file.
+//
+// A leg whose model never made the call it was asked to make, or made another, measures nothing. It
+// says so and the probe is reported as skipped: that is neither a pass nor a failure.
 // ---------------------------------------------------------------------------
 
+/** One turn asked to write `canary.txt`, under `deny` and a `PreToolUse` hook that allows every call. */
+interface DenyRuleTurn {
+  /** Whether the CLI offered the model the `Write` tool. */
+  readonly offered: boolean;
+  /** Every tool the model called, in order. */
+  readonly called: readonly string[];
+  /** Every tool the hook was asked about, in order. */
+  readonly hooked: readonly string[];
+  /** Whether the file exists after the turn. */
+  readonly written: boolean;
+}
+
+async function turnUnderDenyRule(label: string, deny: readonly string[]): Promise<DenyRuleTurn> {
+  const cwd = workspaceOutsideAnyRepo(label);
+  mkdirSync(join(cwd, '.claude'), { recursive: true });
+  writeFileSync(join(cwd, '.claude', 'settings.json'), JSON.stringify({ permissions: { deny } }, null, 2));
+  const called: string[] = [];
+  const hooked: string[] = [];
+  let offered = false;
+
+  for await (const message of query({
+    prompt:
+      'Use the Write tool ONCE to create canary.txt in the current directory containing exactly: pomegranate. ' +
+      'Do not use any other tool for any reason. If Write is refused, say REFUSED and stop.',
+    options: {
+      cwd,
+      env: baseEnv,
+      // The deny rule is the subject, so the settings tier that carries it must load. This is
+      // the exact pair `composeSession` refuses — asserted here deliberately, outside it.
+      settingSources: ['project'],
+      maxTurns: 4,
+      hooks: {
+        PreToolUse: [
+          {
+            hooks: [
+              async (input: HookInput): Promise<HookJSONOutput> => {
+                hooked.push('tool_name' in input ? input.tool_name : '?');
+                return {
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    permissionDecision: 'allow',
+                    permissionDecisionReason: 'the probe allows everything, on purpose',
+                  },
+                };
+              },
+            ],
+          },
+        ],
+      },
+    },
+  })) {
+    if (message.type === 'system' && message.subtype === 'init') offered = message.tools.includes('Write');
+    if (message.type === 'assistant') {
+      for (const block of message.message.content ?? []) {
+        if (block.type === 'tool_use') called.push(block.name);
+      }
+    }
+    if (message.type === 'result') break;
+  }
+  return { offered, called, hooked, written: existsSync(join(cwd, 'canary.txt')) };
+}
+
+/** Why a leg measured nothing, or null when the model made the one call it was asked to make. */
+function measuresNothing(leg: string, turn: DenyRuleTurn, expectsCall: boolean): string | null {
+  const others = turn.called.filter((tool) => tool !== 'Write');
+  if (others.length > 0) {
+    return `${leg}: another tool was called (${others.join(', ')}), so the file is not attributable to Write`;
+  }
+  if (expectsCall && !turn.called.includes('Write')) {
+    return `${leg}: the model never called Write, so the rule was never reached`;
+  }
+  return null;
+}
+
 test(
-  'live: does a hook allow override an operator deny rule? — the grantOnAllow premise, measured',
-  { skip },
-  async () => {
-    const cwd = workspaceOutsideAnyRepo('deny-rule');
-    mkdirSync(join(cwd, '.claude'), { recursive: true });
-    writeFileSync(
-      join(cwd, '.claude', 'settings.json'),
-      JSON.stringify({ permissions: { deny: ['Write'] } }, null, 2),
+  "live: an operator deny rule is applied before any hook is asked, so a hook's allow overrides neither a rule that names the tool nor one that names the path",
+  { skip, timeout: 600_000 },
+  async (t) => {
+    // Control: with no deny rule the same hook's allow is what lets the write through, so a file that
+    // is missing below is the rule's doing and not the hook's.
+    const free = await turnUnderDenyRule('deny-rule-none', []);
+    console.log(`[gate.live] no deny rule: ${JSON.stringify(free)}`);
+    const control = measuresNothing('no deny rule', free, true);
+    if (control !== null) return t.skip(control);
+    assert.ok(free.hooked.includes('Write'), 'the hook was never asked about a Write no rule denied');
+    assert.equal(
+      free.written,
+      true,
+      "the hook's allow did not let a Write through, so nothing below is measured",
     );
 
-    const target = join(cwd, 'canary.txt');
-    let allowsIssued = 0;
-    const toolsCalled: string[] = [];
+    // A rule that names the whole tool: the model is not offered it.
+    const whole = await turnUnderDenyRule('deny-rule-tool', ['Write']);
+    console.log(`[gate.live] deny Write: ${JSON.stringify(whole)}`);
+    const wholeNothing = measuresNothing('deny Write', whole, false);
+    if (wholeNothing !== null) return t.skip(wholeNothing);
+    assert.equal(whole.offered, false, 'a tool an operator deny rule names was offered to the model');
+    assert.equal(whole.written, false, 'a file was written by a tool an operator deny rule names');
 
-    for await (const message of query({
-      prompt:
-        'Use the Write tool ONCE to create canary.txt in the current directory containing exactly: pomegranate. ' +
-        'Do not use any other tool for any reason. If Write is refused, say REFUSED and stop.',
-      options: {
-        cwd,
-        env: baseEnv,
-        // The deny rule is the subject, so the settings tier that carries it must load. This is
-        // the exact pair `composeSession` refuses — asserted here deliberately, outside it.
-        settingSources: ['project'],
-        maxTurns: 4,
-        hooks: {
-          PreToolUse: [
-            {
-              hooks: [
-                async (): Promise<HookJSONOutput> => {
-                  allowsIssued += 1;
-                  return {
-                    hookSpecificOutput: {
-                      hookEventName: 'PreToolUse',
-                      permissionDecision: 'allow',
-                      permissionDecisionReason: 'the probe allows everything, on purpose',
-                    },
-                  };
-                },
-              ],
-            },
-          ],
-        },
-      },
-    })) {
-      if (message.type === 'assistant') {
-        for (const block of message.message.content ?? []) {
-          if (block.type === 'tool_use') toolsCalled.push(block.name);
-        }
-      }
-      if (message.type === 'result') break;
-    }
-
-    // The control comes first, because without it this test reports on a run that never happened.
-    // If the agent never called `Write`, the deny rule was never reached and whether the file exists
-    // says nothing at all — which is precisely how a contaminated attempt fools itself.
-    assert.ok(allowsIssued > 0, 'the hook never fired — no tool call reached the gate');
-    assert.ok(
-      toolsCalled.includes('Write'),
-      `the denied tool was never called, so this run measures nothing; tools seen: ${toolsCalled.join(', ') || '(none)'}`,
+    // A rule that names the path: the call is made, refused before the hook is asked, and never runs.
+    const path = await turnUnderDenyRule('deny-rule-path', ['Edit(canary.txt)']);
+    console.log(`[gate.live] deny Edit(canary.txt): ${JSON.stringify(path)}`);
+    const pathNothing = measuresNothing('deny Edit(canary.txt)', path, true);
+    if (pathNothing !== null) return t.skip(pathNothing);
+    assert.equal(
+      path.written,
+      false,
+      'a PreToolUse hook `allow` overrode an operator deny rule: every comment and document in this ' +
+        'package that says a deny rule survives a grant must be corrected',
     );
     assert.deepEqual(
-      [...new Set(toolsCalled)],
-      ['Write'],
-      `another tool ran alongside Write, so the file's existence is not attributable: ${toolsCalled.join(', ')}`,
-    );
-
-    // The measurement. Per the documented order the deny rule survives the hook allow, so the file
-    // must not exist. If it does, the documentation is wrong — either way, this line is the receipt
-    // and the comments in `gate.ts` must match it.
-    assert.equal(
-      existsSync(target),
-      false,
-      'a PreToolUse hook `allow` overrode an operator deny rule — the documented order is wrong, ' +
-        'and every comment in this package that says deny rules survive a grant must be corrected',
+      path.hooked,
+      [],
+      'the hook was asked about a call an operator deny rule refuses: the rule is no longer applied ' +
+        'before the hook, and the documents that say a denied call never reaches the gate must be corrected',
     );
   },
 );

@@ -36,7 +36,7 @@ import type { ControlTier, SessionTransition } from '../state/model.js';
  * Every bump re-approves `contracts/wire-vectors/` (`npm run contracts:update`) and regenerates
  * any consumer's readers.
  */
-export const PROTOCOL_VERSION = 19;
+export const PROTOCOL_VERSION = 20;
 
 /**
  * The oldest protocol version this build still speaks. A hello advertises the window
@@ -46,19 +46,18 @@ export const PROTOCOL_VERSION = 19;
  * with no range does not decode, so a version older than the first negotiated one cannot be inside
  * the window.
  *
- * Version 19 adds the repositories a host serves beside its home one, and a session's own worktree of
- * each: `configuration.repositories` in the hello (absent on a host that serves only its home
- * repository), `session_new.additionalRepositories`, `where.repositories` on a session's transitions,
- * `repository` on an inventory entry and on a release ask. Every one is optional: a `session_new`
- * without the member is the session version 18 opened, byte for byte, and a host serving no further
- * repository sends none of them. It adds one refusal reason, `repository-unknown`, answered to a
- * `session_new` or a release naming a repository this host does not serve. A version-18 controller
- * is still spoken to: what it sends decodes here unchanged, and what it receives decodes on its side.
- * The narrowing of `session_new.request.env` that version 14 made (a key a controller places in the
- * spawn environment must be one this host's operator declared, above the floor) holds at every
- * version this host negotiates.
+ * Version 20 adds, every member optional: `parentId` on a conversation item, the call that spawned the
+ * agent whose turn the item is from (an item of the session's own thread names none); and on each entry of a
+ * `tasks` fact, the spawning call (`toolUseId`), the task's own summary, its usage and the file its
+ * output is written to. A sub-agent's items are composed only on a link at 20 or above: a controller
+ * at 19 cannot tell them from the session's own, so it is sent none, as version 19 sent none. A
+ * version-19 controller is still spoken to: what it sends decodes here unchanged, and what it receives
+ * decodes on its side, each new member carried as an unknown key. The narrowing of
+ * `session_new.request.env` that version 14 made (a key a controller places in the spawn environment
+ * must be one this host's operator declared, above the floor) holds at every version this host
+ * negotiates.
  */
-export const PROTOCOL_VERSION_MIN = 18;
+export const PROTOCOL_VERSION_MIN = 19;
 
 /** The versions a peer speaks, inclusive at both ends. */
 export interface ProtocolRange {
@@ -388,6 +387,11 @@ export const COMPACTION_STATUSES = ['started', 'ended'] as const;
 export type CompactionStatus = (typeof COMPACTION_STATUSES)[number];
 
 /** Who asked for a compaction: a person (`manual`) or the runtime on its own (`auto`). */
+/** How an ended compaction came out, where its source says. */
+export const COMPACTION_OUTCOMES = ['completed', 'failed'] as const;
+
+export type CompactionOutcome = (typeof COMPACTION_OUTCOMES)[number];
+
 export const COMPACTION_TRIGGERS = ['manual', 'auto'] as const;
 
 export type CompactionTrigger = (typeof COMPACTION_TRIGGERS)[number];
@@ -465,8 +469,34 @@ export interface ReceiptMcpServer {
   readonly status: string;
 }
 
+/**
+ * What a task has used so far, as the runtime last reported it: tokens, tool calls and time running. Each
+ * is stated only where the runtime reported it, so a task can state its tokens alone; absent reads as null.
+ */
+export interface TaskUsage {
+  readonly tokens?: number | null;
+  readonly toolUses?: number | null;
+  readonly durationMs?: number | null;
+}
+
+/**
+ * What the runtime reported about a task beyond its id and type (protocol 20), on a running and a
+ * settled entry alike. Each is stated only where the runtime reported it: absent reads as null, and none
+ * is ever derived. Absent from a host one release behind. Each text is held to `MAX_FACT_TEXT_LENGTH`.
+ */
+export interface TaskReport {
+  /** The tool call that started the task. */
+  readonly toolUseId?: string | null;
+  /** The task's own summary, the latest the runtime wrote. */
+  readonly summary?: string | null;
+  /** What the task has used so far. */
+  readonly usage?: TaskUsage | null;
+  /** The file the runtime writes the task's output to. A path only; nothing here reads it. */
+  readonly outputFile?: string | null;
+}
+
 /** One task the runtime says is running. */
-export interface RunningTaskEntry {
+export interface RunningTaskEntry extends TaskReport {
   readonly taskId: string;
   readonly type: string;
   readonly description: string | null;
@@ -481,7 +511,7 @@ export type TaskSettlement = (typeof TASK_SETTLEMENTS)[number];
  * One task the runtime says has ended, and how. `type` is the task's type as the runtime reported it
  * when the task started, and null when this host never saw it start.
  */
-export interface SettledTaskEntry {
+export interface SettledTaskEntry extends TaskReport {
   readonly taskId: string;
   readonly type: string | null;
   readonly status: TaskSettlement;
@@ -578,6 +608,11 @@ export interface CompactionFact {
   readonly trigger: CompactionTrigger | null;
   readonly tokensBefore: number | null;
   readonly tokensAfter: number | null;
+  /**
+   * On an `ended` fact, whether the compaction completed or failed, where the source that ended it says.
+   * Absent on a `started` fact, from a source that states neither, and from a host that predates the member.
+   */
+  readonly outcome?: CompactionOutcome;
 }
 
 /** One fact, tagged by `kind`. */
@@ -721,6 +756,12 @@ export interface TurnItem {
   readonly kind: 'turn';
   readonly itemId: string;
   readonly turnId: string | null;
+  /**
+   * The call that spawned the agent whose turn this item is from, by the runtime's own id for that call
+   * (Claude's `tool_use` id) (protocol 20). An item of the session's own thread names none, which reads
+   * as null; a spawned agent's item is composed only on a link at 20 or above.
+   */
+  readonly parentId?: string | null;
   readonly status: TurnItemStatus;
   readonly detail: string | null;
   readonly truncated: boolean;
@@ -731,6 +772,8 @@ export interface UserTextItem {
   readonly kind: 'user_text';
   readonly itemId: string;
   readonly turnId: string | null;
+  /** As `TurnItem.parentId` (protocol 20). */
+  readonly parentId?: string | null;
   readonly text: string;
   readonly truncated: boolean;
 }
@@ -743,6 +786,8 @@ export interface AgentTextItem {
   readonly kind: 'agent_text';
   readonly itemId: string;
   readonly turnId: string | null;
+  /** As `TurnItem.parentId` (protocol 20). */
+  readonly parentId?: string | null;
   readonly text: string;
   readonly final: boolean | null;
   readonly truncated: boolean;
@@ -756,6 +801,8 @@ export interface ThinkingItem {
   readonly kind: 'thinking';
   readonly itemId: string;
   readonly turnId: string | null;
+  /** As `TurnItem.parentId` (protocol 20). */
+  readonly parentId?: string | null;
   readonly text: string;
   readonly summary: boolean;
   readonly truncated: boolean;
@@ -770,6 +817,8 @@ export interface ToolCallItem {
   readonly kind: 'tool_call';
   readonly itemId: string;
   readonly turnId: string | null;
+  /** As `TurnItem.parentId` (protocol 20). */
+  readonly parentId?: string | null;
   readonly toolUseId: string;
   readonly toolName: string;
   readonly toolKind: ToolKind;
@@ -793,6 +842,8 @@ export interface ToolResultItem {
   readonly kind: 'tool_result';
   readonly itemId: string;
   readonly turnId: string | null;
+  /** As `TurnItem.parentId` (protocol 20). */
+  readonly parentId?: string | null;
   readonly toolUseId: string;
   readonly status: ToolResultStatus;
   readonly output: string | null;
@@ -807,6 +858,8 @@ export interface PlanItem {
   readonly kind: 'plan';
   readonly itemId: string;
   readonly turnId: string | null;
+  /** As `TurnItem.parentId` (protocol 20). */
+  readonly parentId?: string | null;
   readonly text: string;
   readonly truncated: boolean;
 }
@@ -816,6 +869,8 @@ export interface NoticeItem {
   readonly kind: 'notice';
   readonly itemId: string;
   readonly turnId: string | null;
+  /** As `TurnItem.parentId` (protocol 20). */
+  readonly parentId?: string | null;
   readonly level: NoticeLevel;
   readonly text: string;
   readonly truncated: boolean;

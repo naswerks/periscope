@@ -27,6 +27,7 @@ import type { Result } from '../core/result.js';
 import type { SessionTransition } from '../state/model.js';
 import { FAKE_MODELS, fakeCodex } from '../test-support/fake-codex.js';
 import type { FakeCodex } from '../test-support/fake-codex.js';
+import { CODEX_PINNED_VERSION } from './codex-binary.js';
 import type { CodexRuntimeRead } from './codex-runtime.js';
 import { availableCodexEntry, codexHostModel, unavailableCodexEntry } from './codex-runtime.js';
 import type { HostEvent, HostLink } from './host.js';
@@ -264,7 +265,7 @@ test('a Codex session on the wire: its handle and receipt before ready, ready at
   assert.equal(started['runtime'], 'codex', 'a Codex message did not name its runtime');
   assert.deepEqual(readAgentMessage(started), {
     method: 'thread/started',
-    params: { thread: { id: 'thread-1', cliVersion: '0.162.1' } },
+    params: { thread: { id: 'thread-1', cliVersion: CODEX_PINNED_VERSION } },
   });
   void fake;
   host.stop();

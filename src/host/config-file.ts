@@ -50,6 +50,12 @@ export const CONFIG_KEYS = [
   'PERISCOPE_QWEN_HOME',
   'PERISCOPE_PI_BIN',
   'PERISCOPE_PI_HOME',
+  'PERISCOPE_COPILOT_SDK',
+  'PERISCOPE_COPILOT_HOME',
+  'PERISCOPE_COPILOT_TOKEN_FILE',
+  'PERISCOPE_OPENCODE_SDK',
+  'PERISCOPE_OPENCODE_HOME',
+  'PERISCOPE_AGENT_PROGRESS_SUMMARIES',
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -63,8 +69,10 @@ export type ConfigKey = (typeof CONFIG_KEYS)[number];
  * controller may place in a spawn's environment (a controller able to write that list would declare
  * its own keys), or the file of model endpoints (a controller able to point it elsewhere would choose
  * the address and the credential a session's model calls use), or the Codex binary and its home, or
- * the Qwen Code CLI and its home (a controller able to set either would choose the program a session
- * runs and the sign-in or the settings it runs with).
+ * the Qwen Code CLI and its home, pi's, Copilot's SDK, its home and its token file, or opencode's SDK and its
+ * home (a controller able to set any of them would choose the program a session runs and the sign-in or the
+ * settings it runs with), or whether subagents write progress summaries (each is a model call the
+ * operator pays for).
  */
 export const WIRE_CONFIGURABLE_KEYS = [
   'PERISCOPE_WORKSPACE_ROOT',

@@ -15,13 +15,20 @@
  *     `thread/tokenUsage/updated` for that turn: Codex's running total for the thread. `turn` and
  *     `turnScope` are null: Codex's `last` is one model call, not the turn, and the totals carry the
  *     spend. `inputTokens` is the input minus the cached input, floored at zero, by Codex's own split,
- *     so it counts uncached input only, as on every runtime.
+ *     so it counts uncached input only, as on every runtime. The totals are the session's own thread
+ *     alone: a sub-agent's thread feeds no total, and a task entry states no usage (below), so a
+ *     sub-agent's tokens are in no total this host sends.
  *   - `usage_sample`: each `thread/tokenUsage/updated`. The context is the last call's total, Codex's
  *     own counting rule; cached tokens are part of input there, not added to it. The cache reads are
  *     the last call's cached input.
  *   - `tasks`: the running sub-agents, composed from collaboration tool calls and sub-agent activity,
  *     and the sub-agents settled since the turn began, with how each ended where the item says; the
- *     next `turn/started` clears them.
+ *     next `turn/started` clears them. Each names the call that started it (`toolUseId`) where a call
+ *     named its thread, and a settled one carries the message Codex reported for its end (`summary`): a
+ *     completed agent's final answer, an errored one's error. `usage` is never stated: a sub-agent's own
+ *     thread reports a token total, but a thread spawned with the parent's context (`fork_context`)
+ *     counts on from the parent's running total, and nothing this host receives says which spawn did.
+ *     Codex reports no output file for a sub-agent, so `outputFile` is never stated either.
  *   - `compaction`: the observer's report of the compaction entry, as for every runtime.
  * And one fragment per text or reasoning delta.
  *
@@ -40,6 +47,8 @@ import type {
   SpendFacts,
   TaskSettlement,
 } from '../control/frames.js';
+import { cutText, factText } from '../control/fact-text.js';
+import { fitTasks } from '../control/tasks-budget.js';
 import { MAX_FACT_LIST_ENTRIES, MAX_FACT_TEXT_LENGTH } from '../control/frames.js';
 import type { FactLift, LiftedFacts } from '../sessions/fact-lift.js';
 import { CODEX_RUNTIME } from '../sessions/runtimes.js';
@@ -57,6 +66,7 @@ import {
   ThreadTokenUsageUpdated,
   TokenUsageBreakdown,
   TurnNotification,
+  codexStartedThreads,
   parsed,
 } from './codex-wire.js';
 import type { z } from 'zod';
@@ -171,6 +181,7 @@ export class CodexFactLift implements FactLift<CodexMessage> {
         trigger: report.trigger,
         tokensBefore: report.tokensBefore,
         tokensAfter: report.tokensAfter,
+        ...(report.outcome === undefined ? {} : { outcome: report.outcome }),
       },
     ];
   }
@@ -362,31 +373,41 @@ export class CodexFactLift implements FactLift<CodexMessage> {
     if (notification === null) return NOTHING;
     const item = notification.item as Readonly<Record<string, unknown>> & { type: string; id: string };
     const started = method === 'item/started';
+    // The first call that names a sub-agent's thread is the one that started it; a later call about the
+    // same agent (a message, a wait, a close) never moves it.
+    for (const agent of codexStartedThreads(item)) {
+      if (!this.#spawnedBy.has(agent)) this.#spawnedBy.set(agent, item.id);
+    }
     if (item.type === 'collabAgentToolCall') {
+      if (started) return NOTHING;
       const receivers = Array.isArray(item['receiverThreadIds'])
         ? item['receiverThreadIds'].filter((id): id is string => typeof id === 'string')
         : [];
       const tool = item['tool'];
-      if (started) {
-        for (const receiver of receivers) this.#spawnedBy.set(receiver, item.id);
-        return NOTHING;
-      }
       if (tool === 'spawnAgent') {
         const prompt = typeof item['prompt'] === 'string' ? text(item['prompt']) : null;
         for (const receiver of receivers) {
-          this.#spawnedBy.set(receiver, item.id);
-          this.#running.set(receiver, { taskId: receiver, type: SUBAGENT_TASK_TYPE, description: prompt });
+          this.#running.set(receiver, {
+            taskId: receiver,
+            type: SUBAGENT_TASK_TYPE,
+            description: prompt,
+            ...this.#startedBy(receiver),
+          });
         }
       }
       if (tool === 'closeAgent') for (const receiver of receivers) this.#running.delete(receiver);
       const states = item['agentsStates'];
       if (typeof states === 'object' && states !== null) {
         for (const [agent, state] of Object.entries(states as Record<string, unknown>)) {
-          const status = (state as { status?: unknown } | null)?.status;
+          const reported = state as { status?: unknown; message?: unknown } | null;
+          const status = reported?.status;
           const settled = typeof status === 'string' ? settlementOf(SETTLED_AGENT_STATES, status) : null;
           if (settled === null) continue;
           this.#running.delete(agent);
-          this.#settle(agent, settled);
+          // A completed agent's message is its final answer and an errored one's is its error: the summary
+          // of how it ended, as Codex wrote it.
+          const message = reported?.message;
+          this.#settle(agent, settled, typeof message === 'string' && message !== '' ? message : null);
         }
       }
       return facts(this.#tasksIfChanged());
@@ -396,27 +417,47 @@ export class CodexFactLift implements FactLift<CodexMessage> {
       const kind = item['kind'];
       if (typeof agent !== 'string') return NOTHING;
       if (kind === 'started' && !this.#running.has(agent)) {
-        this.#running.set(agent, { taskId: agent, type: SUBAGENT_TASK_TYPE, description: null });
+        this.#running.set(agent, {
+          taskId: agent,
+          type: SUBAGENT_TASK_TYPE,
+          description: null,
+          ...this.#startedBy(agent),
+        });
       }
       const settled = typeof kind === 'string' ? settlementOf(SETTLED_ACTIVITY, kind) : null;
       if (settled !== null) {
         this.#running.delete(agent);
-        this.#settle(agent, settled);
+        this.#settle(agent, settled, null);
       }
       return facts(this.#tasksIfChanged());
     }
     return NOTHING;
   }
 
-  /** A sub-agent ended, as `status` says; the first ending the turn reports for it stands. */
-  #settle(agent: string, status: TaskSettlement): void {
-    if (!this.#settled.has(agent))
-      this.#settled.set(agent, { taskId: agent, type: SUBAGENT_TASK_TYPE, status });
+  /** The call that started `agent`, as a task's `toolUseId`, where a call named it; nothing otherwise. */
+  #startedBy(agent: string): { readonly toolUseId?: string } {
+    const call = this.#spawnedBy.get(agent);
+    return call === undefined ? {} : { toolUseId: factText(call) };
+  }
+
+  /**
+   * A sub-agent ended, as `status` says, with the message Codex reported for its end where there is one;
+   * the first ending the turn reports for it stands. No usage is stated, since a sub-agent's thread total
+   * can carry its parent's (see the header), and Codex reports no output file for a sub-agent.
+   */
+  #settle(agent: string, status: TaskSettlement, summary: string | null): void {
+    if (this.#settled.has(agent)) return;
+    this.#settled.set(agent, {
+      taskId: agent,
+      type: SUBAGENT_TASK_TYPE,
+      status,
+      ...this.#startedBy(agent),
+      ...(summary === null ? {} : { summary: factText(summary) }),
+    });
   }
 
   #tasksIfChanged(): AgentFact[] {
-    const running = bounded([...this.#running.values()]);
-    const settled = bounded([...this.#settled.values()]);
+    const { running, settled } = fitTasks([...this.#running.values()], [...this.#settled.values()]);
     const key = JSON.stringify([running, settled]);
     if (key === this.#runningSent) return [];
     this.#runningSent = key;
@@ -454,7 +495,7 @@ function bounded<T>(list: readonly T[]): T[] {
 }
 
 function text(value: string): string {
-  return value.length <= MAX_FACT_TEXT_LENGTH ? value : value.slice(0, MAX_FACT_TEXT_LENGTH);
+  return cutText(value, MAX_FACT_TEXT_LENGTH);
 }
 
 /** A reported count as the wire carries it: a non-negative integer. */

@@ -274,6 +274,8 @@ export function isBatchFile(command: string): boolean {
 export interface ProcessEntry {
   readonly pid: number;
   readonly ppid: number;
+  /** When the process started, on a clock of the table's own, where the table states it. */
+  readonly started?: number;
 }
 
 /** Reads the process table once. A process that exits while it is read is left out. */
@@ -426,6 +428,93 @@ export async function killProcessTree(pid: number, seams: KillTreeSeams = {}): P
     send(descendant);
   }
   send(-pid);
+}
+
+/**
+ * The process table on Windows, read through PowerShell: each process, its parent, and when it started.
+ * Empty when it cannot be read.
+ */
+export function readWindowsProcessTable(): Promise<ProcessEntry[]> {
+  return new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.Ticks)" }',
+      ],
+      { windowsHide: true, timeout: 20_000, maxBuffer: 16 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error !== null) {
+          resolve([]);
+          return;
+        }
+        const rows: ProcessEntry[] = [];
+        for (const line of stdout.split('\n')) {
+          const [pid, ppid, started] = line.trim().split(/\s+/).map(Number);
+          if (Number.isInteger(pid) && Number.isInteger(ppid)) {
+            rows.push({
+              pid: pid as number,
+              ppid: ppid as number,
+              ...(Number.isFinite(started) ? { started: started as number } : {}),
+            });
+          }
+        }
+        resolve(rows);
+      },
+    );
+  });
+}
+
+/** The seams `killDescendants` is exercised through; each defaults to the real one. */
+export interface KillDescendantsSeams extends KillTreeSeams {
+  /** How one child's whole tree is killed on Windows. */
+  readonly killTree?: (pid: number) => Promise<void>;
+}
+
+/**
+ * Kill every process under `pid`, and leave `pid` itself running. For a child about to be asked to exit by
+ * itself: what it started is ended while it is still there to root the walk. Once it has exited, a process it
+ * started is under nothing: on Windows a tree is walked from a live pid, and elsewhere an orphan is
+ * reparented and no walk from the child finds it.
+ *
+ * On Windows each direct child's tree is killed (`taskkill /T /F`). A process is taken for a child only if
+ * the table says it started no earlier than `pid` did: Windows keeps a dead parent's pid on its orphans, and
+ * hands the number out again, so an older process naming `pid` as its parent is nothing of this one's.
+ * Elsewhere every descendant and its group are signalled, as `killProcessTree` signals them.
+ */
+export async function killDescendants(pid: number, seams: KillDescendantsSeams = {}): Promise<void> {
+  const platform = seams.platform ?? process.platform;
+  let table: readonly ProcessEntry[] = [];
+  try {
+    table = await (seams.readTable ?? (platform === 'win32' ? readWindowsProcessTable : readProcessTable))();
+  } catch {
+    // An unreadable table leaves nothing to walk; the close that follows still ends the child's own tree.
+  }
+  if (platform === 'win32') {
+    const parent = table.find((entry) => entry.pid === pid);
+    const children = table.filter(
+      (entry) =>
+        entry.ppid === pid &&
+        entry.pid !== pid &&
+        (parent?.started === undefined || entry.started === undefined || entry.started >= parent.started),
+    );
+    const kill = seams.killTree ?? ((target: number) => killProcessTree(target, { platform }));
+    await Promise.all(children.map((child) => kill(child.pid).catch(() => undefined)));
+    return;
+  }
+  const signal = seams.signal ?? ((target: number) => process.kill(target, 'SIGKILL'));
+  for (const descendant of descendantsOf(pid, table)) {
+    for (const target of [-descendant, descendant]) {
+      if (Math.abs(target) <= 1 || Math.abs(target) === process.pid) continue;
+      try {
+        signal(target);
+      } catch {
+        // Gone already, or not a group leader: either way nothing is left to signal there.
+      }
+    }
+  }
 }
 
 /** The default spawner: the program with an explicit argv, no shell and no window. */

@@ -17,6 +17,7 @@ import type {
 } from '../control/frames.js';
 import {
   readAgentFacts,
+  readAgentItem,
   readAgentMessage,
   readStateTransition,
   sessionNew,
@@ -27,7 +28,7 @@ import { ok } from '../core/result.js';
 import type { Result } from '../core/result.js';
 import type { DecisionRequest } from '../gate/decision.js';
 import type { SessionTransition } from '../state/model.js';
-import { fakeQwen } from '../test-support/fake-qwen.js';
+import { FAKE_QWEN_LISTED_TOOLS, fakeQwen } from '../test-support/fake-qwen.js';
 import type { FakeQwen, FakeQwenOptions } from '../test-support/fake-qwen.js';
 import { tempDir } from '../test-support/temp-dir.js';
 import type { WorkspaceProvider } from '../workspace/provider.js';
@@ -130,8 +131,12 @@ async function qwenHost(
 
 async function stopped(run: QwenHost): Promise<void> {
   run.host.stop();
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  await rm(run.base, { recursive: true, force: true });
+  // The CLI the test's session started, where it started one, has exited: the stop is done with the base.
+  await until(
+    () => run.fake.child.spawned === null || run.fake.child.closed,
+    "the stop to end the session's CLI",
+  );
+  await rm(run.base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 async function until(check: () => boolean, what: string, ms = 3000): Promise<void> {
@@ -233,6 +238,143 @@ test('a Qwen Code session on the wire: handle and receipt, ready at its tier, a 
   assert.ok(natives.some((message) => message['type'] === 'result'));
   assert.ok(natives.some((message) => message['type'] === 'control_request'));
   await stopped(run);
+});
+
+/** A Qwen Code sub-agent's call during a turn, on a link at `version`: each item sent, as `[itemId, parentId]`. */
+async function subAgentItemsAt(version: number): Promise<[string, string | null][]> {
+  // The sub-agent's messages are shaped as the CLI's stream-json path writes them at v0.27.3: each carries
+  // the spawning call as its `parent_tool_use_id` (`processSubagentToolCall`, `emitToolResult`).
+  const run = await qwenHost({
+    fake: {
+      calls: () => [{ name: 'agent', input: { prompt: 'Look.' } }],
+      during: (_call, id) => [
+        {
+          type: 'assistant',
+          uuid: 'a-sub',
+          session_id: 's1',
+          parent_tool_use_id: id,
+          message: {
+            content: [{ type: 'tool_use', id: 'sub_read', name: 'read_file', input: { file_path: 'a.ts' } }],
+          },
+        },
+        {
+          type: 'user',
+          uuid: 'u-sub',
+          session_id: 's1',
+          parent_tool_use_id: id,
+          message: { content: [{ type: 'tool_result', tool_use_id: 'sub_read', content: 'text' }] },
+        },
+      ],
+    },
+  });
+  run.link.negotiatedVersion = version;
+  try {
+    run.link.deliver('handle-1', opening());
+    await until(() => run.link.transitions().some((transition) => transition.to === 'ready'), 'ready');
+    run.link.deliver('handle-1', { kind: 'session_prompt', text: 'look' }, 2);
+    await until(
+      () => run.link.transitions().some((transition) => transition.to === 'idle'),
+      'the turn to end',
+    );
+    return run.link.bodies().flatMap(({ body }) => {
+      const read = readAgentItem(body);
+      return read === null ||
+        read.item.kind === 'turn' ||
+        read.item.kind === 'user_text' ||
+        read.item.kind === 'agent_text'
+        ? []
+        : [[read.item.itemId, read.item.parentId ?? null]];
+    });
+  } finally {
+    await stopped(run);
+  }
+}
+
+test("a Qwen Code that registered tools the session's settings turn off is named on the session's state lane, a call to the denied one is refused, and the session opens and goes on", async () => {
+  const run = await qwenHost({
+    fake: {
+      tools: [...FAKE_QWEN_LISTED_TOOLS, 'autofix_pr', 'exec'],
+      calls: () => [
+        { name: 'autofix_pr', input: { helper: 'push' } },
+        { name: 'read_file', input: { file_path: 'notes.txt' } },
+      ],
+    },
+  });
+  try {
+    run.link.deliver('handle-1', opening());
+    await until(() => run.link.transitions().some((transition) => transition.to === 'ready'), 'ready');
+    run.link.deliver('handle-1', { kind: 'session_prompt', text: 'fix it' }, 2);
+    await until(
+      () => run.link.transitions().some((transition) => transition.to === 'idle'),
+      'the turn to end',
+    );
+
+    const named = run.link
+      .transitions()
+      .filter((one) => one.cause.kind === 'refusal' && one.cause.event === 'qwen-ask-rules-not-active')
+      .map((one) => one.cause.detail ?? '');
+    assert.ok(
+      named.some((detail) => /lists the tool autofix_pr, which this session's settings deny/.test(detail)),
+      named.join(' | '),
+    );
+    assert.ok(
+      named.some((detail) => /lists the tool exec, which it registers only in code mode/.test(detail)),
+      named.join(' | '),
+    );
+    // The denied tool's call never ran and nobody was asked; the next call was decided and ran.
+    assert.deepEqual(
+      run.decided.map((request) => request.toolName),
+      ['read_file'],
+    );
+    assert.deepEqual(
+      run.fake.cli.ran.map((call) => call.toolName),
+      ['read_file'],
+    );
+    const refusedAnswer = run.fake.cli.decided.find(
+      (one) => one.request['tool_name'] === 'autofix_pr',
+    )?.answer;
+    assert.equal(refusedAnswer?.['behavior'], 'deny');
+    const words = refusedAnswer?.['message'];
+    assert.match(typeof words === 'string' ? words : '', /^qwen-ask-rules-not-active: /);
+    // The session opened and its turn ended as any other does.
+    assert.ok(!run.link.transitions().some((transition) => transition.to === 'errored'));
+  } finally {
+    await stopped(run);
+  }
+});
+
+test("control: a Qwen Code that lists the tools the session's settings leave on names nothing", async () => {
+  const run = await qwenHost({
+    fake: { calls: () => [{ name: 'read_file', input: { file_path: 'notes.txt' } }] },
+  });
+  try {
+    run.link.deliver('handle-1', opening());
+    await until(() => run.link.transitions().some((transition) => transition.to === 'ready'), 'ready');
+    run.link.deliver('handle-1', { kind: 'session_prompt', text: 'look' }, 2);
+    await until(
+      () => run.link.transitions().some((transition) => transition.to === 'idle'),
+      'the turn to end',
+    );
+    assert.deepEqual(
+      run.link.transitions().filter((one) => one.cause.kind === 'refusal'),
+      [],
+    );
+  } finally {
+    await stopped(run);
+  }
+});
+
+test("a controller on protocol 19 is sent no Qwen Code sub-agent's item, which it would read as the session's own; one on 20 is sent each naming its spawn", async () => {
+  assert.deepEqual(await subAgentItemsAt(19), [
+    ['call_1', null],
+    ['call_1:result', null],
+  ]);
+  assert.deepEqual(await subAgentItemsAt(20), [
+    ['call_1', null],
+    ['sub_read', 'call_1'],
+    ['sub_read:result', 'call_1'],
+    ['call_1:result', null],
+  ]);
 });
 
 test("regression: the session's settings file named through its own variable is refused in each shell's spelling; the shared runtime directory is not", async () => {

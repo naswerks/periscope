@@ -18,8 +18,14 @@
  *   for each MCP server this host attaches, so every call the CLI would allow by default asks this host
  *   instead. The CLI has no rule that names every tool at once (`*` matches no tool), so the list is
  *   the rule.
+ * - `permissions.deny`: the tools this host turns off (`QWEN_DENIED_TOOLS`), which no scope's allow or ask
+ *   rule can turn back on;
  * - `disableAllHooks`, so no settings hook can decide a call or rewrite one;
- * - usage statistics off, the code-mode tool off, and the skill directories the session takes;
+ * - `tools.codeModeOnly: false`, so the CLI never registers `exec`, the tool that runs a script whose
+ *   own tool calls this host has not been shown to decide one by one. The CLI registers it only in code
+ *   mode, which it takes from this setting alone, and the system scope's `false` replaces any other
+ *   scope's `true`;
+ * - usage statistics off, and the skill directories the session takes;
  * - the endpoint's auth (`security.auth`) and providers, when the session names one.
  *
  * Before the first prompt the file is read back and held to the list (`readBackQwenSettings`); a file
@@ -92,11 +98,30 @@ export function qwenAskRules(servers: readonly string[]): string[] {
   return [...QWEN_NAMES.tools, ...servers.map((server) => `mcp__${server}`)];
 }
 
+/**
+ * The built-in tools this host turns off in every session, by a deny rule in its system scope. A deny is
+ * the CLI's strongest rule: every scope's rules merge into one list each, a deny is weighed before any ask
+ * or allow, and a tool a whole-tool deny names is never registered, so the model is not offered it.
+ *
+ * - `autofix_pr` runs the CLI's own pull-request helpers (`push`, `reply`, `rerun` among them), so a call
+ *   to it pushes a branch or posts a reply while the decision request names only the tool and a helper's
+ *   name, which no shell rule and no reading of a command recognises as a push. A controller cannot
+ *   govern a publish it cannot see as one, so the tool is off; lifting it is a later release's change to
+ *   this list, once a decision request can say what such a call publishes.
+ */
+export const QWEN_DENIED_TOOLS = ['autofix_pr'] as const;
+
+/**
+ * The tools the CLI registers only in code mode, which every session's settings keep off
+ * (`tools.codeModeOnly: false`), so no session is offered one.
+ */
+export const QWEN_CODE_MODE_TOOLS = ['exec'] as const;
+
 /** The settings a session's CLI loads as its system scope. Pure. */
 export function qwenSystemSettings(input: QwenSettingsInput): JsonObject {
   const auth = input.auth;
   return {
-    permissions: { ask: qwenAskRules(input.servers) },
+    permissions: { ask: qwenAskRules(input.servers), deny: [...QWEN_DENIED_TOOLS] },
     disableAllHooks: true,
     privacy: { usageStatisticsEnabled: false },
     tools: { codeModeOnly: false },
@@ -180,8 +205,9 @@ export function createQwenSessionHome(base: string, input: QwenSettingsInput): R
 
 /**
  * Why the session's settings would not send every built-in call to ask, or null when they would: the
- * file reads as JSON, its ask rules name every rule the home was written with, its hooks are off, and
- * the environment the CLI starts with names that file as its system scope.
+ * file reads as JSON, its ask rules name every rule the home was written with, it denies every tool this
+ * host turns off, it keeps code mode off, its hooks are off, and the environment the CLI starts with
+ * names that file as its system scope.
  */
 export function readBackQwenSettings(
   session: Pick<QwenSessionHome, 'settingsFile' | 'askRules'>,
@@ -209,6 +235,20 @@ export function readBackQwenSettings(
   const missing = session.askRules.filter((rule) => !named.has(rule));
   if (missing.length > 0) {
     return `${session.settingsFile} has no ask rule for ${missing.length} name(s): ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? ', …' : ''}`;
+  }
+  const deny = (rules as Record<string, unknown>)['deny'];
+  const denied = new Set(
+    Array.isArray(deny) ? deny.filter((rule): rule is string => typeof rule === 'string') : [],
+  );
+  const undenied = QWEN_DENIED_TOOLS.filter((tool) => !denied.has(tool));
+  if (undenied.length > 0) return `${session.settingsFile} does not deny ${undenied.join(', ')}`;
+  const tools = document['tools'];
+  if (
+    typeof tools !== 'object' ||
+    tools === null ||
+    (tools as Record<string, unknown>)['codeModeOnly'] !== false
+  ) {
+    return `${session.settingsFile} does not keep code mode off`;
   }
   if (document['disableAllHooks'] !== true) return `${session.settingsFile} does not turn every hook off`;
   return null;

@@ -37,6 +37,7 @@ import {
 import { classifyShellCommand } from './shell.js';
 import { parseCommand, readCmdCommand } from './command.js';
 import { patchPaths } from './patch.js';
+import { isSocketWatch } from './tool-kind.js';
 import { isAbsolutePath } from '../core/paths.js';
 
 /**
@@ -65,6 +66,13 @@ export interface ToolFamilies {
    * listed as `changes[].path`. Every file is a write. Absent: the default family.
    */
   readonly patch?: readonly string[];
+  /**
+   * Tools that hand local files to a service, or save what a service returns, by the paths their input
+   * names: `file_path`, each of `file_paths`, each source in `files`, `root` and `out_dir`. Each path is
+   * held to the protected set and to nothing else, as a read is: such a tool may read and save anywhere
+   * but in credential material. A call that names no path has no local opinion. Absent: none.
+   */
+  readonly publish?: readonly string[];
 }
 
 /**
@@ -78,8 +86,12 @@ export interface ToolFamilies {
 export const DEFAULT_TOOL_FAMILIES: ToolFamilies = {
   write: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'],
   read: ['Read', 'NotebookRead'],
-  shell: ['Bash', 'PowerShell'],
+  // `Monitor` runs the command its input names, as `Bash` does; a `Monitor` call that watches a socket
+  // instead names no command and is not a shell call (`isSocketWatch`).
+  shell: ['Bash', 'PowerShell', 'Monitor'],
   search: ['Grep', 'Glob'],
+  // `Artifact` publishes the local files its input names and saves the files it fetches.
+  publish: ['Artifact'],
 };
 
 /**
@@ -121,6 +133,36 @@ export const PI_TOOL_FAMILIES: ToolFamilies = {
   search: ['grep', 'find', 'ls'],
 };
 
+/**
+ * The names Copilot gives its built-in tools: `powershell` and `bash` run a command; `view` reads the path it
+ * names; `create`, `edit` and `str_replace_editor` write theirs (every command of the last, its `view`
+ * included, is held as a write: stricter, and the model has `view` for a read); `grep`, `rg` and `glob` read under
+ * the paths they name (`paths`, one string or a list); `apply_patch` writes every file its patch names. Every other Copilot
+ * tool has no local family and is asked about like any call this gate has no opinion on.
+ */
+export const COPILOT_TOOL_FAMILIES: ToolFamilies = {
+  write: ['create', 'edit', 'str_replace_editor'],
+  read: ['view'],
+  shell: ['powershell', 'bash'],
+  search: ['grep', 'rg', 'glob'],
+  patch: ['apply_patch'],
+};
+
+/**
+ * The actions opencode's permission requests name: `shell` runs a command; `edit` writes the path it names
+ * (the tools that ask it are named beside it, so a request by either spelling is jailed as a write);
+ * `read` reads the path it names, and `external_directory` reads where a call outside the session's location
+ * goes (the directory it names); `glob` and `grep` read under theirs. The opencode gate checks each path a
+ * request names (`opencode-gate.ts`), so one request about several files is checked file by file. Every
+ * other opencode action has no local family and is asked about like any call this gate has no opinion on.
+ */
+export const OPENCODE_TOOL_FAMILIES: ToolFamilies = {
+  write: ['edit', 'write', 'patch', 'opencode_worktree_remove'],
+  read: ['read', 'external_directory'],
+  shell: ['shell'],
+  search: ['glob', 'grep'],
+};
+
 export interface LocalGateOptions {
   /** The session's own directory: writes may land inside it, and a relative path is placed against it. */
   readonly workspaceRoot: string | null;
@@ -135,6 +177,20 @@ export interface LocalGateOptions {
   readonly protectedPaths: readonly string[];
   /** The home directory a shell command's `~` and `$HOME` forms name. */
   readonly home?: string | null;
+  /**
+   * The names this machine answers to as a file server, beside `localhost` and the loopback addresses: a
+   * share that names one of them and a drive (`\\name\C$\...`) is checked as that drive's path.
+   * `host/paths.ts` reads the machine's own (`machineNames`). Absent: `localhost` and the loopback
+   * addresses alone.
+   */
+  readonly localNames?: readonly string[];
+  /**
+   * A path as the file system names it. Called only for a path with a segment shaped like a Windows short
+   * name (`PROGRA~1`); the protected set is then compared with the path as written and with what this
+   * returns. `host/canonical-path.ts` holds the one built on the file system. Absent: such a path is
+   * compared as written.
+   */
+  readonly realPath?: PathResolver;
   /**
    * The session's spawn environment as far as the host knows it, read at every decision: a runtime's own
    * variables exist only once its process starts, after this gate is built. Each variable whose value is
@@ -157,9 +213,18 @@ export interface LocalGateOptions {
   /**
    * Check the directory a shell call runs in (its input's `directory`) against the protected set, as a
    * read of that directory. Defaults to false. Set for a runtime whose shell tool takes the directory
-   * beside the command: a relative path in the command is a path under it.
+   * beside the command: a relative path in the command is a path under it. A relative directory is placed
+   * under the session's.
    */
   readonly checksShellDirectory?: boolean;
+  /**
+   * Check the working directory a shell call runs in (the request's `cwd`) against the protected set, as a
+   * read of that directory. Defaults to false. Set for a runtime that reports a shell call's own working
+   * directory as the call's `cwd` and keeps it out of the input: a relative path in the command is a path
+   * under it. A relative `cwd` is placed under the session's directory, and an absent one is read as the
+   * session's directory.
+   */
+  readonly checksShellCwd?: boolean;
   /**
    * Resolve a relative path a read tool names against the call's own working directory (`cwd`), else
    * the workspace root, rather than this process's. Defaults to false. Set for a runtime whose file
@@ -188,6 +253,8 @@ export function localGate(options: LocalGateOptions): LocalGate {
     resolve: options.resolve,
     protectedPaths: options.protectedPaths,
     home: options.home ?? null,
+    ...(options.localNames === undefined ? {} : { localNames: options.localNames }),
+    ...(options.realPath === undefined ? {} : { realPath: options.realPath }),
   };
 
   const writeTools = new Set(families.write);
@@ -195,14 +262,38 @@ export function localGate(options: LocalGateOptions): LocalGate {
   const shellTools = new Set(families.shell);
   const searchTools = new Set(families.search ?? DEFAULT_TOOL_FAMILIES.search);
   const patchTools = new Set(families.patch ?? []);
+  const publishTools = new Set(families.publish ?? []);
   const readsShellDialect = options.readsShellDialect ?? false;
   const checksShellDirectory = options.checksShellDirectory ?? false;
+  const checksShellCwd = options.checksShellCwd ?? false;
   const resolvesAgainstCallCwd = options.resolvesAgainstCallCwd ?? false;
   const resolvesWritesAgainstCallCwd = options.resolvesWritesAgainstCallCwd ?? false;
   const spawnEnv = options.spawnEnv;
+  // Each call's paths are placed against the directory that call runs in.
+  const at = (request: DecisionRequest, placesRelative: boolean): JailOptions => ({
+    ...jail,
+    callDirectory: request.cwd,
+    placesRelative,
+  });
+  // The directory a command runs in, held to the protected set as a read of it. An absolute one is
+  // checked as it is. A relative one is a directory under the session's, and one the call does not state
+  // is the session's own; neither is refused for being unstated, only for where it lands.
+  const runsIn = (directory: string): Refusal | null => {
+    if (isAbsolutePath(directory)) return checkReadPath(directory, jail);
+    const session = jail.workspaceRoot;
+    if (session === null || !isAbsolutePath(session)) return null;
+    const refused = checkReadPath(directory.trim() === '' ? session : directory, {
+      ...jail,
+      callDirectory: session,
+      placesRelative: true,
+    });
+    return refused?.reason === 'credential-path-denied' ? refused : null;
+  };
 
   return (request: DecisionRequest): Refusal | null => {
-    if (shellTools.has(request.toolName)) {
+    // A `Monitor` call that watches a socket and names no command runs nothing a shell reads, so it is no
+    // shell call. Any other shell tool's call with no command is refused below, whatever else it carries.
+    if (shellTools.has(request.toolName) && !isSocketWatch(request.toolName, request.toolInput)) {
       // The shell scan reads the session's variables as they stand now, not as they stood at construction.
       const shellJail: JailOptions = spawnEnv === undefined ? jail : { ...jail, variables: spawnEnv() };
       const command = commandFromToolInput(request.toolInput);
@@ -214,7 +305,11 @@ export function localGate(options: LocalGateOptions): LocalGate {
       }
       if (checksShellDirectory) {
         const directory = shellDirectoryOf(request.toolInput);
-        const inside = directory === null ? null : checkReadPath(directory, jail);
+        const inside = directory === null ? null : runsIn(directory);
+        if (inside !== null) return inside;
+      }
+      if (checksShellCwd) {
+        const inside = runsIn(request.cwd);
         if (inside !== null) return inside;
       }
       // One parse, both consumers. The credential check runs first because a command naming the
@@ -238,27 +333,30 @@ export function localGate(options: LocalGateOptions): LocalGate {
     }
 
     if (patchTools.has(request.toolName)) {
-      return checkPatch(request, jail);
+      // A patch's paths are always placed where the call runs.
+      return checkPatch(request, at(request, true));
     }
 
     if (writeTools.has(request.toolName)) {
-      const named = pathFromToolInput(request.toolInput);
-      if (!resolvesWritesAgainstCallCwd || named === null) return checkPath(named, jail);
-      const placed = againstCallCwd(named, request.cwd, jail.workspaceRoot);
-      return typeof placed === 'string' ? checkPath(placed, jail) : placed;
+      return checkPath(pathFromToolInput(request.toolInput), at(request, resolvesWritesAgainstCallCwd));
     }
 
     if (readTools.has(request.toolName)) {
-      const named = pathFromToolInput(request.toolInput);
-      if (!resolvesAgainstCallCwd || named === null) return checkReadPath(named, jail);
-      const placed = againstCallCwd(named, request.cwd, jail.workspaceRoot);
-      return typeof placed === 'string' ? checkReadPath(placed, jail) : placed;
+      return checkReadPath(pathFromToolInput(request.toolInput), at(request, resolvesAgainstCallCwd));
     }
 
     if (searchTools.has(request.toolName)) {
-      if (!resolvesAgainstCallCwd) return checkSearch(request.toolInput, jail);
-      const placed = placedSearchInput(request, jail.workspaceRoot);
-      return 'refused' in placed ? placed.refused : checkSearch(placed.input, jail);
+      return checkSearch(request.toolInput, at(request, resolvesAgainstCallCwd));
+    }
+
+    if (publishTools.has(request.toolName)) {
+      // Each path is placed where the call runs, and only the protected set can refuse it.
+      const placed = at(request, true);
+      for (const path of publishedPaths(request.toolInput)) {
+        const refused = checkReadPath(path, placed);
+        if (refused?.reason === 'credential-path-denied') return refused;
+      }
+      return null;
     }
 
     // No opinion. The surrounding gate asks whoever it was going to ask.
@@ -277,30 +375,10 @@ function strongerRefusal(first: Refusal | null, second: Refusal | null): Refusal
 }
 
 /**
- * `path` placed under the call's working directory when it is relative: the call's `cwd`, else the
- * workspace root. A relative path with neither to stand on is refused, because resolving it against this
- * process's own directory would check a file the call never named.
- */
-function againstCallCwd(path: string, callCwd: string, workspaceRoot: string | null): string | Refusal {
-  if (isAbsolutePath(path)) return path;
-  const base = isAbsolutePath(callCwd)
-    ? callCwd
-    : workspaceRoot !== null && isAbsolutePath(workspaceRoot)
-      ? workspaceRoot
-      : null;
-  if (base === null) {
-    return refusal(
-      'path-not-absolute',
-      `${path} is relative and the call states no absolute working directory to resolve it against`,
-    );
-  }
-  return `${base}/${path}`;
-}
-
-/**
- * Every file a patch call names goes through the jail and the protected set, as a write. The files come
- * from the patch's own header lines (`command`) or from `changes[].path` and `changes[].movePath`. A
- * patch that names no file this host can read is refused: there is nothing to bound.
+ * Every file a patch call names goes through the jail and the protected set, as a write, each placed
+ * where the call runs (`jail` carries the call's directory). The files come from the patch's own header
+ * lines (`command`) or from `changes[].path` and `changes[].movePath`. A patch that names no file this
+ * host can read is refused: there is nothing to bound.
  */
 function checkPatch(request: DecisionRequest, jail: JailOptions): Refusal | null {
   const paths = patchInputPaths(request.toolInput);
@@ -311,15 +389,51 @@ function checkPatch(request: DecisionRequest, jail: JailOptions): Refusal | null
     );
   }
   for (const path of paths) {
-    const placed = againstCallCwd(path, request.cwd, jail.workspaceRoot);
-    const refused = typeof placed === 'string' ? checkPath(placed, jail) : placed;
+    const refused = checkPath(path, jail);
     if (refused !== null) return refused;
   }
   return null;
 }
 
+/**
+ * The local paths a publishing call's input names: the page or file it sends (`file_path`), each further
+ * file (`file_paths`), each source in `files` (a list of `{ path }`, or a map whose values are a path or
+ * `{ from }`), the directory relative sources are read from (`root`) and the directory a fetched file is
+ * saved into (`out_dir`). A relative source is read under `root` where the input names one. A source that
+ * is another published file, and a member of any other shape, names no local path.
+ */
+export function publishedPaths(toolInput: unknown): string[] {
+  if (typeof toolInput !== 'object' || toolInput === null || Array.isArray(toolInput)) return [];
+  const input = toolInput as Record<string, unknown>;
+  const named = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
+  const paths: string[] = [];
+  for (const key of ['file_path', 'out_dir', 'root']) if (named(input[key])) paths.push(input[key]);
+  const further = input['file_paths'];
+  if (Array.isArray(further)) for (const one of further as unknown[]) if (named(one)) paths.push(one);
+  const root = named(input['root']) ? input['root'] : null;
+  const underRoot = (source: string): string =>
+    root === null || isAbsolutePath(source) || /^[~\\/]|^[A-Za-z]:/.test(source)
+      ? source
+      : `${root.replace(/[\\/]+$/, '')}/${source}`;
+  const files = input['files'];
+  const sources: unknown[] = Array.isArray(files)
+    ? (files as unknown[]).map((entry) =>
+        typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>)['path'] : entry,
+      )
+    : typeof files === 'object' && files !== null
+      ? Object.values(files as Record<string, unknown>).map((entry) =>
+          typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>)['from'] : entry,
+        )
+      : [];
+  for (const source of sources) if (named(source)) paths.push(underRoot(source));
+  return paths;
+}
+
 /** The files a patch call's input names, or null when it names none. */
 export function patchInputPaths(toolInput: unknown): string[] | null {
+  // A patch tool that takes its patch as the whole input (Copilot's `apply_patch`) names its files on the
+  // patch's own header lines, as a `command` does.
+  if (typeof toolInput === 'string') return patchPaths(toolInput);
   if (typeof toolInput !== 'object' || toolInput === null) return null;
   const record = toolInput as Record<string, unknown>;
   const command = record['command'];
@@ -343,22 +457,4 @@ export function shellDirectoryOf(toolInput: unknown): string | null {
   if (typeof toolInput !== 'object' || toolInput === null) return null;
   const directory = (toolInput as Record<string, unknown>)['directory'];
   return typeof directory === 'string' && directory.trim() !== '' ? directory : null;
-}
-
-/**
- * A search call's input with a relative `path` placed under where the call runs, as a runtime that
- * resolves it there reads it; an absolute path, a home-relative one or none is left as it is.
- */
-function placedSearchInput(
-  request: DecisionRequest,
-  workspaceRoot: string | null,
-): { readonly input: unknown } | { readonly refused: Refusal } {
-  const input = request.toolInput;
-  if (typeof input !== 'object' || input === null) return { input };
-  const path = (input as Record<string, unknown>)['path'];
-  if (typeof path !== 'string' || path.trim() === '' || path.startsWith('~') || isAbsolutePath(path)) {
-    return { input };
-  }
-  const placed = againstCallCwd(path, request.cwd, workspaceRoot);
-  return typeof placed === 'string' ? { input: { ...input, path: placed } } : { refused: placed };
 }
