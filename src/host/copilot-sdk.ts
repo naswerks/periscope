@@ -137,7 +137,18 @@ export interface CopilotSessionConfig {
   readonly mcpServers?: Record<string, CopilotMcpServer>;
   readonly streaming: boolean;
   readonly includeSubAgentStreamingEvents: boolean;
-  readonly systemMessage?: { readonly mode: 'append'; readonly content: string };
+  /**
+   * The runtime's system message, section by section: the environment section as the runtime writes it,
+   * the runtime's own instructions passed through a function, and the caller's words appended.
+   */
+  readonly systemMessage: {
+    readonly mode: 'customize';
+    readonly content?: string;
+    readonly sections: {
+      readonly environment_context: { readonly action: 'preserve' };
+      readonly runtime_instructions: { readonly action: (current: string) => string };
+    };
+  };
   readonly model?: string;
   readonly reasoningEffort?: string;
   readonly provider?: CopilotProvider;

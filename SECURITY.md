@@ -618,6 +618,19 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   that is none of the session's is named `gate-mode-widened` when the session opens, and the session
   opens. It was a reason to refuse the open, and a session whose temp folder is no write root of its
   own (one that covers its own directory, its home or a protected path) did not open at all.
+- **A session's model is told its working directory, and nothing of the runner's Copilot home.** Two
+  things made it otherwise. The SDK's `empty` client mode, which this host uses, takes the runtime's
+  environment section out of the system message unless it is asked for, so the model was told no
+  working directory, while its file tools take only absolute paths. And the runtime's own instructions
+  name its session folder, which is under the session's home. The one folder the model was told of was
+  under the runner's home, and on a real model about one first turn in three it named a file there:
+  this host refused the call, and the model stopped. The host now asks for the environment section
+  (the working directory, its git root, the operating system, the tools found) and takes the session
+  folder out of the runtime's instructions. A sub-agent's system message is the runtime's own, and no
+  option reaches it: a sub-agent is told its working directory and that session folder both, and a
+  call of its that names the folder is refused `credential-path-denied`, as any call that names the
+  runner's home is. A command the agent runs still finds the home's path in its environment
+  (`COPILOT_HOME`), where the runtime needs it, and a call that names it is refused the same way.
 - **The hook fails open; the gate does not depend on it alone.** A pre-tool hook that throws or times
   out lets a call proceed in the runtime. The host's hook does no I/O and answers at once. The host
   keeps what it answered for each call until that call finishes, and names `gate-hook-missing` a call

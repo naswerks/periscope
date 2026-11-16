@@ -640,6 +640,11 @@ token or Copilot HMAC key provided`).
 - **Nothing is discovered.** A session's runtime reads no configuration, custom instructions, MCP
   servers or skills of a workspace's or the user's: the session is created with discovery off, its
   skills are the plugin directories' alone and its servers the ones it attaches.
+- **What the model is told of the machine.** The session's working directory, in the runtime's own
+  environment section (with the directory's git root, the operating system and the tools found), and
+  nothing of the runner's home under `<base>`. A sub-agent is told the same, and by the runtime itself
+  the session folder under the session's home, which no option removes: a call that names it is
+  refused `credential-path-denied` ([gate.md](gate.md), the Copilot gate).
 - **The open.** Before any prompt the host reads the runtime back: its permission mode is `manual`, its
   agent mode `interactive` (or `plan` for a session opened in plan mode), no approve-all grant of any
   kind, no path approved for the session, no plugin, and none of the tools this host turns off

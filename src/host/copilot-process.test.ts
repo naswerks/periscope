@@ -230,7 +230,8 @@ test("the runtime starts from the operator's install, in empty mode, signed in a
   assert.equal(config?.skipCustomInstructions, true);
   assert.equal(config?.enableSessionTelemetry, false);
   assert.equal(config?.enableSkills, false);
-  assert.deepEqual(config?.systemMessage, { mode: 'append', content: 'Be brief.' });
+  assert.equal(config?.systemMessage.mode, 'customize');
+  assert.equal(config?.systemMessage.content, 'Be brief.');
   assert.equal(config?.model, 'gpt-5-mini');
   assert.equal(config?.reasoningEffort, 'medium');
   assert.deepEqual(config?.mcpServers, {
@@ -496,6 +497,46 @@ test("a call is decided by this host's gate: an approved one runs, a refused one
   assert.deepEqual(answers['call_read'], { kind: 'approve-once' });
   assert.deepEqual(answers['call_write'], { kind: 'reject', feedback: 'no writes today' });
   await closed(run);
+});
+
+test("a session's model is told its working directory and nothing of the runner's home: the environment section is asked for, which the SDK's client mode otherwise removes, and the runtime's account of its session folder is taken out of its instructions", async () => {
+  const run = await started();
+  await waitFor(() => opened(run), 'the open');
+  const message = run.record.configs[0]?.systemMessage;
+  assert.equal(message?.mode, 'customize');
+  // Named, so the SDK leaves it in. Unnamed, the client's mode removes it, and the model is told no
+  // directory at all while its file tools take only absolute paths.
+  assert.deepEqual(message?.sections.environment_context, { action: 'preserve' });
+  assert.equal(Object.hasOwn(message ?? {}, 'content'), false, 'a request with no prompt append sends none');
+  // The runtime's own instructions around its session folder, as the pinned runtime writes them.
+  const instructions = [
+    '</system_notifications>',
+    '',
+    '<session_context>',
+    'Session folder: C:/runner/copilot/sessions/a1/session-state/b2',
+    '',
+    'Contents:',
+    '- files/: Persistent storage for session artifacts',
+    '</session_context>',
+    '<tool_calling>',
+    'keep this',
+    '</tool_calling>',
+  ].join('\n');
+  const rewrite = message?.sections.runtime_instructions.action;
+  assert.ok(rewrite !== undefined);
+  const told = rewrite(instructions);
+  assert.equal(told.includes('C:/runner/copilot'), false, 'the session folder is still named');
+  assert.equal(told.includes('session_context'), false);
+  assert.ok(
+    told.includes('</system_notifications>') && told.includes('<tool_calling>\nkeep this\n</tool_calling>'),
+    'more than the session folder was taken out',
+  );
+  // Control: instructions that hold no such account pass through as they are.
+  assert.equal(
+    rewrite('<tool_calling>\nkeep this\n</tool_calling>'),
+    '<tool_calling>\nkeep this\n</tool_calling>',
+  );
+  assert.equal(await closed(run), null);
 });
 
 test("a session whose request names no model names none to the runtime, so it opens on the runtime's own default; a switch back to the session's own model then has none to send", async () => {

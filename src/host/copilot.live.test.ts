@@ -193,6 +193,31 @@ const writes = (asked: DecisionRequest, file: string): boolean =>
   asked.toolKind === 'file_edit' ||
   (asked.toolKind === 'shell' && JSON.stringify(asked.toolInput).includes(file));
 
+/**
+ * What a set of system messages names of two folders, with one spelling of a path's separators and case:
+ * the session's working directory, and the runner's Copilot home.
+ */
+function toldOfFolders(
+  messages: readonly { data?: unknown }[],
+  directory: string,
+  home: string,
+): { messages: number; namesTheSessionDirectory: boolean; namesTheRunnersHome: boolean } {
+  const plain = (text: string): string => text.replaceAll('\\', '/').toLowerCase();
+  const text = plain(
+    messages
+      .map((event) => {
+        const content = (event.data as { content?: unknown } | undefined)?.content;
+        return typeof content === 'string' ? content : '';
+      })
+      .join('\n'),
+  );
+  return {
+    messages: messages.length,
+    namesTheSessionDirectory: text.includes(plain(directory)),
+    namesTheRunnersHome: text.includes(plain(home)),
+  };
+}
+
 /** What the session's model said, turn by turn. */
 const repliesOf = (stream: LiveStream<CopilotMessage>): unknown[] =>
   events(stream, 'assistant.message').map((event) => (event.data as { content?: unknown }).content);
@@ -274,6 +299,24 @@ test(
       if (nothing !== null) return t.skip(nothing);
       receipt('models', { asked: MODEL, ...modelsOf(run.stream) });
       receipt('replies', { replies: repliesOf(run.stream) });
+      // What the runtime told the model of the machine's folders, read from the system message it shows:
+      // the session's working directory, and nothing under the runner's Copilot home, which here is the
+      // base. A model told only of a folder under that home makes its paths from it.
+      const told = toldOfFolders(events(run.stream, 'system.message'), dir, run.base);
+      receipt('what the model was told of folders', {
+        session: told,
+        subAgents: toldOfFolders(
+          everyEvent(run.stream, 'system.message').filter((event) => event.agentId !== undefined),
+          dir,
+          run.base,
+        ),
+      });
+      assert.ok(
+        told.messages > 0,
+        'the runtime showed no system message, so what the model was told was not read',
+      );
+      assert.ok(told.namesTheSessionDirectory, "the model was not told the session's working directory");
+      assert.equal(told.namesTheRunnersHome, false, "the model was told of a folder under the runner's home");
       const said = (event: { data?: unknown }): string => JSON.stringify(event.data ?? null);
       // The one failure the free plan is known for is the sub-agent leg's to report, below.
       const failure = events(run.stream, 'session.error').filter(

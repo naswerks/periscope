@@ -605,6 +605,27 @@ the one this host decides.
   one call approved, or refused with the outcome's words, which the model reads. Nothing broader is ever
   sent: no approval for the session, for a location or for good. An allow that rewrites the input is
   refused: the rewrite would live only in the fail-open hook (`canRewriteInput: false`).
+- **What the model is told of the machine's folders** (`copilotSystemMessage`,
+  `src/host/copilot-process.ts`). Its working directory, and nothing of the runner's home. The session's
+  system message is the runtime's, with two of its sections named:
+  - `environment_context` is asked for (`preserve`). The SDK's `empty` client mode removes it unless
+    the caller names it (`getSystemMessageConfigForMode` in the SDK's own client), and with it the
+    working directory, the git root, the operating system and the tools found. The file tools take
+    only absolute paths, so a model told no directory has to make one up.
+  - `runtime_instructions` passes through `copilotWithoutSessionFolder`, which takes out the runtime's
+    account of its session folder (`<session_context>`): a folder under the session's home, in the
+    protected set, which the runtime offers the model for its own files.
+
+  Measured on the pinned runtime, in what it sends a model, driven by a stub model: before, the
+  message named the session folder and never the working directory; now it names the working
+  directory and nothing under the home (`copilot-local.test.ts`, and the live probe reads the same
+  from the system message a real turn shows). On a real model, two first turns in six had named a file
+  under the home, each refused `credential-path-denied`. A sub-agent's system message is built by the
+  runtime and passes through none of this: it carries the environment section and the session folder
+  both, and the SDK has no option for it short of turning infinite sessions off, which turns the
+  runtime's own compaction off with them. A sub-agent's call that names the folder is refused like any
+  other call into the home.
+
 - **Sub-agents' calls take the same route.** A call a sub-agent makes fires the same hook and raises
   the same request, naming the call that spawned it; it is decided like the session's own. Shown
   against the pinned runtime driven by a stub model on a loopback port (`copilot-local.test.ts`), and by

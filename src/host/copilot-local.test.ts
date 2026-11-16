@@ -1171,6 +1171,62 @@ test(
 );
 
 test(
+  "what the runtime sends a model names the session's working directory and nothing under the runner's Copilot home; driven by a stub model",
+  { skip, timeout: 180_000 },
+  async () => {
+    const dirs = await scratch();
+    const stub = await stubModel(() => ({ text: 'ok' }));
+    const run = await adapterOn(dirs, {
+      name: 'stub',
+      wireApi: 'openai-chat',
+      baseUrl: stub.url,
+      models: ['stub-model'],
+      // No key: a literal placeholder, since the provider takes a string.
+      authToken: () => 'placeholder',
+    });
+    try {
+      run.proc.prompt('Say ok.');
+      const deadline = Date.now() + 60_000;
+      while (stub.requests.length === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      const sent = stub.requests[0];
+      assert.ok(sent !== undefined, 'the runtime sent the model nothing');
+      // Every message of the request, as text, with one spelling of a path's separators and case.
+      const plain = (text: string): string => text.replaceAll('\\', '/').toLowerCase();
+      const told = plain(
+        sent.messages
+          .map((message) =>
+            typeof message.content === 'string'
+              ? message.content
+              : Array.isArray(message.content)
+                ? (message.content as { text?: unknown }[])
+                    .map((part) => (typeof part.text === 'string' ? part.text : ''))
+                    .join('\n')
+                : '',
+          )
+          .join('\n'),
+      );
+      assert.ok(told.length > 0, 'the request carried no text to read');
+      assert.ok(
+        told.includes(plain(dirs.work)),
+        "the model was not told the session's working directory, and its file tools take only absolute paths",
+      );
+      assert.equal(
+        told.includes(plain(dirs.base)),
+        false,
+        "the model was told of a folder under the runner's Copilot home",
+      );
+    } finally {
+      run.proc.close();
+      await run.ended;
+      await stub.close();
+      await removeScratch(dirs);
+    }
+  },
+);
+
+test(
   "the adapter's close ends a command a turn's shell call started in the background and the turn then left running; driven by a stub model",
   { skip, timeout: 240_000 },
   async () => {

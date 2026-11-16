@@ -429,7 +429,9 @@ control tier is `intercepted-with-residual` ([gate.md](gate.md), the Copilot gat
   `AgentProcess<CopilotMessage>`. The open runs in order: the install is checked and the SDK loaded,
   the home made (and a kept state copied in), the client started in `empty` mode signed in as nobody,
   the session created (or resumed, or forked and resumed) in the `manual` permission mode with
-  discovery off, the agent mode set for a plan open, the posture read back (`copilotReadBackProblem`),
+  discovery off and a system message that names its working directory and nothing of the runner's home
+  (`copilotSystemMessage`), the agent mode set for a plan open, the posture read back
+  (`copilotReadBackProblem`),
   and one probe call run through the hook and the request; only then is the session ready and the first
   prompt sent. A prompt is `send` in `enqueue` mode, held until the open and bounded in the host. The
   model and effort setters are the session's own calls, the permission mode is the agent mode, and an

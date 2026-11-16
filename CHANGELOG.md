@@ -91,6 +91,15 @@ frame it sends decodes unchanged.
   release run the model spelt the line so that it printed an error, whose text holds no key, and the
   test passed having read no environment. The listing must now be an environment, the search path
   among its names. The Codex probe's own listing must have run before what it shows is read.
+- Fixed: a Copilot session's model is told its working directory, and no longer a folder under the
+  runner's Copilot home. The SDK's `empty` client mode removes the runtime's environment section from
+  the system message unless it is asked for, and the runtime's instructions name its session folder,
+  under the session's home. So the one folder a model was told of was under the runner's home, while
+  its file tools take only absolute paths: on a real model two first turns in six named a file there,
+  were refused `credential-path-denied`, and stopped. The host now asks for the environment section
+  and takes the session folder out of the runtime's instructions. A sub-agent's system message is the
+  runtime's own and still names that folder beside the working directory; a call that names it is
+  refused as before, and the documents say so.
 - Fixed: a Copilot session opens where the runtime allows a directory that is none of the session's.
   The read-back refused the open `copilot-gate-not-active` for it, and the runtime allows its temp folder
   by itself, so a session whose temp folder is no write root of its own (one that covers the session's

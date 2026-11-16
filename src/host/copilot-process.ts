@@ -209,9 +209,44 @@ export interface CopilotSessionParts {
 }
 
 /**
+ * The runtime's account of its session folder, as it writes it into its own instructions. The folder is
+ * under the session's home, which is the runner's and is in the protected set.
+ */
+const SESSION_FOLDER_ACCOUNT = /<session_context>[\s\S]*?<\/session_context>\n?/g;
+
+/** The runtime's own instructions with its account of the session folder taken out. */
+export function copilotWithoutSessionFolder(instructions: string): string {
+  return instructions.replace(SESSION_FOLDER_ACCOUNT, '');
+}
+
+/**
+ * What a session's model is told of the machine's folders: its working directory, and nothing of the
+ * runner's home.
+ *
+ * - The runtime's environment section names the working directory, and the SDK's `empty` client mode
+ *   removes that section unless the caller names it. With it gone the model is told no directory at all,
+ *   while its file tools take only absolute paths. So the section is named, and kept as the runtime
+ *   writes it.
+ * - The runtime's own instructions name its session folder, under the session's home. That was the only
+ *   folder the model was told of, so a model made its paths from it, and each such call is refused as a
+ *   read of the runner's home. The account is taken out; the folder was never the session's to use.
+ */
+function copilotSystemMessage(append: string): CopilotSessionConfig['systemMessage'] {
+  return {
+    mode: 'customize',
+    ...(append === '' ? {} : { content: append }),
+    sections: {
+      environment_context: { action: 'preserve' },
+      runtime_instructions: { action: copilotWithoutSessionFolder },
+    },
+  };
+}
+
+/**
  * The session's configuration: every built-in and every attached server's tools offered, less the tools this
  * host turns off; the `manual` permission mode; no configuration of the workspace's or the user's; the
- * session's skills, servers, model, effort and prompt append; the hook and the permission handler.
+ * session's skills, servers, model, effort and prompt append; what its model is told of the machine's
+ * folders; the hook and the permission handler.
  */
 export function copilotSessionConfig(
   request: AgentProcessRequest,
@@ -234,7 +269,7 @@ export function copilotSessionConfig(
     ...(Object.keys(servers).length === 0 ? {} : { mcpServers: servers }),
     streaming: request.includePartialMessages,
     includeSubAgentStreamingEvents: request.forwardSubagentText,
-    ...(append === '' ? {} : { systemMessage: { mode: 'append', content: append } }),
+    systemMessage: copilotSystemMessage(append),
     ...(parts.model === null ? {} : { model: parts.model }),
     ...(request.effort === null ? {} : { reasoningEffort: request.effort }),
     ...(parts.provider === null ? {} : { provider: parts.provider }),
