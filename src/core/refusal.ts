@@ -611,8 +611,8 @@ export const REFUSAL_REASONS = [
   //
   //   copilot-gate-not-active      Refused: the open ends because the runtime, read back before the first
   //                                prompt, is not in the posture this host started it in (its permission
-  //                                mode, its agent mode, an approve-all grant, a path outside the
-  //                                session's roots, a plugin, a tool this host turns off), or a probe call
+  //                                mode, its agent mode, an approve-all grant, a path approved for the
+  //                                session, a plugin, a tool this host turns off), or a probe call
   //                                did not reach this host through the hook and the permission request
   //                                both. Without the joined route a call the runtime allows by default
   //                                runs undecided. The detail says which.

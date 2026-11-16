@@ -601,9 +601,15 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   and a repository's own Copilot configuration are never read. Your `~/.copilot` and `COPILOT_HOME`, and
   the whole runner base, are in the protected set.
 - **Proven before the first prompt.** The host reads the runtime back (the `manual` permission mode, the
-  agent mode asked for, no approve-all grant, no approved path, only the session's own directories, no
-  plugin, none of the tools it turns off) and runs one probe call through the hook and the request. A
-  runtime that is not as the host started it refuses the open `copilot-gate-not-active`.
+  agent mode asked for, no approve-all grant, no approved path, no plugin, none of the tools it turns
+  off) and runs one probe call through the hook and the request. A runtime that is not as the host
+  started it refuses the open `copilot-gate-not-active`.
+- **The runtime's own list of directories bounds no write.** The runtime allows its temp folder by
+  itself, whatever it was asked. What holds a write is this host: the hook asks about every call, and
+  the host's own gate holds a write to the session's write limits. So a directory the runtime allows
+  that is none of the session's is named `gate-mode-widened` when the session opens, and the session
+  opens. It was a reason to refuse the open, and a session whose temp folder is no write root of its
+  own (one that covers its own directory, its home or a protected path) did not open at all.
 - **The hook fails open; the gate does not depend on it alone.** A pre-tool hook that throws or times
   out lets a call proceed in the runtime. The host's hook does no I/O and answers at once. The host
   keeps what it answered for each call until that call finishes, and names `gate-hook-missing` a call

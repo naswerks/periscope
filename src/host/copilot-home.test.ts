@@ -28,6 +28,7 @@ import {
   copilotRuntimePolicyLook,
   mergeCopilotPolicyLooks,
   copilotCanonicalPath,
+  copilotOutsideDirectories,
   copilotReadBackProblem,
   copilotRuntimeEnv,
   copilotTokenProvider,
@@ -111,12 +112,6 @@ test('control: the read-back refuses each condition broken once, by name', () =>
       expected,
       /paths approved for the session/,
     ],
-    [
-      'a directory outside the roots',
-      { ...clean, paths: { directories: [...clean.paths.directories, 'C:/Users/someone'] } },
-      expected,
-      /outside the session's roots: C:\/Users\/someone/,
-    ],
     ['a plugin', { ...clean, plugins: [{ name: 'p' }] }, expected, /1 plugin\(s\) installed/],
     [
       'a turned-off tool offered',
@@ -144,15 +139,33 @@ test('regression: a root handed over in another spelling of the place the runtim
     };
     const held: CopilotPostureExpected = { ...expected, cwd: link, writeRoots: [], home: join(dir, 'home') };
     assert.equal(copilotReadBackProblem(read, held), null);
-    // Control: a directory outside the link's target is still refused.
-    assert.match(
-      copilotReadBackProblem({ ...read, paths: { directories: [join(dir, 'elsewhere')] } }, held) ?? '',
-      /outside the session's roots/,
+    assert.deepEqual(copilotOutsideDirectories(read, held), []);
+    // Control: a directory outside the link's target is still one the session does not own.
+    assert.deepEqual(
+      copilotOutsideDirectories({ ...read, paths: { directories: [join(dir, 'elsewhere')] } }, held),
+      [join(dir, 'elsewhere')],
     );
     // A path not made yet keeps what follows its deepest existing ancestor.
     assert.equal(copilotCanonicalPath(join(link, 'not-yet', 'made')), join(resolved, 'not-yet', 'made'));
     return Promise.resolve();
   }));
+
+test("a directory the runtime allows that is none of the session's is listed, and is no reason to refuse the open", () => {
+  // The session's own directory, a write root and what sits inside its home are the session's.
+  assert.deepEqual(copilotOutsideDirectories(clean, expected), []);
+  const temp = 'C:/Users/op/AppData/Local/Temp';
+  const wider: CopilotPostureRead = {
+    ...clean,
+    paths: { ...clean.paths, directories: [...clean.paths.directories, temp, 'C:/Users/someone'] },
+  };
+  assert.deepEqual(copilotOutsideDirectories(wider, expected), [temp, 'C:/Users/someone']);
+  assert.equal(copilotReadBackProblem(wider, expected), null, 'an allowed directory refused the open');
+  // The same folder handed over as a write root is the session's own.
+  assert.deepEqual(
+    copilotOutsideDirectories(wider, { ...expected, writeRoots: [...expected.writeRoots, temp] }),
+    ['C:/Users/someone'],
+  );
+});
 
 test('the read-back and the session config share one list of turned-off tools', () => {
   for (const tool of COPILOT_EXCLUDED_TOOLS) {

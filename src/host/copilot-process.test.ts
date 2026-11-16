@@ -301,7 +301,6 @@ test('control: each posture the read-back refuses ends the open by name, before 
     [{ agentMode: 'autopilot' }, /agent mode is autopilot/],
     [{ allowAll: { active: true } }, /approve-all grant/],
     [{ plugins: [{ name: 'p' }] }, /plugin/],
-    [{ directories: [ROOT, 'C:/Users/someone/elsewhere'] }, /outside the session's roots/],
     [{ offeredTools: ['powershell', 'manage_schedule'] }, /offers manage_schedule/],
     [{ permissionModeResult: null }, /did not apply the manual permission mode/],
   ];
@@ -381,6 +380,33 @@ test("a built-in the tables do not name does not refuse the open: it is named on
     'a tool already named is not named again when it is called',
   );
   assert.equal(await closed(run), null);
+});
+
+test("a runtime that allows a directory outside the session's roots is named, once, and the session opens", async () => {
+  // As the runtime answers on a machine whose temp folder is no root of the session's.
+  const temp = 'C:/Users/op/AppData/Local/Temp';
+  const run = await started({ fake: { directories: [ROOT, temp] } });
+  await waitFor(() => opened(run), 'the open');
+  const named = run.raised.filter((one) => /outside the session's roots/.test(one.detail));
+  assert.deepEqual(
+    named.map((one) => one.name),
+    ['gate-mode-widened'],
+  );
+  assert.match(
+    named[0]?.detail ?? '',
+    /allows directories outside the session's roots: C:\/Users\/op\/AppData\/Local\/Temp/,
+  );
+  assert.match(named[0]?.detail ?? '', /held to the session's write limits by this host's gate/);
+  assert.equal(await closed(run), null);
+
+  // Control: the same folder handed over as one of the session's write roots is its own, and nothing is named.
+  const own = await started({ fake: { directories: [ROOT, temp] }, writeRoots: [temp] });
+  await waitFor(() => opened(own), 'the open');
+  assert.deepEqual(
+    own.raised.filter((one) => /outside the session's roots/.test(one.detail)),
+    [],
+  );
+  await closed(own);
 });
 
 test('a directory the session writes to beside its own is admitted by the read-back', async () => {

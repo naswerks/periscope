@@ -638,9 +638,11 @@ token or Copilot HMAC key provided`).
   skills are the plugin directories' alone and its servers the ones it attaches.
 - **The open.** Before any prompt the host reads the runtime back: its permission mode is `manual`, its
   agent mode `interactive` (or `plan` for a session opened in plan mode), no approve-all grant of any
-  kind, no path approved for the session, every directory it allows the session's own, a further
-  worktree, the temp folder or inside its home, no plugin, and none of the tools this host turns off
-  offered. Then one probe call runs through it, under an id the host minted: the pre-tool hook must
+  kind, no path approved for the session, no plugin, and none of the tools this host turns off
+  offered. A directory the runtime allows that is none of the session's (its own, a further worktree,
+  the temp folder where that is one of its write roots, or inside its home) refuses nothing: it is
+  named `gate-mode-widened` and the session opens, since the host's own gate is what holds a write to
+  the write limits. Then one probe call runs through it, under an id the host minted: the pre-tool hook must
   fire and its request reach the host, which refuses it, so nothing runs. Anything else refuses the
   open `copilot-gate-not-active`, naming what differed. A machine-wide policy hook
   (`%ProgramData%\GitHub\Copilot\policy.d\*.json`, or the `HKLM\Software\Policies\GitHub\Copilot`

@@ -596,9 +596,13 @@ the one this host decides.
   probe in `src/host/copilot-process.ts`). The session is created in the `manual` permission mode with
   discovery off, and read back: the mode applied and still `manual`; the agent mode `interactive`, or
   `plan` for a plan open; no approve-all grant (`active`, `autoApproval`, a stored approval, a runtime
-  override, or a baseline for tools, paths or URLs); no path approved for the session; every directory
-  it allows the session's own, a further worktree, the temp folder, or inside its own home; no plugin;
-  none of the tools below offered. Then one probe call runs through the session: `view` on the
+  override, or a baseline for tools, paths or URLs); no path approved for the session; no plugin;
+  none of the tools below offered. The directories the runtime allows are read too, and refuse nothing
+  (`copilotOutsideDirectories`): the runtime allows its temp folder by itself, and its list is not
+  what bounds a write, since the hook asks about every call and the host's own gate holds a write to
+  the session's write limits. One that is none of the session's (not its own directory, a further
+  worktree, the temp folder where that is one of its write roots, or inside its home) is named
+  `gate-mode-widened`, once, and the session opens. Then one probe call runs through the session: `view` on the
   session's own directory, under an id the host minted. Its hook must fire and its `hook` request reach
   the host, which refuses it without asking anyone, so nothing runs. Anything else refuses the open
   `copilot-gate-not-active`, naming what differed.
@@ -658,7 +662,8 @@ the one this host decides.
   - `gate-unhooked-call`: a tool the model's provider ran itself (`assistant.server_tool_progress`),
     which no hook sees.
   - `gate-mode-widened`: the runtime reports a permission mode other than `manual`, or an agent mode
-    other than `interactive` and `plan`. Measured on the pinned runtime: in `allow-all` a call still
+    other than `interactive` and `plan`; or, at the open, it allows a directory that is none of the
+    session's (the detail names each). Measured on the pinned runtime: in `allow-all` a call still
     asks while the hook answers `ask`. A sub-agent's events carry its id, session-scoped kinds included
     (measured: a sub-agent's `session.model_change` arrives under its id), so a mode a sub-agent reports
     is named as that sub-agent's, by its id, and never as the session's. No sub-agent was seen to

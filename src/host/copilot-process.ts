@@ -64,6 +64,7 @@ import {
   copilotPolicyHooks,
   copilotRuntimePolicyLook,
   mergeCopilotPolicyLooks,
+  copilotOutsideDirectories,
   copilotReadBackProblem,
   copilotRuntimeEnv,
   copilotTokenProvider,
@@ -533,13 +534,20 @@ export function startCopilotProcess(
 
     // The posture, read back before the first prompt.
     const read = await within(readPosture(session), deadline, "the runtime's read-back");
-    const unread = copilotReadBackProblem(read, {
-      agentMode,
-      cwd: request.cwd,
-      writeRoots,
-      home: home?.home ?? '',
-    });
+    const posture = { agentMode, cwd: request.cwd, writeRoots, home: home?.home ?? '' };
+    const unread = copilotReadBackProblem(read, posture);
     if (unread !== null) return refuseOpen('copilot-gate-not-active', unread);
+    // A directory the runtime allows that is none of the session's is named, and the session opens: the
+    // runtime's list bounds no write, since the hook asks about every call and this host's gate holds a
+    // write to the session's write limits.
+    const outside = copilotOutsideDirectories(read, posture);
+    if (outside.length > 0) {
+      gate.raise(
+        'gate-mode-widened',
+        `the runtime allows directories outside the session's roots: ${outside.join(', ')}; a write is still held to the session's write limits by this host's gate`,
+        'directories',
+      );
+    }
     // A built-in the tables do not name is named, once, and the session opens: its calls ask like any other.
     gate.toolsOffered(
       read.offeredTools,

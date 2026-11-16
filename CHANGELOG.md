@@ -52,6 +52,13 @@ frame it sends decodes unchanged.
   pin holds that for each probe file. The probe of the spawn environment looked for the search path
   as `PATH` exactly, which a shell on Windows hands over as `Path`; it now matches a variable's name
   without regard to case, as the host does.
+- Fixed: a Copilot session opens where the runtime allows a directory that is none of the session's.
+  The read-back refused the open `copilot-gate-not-active` for it, and the runtime allows its temp folder
+  by itself, so a session whose temp folder is no write root of its own (one that covers the session's
+  directory, its home or a protected path) never opened. The runtime's list bounds no write: the hook
+  asks about every call, and the host's gate holds a write to the session's write limits. Such a
+  directory is now named `gate-mode-widened`, once, and the session opens. Every other posture the
+  read-back holds still refuses the open.
 - Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
   The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
   what the CLI then registered. The first list of tools the CLI sends is now read for the tools the

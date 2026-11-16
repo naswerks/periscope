@@ -545,10 +545,27 @@ function within(inner: string, outer: string): boolean {
 }
 
 /**
+ * The directories the runtime allows that are none of the session's: not its own directory, not one of its
+ * write roots (its temp folder is one, where this host hands it over) and not inside its home. The runtime
+ * allows its temp folder by itself, whatever it was asked. That list is not what bounds a write: the hook
+ * asks this host about every call, and this host's gate holds a write to the session's write limits. So a
+ * directory outside is named on the session, and is no reason to refuse its open.
+ */
+export function copilotOutsideDirectories(
+  read: CopilotPostureRead,
+  expected: CopilotPostureExpected,
+): string[] {
+  const roots = [expected.cwd, ...expected.writeRoots];
+  return read.paths.directories.filter(
+    (directory) => !roots.some((root) => within(directory, root)) && !within(directory, expected.home),
+  );
+}
+
+/**
  * Why the runtime is not in the posture this host started it in, or null when it is: the permission mode
  * applied and `manual`; the agent mode the one asked for; no approve-all grant of any kind; no path approved
- * for the session, and every allowed directory the session's own, a write root or inside its home; no
- * plugin; and none of the tools this host turns off offered.
+ * for the session; no plugin; and none of the tools this host turns off offered. The directories the
+ * runtime allows are read apart (`copilotOutsideDirectories`).
  */
 export function copilotReadBackProblem(
   read: CopilotPostureRead,
@@ -576,13 +593,6 @@ export function copilotReadBackProblem(
   if (granted.length > 0) return `the runtime holds an approve-all grant: ${granted.join(', ')}`;
   const approved = read.paths.sessionApprovedPaths ?? [];
   if (approved.length > 0) return `the runtime has paths approved for the session: ${approved.join(', ')}`;
-  const roots = [expected.cwd, ...expected.writeRoots];
-  const outside = read.paths.directories.filter(
-    (directory) => !roots.some((root) => within(directory, root)) && !within(directory, expected.home),
-  );
-  if (outside.length > 0) {
-    return `the runtime allows directories outside the session's roots: ${outside.join(', ')}`;
-  }
   if (read.plugins.length > 0) return `the runtime has ${read.plugins.length} plugin(s) installed`;
   const offered = COPILOT_EXCLUDED_TOOLS.filter((tool) => read.offeredTools.includes(tool));
   if (offered.length > 0) return `the runtime offers ${offered.join(', ')}, which this host turns off`;

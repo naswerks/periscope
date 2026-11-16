@@ -155,6 +155,22 @@ const events = (stream: LiveStream<CopilotMessage>, type: string) =>
 
 const idle = (stream: LiveStream<CopilotMessage>): boolean => events(stream, 'session.idle').length > 0;
 
+/**
+ * Why a run measured nothing, or null. A session that opened and was handed its token, and whose account
+ * is offered no such model, ran no turn: nothing of the gate was exercised. That is the token's account
+ * and the model named for the probe, never this host, so the run is skipped with the runtime's own words.
+ */
+function ranNoTurn(stream: LiveStream<CopilotMessage>): string | null {
+  const said = events(stream, 'session.error').map((event) => {
+    const message = (event.data as { message?: unknown }).message;
+    return typeof message === 'string' ? message : '';
+  });
+  const unavailable = said.find((message) => /Model "[^"]*" is not available/.test(message));
+  return unavailable === undefined
+    ? null
+    : `the session opened and ran no turn: ${unavailable} Name a model the token's account may use in PERISCOPE_COPILOT_MODEL`;
+}
+
 /** Processes whose command line carries the marker, after close: what outlived the session. */
 function survivors(): string[] {
   try {
@@ -175,7 +191,7 @@ function survivors(): string[] {
 test(
   "every call of a Copilot session asks this host, its sub-agents' included: a read, a refused write that does not run, an MCP call and a sub-agent's read; signed in by the token file over the SDK's pipe",
   { skip },
-  async () => {
+  async (t) => {
     const dir = scratch();
     const mcp = await fakeMcpHttp('2024-11-05');
     const run = start(
@@ -193,6 +209,8 @@ test(
         'Do these four things in order, one tool each: read notes.txt with the view tool; create a file named blocked.txt containing hi; call the echo tool of the fake server with the text ping; use the task tool with agent_type general-purpose to have a sub-agent read notes.txt with the view tool. Then say what the create tool told you.',
       );
       await run.stream.until(() => idle(run.stream), 600_000);
+      const nothing = ranNoTurn(run.stream);
+      if (nothing !== null) return t.skip(nothing);
       const failure = events(run.stream, 'session.error');
       receipt('errors', { failure: failure.map((event) => event.data) });
       assert.deepEqual(failure, [], 'the session did not sign in or failed its run');
@@ -230,7 +248,7 @@ test(
 test(
   "silence holds to this host's deadline: a call nobody answers expires and does not run",
   { skip },
-  async () => {
+  async (t) => {
     const dir = scratch();
     const run = start(
       dir,
@@ -244,6 +262,8 @@ test(
     try {
       run.process.prompt('Create a file named silent.txt containing hi, with the create tool.');
       await run.stream.until(() => idle(run.stream), 600_000);
+      const nothing = ranNoTurn(run.stream);
+      if (nothing !== null) return t.skip(nothing);
       assert.ok(
         run.decided.some((asked) => asked.toolName === 'create'),
         'the write never asked',
@@ -260,7 +280,7 @@ test(
 test(
   "an approved command's environment names no credential, and holds no copy of the token",
   { skip },
-  async () => {
+  async (t) => {
     const dir = scratch();
     const run = start(dir, allow);
     try {
@@ -270,6 +290,8 @@ test(
           : 'env';
       run.process.prompt(`Run exactly this shell command and reply done: ${command}`);
       await run.stream.until(() => idle(run.stream), 600_000);
+      const nothing = ranNoTurn(run.stream);
+      if (nothing !== null) return t.skip(nothing);
       const outputs = events(run.stream, 'tool.execution_complete').map((event) =>
         String((event.data as { result?: { content?: string } }).result?.content ?? ''),
       );
@@ -292,9 +314,10 @@ test(
 test(
   "a command the agent's shell runs in the background does not outlive the session's close",
   { skip },
-  async () => {
+  async (t) => {
     const dir = scratch();
     const run = start(dir, allow);
+    const before: string[] = [];
     try {
       const command =
         process.platform === 'win32' ? `ping -n 120 127.0.0.1 # ${MARKER}` : `sleep 120 # ${MARKER}`;
@@ -302,7 +325,10 @@ test(
         `Run this command with the shell tool in its async mode, and do not wait for it: ${command}`,
       );
       await run.stream.until(() => idle(run.stream), 600_000);
-      receipt('running before close', { survivors: survivors() });
+      const nothing = ranNoTurn(run.stream);
+      if (nothing !== null) return t.skip(nothing);
+      before.push(...survivors());
+      receipt('running before close', { survivors: before });
     } finally {
       await closeAndWait(run.process, run.stream, receipt);
       removeScratch(dir, receipt);
@@ -312,5 +338,11 @@ test(
     const left = survivors();
     receipt('after close', { survivors: left });
     assert.deepEqual(left, [], 'a command the session started outlived its close');
+    // A close that ended nothing proves nothing: the command has to have been running when it came.
+    if (before.length === 0) {
+      t.skip(
+        'the command was not running when the session closed, so this run says nothing of what a close ends',
+      );
+    }
   },
 );
