@@ -74,11 +74,11 @@ const permissionActivity = (toolName: string): SessionActivity => ({ kind: 'perm
 /**
  * How the gate keys its hold entry: by `tool_use_id`, which every `PreToolUse` carries.
  *
- * Deliberately not the observer's name-keyed `permission:<toolName>`. The observer's `PreToolUse`
- * branch closes any open name-keyed permission entry — the allow-path exit for its own
- * `PermissionRequest` lane — so a name-keyed hold could be closed by the next `PreToolUse` for the
- * same tool while this call's decision is still outstanding, recording a resolution that never
- * happened. Two writers, two key spaces: the observer owns `permission:<toolName>`, the gate owns
+ * Deliberately not the observer's name-keyed `permission:<toolName>`. The observer closes its
+ * name-keyed entry when a call of that tool ends or is denied — the exits of its own
+ * `PermissionRequest` lane — so a name-keyed hold could be closed by another call of the same tool
+ * while this call's decision is still outstanding, recording a resolution that never happened. Two
+ * writers, two key spaces: the observer owns `permission:<toolName>`, the gate owns
  * `permission:<toolUseId>`, and two simultaneous holds for one tool are two entries. The
  * `permission:` prefix is kept so this key can never collide with the observer's `tool` entry,
  * which is the raw tool_use_id from the same event.

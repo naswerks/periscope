@@ -201,13 +201,23 @@ turn's end, `Stop` or `result`, whichever arrives. A session never carries an op
 after its turn.
 
 The runtime wins over the types. Four wired events are measured not to fire under an SDK-hosted
-session: `SessionStart` (take the start receipt from `system/init`), `PermissionRequest` and
-`PermissionDenied` (a hook-authored deny blocks while both stay silent), and
+session whose calls the hooks decide: `SessionStart` (take the start receipt from `system/init`),
+`PermissionRequest` and `PermissionDenied` (a hook-authored deny blocks while both stay silent), and
 `system/session_state_changed` (`Stop` and `result` are the observed turn boundaries). Measured
-again on Claude Code 2.1.284: a turn whose Bash call the hook denied fired `UserPromptSubmit`,
+again on Claude Code 2.1.325: a turn whose Bash call the hook denied fired `UserPromptSubmit`,
 `PreToolUse`, `PostToolBatch` and `Stop`, and none of the four. The rows stay wired, because "wired
 and not observed" is a question and "declined" closes one, and each says "measured not to fire" at
 the row. Re-measure before relying on any of the four (`agent-controls.live.test.ts`).
+
+`PermissionRequest` does fire where a hook leaves a call to the CLI's own permission flow: the gate
+allowed without granting (`grantOnAllow: false`) in a mode that asks. Recorded on Claude Code 2.1.325,
+in this order for one call: its `PreToolUse`, then `PermissionRequest`, then either the
+`system/permission_denied` message and an error result when nobody grants it (the `PermissionDenied`
+hook stays silent), or the tool's `PostToolUse` when a hook grants it. So the `permission:<toolName>`
+entry that `PermissionRequest` opens is closed by the denial, whichever of the message and the hook
+reports it, once; or by the end of a call of that tool, which is the sign it was granted. A call's
+`PreToolUse` closes no permission: it comes before that call's own request, so one outstanding then is
+another call's. `PeriscopeHost` grants on allow, so its sessions open none of these entries.
 
 `src/state/codex-coverage.ts` does the same for Codex: `CODEX_COVERAGE` lists every notification,
 server request and item kind the pinned app-server declares, wired or declined with a reason, an

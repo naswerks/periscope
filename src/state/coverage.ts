@@ -45,7 +45,7 @@ export const HOOK_COVERAGE = {
   },
   PostToolUse: {
     handling: 'wired',
-    note: 'closes the `tool` entry for its tool_use_id. The ordinary exit.',
+    note: "closes the `tool` entry for its tool_use_id. The ordinary exit. Where a `permission` entry is outstanding for the tool, closes that first: the CLI asks after a call's PreToolUse and runs the tool only once it is granted, so the tool having run is the sign of the grant.",
   },
   PostToolUseFailure: {
     handling: 'wired',
@@ -113,11 +113,11 @@ export const HOOK_COVERAGE = {
   // --- wired: the permission lane -------------------------------------------
   PermissionRequest: {
     handling: 'wired',
-    note: "opens a `permission` entry for the tool. Measured not to fire for a hook-authored decision — `gate/outcome.ts` records the measurement — so the held-visibility this model buys is delivered by the gate's own hold entry (keyed by tool_use_id), not by this hook. Do not wait on this hook for entries the gate opens elsewhere; re-measure before relying on it for any other decision path.",
+    note: "opens a `permission` entry for the tool. Measured not to fire for a hook-authored decision — `gate/outcome.ts` records the measurement — so the held-visibility this model buys is delivered by the gate's own hold entry (keyed by tool_use_id), not by this hook. It does fire, on Claude Code 2.1.325, for a call the hooks left to the CLI's own permission flow: after that call's PreToolUse, and before a `system/permission_denied` message when nobody grants it, or the tool's PostToolUse when a hook does. Do not wait on this hook for entries the gate opens elsewhere.",
   },
   PermissionDenied: {
     handling: 'wired',
-    note: 'closes the `permission` entry, cause kind `hook`, carrying the deny reason. A denial and a permission-path outage must not read alike: an outage arrives as cause kind `refusal` with a refusal reason, so the two differ in kind and event. Measured not to fire for a hook-authored deny: a real session whose PreToolUse returned `permissionDecision: deny` blocked the tool (no PostToolUse) but emitted no PermissionDenied — so this hook appears to belong to a decision path other than the hook lane. Whoever builds the decision path must not rely on it as the deny receipt without re-measuring.',
+    note: 'closes the `permission` entry, cause kind `hook`, carrying the deny reason. A denial and a permission-path outage must not read alike: an outage arrives as cause kind `refusal` with a refusal reason, so the two differ in kind and event. Measured not to fire for a hook-authored deny: a real session whose PreToolUse returned `permissionDecision: deny` blocked the tool (no PostToolUse) but emitted no PermissionDenied — so this hook appears to belong to a decision path other than the hook lane. Whoever builds the decision path must not rely on it as the deny receipt without re-measuring. Measured silent as well, on Claude Code 2.1.325, when the CLI denied a call it had itself asked about: that denial arrived as the `system/permission_denied` message alone, which closes the entry. One denial reported both ways is recorded once, by its tool_use_id.',
   },
 
   // --- wired: elicitation ---------------------------------------------------
@@ -342,8 +342,8 @@ export const MESSAGE_COVERAGE = {
     note: 'a URL-mode elicitation confirmed complete by the MCP server. The ElicitationResult hook already closes the entry; consuming both would close it twice.',
   },
   'system/permission_denied': {
-    handling: 'declined',
-    note: 'mirrors the PermissionDenied hook, which is wired and additionally carries the deny reason. Consuming both would record one denial as two.',
+    handling: 'wired',
+    note: "the CLI's own report that it denied a call it had asked about. Closes the `permission` entry the PermissionRequest hook opened, and is the only report of such a denial where the PermissionDenied hook stays silent (measured on Claude Code 2.1.325). Recorded once with the hook, by tool_use_id, and not at all with no `permission` entry of this lane open: a denial this host's own gate made is the gate's to record.",
   },
   'system/mirror_error': {
     handling: 'declined',

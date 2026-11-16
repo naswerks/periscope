@@ -308,9 +308,10 @@ rather than a throw, enforced in two places from one declaration (`deadlineOrder
 A decision taking longer than `holdAfterMs` opens a `permission:<toolUseId>` entry through the
 state machine and closes it at resolution; a synchronous allow or deny opens nothing, because an
 entry opened and closed in one tick is noise in the one signal it carries. It is keyed by
-`tool_use_id`, so a second `PreToolUse` for the same tool name cannot close a live hold; the
-observer's `permission:<toolName>` lane is single-writer and effectively dormant (only the
-never-firing `PermissionRequest` opens it). Emission rides outside the deny path's `try/catch`: a
+`tool_use_id`, so another call of the same tool cannot close a live hold; the
+observer's `permission:<toolName>` lane is single-writer, and dormant wherever the gate's allow is the
+grant (`grantOnAllow`, as `PeriscopeHost` sets it): only `PermissionRequest` opens it, and that hook
+fires for a call the hooks left to the CLI's own permission flow ([state-machine.md](state-machine.md)). Emission rides outside the deny path's `try/catch`: a
 gate that fails closed still says it did.
 
 The hold reaches the wire. `forwardSession` subscribes to `machine.onTransition` and emits every

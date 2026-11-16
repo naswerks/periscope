@@ -23,6 +23,15 @@ frame it sends decodes unchanged.
   answer, the session's own `assistant` message, in a transition whose cause is `assistant`; one that
   got no answer is closed by the turn's end, `Stop` or `result`. A sub-agent's message closes nothing,
   and with no request open none of the three names an entry.
+- Fixed: a Claude session's `permission:<toolName>` entry is closed by what the CLI sends. Claude Code
+  2.1.325 fires `PermissionRequest` for a call the hooks left to its own permission flow (an allow
+  that does not grant, in a mode that asks), after that call's `PreToolUse`; it reports a denial as
+  the `system/permission_denied` message with the `PermissionDenied` hook silent, and runs the tool
+  when a hook grants. The entry was closed by the next `PreToolUse` of the same tool, which is
+  another call's, so the trace said a permission had resolved when nobody had answered it, and a
+  denied one stayed open. It is now closed by the denial, whichever of the message and the hook
+  reports it, once; or by the end of a call of that tool. A session whose gate grants on allow, as
+  `PeriscopeHost`'s do, opens no such entry and is unchanged.
 - Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
   The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
   what the CLI then registered. The first list of tools the CLI sends is now read for the tools the
