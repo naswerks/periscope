@@ -67,16 +67,39 @@ export async function closeAndWait<M>(
   receipt('closed', { ended: stream.ended, error: stream.error });
 }
 
+/** How often a scratch directory's removal is tried, and how long it waits between tries. */
+const SCRATCH_TRIES = 40;
+const SCRATCH_WAIT_MS = 250;
+
+/** Wait without yielding: a removal is a step of a test's own clean-up, in the order the test wrote it. */
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 /**
- * Remove a scratch directory, retrying while a process that ran in it lets go. A removal that still
- * fails is a receipt, never a throw: it must not stand in for the test's own result.
+ * Remove a scratch directory, waiting while a process that ran in it lets go. A command a close has just
+ * ended holds its working directory for a moment more, and on Windows a directory cannot be removed while
+ * it is a process's working directory: the removal fails there at once, and the retry `rmSync` offers
+ * does not wait that failure out. So the removal is tried again here, for up to ten seconds, and says in a
+ * receipt when it had to wait and for how long. One that still fails then was held by something that
+ * stayed, which is worth knowing: it is a receipt, never a throw, so it cannot stand in for the test's
+ * own result.
  */
 export function removeScratch(dir: string, receipt: Receipt): void {
-  try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-  } catch (error) {
-    receipt('scratch directory left behind', { dir, error: String(error) });
+  const began = Date.now();
+  let failure: unknown = null;
+  for (let tries = 1; tries <= SCRATCH_TRIES; tries += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      if (tries > 1)
+        receipt('scratch directory removed after a wait', { dir, tries, ms: Date.now() - began });
+      return;
+    } catch (error) {
+      failure = error;
+      if (tries < SCRATCH_TRIES) pause(SCRATCH_WAIT_MS);
+    }
   }
+  receipt('scratch directory left behind', { dir, error: String(failure), ms: Date.now() - began });
 }
 
 /**

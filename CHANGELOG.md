@@ -81,6 +81,11 @@ frame it sends decodes unchanged.
   request entry and leave the session reading as requesting for the sub-agent's whole run. Claude
   Code 2.1.325 sends none, by its own code and by a recorded turn; the probe's sub-agent test now
   asserts it, and [state-machine.md](docs/state-machine.md) says it.
+- Fixed: a live probe no longer leaves its scratch directory behind. The opencode probe's background
+  test left its directory in the temp folder each run. What held it was the command the close had just
+  ended, for under a second, as its working directory: on Windows such a directory cannot be removed,
+  the removal fails at once, and the retry `rmSync` offers does not wait that failure out. The shared
+  removal now tries again itself, for up to ten seconds, and says in a receipt when it had to wait.
 - Fixed: a Copilot session opens where the runtime allows a directory that is none of the session's.
   The read-back refused the open `copilot-gate-not-active` for it, and the runtime allows its temp folder
   by itself, so a session whose temp folder is no write root of its own (one that covers the session's
