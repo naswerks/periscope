@@ -808,6 +808,14 @@ every request they raise.
   call is the exception: its line is what the host's own gate reads, so one too long to send whole is
   refused by the hook, `rpc-line-too-large`, and never runs. A line this host does drop is named on the
   session, `rpc-line-too-large`, once, and in the host's log each time.
+- **A subagent's call can come after the session's own run has ended.** A subagent always runs in the
+  background (the SDK's own `subagent` tool says so): the call that starts it returns at once, and the
+  session's run ends when its model has answered, whatever the subagent is still doing. Measured on
+  the pinned SDK on a stub model whose subagent answers late: the session's run ended with no call of
+  the subagent asked, the subagent's read reached this host four seconds later, named as the
+  subagent's, and was decided like any other; the session was then told its subagent had gone idle and
+  ran again. A session closed in between ends its subagent before the subagent makes a call, and
+  nothing of it runs.
 - **An interrupt reaches the subagents.** A subagent runs in a session of its own, and the server does
   not interrupt it with the session that started it: measured on the pinned SDK, an interrupt of the
   session left a subagent waiting on its decision untouched. So an interrupt goes to the session and to

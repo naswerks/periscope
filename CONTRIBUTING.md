@@ -141,9 +141,12 @@ npm run build && PERISCOPE_LIVE=1 PERISCOPE_COPILOT_SDK=<sdk directory> PERISCOP
 real model behind an OpenAI-compatible endpoint, its key in a file: every call of an opencode session asks
 this host (a read, a refused write that does not run, an MCP call, a subagent's read), a key the endpoint
 refuses fails the run in the provider's words, silence holds to the decision deadline, an approved
-command's environment holds no copy of the key, and nothing the shell still runs outlives the close. It
-prints the receipts the facts are read from: the spend per model call, the first and last events of a run,
-whether the skill handed over was loaded. Run it on Node 24 or later before tagging any release that
+command's environment holds no copy of the key, and nothing the shell still runs outlives the close. A
+subagent runs in the background, so the first test waits for the subagent's own run to end before it
+reads what the subagent asked, and the subagent's call reports as a leg of its own: skipped, with that
+reason, when the subagent ended having made no call, and red when a call of its began with nobody
+asked. It prints the receipts the facts are read from: the spend per model call, the first and last
+events of a run, whether the skill handed over was loaded. Run it on Node 24 or later before tagging any release that
 moves the opencode SDK; the variables it needs are in its header:
 
 ```sh
