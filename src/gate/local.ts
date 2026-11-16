@@ -136,7 +136,7 @@ export const PI_TOOL_FAMILIES: ToolFamilies = {
 /**
  * The names Copilot gives its built-in tools: `powershell` and `bash` run a command; `view` reads the path it
  * names; `create`, `edit` and `str_replace_editor` write theirs (every command of the last, its `view`
- * included, is held as a write: stricter, and the model has `view` for a read); `grep` and `glob` read under
+ * included, is held as a write: stricter, and the model has `view` for a read); `grep`, `rg` and `glob` read under
  * the paths they name (`paths`, one string or a list); `apply_patch` writes every file its patch names. Every other Copilot
  * tool has no local family and is asked about like any call this gate has no opinion on.
  */
@@ -144,7 +144,7 @@ export const COPILOT_TOOL_FAMILIES: ToolFamilies = {
   write: ['create', 'edit', 'str_replace_editor'],
   read: ['view'],
   shell: ['powershell', 'bash'],
-  search: ['grep', 'glob'],
+  search: ['grep', 'rg', 'glob'],
   patch: ['apply_patch'],
 };
 

@@ -639,7 +639,7 @@ the one this host decides.
   `str_replace_editor` through the jail, with a relative path placed where the call runs
   (`resolvesWritesAgainstCallCwd`); every command of `str_replace_editor`, its `view` included, is held
   as a write; `view` through the protected set; `powershell` and `bash` through the shell rules, read
-  in their own grammars (`powershell` and `posix`); `grep` and `glob` through the protected set, their
+  in their own grammars (`powershell` and `posix`); `grep`, `rg` (the search tool offered in place of `grep` under some models) and `glob` through the protected set, their
   `paths` a root when it is one string and each entry a root when it is a list (any other shape names no
   root here, and the tool rejects it); `apply_patch` through the jail, by the files its patch names. The
   runtime's own home is in the environment the local gate reads, so `$env:COPILOT_HOME` is read as the

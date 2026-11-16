@@ -219,7 +219,7 @@ export function piShellDialect(toolName: string): ShellDialect | null {
 /**
  * Copilot's built-in tool names, read as tool kinds: the names its pre-tool hook carries. `powershell` runs a
  * command on Windows and `bash` elsewhere; `view` reads a path; `create` writes one; `edit`,
- * `str_replace_editor` and `apply_patch` change one; `grep` and `glob` read under theirs; `web_fetch` fetches
+ * `str_replace_editor` and `apply_patch` change one; `grep`, `rg` and `glob` read under theirs; `web_fetch` fetches
  * a URL. Every MCP tool reaches this host as `mcp__{server}__{tool}` (`copilot-gate.ts` spells it) and is
  * `mcp` by that prefix. Every other built-in is `other`, and is named in `COPILOT_OTHER_TOOLS`.
  */
@@ -228,6 +228,9 @@ export const COPILOT_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   bash: 'shell',
   view: 'file_read',
   grep: 'file_read',
+  // The search tool a session is offered in place of `grep` under some models (the `gpt-` family on the
+  // pinned runtime): the same pattern and `paths`.
+  rg: 'file_read',
   glob: 'file_read',
   create: 'file_write',
   edit: 'file_edit',

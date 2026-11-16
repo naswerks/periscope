@@ -150,6 +150,21 @@ test('the home the runtime is started with is read as the protected path it is, 
   assert.equal(shell('Get-ChildItem $env:LOCALAPPDATA'), 'credential-path-denied');
 });
 
+test('the search tool a session is offered under another model family is held like the first: `rg` by its paths, one string or a list', () => {
+  const decide = gateWith(credentialPaths(env, options));
+  // `rg` as the runtime describes it: a pattern, and `paths` as one directory or a list, the session's
+  // directory when it names none.
+  assert.equal(decide('rg', { pattern: 'token', paths: [join(BASE, 'state')] }), 'credential-path-denied');
+  assert.equal(decide('rg', { pattern: 'token', paths: join(HOME, '.copilot') }), 'credential-path-denied');
+  assert.equal(
+    decide('rg', { pattern: 'x', paths: ['src', join(BASE, 'sessions')] }),
+    'credential-path-denied',
+  );
+  // Control: a search of the workspace, and one that names no directory, are no local matter.
+  assert.equal(decide('rg', { pattern: 'x', paths: [ROOT] }), null);
+  assert.equal(decide('rg', { pattern: 'x' }), null);
+});
+
 test("control: a search's paths are its roots; read only its path, a protected directory in the list would pass", () => {
   const decide = gateWith(credentialPaths(env, options));
   assert.equal(decide('grep', { pattern: 'x', paths: [ROOT] }), null, 'the workspace itself is searched');

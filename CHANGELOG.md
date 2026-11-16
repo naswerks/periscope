@@ -59,6 +59,13 @@ frame it sends decodes unchanged.
   asks about every call, and the host's gate holds a write to the session's write limits. Such a
   directory is now named `gate-mode-widened`, once, and the session opens. Every other posture the
   read-back holds still refuses the open.
+- Security: Copilot's `rg` is read as the search tool it is. Under some models (the `gpt-` family on
+  the pinned runtime) a session is offered `rg` and `apply_patch` in place of `grep`, `create` and
+  `edit`. `rg` was in none of the host's tables: its kind was `other`, and its `paths` were not read
+  against the protected set, so a search under a protected directory had no local refusal (it was named
+  `gate-tool-unnamed`, and still went to the controller). It is now kind `file_read` and in the search
+  family, held by its `paths` as `grep` is, and a real-runtime test reads the tools a session is offered
+  under each of the two families.
 - Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
   The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
   what the CLI then registered. The first list of tools the CLI sends is now read for the tools the

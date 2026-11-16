@@ -34,7 +34,12 @@ import { fileURLToPath } from 'node:url';
 import type { Decider, DecisionRequest } from '../gate/decision.js';
 import { COPILOT_TOOL_FAMILIES, localGate } from '../gate/local.js';
 import type { LocalGate } from '../gate/local.js';
-import { COPILOT_EXCLUDED_TOOLS, COPILOT_OTHER_TOOLS, COPILOT_TOOL_KINDS } from '../gate/tool-kind.js';
+import {
+  COPILOT_EXCLUDED_TOOLS,
+  COPILOT_OTHER_TOOLS,
+  COPILOT_TOOL_KINDS,
+  copilotToolKind,
+} from '../gate/tool-kind.js';
 import type { RefusalReason } from '../core/refusal.js';
 import { fakeMcpHttp } from '../test-support/fake-mcp-http.js';
 import { stubModel, stubRequestText } from '../test-support/stub-model-http.js';
@@ -565,6 +570,53 @@ test(
       await real.close();
       await removeScratch(dirs);
     }
+  },
+);
+
+test(
+  'the census holds for each model family: the tools a session is offered under another model are ones the tables name, its search tool among them',
+  { skip, timeout: 120_000 },
+  async () => {
+    const known = (name: string): boolean =>
+      Object.hasOwn(COPILOT_TOOL_KINDS, name) ||
+      COPILOT_OTHER_TOOLS.includes(name) ||
+      COPILOT_EXCLUDED_TOOLS.includes(name);
+    const offered: Record<string, string[]> = {};
+    // The runtime picks a session's file and search tools by its model's name: no sign-in is needed to
+    // read which, and no model is called.
+    for (const model of ['claude-haiku-4.5', 'gpt-6-luna']) {
+      const dirs = await scratch();
+      const real = await openReal(dirs, { model });
+      try {
+        let listed = await real.session.rpc.tools.getCurrentMetadata();
+        if (listed.tools === null) {
+          await real.session.rpc.tools.initializeAndValidate();
+          listed = await real.session.rpc.tools.getCurrentMetadata();
+        }
+        offered[model] = (listed.tools ?? [])
+          .filter((tool) => tool.mcpServerName === undefined)
+          .map((tool) => tool.name);
+      } finally {
+        await real.close();
+        await removeScratch(dirs);
+      }
+    }
+    for (const [model, names] of Object.entries(offered)) {
+      assert.deepEqual(
+        names.filter((name) => !known(name)),
+        [],
+        `under ${model} the session is offered built-ins this host has no word for`,
+      );
+    }
+    // Control: the two families do differ, so the second leg reads a list the first did not.
+    assert.notDeepEqual(offered['gpt-6-luna'], offered['claude-haiku-4.5']);
+    assert.ok(
+      offered['gpt-6-luna']?.includes('rg'),
+      "the other family's search tool is no longer rg: the list is stale",
+    );
+    // A search tool is a read by kind, whichever family names it.
+    assert.equal(copilotToolKind('rg'), 'file_read');
+    assert.equal(copilotToolKind('grep'), 'file_read');
   },
 );
 
