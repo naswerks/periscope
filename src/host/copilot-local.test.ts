@@ -28,7 +28,7 @@ import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { Decider, DecisionRequest } from '../gate/decision.js';
@@ -49,6 +49,7 @@ import { COPILOT_HOOK_REASON, createCopilotSessionGate } from './copilot-gate.js
 import type { CopilotSessionGate } from './copilot-gate.js';
 import { copilotRuntimeEnv, copilotRuntimePolicyLook, createCopilotSessionHome } from './copilot-home.js';
 import { copilotMcpServers } from './copilot-mcp.js';
+import type { CopilotEndpointRoute } from './copilot-endpoints.js';
 import { copilotSessionConfig, startCopilotProcess } from './copilot-process.js';
 import type {
   CopilotClient,
@@ -922,7 +923,11 @@ function alive(target: number): boolean {
 }
 
 /** Start the adapter on the real runtime, reading back its client and session as it makes them. */
-async function adapterOn(dirs: Scratch): Promise<{
+async function adapterOn(
+  dirs: Scratch,
+  route: CopilotEndpointRoute | null = null,
+  env: Record<string, string> = scratchEnv(dirs),
+): Promise<{
   readonly proc: ReturnType<typeof startCopilotProcess>;
   readonly messages: CopilotMessage[];
   readonly ended: Promise<unknown>;
@@ -956,10 +961,14 @@ async function adapterOn(dirs: Scratch): Promise<{
     onSpawnDegrades: () => undefined,
   });
   const proc = startCopilotProcess(
-    processRequest(dirs.work, { env: scratchEnv(dirs) }),
+    processRequest(dirs.work, {
+      env,
+      ...(route === null ? {} : { model: route.models[0] ?? null }),
+    }),
     {
       sdk: PACKAGE_ROOT,
       base: dirs.base,
+      ...(route === null ? {} : { endpoints: [route] }),
       loadSdk: () =>
         Promise.resolve({
           ok: true,
@@ -972,7 +981,7 @@ async function adapterOn(dirs: Scratch): Promise<{
       policyHooks: () => Promise.resolve({ found: [], unread: [] }),
     },
     () => undefined,
-    null,
+    route?.name ?? null,
     gate,
     [dirs.tmp],
   );
@@ -1017,6 +1026,32 @@ async function startedIn(
     arguments: { command: command(pidFile), description: 'scratch', mode: 'async' },
     toolCallId: id,
   });
+  return pidWrittenTo(pidFile);
+}
+
+/**
+ * The first folder of this process's own search path that lists `program`, or null. By the folder's
+ * listing: a program the system installs as an alias is listed there and is not a file to stat.
+ */
+function folderOnPathOf(program: string): string | null {
+  const path = Object.entries(process.env).find(([name]) => name.toLowerCase() === 'path')?.[1] ?? '';
+  const lists = (folder: string): boolean => {
+    try {
+      return readdirSync(folder).some((name) => name.toLowerCase() === program.toLowerCase());
+    } catch {
+      return false;
+    }
+  };
+  return (
+    path
+      .split(delimiter)
+      .filter((folder) => folder !== '')
+      .find(lists) ?? null
+  );
+}
+
+/** The pid a command wrote to `pidFile`, once it has. */
+async function pidWrittenTo(pidFile: string): Promise<number> {
   // A cold shell on a loaded host can take most of a minute to run its first command.
   // The shell may still hold the file open while it writes it: a read that is refused then is tried again.
   const written = (): string => {
@@ -1130,6 +1165,90 @@ test(
       );
     } finally {
       run.proc.close();
+      await removeScratch(dirs);
+    }
+  },
+);
+
+test(
+  "the adapter's close ends a command a turn's shell call started in the background and the turn then left running; driven by a stub model",
+  { skip, timeout: 240_000 },
+  async () => {
+    const dirs = await scratch();
+    const pidFile = join(dirs.work, 'turn-background.pid');
+    const command = WINDOWS
+      ? `$p = Start-Process -FilePath ping -ArgumentList '-n','120','127.0.0.1' -NoNewWindow -PassThru; Set-Content -Path '${pidFile}' -Value $p.Id; $p.WaitForExit()`
+      : `sleep 120 & echo $! > '${pidFile}'; wait`;
+    // The stub's script: the session's model starts one command in the shell's background mode, then answers.
+    const stub = await stubModel((request) => {
+      if (request.messages.at(-1)?.role === 'tool') return { text: 'started' };
+      return stubRequestText(request).includes('RUN-IN-BACKGROUND')
+        ? {
+            toolCalls: [
+              {
+                id: 'call_background',
+                name: SHELL,
+                arguments: { command, description: 'background', mode: 'async' },
+              },
+            ],
+          }
+        : { text: 'ok' };
+    });
+    // The runtime runs its shell tool in PowerShell 7 where the machine has one, and that shell leaves at
+    // once when the runtime ends it, with its command still running: so the folder that holds one goes on
+    // the scratch PATH, where one is found. Windows PowerShell, the only shell the scratch PATH names
+    // otherwise, stays until the tree is ended, and hides what this test is for.
+    const env = scratchEnv(dirs);
+    const newer = WINDOWS ? folderOnPathOf('pwsh.exe') : null;
+    if (newer !== null) env['PATH'] = `${newer};${env['PATH'] ?? ''}`;
+    const run = await adapterOn(
+      dirs,
+      {
+        name: 'stub',
+        wireApi: 'openai-chat',
+        baseUrl: stub.url,
+        models: ['stub-model'],
+        // No key: a literal placeholder, since the provider takes a string.
+        authToken: () => 'placeholder',
+      },
+      env,
+    );
+    let started: number | null = null;
+    try {
+      run.proc.prompt('RUN-IN-BACKGROUND');
+      started = await pidWrittenTo(pidFile);
+      // The turn has given its answer and left the command running: what a close then meets.
+      const answered = (): boolean =>
+        run.messages.some(
+          (message) =>
+            message.kind === 'event' &&
+            message.event.type === 'assistant.message' &&
+            (message.event.data as { content?: unknown } | undefined)?.content === 'started',
+        );
+      const deadline = Date.now() + 60_000;
+      while (!answered() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.ok(answered(), `the turn gave no answer; the stub saw ${stub.requests.length} request(s)`);
+      const client = run.client();
+      const runtime = client === null ? null : copilotRuntimePid(client);
+      assert.ok(runtime !== null, 'the runtime process is not there to watch end');
+      assert.equal(alive(started), true, 'control: the command reads as alive before the close');
+      run.proc.close();
+      assert.equal(await run.ended, null);
+      await untilGone(runtime);
+      await untilGone(started);
+      assert.equal(alive(runtime), false, 'the runtime outlived the close');
+      assert.equal(
+        alive(started),
+        false,
+        'a command the turn left running in the background outlived the close',
+      );
+    } finally {
+      run.proc.close();
+      if (started !== null && alive(started)) {
+        process.kill(started);
+        await untilGone(started);
+      }
+      await stub.close();
       await removeScratch(dirs);
     }
   },

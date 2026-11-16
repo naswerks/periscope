@@ -52,6 +52,13 @@ frame it sends decodes unchanged.
   pin holds that for each probe file. The probe of the spawn environment looked for the search path
   as `PATH` exactly, which a shell on Windows hands over as `Path`; it now matches a variable's name
   without regard to case, as the host does.
+- Fixed: the close of a Copilot session ends a command a turn started in the shell's background mode.
+  The close ended the turn first, which makes the runtime end its shells, each without the command it
+  is running; where the runtime's shell is PowerShell 7 the command was then under a process that was
+  gone, which no tree kill from the runtime finds, and it outlived the session. The close now ends
+  everything under the runtime first, while the runtime and its shells are there to root the walk, as
+  the close of an opencode session does. Found by the live probe's first turns on a real model;
+  held on the real runtime with a stub model.
 - Fixed: a Copilot session opens where the runtime allows a directory that is none of the session's.
   The read-back refused the open `copilot-gate-not-active` for it, and the runtime allows its temp folder
   by itself, so a session whose temp folder is no write root of its own (one that covers the session's

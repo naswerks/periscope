@@ -60,6 +60,8 @@ interface Started {
   readonly raised: { name: RefusalReason; detail: string }[];
   readonly tier: RefusalReason[];
   readonly killed: number[];
+  /** The pids whose descendants the close ended, the process itself left running. */
+  readonly emptied: number[];
   readonly base: string;
   readonly ended: Promise<Error | null>;
 }
@@ -86,6 +88,7 @@ async function started(setup: Setup = {}): Promise<Started> {
   const raised: { name: RefusalReason; detail: string }[] = [];
   const tier: RefusalReason[] = [];
   const killed: number[] = [];
+  const emptied: number[] = [];
   const request = processRequest(setup.request);
   const gate =
     setup.noGate === true
@@ -121,6 +124,11 @@ async function started(setup: Setup = {}): Promise<Started> {
         record.lifecycle.push('killTree');
         return Promise.resolve();
       },
+      killDescendants: (pid) => {
+        emptied.push(pid);
+        record.lifecycle.push('killDescendants');
+        return Promise.resolve();
+      },
       closeGraceMs: 200,
       ...setup.runtime,
     },
@@ -138,7 +146,7 @@ async function started(setup: Setup = {}): Promise<Started> {
       return error instanceof Error ? error : new Error(String(error));
     }
   })();
-  return { process, record, messages, degrades, raised, tier, killed, base, ended };
+  return { process, record, messages, degrades, raised, tier, killed, emptied, base, ended };
 }
 
 async function closed(run: Started): Promise<Error | null> {
@@ -551,6 +559,20 @@ test('an interrupt ends the decision a call was waiting on, so the call is refus
   assert.equal(await closed(run), null);
 });
 
+test('close ends what the runtime started first, while the runtime and its shells are there to root the walk, and only then ends the turn: the runtime ends a shell of its own without the command that shell is running', async () => {
+  const run = await started();
+  await waitFor(() => opened(run), 'the open');
+  run.process.close();
+  assert.equal(await run.ended, null);
+  const steps = run.record.lifecycle;
+  assert.deepEqual(run.emptied, [4242], "the runtime's own id, once");
+  assert.ok(
+    steps.includes('killDescendants') && steps.indexOf('killDescendants') < steps.indexOf('abort'),
+    `what the runtime started was not ended before the turn: ${steps.join(', ')}`,
+  );
+  await rm(run.base, { recursive: true, force: true });
+});
+
 test("close ends the turn and its background agents first, then disconnects the session, ends the runtime's tree by its pid, stops the client, keeps the session's state and removes the home", async () => {
   const run = await started();
   await waitFor(() => opened(run), 'the open');
@@ -641,6 +663,7 @@ test('a runtime that exits under a live session ends it, named, and no process t
   const ended = await run.ended;
   assert.match(ended?.message ?? '', /the Copilot runtime exited \(exit code 3\)/);
   assert.deepEqual(run.killed, [], 'a tree was ended by the id of a process that had already exited');
+  assert.deepEqual(run.emptied, [], 'processes were ended under the id of a process that had already exited');
   assert.ok(
     run.degrades.some((detail) =>
       /the Copilot runtime exited on its own \(exit code 3\), so this host ended no process tree by its id/.test(

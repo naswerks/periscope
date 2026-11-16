@@ -128,6 +128,7 @@ async function copilotHost(
         loadSdk: () => Promise.resolve(ok(sdk)),
         policyHooks: () => Promise.resolve({ found: [], unread: [] }),
         killTree: () => Promise.resolve(),
+        killDescendants: () => Promise.resolve(),
         closeGraceMs: 20,
       },
       read: async () => options.read ?? { entry: availableCopilotEntry(), detail: null },

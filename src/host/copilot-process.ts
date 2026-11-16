@@ -34,12 +34,14 @@
  *   is Copilot's agent mode: `default` is `interactive` and `plan` is `plan`; nothing else is ever sent, and
  *   the permission mode stays `manual`. Copilot has no thinking switch, so a request to turn thinking off is
  *   refused by name.
- * - **Close.** Every decision still waiting is ended, then the turn and its background sub-agents are
- *   ended while the hook and the permission handler still have their route, so a call that arrives as the
- *   turn winds down is refused here and never runs unasked. Only then is the session disconnected, the
- *   runtime's process tree ended by its pid, the client stopped, the session's state moved out of the home
- *   for a later resume, and the home removed. A turn that would not end is never disconnected while it
- *   runs: its tree is ended first.
+ * - **Close.** Every decision still waiting is ended. What the runtime started is ended next, while the
+ *   runtime and its shells are there to root the walk: the runtime ends a shell of its own without the
+ *   command that shell is running, and a command left under a shell that is gone is under nothing a tree
+ *   kill finds. Then the turn and its background sub-agents are ended while the hook and the permission
+ *   handler still have their route, so a call that arrives as the turn winds down is refused here and
+ *   never runs unasked. Only then is the session disconnected, the runtime's process tree ended by its
+ *   pid, the client stopped, the session's state moved out of the home for a later resume, and the home
+ *   removed. A turn that would not end is never disconnected while it runs: its tree is ended first.
  */
 import type { RefusalReason } from '../core/refusal.js';
 import { AsyncQueue } from '../core/async-queue.js';
@@ -95,7 +97,7 @@ import {
 } from './copilot-sdk.js';
 import type { CopilotMessage } from './copilot-wire.js';
 import { copilotData, copilotRecord, copilotWord, isCopilotMainThread } from './copilot-wire.js';
-import { killProcessTree } from './stdio-rpc.js';
+import { killDescendants, killProcessTree } from './stdio-rpc.js';
 
 /** The effort words a Copilot session takes: the runtime's reasoning efforts this host offers. */
 export const COPILOT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -132,6 +134,8 @@ export interface CopilotRuntimeConfig {
    */
   readonly policyHooks?: () => Promise<CopilotPolicyLook>;
   readonly killTree?: (pid: number) => Promise<void>;
+  /** How everything a running runtime started is ended, the runtime left running (`killDescendants`). */
+  readonly killDescendants?: (pid: number) => Promise<void>;
   readonly closeGraceMs?: number;
   readonly openDeadlineMs?: number;
 }
@@ -643,6 +647,12 @@ export function startCopilotProcess(
           `the Copilot runtime exited on its own (${exited}), so this host ended no process tree by its id: a command or a server it had started may still be running`,
         );
       }
+      // What the runtime started goes before the turn does. Ending the turn makes the runtime end its
+      // shells, each without the command it is running: on Windows such a command is then the child of a
+      // process that is gone, which no walk from the runtime finds, and elsewhere it is reparented.
+      const running = client === null || exited !== null ? null : copilotRuntimePid(client);
+      if (running !== null)
+        await (runtime.killDescendants ?? killDescendants)(running).catch(() => undefined);
       if (session !== null && exited === null) {
         turnEnded = await within(
           Promise.all([session.abort(), session.rpc.cancelAllBackgroundAgents()]),
@@ -658,7 +668,7 @@ export function startCopilotProcess(
       }
       const stopping = client;
       client = null;
-      // The tree, while the runtime still roots it: a command the agent left running ends with it.
+      // The tree, while the runtime still roots it: whatever it started since ends with it.
       const endTree = async (): Promise<void> => {
         const pid = stopping === null || exited !== null ? null : copilotRuntimePid(stopping);
         if (pid !== null) await (runtime.killTree ?? killProcessTree)(pid).catch(() => undefined);

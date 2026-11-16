@@ -654,6 +654,12 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   before it disconnects the session, while the hook still has its route, so a call that arrives as the
   turn winds down is asked and refused. A turn that will not end is not disconnected while it runs: its
   process tree is ended first.
+- **What the runtime started is ended before the turn is.** Ending a turn makes the runtime end its
+  shells, each without the command it is running. Measured on the pinned runtime with PowerShell 7 as
+  its shell: a command a turn had started in the shell's background mode was then the child of a
+  process that was gone, which no walk from the runtime finds, and it outlived the close. So the close
+  first ends everything under the runtime, while the runtime and its shells are there to root the walk,
+  and only then ends the turn.
 - **A command detached on purpose outlives the session, and so does what a crashed runtime left.**
   Closing a session ends its runtime and every command its shell still runs. A command the agent
   detaches from its shell (on Windows, `Start-Process`) is in no process tree of the session, and keeps

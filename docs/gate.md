@@ -691,13 +691,24 @@ the one this host decides.
     local family; the name is said once per tool, at the open or at its first call, so the tables can
     learn it. A tool the runtime lists as an attached server's is never taken for one.
 - **The close.** The runtime lets a call proceed when its hook has no route, and a disconnected session's
-  hook has none. So the close ends every waiting decision, then ends the turn (`abort`) and its
-  background sub-agents (`cancelAllBackgroundAgents`), and only then disconnects the session, ends the
-  runtime's process tree and stops the client. A call that arrives while the turn winds down is asked
-  through the hook as any other and refused, since its decision is already ended. A turn that does not
-  end within the close's grace is never disconnected while it runs: its process tree is ended first.
-  That the runtime would run a disconnected turn's call was not measured: the order rests on the SDK's
-  own account of its hook.
+  hook has none. So the close ends every waiting decision, then everything the runtime started
+  (`killDescendants`), then the turn (`abort`) and its background sub-agents
+  (`cancelAllBackgroundAgents`), and only then disconnects the session, ends the runtime's process
+  tree and stops the client. A call that arrives while the turn winds down is asked through the hook as
+  any other and refused, since its decision is already ended. A turn that does not end within the
+  close's grace is never disconnected while it runs: its process tree is ended first. That the runtime
+  would run a disconnected turn's call was not measured: the order rests on the SDK's own account of
+  its hook.
+
+  What the runtime started goes before the turn because ending the turn makes the runtime end its
+  shells, each without the command it is running. Measured on the pinned runtime, driven by a stub
+  model, with PowerShell 7 as the runtime's shell: before the close a command a turn had started in the
+  shell's background mode was under the shell, under the runtime; after it the shell and the runtime
+  were gone and the command was not, its parent a process that had ended, which no walk from the
+  runtime finds. With Windows PowerShell as the shell the same close left nothing: that shell is still
+  there when the tree is ended. The real-runtime test puts PowerShell 7 on its search path where the
+  machine has one (`copilot-local.test.ts`).
+
 - **What it does not hold.** A command the agent detaches from its shell on purpose (on Windows,
   `Start-Process`, measured on the pinned runtime) is in no process tree of the session, so it outlives
   the session's close. A command the session's shell still runs, in the foreground or the background,
