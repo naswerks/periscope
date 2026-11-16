@@ -405,6 +405,29 @@ test(
 
       assert.ok(wired.firedHooks.has('SubagentStop'), 'a subagent entry opened with no exit wired');
       assert.ok(subagentTransitions.length > 0, 'SubagentStart fired but produced no activity');
+
+      // A status names no thread, so one sent for a sub-agent's model request would open the session's
+      // own request entry and leave the session reading as requesting for the sub-agent's whole run.
+      // The CLI sends none: every status that opened a request arrived outside the sub-agent's run.
+      const all = wired.store.all();
+      const startedAt = all.findIndex((transition) => transition.cause.event === 'SubagentStart');
+      const stoppedAt = all.findIndex((transition) => transition.cause.event === 'SubagentStop');
+      const requesting = all.flatMap((transition, index) =>
+        transition.cause.event === 'system/status' && transition.activity?.kind === 'requesting'
+          ? [index]
+          : [],
+      );
+      const during = requesting.filter((index) => index > startedAt && index < stoppedAt);
+      console.log(
+        `[live] requesting statuses: ${requesting.length} in the turn, ${during.length} while the subagent ran`,
+      );
+      assert.ok(requesting.length > 0, 'no requesting status opened a request, so nothing was measured');
+      assert.ok(startedAt >= 0 && stoppedAt > startedAt, "the subagent's start and stop left no transitions");
+      assert.deepEqual(
+        during,
+        [],
+        "a requesting status arrived while a subagent ran: the session's request entry would stay open through it",
+      );
       assert.equal(
         wired.machine.openEntries().filter((entry) => entry.activity.kind === 'subagent').length,
         0,

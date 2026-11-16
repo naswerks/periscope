@@ -76,6 +76,11 @@ frame it sends decodes unchanged.
   every variable declines; it waits for a background command itself and not for the turn's end, since
   a session is not idle while a command it started runs; and the sub-agent's leg reports alone, so
   that it alone is skipped where the plan gives a sub-agent no model.
+- Changed: the trace live probe holds that the CLI sends no `requesting` status for a sub-agent's
+  model requests. A status names no thread, so one sent for a sub-agent would open the session's own
+  request entry and leave the session reading as requesting for the sub-agent's whole run. Claude
+  Code 2.1.325 sends none, by its own code and by a recorded turn; the probe's sub-agent test now
+  asserts it, and [state-machine.md](docs/state-machine.md) says it.
 - Fixed: a Copilot session opens where the runtime allows a directory that is none of the session's.
   The read-back refused the open `copilot-gate-not-active` for it, and the runtime allows its temp folder
   by itself, so a session whose temp folder is no write root of its own (one that covers the session's

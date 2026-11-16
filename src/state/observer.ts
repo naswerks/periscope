@@ -482,8 +482,13 @@ export class SessionObserver {
 
     if (message.type === 'assistant') {
       // The CLI states a model request's start (`status: 'requesting'`) and nothing at its end, so the
-      // answer is the end: the session's own assistant message closes the request it answers. A
-      // sub-agent's message answers a request of the sub-agent's, which opened no entry here.
+      // answer is the end: the session's own assistant message closes the request it answers.
+      //
+      // A status names no thread: `SDKStatusMessage` carries no parent id. The CLI sends one for the
+      // session's own model requests only, and none for a sub-agent's (measured on the pinned CLI, and
+      // held by the trace probe's sub-agent test), so the entry a status opens is always a request of
+      // the session's own, and the session's own next answer is the nearest one there is. A sub-agent's
+      // message answers a request of the sub-agent's, which opened no entry here, and closes nothing.
       if (message.parent_tool_use_id !== null || !this.#isOpen(REQUEST_ENTRY)) return [];
       return [
         {

@@ -200,6 +200,13 @@ code and recorded on Claude Code 2.1.325). So the request is closed by its answe
 turn's end, `Stop` or `result`, whichever arrives. A session never carries an open model request
 after its turn.
 
+A status names no thread (`SDKStatusMessage` carries no parent id), so if the CLI sent `requesting`
+for a sub-agent's model requests the session would read as requesting for the sub-agent's whole run.
+It does not: the status is built from the session's own query alone (the bundled CLI's code), and a
+recorded turn on Claude Code 2.1.325 whose sub-agent made its own model requests carried two
+statuses, the session's own two, with none between the sub-agent's start and its stop. The trace
+live probe's sub-agent test holds that, so a CLI that starts sending them turns it red.
+
 The runtime wins over the types. Four wired events are measured not to fire under an SDK-hosted
 session whose calls the hooks decide: `SessionStart` (take the start receipt from `system/init`),
 `PermissionRequest` and `PermissionDenied` (a hook-authored deny blocks while both stay silent), and
