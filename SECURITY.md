@@ -303,12 +303,14 @@ disabled wholesale.
 > smaller than a full bypass, and the refusal in (2) rests on "two authorities, no stated
 > precedence" rather than on a bypass.
 >
-> That paragraph is documented, not measured. The probe that would settle it exists in
-> `gate.live.test.ts` (does a hook allow override an operator deny rule?) and has not been
-> exercised cleanly: run from inside an agent session, the child inherits the enclosing session's
-> tool surface, satisfies the prompt with a tool the deny rule did not name, and never calls the
-> denied one. Run it on a machine that is not itself an agent session before treating any of this
-> as observed.
+> That paragraph is the documentation's. What the runtime does is measured by a probe in
+> `gate.live.test.ts` (an operator deny rule is applied before any hook is asked). On Claude Code
+> 2.1.325 a deny rule is applied before the hook is asked at all: a rule that names the whole tool
+> takes the tool from the model, and a rule that names a path refuses the call with `PreToolUse`
+> never firing, so a hook that allows everything overrode neither. A call your deny rule refuses
+> therefore never reaches the gate, and your controller is asked nothing about it. A run in which the
+> model called another tool, or none where a call was due, measured nothing and is reported as
+> skipped; run the probe on a machine that is not itself an agent session.
 
 ## Model endpoints and the agent's own settings
 

@@ -42,11 +42,17 @@ allow, and that an explicit allow skips only the permission mode, the allow rule
 (<https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks>). The operator's deny
 and ask rules survive it.
 
-That claim is documented, not measured, and the package's standing rule is that the runtime beats
-the documentation. The probe that would settle it is written in `gate.live.test.ts` (does a hook
-allow override an operator deny rule) and is not exercised: run from inside an agent session it is
-contaminated by the enclosing harness's tool surface, so it must be run on a machine that is not
-itself an agent session. Do not upgrade the claim without that receipt.
+The package's standing rule is that the runtime beats the documentation, so the claim is measured
+by a probe in `gate.live.test.ts` (an operator deny rule is applied before any hook is asked). On
+Claude Code 2.1.325 a deny rule is applied before the hook is asked at all. A rule that names the
+whole tool (`Write`) takes the tool from the model: it is not in the tools the CLI offers, and no call
+is made. A rule that names a path (`Edit(canary.txt)`) refuses the call, and `PreToolUse` never fires
+for it. With a hook that allows every call, neither wrote the file, and with no rule the same hook's
+allow did. So a call an operator's deny rule refuses never reaches the gate: the controller is asked
+nothing about it, and sees the call and its error result on the stream. The probe's control is that
+`Write` is the one tool the model calls; a run in which it called another, or none where a call was
+due, measured nothing and is reported as skipped. Run it on a machine that is not itself an agent
+session, where the enclosing session's tools cannot stand in for the denied one.
 
 ## `grantOnAllow`
 

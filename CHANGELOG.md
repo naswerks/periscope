@@ -32,6 +32,13 @@ frame it sends decodes unchanged.
   denied one stayed open. It is now closed by the denial, whichever of the message and the hook
   reports it, once; or by the end of a call of that tool. A session whose gate grants on allow, as
   `PeriscopeHost`'s do, opens no such entry and is unchanged.
+- Changed: what an operator's deny rule does to a call a hook would allow is measured, where it was
+  stated from the documentation alone. On Claude Code 2.1.325 a deny rule is applied before any hook is
+  asked: a rule that names the whole tool takes the tool from the model, and a rule that names a path
+  refuses the call with `PreToolUse` never firing, so a hook's allow overrides neither, and a call a
+  deny rule refuses never reaches the gate. The live probe asserts it in three turns (no rule, the
+  tool's rule, a path's rule), and reports itself skipped when the model did not make the one call it
+  was asked to make.
 - Fixed: a Qwen Code session holds the tools the CLI registered to the ones its settings turn off.
   The read-back before the CLI starts reads the file the host itself wrote, and nothing compared it with
   what the CLI then registered. The first list of tools the CLI sends is now read for the tools the

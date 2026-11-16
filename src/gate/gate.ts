@@ -30,12 +30,13 @@
  * standing and skips only the permission mode, the allow rules and `canUseTool`. Source:
  * https://code.claude.com/docs/en/permissions#extend-permissions-with-hooks
  *
- * That order is documented, not measured, and this package treats the two differently: the runtime
- * beats the docs, and this module exists because executing something found what the documentation
- * denied. The probe that would settle it is written in `gate.live.test.ts` ("does a hook allow
- * override an operator deny rule?") and is not exercised: attempts to run it from inside an agent
- * session were contaminated by the enclosing tool surface, so the denied tool was never the one
- * called. Do not restate this paragraph as a measured claim without that receipt.
+ * The runtime beats the docs, and this module exists because executing something found what the
+ * documentation denied, so the order is measured as well, by the probe in `gate.live.test.ts` ("an
+ * operator deny rule is applied before any hook is asked"). On Claude Code 2.1.325 a deny rule is
+ * applied before this hook is asked at all: a rule that names the whole tool takes the tool from the
+ * model, and a rule that names a path refuses the call with `PreToolUse` never firing. So an
+ * operator's deny rule stands whatever this gate answers, and a call it refuses never reaches this
+ * gate: no decision is asked for it and no outcome is recorded.
  *
  * Without `grantOnAllow` the gate is a veto rather than a gate, which was observed rather than
  * inferred. Saying nothing leaves the agent's own permission mode as the decider, and an embedder
