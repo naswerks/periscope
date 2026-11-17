@@ -24,6 +24,13 @@ keeps; what a working call meets is unchanged but for the one shell command name
   id and none, or more than one decided differently, fits it) is refused `gate-hook-missing` and nobody
   is asked. On the pinned runtime every request carries its own hook's tool and arguments, so no call
   it makes meets the refusal.
+- Fixed: a Copilot request whose arguments are not the ones its one hook announced is held to the host's
+  own gate in both readings. Such a call was decided on the hook's arguments alone, so a request naming a
+  file outside the session's roots, under a hook that announced one inside them, was approved. The call
+  is still decided on the hook's and named `gate-hook-missing`; the host's own gate now reads the
+  request's arguments as well, and a refusal of either reading refuses the call. A difference that
+  changes nothing the gate reads changes no answer, and on the pinned runtime a request carries its
+  hook's arguments, so no call it makes meets this.
 - Fixed: a write or read tool's input is checked at every path field it carries (`file_path`,
   `notebook_path`, `path`), not at the first one alone. Copilot's and pi's file tools open `path`, and a
   `file_path` beside it in the workspace stood in for it: measured on the pinned Copilot runtime, a

@@ -30,7 +30,8 @@
  * - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the hook
  *   did not ask; the request is refused, never decided), a `hook` request that cannot be tied to one hook
  *   (above; refused), a `hook` request whose arguments are not the ones its one hook announced (the call is
- *   decided on the hook's, which are the call's own), a
+ *   decided on the hook's, and this host's own gate reads the request's as well, so a refusal of either
+ *   reading refuses the call), a
  *   pre-tool hook the runtime reports as failed, or a call that finished with no decision of this host's
  *   behind it: none at all, one still being awaited, or a refusal the call ran against. Each call's answer
  *   is kept by its thread (the session's own, or a sub-agent's) and its id until the call finishes and
@@ -291,7 +292,8 @@ type Tie = { readonly call: HookedCall; readonly argumentsDiffer: boolean } | { 
  * The one hook a `hook` request is tied to among those announced under its id, or why there is none: no
  * hook at all, the one hook under the id naming another tool, or several hooks none of which fits the
  * request, or more than one of which fits it and differs in what the decision reads. One hook of the same
- * tool whose arguments differ is the call's own (the owner's rule: decided on the hook's, and named).
+ * tool whose arguments differ is the call's own: it is decided on the hook's and named, and this host's own
+ * gate reads the request's arguments as well as the hook's (`bothReadings`).
  */
 function tie(request: CopilotPermissionRequest, id: string, calls: readonly HookedCall[]): Tie {
   const fitting = calls.filter((call) => fits(request, call));
@@ -460,14 +462,24 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
     else hooked.set(id, left);
   };
 
-  // The decision for a call that has already waited `spentMs` of its deadline.
-  const decisionAfter = (spentMs: number): CallDecision =>
+  // This host's own gate over both readings of a call whose request carries other arguments than its hook
+  // announced: the hook's, which the call is decided on, and the request's own. Which of the two the runtime
+  // then runs is not this host's to know, so a refusal of either refuses the call, and a difference that
+  // changes nothing the gate reads changes no answer.
+  const bothReadings = (requested: unknown): LocalGate | undefined => {
+    const local = options.localGate;
+    if (local === undefined) return undefined;
+    return (request) => local(request) ?? local({ ...request, toolInput: requested ?? null });
+  };
+
+  // The decision for a call that has already waited `spentMs` of its deadline, behind `local`.
+  const decisionAfter = (spentMs: number, local: LocalGate | undefined = options.localGate): CallDecision =>
     createCallDecision({
       decide: options.decide,
       onOutcome: options.onOutcome,
       sessionKey: options.sessionKey,
       runtime: COPILOT_RUNTIME,
-      ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+      ...(local === undefined ? {} : { localGate: local }),
       decisionTimeoutMs: Math.max(1, options.decisionTimeoutMs - spentMs),
       holdAfterMs: Math.max(0, options.holdAfterMs - spentMs),
       // The rewrite lives only in the fail-open hook; the request can only approve or refuse the call asked.
@@ -614,7 +626,7 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
       if (tied.argumentsDiffer) {
         raise(
           'gate-hook-missing',
-          `Copilot asked about call ${id} with other arguments than its pre-tool hook announced for it; the call is decided on the arguments the hook announced`,
+          `Copilot asked about call ${id} with other arguments than its pre-tool hook announced for it; the call is decided on the arguments the hook announced, and this host's own gate reads both`,
           `arguments:${id}`,
         );
       }
@@ -631,7 +643,12 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
         const waited = await learnServers(asked, own.signal);
         nameIfUnnamed(asked, 'was asked to run');
         const request = requestOf(raw, call, id);
-        const decideNow = waited ? decisionAfter(Date.now() - began) : decideCall;
+        // A request whose arguments are not its hook's is held to this host's own gate in both readings.
+        const decideNow = tied.argumentsDiffer
+          ? decisionAfter(waited ? Date.now() - began : 0, bothReadings(raw.toolArgs))
+          : waited
+            ? decisionAfter(Date.now() - began)
+            : decideCall;
         const outcome = await decideNow(request, own.signal);
         // Written once the answer is known and before the runtime is told, so a call that finishes after
         // this is read against what it was told.

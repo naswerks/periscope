@@ -652,8 +652,10 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   provider gives one id while both run (a sub-agent's and the session's own) are each decided on their
   own hook and read apart when they finish, by the thread each runs in. A request that cannot be tied to
   one hook (none announced its id, its one hook named another tool, or several calls under its id and
-  none, or more than one decided differently, fits it) is refused and nobody is asked. An id handed out
-  again later is a new call.
+  none, or more than one decided differently, fits it) is refused and nobody is asked. A request whose
+  arguments are not the ones its one hook announced is decided on the hook's and named, and this host's
+  own gate reads the request's arguments as well: a protected path or a write outside the roots in
+  either reading refuses the call. An id handed out again later is a new call.
 - **What no hook sees is named.** A tool the model's provider runs itself is named
   `gate-unhooked-call`; a machine-wide policy hook, which runs whatever a session's settings say, is
   named `gate-hook-foreign` at the open; a permission or agent mode the host did not set is named

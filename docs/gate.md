@@ -613,7 +613,9 @@ the one this host decides.
   the one the hook announced, which is the call's own. On the pinned runtime the request carried the
   same tool name and the same arguments by value for every tool measured (a shell line, `view`, `create`,
   `apply_patch`, `task`, a skill, an MCP tool, a sub-agent's call); a request that carries other arguments
-  than its one hook is named `gate-hook-missing`, and the call is still decided, on the hook's. The answer is
+  than its one hook is named `gate-hook-missing`, and the call is still decided, on the hook's. The host's
+  own gate then reads both, the hook's arguments and the request's, and a refusal of either refuses the
+  call: which of the two the runtime runs when they differ was not measured. The answer is
   one call approved, or refused with the outcome's words, which the model reads. Nothing broader is ever
   sent: no approval for the session, for a location or for good. An allow that rewrites the input is
   refused: the rewrite would live only in the fail-open hook (`canRewriteInput: false`).
@@ -709,7 +711,8 @@ the one this host decides.
   - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the
     hook did not ask; the request is refused, never decided), a `hook` request that cannot be tied to
     one hook (above; refused), a `hook` request whose arguments are not the ones its one hook announced
-    (decided on the hook's), a pre-tool hook the runtime reports as failed (after which it lets the call
+    (decided on the hook's, with this host's own gate reading both), a pre-tool hook the runtime reports
+    as failed (after which it lets the call
     proceed), or a call that finished with no decision of this host's behind it: none at all, one still
     awaited, or a refusal the call ran against. Each call's answer is kept by its thread and its call id
     until `tool.execution_complete` and forgotten then, so an id a provider hands out again is a new call; only

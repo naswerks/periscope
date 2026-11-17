@@ -508,6 +508,39 @@ test("regression: two calls running under one call id are decided apart, each on
   assert.match(control.kind === 'reject' ? (control.feedback ?? '') : '', /^path-escapes-root: /);
 });
 
+test("regression: a request whose arguments are not its one hook's is held to this host's own gate in both readings, so a write outside the roots is refused whichever of the two names it", async () => {
+  const run = jailed(allow);
+  // The hook announced a write in the workspace; the request under its id names one outside the roots.
+  run.built.preToolUse(announced('create', { path: README, file_text: 'x' }));
+  const requested = await run.built.decide(asked('create', { path: OUTSIDE, file_text: 'x' }));
+  assert.equal(requested.kind, 'reject', "a write outside the roots was approved on the hook's arguments");
+  assert.match(requested.kind === 'reject' ? (requested.feedback ?? '') : '', /^path-escapes-root: /);
+  // The other way round: the hook's is the reading outside the roots.
+  run.built.preToolUse(announced('create', { path: OUTSIDE, file_text: 'x' }, 'call_1'));
+  const announcedOutside = await run.built.decide(
+    asked('create', { path: README, file_text: 'x' }, 'call_1'),
+  );
+  assert.match(
+    announcedOutside.kind === 'reject' ? (announcedOutside.feedback ?? '') : '',
+    /^path-escapes-root: /,
+  );
+  assert.equal(run.requests.length, 0, 'nobody is asked about a call this host refuses by itself');
+
+  // Control: a difference in what the gate reads nothing of is named, and the call is decided on the hook's.
+  run.built.preToolUse(announced('create', { path: README, file_text: 'one' }, 'call_2'));
+  const inside = await run.built.decide(asked('create', { path: README, file_text: 'two' }, 'call_2'));
+  assert.deepEqual(inside, { kind: 'approve-once' });
+  assert.deepEqual(
+    run.requests.map((one) => one.toolInput),
+    [{ path: README, file_text: 'one' }],
+  );
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-hook-missing', 'gate-hook-missing', 'gate-hook-missing'],
+  );
+  assert.match(run.raised[2]?.detail ?? '', /this host's own gate reads both/);
+});
+
 test('regression: a request naming another tool than its pre-tool hook announced is refused, by name, and nobody is asked', async () => {
   const run = jailed(allow);
   run.built.preToolUse(announced('view', { path: README }, 'call_1'));
