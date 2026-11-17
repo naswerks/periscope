@@ -32,6 +32,12 @@ removed export. The package version and the wire protocol version are separate n
   before, so nothing refused before is let through. One command admitted before is refused now: a word
   that names a protected path and climbs out of it (`cat ~/.ssh/../work/x`), which names the path
   literally.
+- Fixed: an opencode session's pre-call gate counts as loaded only when the server states it `active`.
+  The read-back kept each plugin's id and source and not its state, so a `periscope.gate` the server
+  listed as `failed` was taken as loaded, and a shell line the runtime reads no command in ran with no
+  decision and nothing named. A gate listed `failed`, or with no state, is now read as missing: named
+  `gate-hook-missing` at the open with the server's words, and the session opens. The pinned SDK's server
+  states the gate `active`.
 
 ## [1.11.0] - 2026-11-15
 

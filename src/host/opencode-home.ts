@@ -479,6 +479,22 @@ export function isOpencodeGatePlugin(plugin: {
 }
 
 /**
+ * Why this host's pre-call gate is not running in the server whose plugins these are, or null when it is: it
+ * is listed by its id and its source, and the server states it `active`. A gate listed `failed`, or with no
+ * state, did not load as far as the server says, and its hook decides nothing.
+ */
+export function opencodeGateNotActive(plugins: OpencodePostureRead['plugins']): string | null {
+  const listed = plugins.find(isOpencodeGatePlugin);
+  if (listed === undefined) return "this host's pre-call gate is not among the server's plugins";
+  if (listed.state?.status === 'active') return null;
+  const stated =
+    listed.state === undefined
+      ? 'the server states no state for it'
+      : `the server states it ${listed.state.status}${listed.state.error === undefined ? '' : `: ${listed.state.error}`}`;
+  return `this host's pre-call gate is among the server's plugins but is not active (${stated})`;
+}
+
+/**
  * The configuration as the text the server loads. The server follows two references in that text itself,
  * before it parses it and wherever they stand: `{env:NAME}` becomes a variable of the host process's and
  * `{file:path}` the content of any file the host process can read. A value a controller supplied (an MCP
@@ -497,7 +513,12 @@ export interface OpencodePostureRead {
   readonly rules: readonly OpencodeRule[];
   readonly agents: readonly { readonly id: string; readonly rules: readonly OpencodeRule[] }[];
   readonly saved: readonly { readonly action: string; readonly resource: string }[];
-  readonly plugins: readonly { readonly id?: string; readonly source: { readonly type: string } }[];
+  /** Each plugin by its id, its source and the state the server states it in (`active`, or `failed` and why). */
+  readonly plugins: readonly {
+    readonly id?: string;
+    readonly source: { readonly type: string };
+    readonly state?: { readonly status: string; readonly error?: string };
+  }[];
   readonly servers: readonly string[];
   readonly config: readonly { readonly type: string; readonly path?: string }[];
   readonly models: readonly { readonly id: string; readonly providerID: string }[];

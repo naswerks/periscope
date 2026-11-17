@@ -63,7 +63,11 @@ export interface FakeOpencodeOptions {
   readonly sessionRules?: readonly OpencodeRule[];
   readonly agents?: readonly { readonly id: string; readonly permissions: readonly OpencodeRule[] }[];
   readonly saved?: readonly { readonly action: string; readonly resource: string }[];
-  readonly plugins?: readonly { readonly id?: string; readonly source: { readonly type: string } }[];
+  readonly plugins?: readonly {
+    readonly id?: string;
+    readonly source: { readonly type: string };
+    readonly state?: { readonly status: string; readonly error?: string };
+  }[];
   readonly servers?: readonly string[];
   readonly configEntries?: readonly { readonly type: string; readonly path?: string }[];
   readonly models?: readonly { readonly id: string; readonly providerID: string }[];

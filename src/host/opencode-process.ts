@@ -11,8 +11,8 @@
  * - **Nothing the server reads is discovered.** The host process runs with its home and its data,
  *   configuration, cache and state directories inside the session's fresh home under the runner's base
  *   (`opencode-home.ts`), with no project configuration, no `.claude` folder, no catalogue fetched and none
- *   of opencode's own hosted models; plugins other than the runtime's own never load, and the built-ins that
- *   could act outside a call are off.
+ *   of opencode's own hosted models; no plugin loads but the runtime's own and this host's pre-call gate
+ *   (`periscope.gate`), and the built-ins that could act outside a call are off.
  * - **No credential in an environment.** The configuration, an endpoint's key among it, crosses into the host
  *   process in its `open` request. The host process's environment holds none, and the agent's shell is given
  *   the session's spawn environment as its own (`opencodeShellEnv`), so a command finds the operator's own
@@ -21,7 +21,9 @@
  *   (`opencodeRuleset`): every action asks, the tools this host turns off are denied. Once the server's
  *   plugins are active (`model.list` waits for them), the server is read back (`opencodeReadBackProblem`):
  *   the session's and every agent's rules, saved approvals, plugins, servers, configuration and models. Any
- *   difference refuses the open (`opencode-gate-not-active`) and no prompt is ever sent.
+ *   difference refuses the open (`opencode-gate-not-active`) and no prompt is ever sent. The pre-call gate
+ *   counts only when the server states it `active` (`opencodeGateNotActive`); one missing, `failed` or with
+ *   no state is named `gate-hook-missing`, and the session opens.
  * - **Queue semantics.** A prompt is sent as it comes, queued behind any run (`delivery: 'queue'`), up to
  *   `MAX_PENDING_PROMPTS` the server has not yet delivered. Prompts that arrive before the open is proven are
  *   held, in order, and sent after.
@@ -57,6 +59,7 @@ import {
   isOpencodeGatePlugin,
   opencodeConfig,
   opencodeConfigText,
+  opencodeGateNotActive,
   opencodeHostEnv,
   opencodeReadBackProblem,
   opencodeRuleset,
@@ -533,10 +536,18 @@ export function startOpencodeProcess(
         action: String(one['action']),
         resource: String(one['resource']),
       })),
-      plugins: listOf(plugins).map((one) => ({
-        ...(typeof one['id'] === 'string' ? { id: one['id'] } : {}),
-        source: { type: String(opencodeRecord(one['source'])['type']) },
-      })),
+      plugins: listOf(plugins).map((one) => {
+        const state = opencodeRecord(one['state']);
+        const status = state['status'];
+        const error = state['error'];
+        return {
+          ...(typeof one['id'] === 'string' ? { id: one['id'] } : {}),
+          source: { type: String(opencodeRecord(one['source'])['type']) },
+          ...(typeof status === 'string'
+            ? { state: { status, ...(typeof error === 'string' ? { error } : {}) } }
+            : {}),
+        };
+      }),
       servers: listOf(mcp).map((one) => String(one['name'])),
       config: listOf(config).map((one) => ({
         type: String(one['type']),
@@ -683,12 +694,15 @@ export function startOpencodeProcess(
       providerId,
     });
     if (unread !== null) return refuseOpen('opencode-gate-not-active', unread);
-    if (!read.plugins.some(isOpencodeGatePlugin)) {
+    // The gate counts only when the server states it active: one it lists as failed, or with no state, is
+    // a hook that decides nothing.
+    const gateMissing = opencodeGateNotActive(read.plugins);
+    if (gateMissing !== null) {
       gate.preCallHook(false);
       // Named, and the session opens: every call that raises a request is still decided.
       gate.raise(
         'gate-hook-missing',
-        "this host's pre-call gate is not among the server's plugins, so a shell line the runtime reads no command in would run with no decision of this host's",
+        `${gateMissing}, so a shell line the runtime reads no command in would run with no decision of this host's`,
         'open:gate-plugin',
       );
     }

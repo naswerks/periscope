@@ -1066,6 +1066,65 @@ test("the pre-call gate missing from the server's plugins is named at the open, 
   }
 });
 
+test("regression: the pre-call gate listed but not active is read as missing: named at the open in the server's words, and the session opens", async () => {
+  const builtins = [
+    { id: 'opencode.tool.shell', source: { type: 'builtin' }, state: { status: 'active' } },
+    { id: 'opencode.tool.edit', source: { type: 'builtin' }, state: { status: 'active' } },
+  ];
+  const failed = await started({
+    fake: {
+      plugins: [
+        ...builtins,
+        {
+          id: 'periscope.gate',
+          source: { type: 'sdk' },
+          state: { status: 'failed', error: 'the hook threw while loading' },
+        },
+      ],
+    },
+  });
+  try {
+    await until(() => opened(failed), 'the open');
+    assert.deepEqual(
+      failed.raised.map((one) => one.name),
+      ['gate-hook-missing'],
+      'a gate the server could not load was taken as loaded',
+    );
+    assert.match(
+      failed.raised[0]?.detail ?? '',
+      /pre-call gate is among the server's plugins but is not active/,
+    );
+    assert.match(failed.raised[0]?.detail ?? '', /the hook threw while loading/);
+  } finally {
+    await closed(failed);
+  }
+  // A gate listed with no state at all is not known to run either.
+  const unstated = await started({
+    fake: { plugins: [...builtins, { id: 'periscope.gate', source: { type: 'sdk' } }] },
+  });
+  try {
+    await until(() => opened(unstated), 'the open');
+    assert.deepEqual(
+      unstated.raised.map((one) => one.name),
+      ['gate-hook-missing'],
+    );
+  } finally {
+    await closed(unstated);
+  }
+  // Control: the gate listed active names nothing.
+  const active = await started({
+    fake: {
+      plugins: [...builtins, { id: 'periscope.gate', source: { type: 'sdk' }, state: { status: 'active' } }],
+    },
+  });
+  try {
+    await until(() => opened(active), 'the open');
+    assert.deepEqual(active.raised, []);
+  } finally {
+    await closed(active);
+  }
+});
+
 test('the close interrupts the run, ends the host process and its tree, keeps the database for a resume and removes the home', async () => {
   const run = await started();
   await until(() => opened(run), 'the open');

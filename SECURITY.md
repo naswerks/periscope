@@ -758,7 +758,9 @@ hello says so ([gate.md](docs/gate.md), the opencode gate). What holds, and what
 - **Proven before the first prompt.** The host reads the server back (the session's rules, every agent's,
   no saved approval, only the runtime's own plugins, the host's own pre-call gate and none it turns off,
   only the session's MCP servers, no configuration but its own, no model but the endpoint's). A server
-  that is not as the host created it refuses the open `opencode-gate-not-active`.
+  that is not as the host created it refuses the open `opencode-gate-not-active`. The pre-call gate is
+  read with the state the server states for it: only one listed `active` runs; one listed `failed`, or
+  with no state, is read as missing (below), and the session opens.
 - **A shell call is decided before it runs, whole.** opencode's `shell` tool asks only about the
   commands its own reading finds in a line, and a line it finds none in raises no request at all: on
   Windows, where the shell is PowerShell, an assignment through a provider path
@@ -773,7 +775,9 @@ hello says so ([gate.md](docs/gate.md), the opencode gate). What holds, and what
 - **What runs undecided is named.** A tool the model's provider runs itself is named `gate-unhooked-call`;
   a call the server began with no decision of the host's behind it, `gate-hook-missing`, whether it
   succeeded, failed, was interrupted or was still running at the close (the same name says, at the open,
-  that the host's pre-call gate is not among the server's plugins); rules that are no longer this host's, or an
+  that the host's pre-call gate is not among the server's plugins, or is listed and not active, and then
+  a shell line the runtime reads no command in runs with no decision of the host's, named when it
+  succeeds); rules that are no longer this host's, or an
   approval it never gave, `gate-mode-widened`; a plugin that is neither the runtime's own nor the host's
   gate, loaded after the open, `gate-foreign-extension`.
 - **Tools that cannot be decided are turned off.** Code Mode's `execute`, `question`, image generation,

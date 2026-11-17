@@ -863,7 +863,10 @@ every request they raise.
   for a plugin handed to `create`, `sdk`, both), and none turned off runs; the MCP servers are the session's; every
   configuration place it read is inside the session's home; and no model but the endpoint provider's is
   offered. Anything else refuses the open `opencode-gate-not-active`, naming what differed, and no prompt
-  is sent. A planted allow rule and a second provider are each refused on the pinned SDK.
+  is sent. A planted allow rule and a second provider are each refused on the pinned SDK. The pre-call
+  gate counts as there only when the server lists it and states it `active` (`opencodeGateNotActive`):
+  one it states `failed`, or lists with no state, has a hook that decides nothing, and is read as missing
+  (below). The pinned SDK's server states it `active` (`opencode-local.test.ts`).
 - **The tools turned off** (`OPENCODE_DENIED_TOOLS`, one list the rules, the read-back, the census of the
   tools a model is offered and the gate all read). Each is denied by the rules, so the runtime never offers
   it, and a request naming one is refused without asking anyone:
@@ -909,7 +912,8 @@ every request they raise.
     its turn is interrupted, and at the close if it is still running. A success for a call this process
     never saw begin is one an earlier process ran, which the server states again to a resumed session,
     and is not named. At the open the same name says this host's pre-call gate is missing from the
-    server's plugins; then no call is known to have begun, and a call is named on its success alone, as
+    server's plugins, or is listed and not active (the server's own words for a failure in the detail),
+    and the session opens; then no call is known to have begun, and a call is named on its success alone, as
     a shell line that names no command would be. One call the pinned SDK runs this way with the gate in
     place: `opencode_list_mcp_resources` asks about each MCP server it would list (the SDK's own
     source), so in a session with no server attached it asks about none, lists nothing, and is named
