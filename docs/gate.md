@@ -92,7 +92,11 @@ an asynchronous local policy would be a second place a decision can hang.
 
 What refuses locally, and only locally: a write that lands outside every root the session may write in
 (`path-escapes-root`, naming the roots; below), a read, a write or a search that reaches the protected set
-(`credential-path-denied`), and a git invocation whose verb is not on the allow-list. Reads are not
+(`credential-path-denied`), and a git invocation whose verb is not on the allow-list. A write or read
+tool's input is checked at every path field it carries (`file_path`, `notebook_path`, `path`; `pathsFromToolInput`), each on its
+own and the first refusal the answer, because a tool opens the field its own schema reads and the
+pinned Copilot runtime was measured running a call that carried another beside it
+(`copilot-local.test.ts`); an input with none is refused `path-input-missing`. Reads are not
 jailed: a read goes anywhere the host's OS user can read except the protected set. A search (`Grep`,
 `Glob`) is refused when its root (`path`, else the workspace) is at or beneath a protected path and
 also when a protected path sits beneath its root. A path a read, a write, a patch or a search names is

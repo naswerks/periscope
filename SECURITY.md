@@ -164,7 +164,11 @@ gets no local opinion, so the decision escalates to your controller. That is fai
 Within the families the credential-path denial is scoped, and the scope is what to review. Writes
 are jailed to the session's workspace. Reads are not jailed: a read goes anywhere this host's OS user
 can read, the agent's own tool output and installed packages included, and the protected set is what
-stops it. A search is refused when its root (`path`, else the workspace) is at or beneath a protected
+stops it. A write or read tool's input is checked at every path field it carries (`file_path`,
+`notebook_path`, `path`), each on its own, since tools differ in the one they open (Claude's
+`file_path`, Copilot's and pi's `path`) and a runtime runs a call that carries the others beside it:
+measured on the pinned Copilot runtime, a `create` whose `path` was outside the roots and whose
+`file_path` was inside wrote the file outside, before every field was checked. A search is refused when its root (`path`, else the workspace) is at or beneath a protected
 path, and also when a protected path sits beneath its root, because the search would read it. Each
 path a tool names is placed first, where the operating system puts it for a tool running in the call's
 directory, so the file the gate judges is the file the tool opens: on Windows a path with one leading

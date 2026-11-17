@@ -624,3 +624,67 @@ test('a signal with no removeEventListener does not turn a settled decision into
   const output = await handler(preToolUse(), 'toolu_1', { signal: crippled });
   assert.equal(denies(output), true);
 });
+
+// ---------------------------------------------------------------------------
+// Every path field an input carries
+// ---------------------------------------------------------------------------
+
+test("regression: every path field a write or read tool's input carries is checked, so a field the tool does not read never hides the one it opens", () => {
+  const families = { copilot: COPILOT_TOOL_FAMILIES, pi: PI_TOOL_FAMILIES };
+  const gateOf = (toolFamilies: (typeof families)[keyof typeof families]) =>
+    localGate({
+      workspaceRoot: WORKSPACE,
+      resolve: fakeResolve,
+      protectedPaths: [CREDENTIALS],
+      toolFamilies,
+    });
+  const copilot = gateOf(families.copilot);
+  const pi = gateOf(families.pi);
+  const outside = 'C:/Users/agent/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/x.cmd';
+
+  // Copilot's and pi's file tools take `path`; a `file_path` beside it inside the workspace hid it.
+  const write = copilot(
+    request({ toolName: 'create', toolInput: { path: outside, file_text: 'x', file_path: 'C:/repo/x.txt' } }),
+  );
+  assert.equal(write?.reason, 'path-escapes-root', 'a write outside the roots went on behind a decoy field');
+  const read = copilot(
+    request({
+      toolName: 'view',
+      toolInput: { path: `${CREDENTIALS}/.credentials.json`, file_path: 'C:/repo/README.md' },
+    }),
+  );
+  assert.equal(read?.reason, 'credential-path-denied', 'a protected read went on behind a decoy field');
+  const piWrite = pi(
+    request({
+      toolName: 'write',
+      toolInput: { path: outside, content: 'x', notebook_path: 'C:/repo/n.ipynb' },
+    }),
+  );
+  assert.equal(piWrite?.reason, 'path-escapes-root');
+  // The same on the Claude path, the decoy the other way round.
+  const claude = gate(
+    request({ toolName: 'Write', toolInput: { file_path: 'C:/repo/a.txt', path: outside, content: 'x' } }),
+  );
+  assert.equal(claude?.reason, 'path-escapes-root');
+
+  // Controls: every field inside the workspace, and one field alone, are as they were.
+  assert.equal(
+    copilot(
+      request({ toolName: 'create', toolInput: { path: 'C:/repo/a.txt', file_path: 'C:/repo/b.txt' } }),
+    ),
+    null,
+  );
+  assert.equal(
+    copilot(request({ toolName: 'create', toolInput: { path: 'C:/repo/a.txt', file_text: 'x' } })),
+    null,
+  );
+  assert.equal(
+    copilot(request({ toolName: 'create', toolInput: { path: outside, file_text: 'x' } }))?.reason,
+    'path-escapes-root',
+  );
+  assert.equal(copilot(request({ toolName: 'view', toolInput: { path: 'C:/Users/agent/notes.txt' } })), null);
+  assert.equal(
+    copilot(request({ toolName: 'create', toolInput: { file_text: 'x' } }))?.reason,
+    'path-input-missing',
+  );
+});

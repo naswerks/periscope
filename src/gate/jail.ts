@@ -104,7 +104,11 @@ export interface JailOptions {
   readonly placesRelative?: boolean;
 }
 
-/** The tool-input fields that carry a path, in precedence order. First readable one wins. */
+/**
+ * The tool-input fields that carry a path, in precedence order. `pathFromToolInput` takes the first one
+ * present; the local gate checks every one present (`pathsFromToolInput`), since tools differ in which
+ * one they open (Claude's `file_path`, Copilot's and pi's `path`).
+ */
 const PATH_FIELDS = ['file_path', 'notebook_path', 'path'] as const;
 
 /**
@@ -121,6 +125,22 @@ export function pathFromToolInput(toolInput: unknown): string | null {
     if (typeof value === 'string' && value.trim() !== '') return value;
   }
   return null;
+}
+
+/**
+ * Every path this tool call's input names in a path field, in precedence order; empty when it names none.
+ * A tool opens the field its own schema reads and an input may carry the others beside it, so each one is
+ * checked, and a field the tool does not read can never stand in for the one it opens.
+ */
+export function pathsFromToolInput(toolInput: unknown): string[] {
+  if (typeof toolInput !== 'object' || toolInput === null) return [];
+  const record = toolInput as Record<string, unknown>;
+  const paths: string[] = [];
+  for (const field of PATH_FIELDS) {
+    const value = record[field];
+    if (typeof value === 'string' && value.trim() !== '') paths.push(value);
+  }
+  return paths;
 }
 
 /** The command this shell call is about, or null when the input carries none. */

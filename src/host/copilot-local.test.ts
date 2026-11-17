@@ -767,6 +767,62 @@ test(
 );
 
 test(
+  "the runtime's file tools run a call whose input carries a path field beside the one they open, and the gate checks both: a write outside the roots behind a `file_path` in the workspace does not land, and a protected file is not read behind one; no model",
+  { skip, timeout: 120_000 },
+  async () => {
+    const dirs = await scratch();
+    const secret = join(dirs.profile, 'held', 'token.txt');
+    mkdirSync(dirname(secret), { recursive: true });
+    writeFileSync(secret, 'kept-from-the-agent');
+    const gate = localGate({
+      workspaceRoot: dirs.work,
+      resolve: nodePathResolver,
+      protectedPaths: [dirname(secret)],
+      home: dirs.profile,
+      toolFamilies: COPILOT_TOOL_FAMILIES,
+      readsShellDialect: true,
+      resolvesAgainstCallCwd: true,
+      resolvesWritesAgainstCallCwd: true,
+    });
+    const real = await openReal(dirs, { localGate: gate });
+    try {
+      const outside = join(dirs.profile, 'outside-decoy.txt');
+      const write = await real.run(
+        'create',
+        { path: outside, file_text: 'x', file_path: join(dirs.work, 'decoy.txt') },
+        'pin-decoy-write',
+      );
+      const read = await real.run(
+        'view',
+        { path: secret, file_path: join(dirs.work, 'readme.txt') },
+        'pin-decoy-view',
+      );
+      const decided = real.requests.map((one) => [one.toolUseId, one.toolInput]);
+      process.stdout.write(
+        `${JSON.stringify({ receipt: 'decoy path field', write, landed: existsSync(outside), read, decided })}\n`,
+      );
+      // Each call reached the hook and its request with the extra field in place: the runtime took the input.
+      assert.deepEqual(routeOf(real, 'pin-decoy-write'), { hooked: true, kinds: ['hook'] });
+      assert.deepEqual(routeOf(real, 'pin-decoy-view'), { hooked: true, kinds: ['hook'] });
+      assert.equal(
+        write.resultType,
+        'denied',
+        `a write outside the roots ran behind a decoy field: ${write.text}`,
+      );
+      assert.match(write.text, /path-escapes-root/);
+      assert.equal(existsSync(outside), false, 'a write outside the roots landed behind a decoy field');
+      assert.equal(read.resultType, 'denied', `a protected file was read behind a decoy field: ${read.text}`);
+      assert.match(read.text, /credential-path-denied/);
+      assert.doesNotMatch(read.text, /kept-from-the-agent/);
+      assert.deepEqual(decided, [], 'a call the local gate refuses reached the controller');
+    } finally {
+      await real.close();
+      await removeScratch(dirs);
+    }
+  },
+);
+
+test(
   "a sub-agent's call asks this host through the hook, as the session's own calls do; driven by a stub model, not a model",
   { skip, timeout: 180_000 },
   async () => {

@@ -18,6 +18,12 @@ removed export. The package version and the wire protocol version are separate n
   id and none, or more than one decided differently, fits it) is refused `gate-hook-missing` and nobody
   is asked. On the pinned runtime every request carries its own hook's tool and arguments, so no call
   it makes meets the refusal.
+- Fixed: a write or read tool's input is checked at every path field it carries (`file_path`,
+  `notebook_path`, `path`), not at the first one alone. Copilot's and pi's file tools open `path`, and a
+  `file_path` beside it in the workspace stood in for it: measured on the pinned Copilot runtime, a
+  `create` wrote a file outside the session's roots and a `view` read a protected file that way. Each
+  field is now checked on its own and the first refusal is the answer. A call naming one path is
+  decided as before. `pathFromToolInput` is unchanged.
 
 ## [1.11.0] - 2026-11-15
 
