@@ -175,7 +175,13 @@ directory, so the file the gate judges is the file the tool opens: on Windows a 
 separator starts at the drive the call runs on and `C:name` on that drive is beneath the call's
 directory, and on every system `~` is the home directory. A drive-relative path on another drive and
 another user's home (`~name/...`) cannot be placed and are refused `path-unplaceable`. The
-shell scan matches a protected path written literally, through a home-directory form (`~`, `$HOME`,
+shell scan matches a protected path written literally wherever it stands on the line: it reads the line
+as written, with no `.` or `..` resolved, so a `..` elsewhere on the line (`cat ~/.ssh/id_rsa; ls
+/../..`) never hides one; it reads each word with that word's own `.` and `..` resolved, so a path that
+climbs to a protected one (`~/work/../.ssh/id_rsa`) is matched and a `..` in another word cannot undo
+it; and it reads the whole line resolved as one path, as it always has. A word that names a protected
+path and climbs out of it (`cat ~/.ssh/../work/x`) names the path literally, and is refused. It matches
+through a home-directory form (`~`, `$HOME`,
 `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}` spellings, `%USERPROFILE%`),
 or through a variable of the session's spawn environment whose value is one absolute path, spelled
 `$NAME`, `${NAME}`, `$env:NAME`, `${env:NAME}` or `%NAME%`. Those variables are the ones each runtime

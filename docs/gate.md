@@ -128,7 +128,15 @@ a temp folder handed over in short form is written as before. A rooted path whos
 letter (`/c/Users/x`, `/cygdrive/c/Users/x`, `/proc/cygdrive/c/Users/x`) is compared with the protected
 set in both its readings under Windows rules: the folder Windows reads, and the drive that letter names,
 which is how a POSIX layer on Windows and the agent CLI's own tools read it; the write limits keep
-Windows' reading. The shell scan matches a protected path written
+Windows' reading. The shell scan reads the line three ways, and a protected path in any of them refuses:
+as written, with no `.` or `..` resolved, so a path written literally is found wherever it stands and a
+`..` elsewhere on the line (`cat ~/.ssh/id_rsa; ls /../..`) cannot hide it; word by word, each word's `.`
+and `..` resolved within it alone (a word ends at a blank or a separator, operator or expansion mark
+outside a quote), so a path that climbs to a protected one (`~/work/../.ssh/id_rsa`) is found and a `..`
+in another word cannot reach it; and as one path resolved whole, so no line refused that way before is
+let through. One command admitted before the three readings is refused now: a word that names a
+protected path and then climbs out of it (`cat ~/.ssh/../work/x`), which names the path literally. The
+shell scan matches a protected path written
 literally, or, for one on a drive, from the root as a POSIX shell on Windows writes it (`/c/...`,
 `/cygdrive/c/...`, `/mnt/c/...`), through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}`
 spellings or `%USERPROFILE%`, or through a variable of the session's spawn environment whose value is

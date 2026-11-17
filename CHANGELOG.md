@@ -24,6 +24,14 @@ removed export. The package version and the wire protocol version are separate n
   `create` wrote a file outside the session's roots and a `view` read a protected file that way. Each
   field is now checked on its own and the first refusal is the answer. A call naming one path is
   decided as before. `pathFromToolInput` is unchanged.
+- Fixed: a `..` elsewhere on a shell line no longer hides a protected path from the shell scan. The scan
+  resolved the whole line as one path, so `cat ~/.ssh/id_rsa; ls /../..` climbed back over the protected
+  path's own segments and was not refused, on every runtime. The line is now read three ways, and a
+  protected path in any of them refuses: as written with no `.` or `..` resolved; word by word, each
+  word's `..` resolved within it, so a path that climbs to a protected one is still found; and whole, as
+  before, so nothing refused before is let through. One command admitted before is refused now: a word
+  that names a protected path and climbs out of it (`cat ~/.ssh/../work/x`), which names the path
+  literally.
 
 ## [1.11.0] - 2026-11-15
 
