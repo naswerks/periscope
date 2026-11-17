@@ -34,10 +34,14 @@ and a pi session that finds code it did not load names it. And it can offer GitH
 Copilot SDK its operator installs and a home of the runner's own
 ([configuration](docs/configuration.md#copilot)); Copilot's pre-tool hook asks for every call and the
 gate decides each request, at tier `intercepted-with-residual`, with the runtime read back and its route
-proven before the first prompt. And it can offer opencode, through the opencode SDK its operator installs,
-hosting each session's server in a process of its own with no listener, and a home of the runner's own
-([configuration](docs/configuration.md#opencode)); every action a session takes asks and the gate decides
-each request, at tier `intercepted-with-residual`, with the server read back before the first prompt.
+proven before the first prompt, and what can still run undecided (a tool the model's provider runs
+itself, the runtime's own read of a finished background command's output) is named. And it can offer
+opencode, through the opencode SDK its operator installs, hosting each session's server in a process of
+its own with no listener, and a home of the runner's own
+([configuration](docs/configuration.md#opencode)); every action a session takes asks, one plugin of
+periscope's own holds every shell line until it is decided, and the gate decides each request, at tier
+`intercepted-with-residual`, with the server read back before the first prompt, and what can still run
+undecided is named.
 opencode needs Node 24 or later.
 
 ## Run a host
@@ -68,7 +72,7 @@ PERISCOPE_CONTROLLER_URL and PERISCOPE_DECISION_URL written to the config file -
 The fourth starts the host, in the foreground, until you stop it:
 
 ```
-[host] periscope 1.11.0 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
+[host] periscope 1.11.1 · host ph-8cb226ae… (paired; configured build-box) · credential paired · workspace none · config file ~/.periscope/config.json
 [credential] paired as ph-8cb226ae… - the paired credential is presented on every dial
 [agent] Claude Code 2.1.325 (agent SDK 0.3.325), 12 model(s) in the hello
 [link] idle -> connecting (start_requested)

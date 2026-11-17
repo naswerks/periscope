@@ -732,7 +732,9 @@ using`), which Node 22 cannot parse, so on Node 22 the SDK cannot load at all. T
 - **The open.** Every session is created with this host's permission rules: every action asks, and each
   tool this host turns off is denied. Once the server's plugins are active, before any prompt, the host
   reads it back: the session's rules are exactly those; every agent's rules end with them; no approval is
-  saved; every plugin is the runtime's own and none this host turns off runs; the MCP servers are the
+  saved; every plugin is the runtime's own or this host's pre-call gate (`periscope.gate`), and none this
+  host turns off runs; the gate is stated `active` (one stated `failed`, or with no state, is named
+  `gate-hook-missing` and the session opens); the MCP servers are the
   session's; no configuration but this host's is loaded; and no model but the endpoint's is offered.
   Anything else refuses the open `opencode-gate-not-active`, naming what differed.
 - **Its control tier is `intercepted-with-residual`.** Every permission request the server raises, the

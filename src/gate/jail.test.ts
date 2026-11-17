@@ -8,6 +8,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import * as fc from 'fast-check';
+
+import { normalizePath } from '../core/paths.js';
+import { propertyRuns } from '../test-support/property.js';
+
 import type { JailOptions } from './jail.js';
 import { checkPath, checkShellForProtectedPaths, commandFromToolInput, pathFromToolInput } from './jail.js';
 
@@ -329,6 +334,123 @@ test('control: a variable naming no protected path, a list, and a value that is 
   assert.equal(shellReason('echo $PATH'), null);
   assert.equal(shellReason('echo %MODE%'), null);
   assert.equal(shellReason('cat "$NOT_SET/.credentials.json"'), null);
+});
+
+// ---------------------------------------------------------------------------
+// A `..` elsewhere on the line
+// ---------------------------------------------------------------------------
+
+const TOKEN_CACHE = 'C:/Users/agent/.claude/.credentials.json';
+
+test('regression: a `..` anywhere else on the line never hides a protected path written literally', () => {
+  for (const command of [
+    `cat ${TOKEN_CACHE}; ls /../..`,
+    `cat ${TOKEN_CACHE};ls/../..`,
+    `cat ${TOKEN_CACHE}\${IFS}/../..`,
+    `cat ${TOKEN_CACHE}/../..`,
+    'type C:\\Users\\agent\\.claude\\.credentials.json & dir \\..\\..',
+    `Get-Content ${TOKEN_CACHE},/../..`,
+  ]) {
+    assert.equal(shellReason(command, jail()), 'credential-path-denied', command);
+  }
+  // Through the home form, as a model writes it.
+  const home = jail({ home: 'C:/Users/agent' });
+  assert.equal(
+    checkShellForProtectedPaths('cat ~/.claude/.credentials.json; ls /../..', home)?.reason,
+    'credential-path-denied',
+  );
+});
+
+test('regression: a path that climbs to a protected one is read within its own word, so a `..` in another word does not undo it', () => {
+  for (const command of [
+    'cat C:/Users/agent/work/../.claude/.credentials.json; ls /../..',
+    'cat "C:/Users/agent/my work/../.claude/.credentials.json"; ls /../..',
+    'cat C:/Users/agent/work/./../.claude/.credentials.json && cd /../..',
+  ]) {
+    assert.equal(shellReason(command, jail()), 'credential-path-denied', command);
+  }
+});
+
+test('control: a `..` on a line that names no protected path, and a climb that ends outside the protected set, have no credential opinion', () => {
+  assert.equal(shellReason('ls /../..', jail()), null);
+  assert.equal(shellReason('cat C:/Users/agent/work/x; ls /../..', jail()), null);
+  assert.equal(shellReason('cd ../.. && npm test', jail()), null);
+  assert.equal(shellReason('cat C:/Users/agent/work/../notes.txt', jail()), null);
+});
+
+test('a command that names a protected path and climbs out of it in the same word refuses: the protected path is written in it literally', () => {
+  assert.equal(shellReason('cat C:/Users/agent/.claude/../work/x', jail()), 'credential-path-denied');
+});
+
+/** What the scan read before each word was read on its own: the whole line resolved as one path. */
+const lineReadAsOnePath = (command: string, options: JailOptions): boolean => {
+  const haystack = normalizePath(command).toLowerCase();
+  return options.protectedPaths.some((path) => {
+    const needle = normalizePath(fakeResolve(path)).toLowerCase();
+    const drive = /^([a-z]):\/(.*)$/.exec(needle);
+    const spellings =
+      drive === null
+        ? [needle]
+        : [needle, ...['/', '/cygdrive/', '/mnt/'].map((root) => `${root}${drive[1]}/${drive[2]}`)];
+    return spellings.some((spelling) => haystack.includes(spelling));
+  });
+};
+
+const PIECES = [
+  'cat ',
+  'ls ',
+  ' ',
+  ';',
+  '&&',
+  '|',
+  ',',
+  '"',
+  "'",
+  '/',
+  '\\',
+  '.',
+  '..',
+  '/..',
+  '/../..',
+  '${IFS}',
+  'x',
+  'work',
+  'C:/Users/agent',
+  'C:/Users/agent/.claude',
+  '.claude',
+  '.credentials.json',
+  'C:/Users/agent/.claude.json',
+  '/c/Users/agent/.claude',
+];
+const lineArb = fc.array(fc.constantFrom(...PIECES), { maxLength: 14 }).map((pieces) => pieces.join(''));
+
+test('control: every line the scan refused when it read the whole line as one path it still refuses', () => {
+  const options = jail();
+  // The one shape only that reading finds: a climb across a blank outside any quote.
+  const acrossABlank = 'cat C:/Users/agent/x y/../.claude/.credentials.json';
+  assert.equal(lineReadAsOnePath(acrossABlank, options), true);
+  assert.equal(checkShellForProtectedPaths(acrossABlank, options)?.reason, 'credential-path-denied');
+  let refusedBefore = 0;
+  fc.assert(
+    fc.property(lineArb, (command) => {
+      if (!lineReadAsOnePath(command, options)) return;
+      refusedBefore += 1;
+      assert.equal(checkShellForProtectedPaths(command, options)?.reason, 'credential-path-denied', command);
+    }),
+    propertyRuns(2_000),
+  );
+  assert.ok(refusedBefore > 50, `the generated lines reached the old refusal ${refusedBefore} times`);
+});
+
+test('a protected path written literally refuses whatever surrounds it', () => {
+  const options = jail();
+  fc.assert(
+    fc.property(lineArb, lineArb, (before, after) => {
+      const command = `${before} ${TOKEN_CACHE}${after}`;
+      assert.equal(checkShellForProtectedPaths(command, options)?.reason, 'credential-path-denied', command);
+    }),
+    propertyRuns(2_000),
+  );
 });
 
 // Guards the selector: a jail that refused everything would satisfy every refusal assertion above.

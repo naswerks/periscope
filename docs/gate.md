@@ -92,7 +92,11 @@ an asynchronous local policy would be a second place a decision can hang.
 
 What refuses locally, and only locally: a write that lands outside every root the session may write in
 (`path-escapes-root`, naming the roots; below), a read, a write or a search that reaches the protected set
-(`credential-path-denied`), and a git invocation whose verb is not on the allow-list. Reads are not
+(`credential-path-denied`), and a git invocation whose verb is not on the allow-list. A write or read
+tool's input is checked at every path field it carries (`file_path`, `notebook_path`, `path`; `pathsFromToolInput`), each on its
+own and the first refusal the answer, because a tool opens the field its own schema reads and the
+pinned Copilot runtime was measured running a call that carried another beside it
+(`copilot-local.test.ts`); an input with none is refused `path-input-missing`. Reads are not
 jailed: a read goes anywhere the host's OS user can read except the protected set. A search (`Grep`,
 `Glob`) is refused when its root (`path`, else the workspace) is at or beneath a protected path and
 also when a protected path sits beneath its root. A path a read, a write, a patch or a search names is
@@ -124,7 +128,15 @@ a temp folder handed over in short form is written as before. A rooted path whos
 letter (`/c/Users/x`, `/cygdrive/c/Users/x`, `/proc/cygdrive/c/Users/x`) is compared with the protected
 set in both its readings under Windows rules: the folder Windows reads, and the drive that letter names,
 which is how a POSIX layer on Windows and the agent CLI's own tools read it; the write limits keep
-Windows' reading. The shell scan matches a protected path written
+Windows' reading. The shell scan reads the line three ways, and a protected path in any of them refuses:
+as written, with no `.` or `..` resolved, so a path written literally is found wherever it stands and a
+`..` elsewhere on the line (`cat ~/.ssh/id_rsa; ls /../..`) cannot hide it; word by word, each word's `.`
+and `..` resolved within it alone (a word ends at a blank or a separator, operator or expansion mark
+outside a quote), so a path that climbs to a protected one (`~/work/../.ssh/id_rsa`) is found and a `..`
+in another word cannot reach it; and as one path resolved whole, so no line refused that way before is
+let through. One command admitted before the three readings is refused now: a word that names a
+protected path and then climbs out of it (`cat ~/.ssh/../work/x`), which names the path literally. The
+shell scan matches a protected path written
 literally, or, for one on a drive, from the root as a POSIX shell on Windows writes it (`/c/...`,
 `/cygdrive/c/...`, `/mnt/c/...`), through `~`, `$HOME`, `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}`
 spellings or `%USERPROFILE%`, or through a variable of the session's spawn environment whose value is
@@ -135,7 +147,9 @@ knows before anything spawns, the environment the registry composes, and the var
 process adds as it starts (`LocalGateOptions.spawnEnv`, internal). Outside the scan: a path a command
 builds at run time, a variable the command or the runtime sets itself (pi's `PI_SESSION_FILE`), a
 variable read through a command (`$(printenv NAME)`) or an expansion operator (`${NAME:-...}`), a
-list variable such as `PATH`, and a recursive search of an ancestor. A boundary-crossing shell shape
+list variable such as `PATH`, a recursive search of an ancestor, a path a shell completes only as it
+runs the command (a wildcard, a brace list, a backslash a POSIX shell removes, a `$'...'` quote), and a
+relative path after a change of directory on the same line (`cd ~ && cat .ssh/id_rsa`). A boundary-crossing shell shape
 (`shell-boundary-command`: a push, a force, a remote change, a branch deletion, a hard reset, a merge
 with `gh pr merge`, the completion of an Azure DevOps pull request with `az repos pr update --status
 completed` or `--auto-complete`) is read from the parsed invocation — its program, its subcommand and its
@@ -599,12 +613,25 @@ the one this host decides.
   call runs in, the sub-agent that made it, `toolKind`, `shellDialect`, through the same call decision as
   a Claude call (the local gate, then the decider, with the session's deadline and hold). The input is
   the one the hook announced, which is the call's own. On the pinned runtime the request carried the
-  same arguments by value for every tool measured (a shell line, `view`, `create`, `apply_patch`,
-  `task`, a skill, an MCP tool, a sub-agent's call); a request that carries others is named
-  `gate-hook-missing`, and the call is still decided, on the hook's. The answer is
+  same tool name and the same arguments by value for every tool measured (a shell line, `view`, `create`,
+  `apply_patch`, `task`, a skill, an MCP tool, a sub-agent's call); a request that carries other arguments
+  than its one hook is named `gate-hook-missing`, and the call is still decided, on the hook's. The host's
+  own gate then reads both, the hook's arguments and the request's, and a refusal of either refuses the
+  call: which of the two the runtime runs when they differ was not measured. The answer is
   one call approved, or refused with the outcome's words, which the model reads. Nothing broader is ever
   sent: no approval for the session, for a location or for good. An allow that rewrites the input is
   refused: the rewrite would live only in the fail-open hook (`canRewriteInput: false`).
+- **A call is decided on its own hook, never another's.** The request carries no session, and a provider
+  may hand two calls running at once one id (a sub-agent's and the session's own), so every hook announced
+  under an id is kept until a request is tied to it, and a request is tied to the one hook whose tool and
+  arguments it carries. Two calls under one id are each decided on their own hook, and their answers are
+  kept apart by the thread that made each (a sub-agent's id, as its hook and its events state it). A
+  request is refused `gate-hook-missing`, and nobody is asked, when it cannot be tied to one hook: no hook
+  announced its id; the one hook under its id named another tool; or several hooks under its id
+  announced calls and none of them, or more than one that would be decided differently (another
+  directory, another thread), fits it. The hooks under the id are left for their own requests. No call the
+  pinned runtime makes meets any of these: each request it raised carried its own hook's name and
+  arguments.
 - **What the model is told of the machine's folders** (`copilotSystemMessage`,
   `src/host/copilot-process.ts`). Its working directory, and nothing of the runner's home. The session's
   system message is the runtime's, with two of its sections named:
@@ -684,12 +711,13 @@ the one this host decides.
   protected path it is.
 - **What the reused names mean on Copilot.** Each is raised once per call, request or mode:
   - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the
-    hook did not ask; the request is refused, never decided), a `hook` request whose call no hook
-    announced, a `hook` request whose arguments are not the ones its hook announced (decided on the
-    hook's), a pre-tool hook the runtime reports as failed (after which it lets the call proceed), or
-    a call that finished with no decision of this host's behind it: none at all, one still awaited, or
-    a refusal the call ran against. Each call's answer is kept by its call id until
-    `tool.execution_complete` and forgotten then, so an id a provider hands out again is a new call; only
+    hook did not ask; the request is refused, never decided), a `hook` request that cannot be tied to
+    one hook (above; refused), a `hook` request whose arguments are not the ones its one hook announced
+    (decided on the hook's, with this host's own gate reading both), a pre-tool hook the runtime reports
+    as failed (after which it lets the call
+    proceed), or a call that finished with no decision of this host's behind it: none at all, one still
+    awaited, or a refusal the call ran against. Each call's answer is kept by its thread and its call id
+    until `tool.execution_complete` and forgotten then, so an id a provider hands out again is a new call; only
     the probe id this gate minted is exempt, never an id that merely starts the same. The detail names
     the call's tool, which the runtime states at the call's start and not at its end. One such call is
     the runtime's own: when a command started in the shell's background mode ends
@@ -840,7 +868,10 @@ every request they raise.
   for a plugin handed to `create`, `sdk`, both), and none turned off runs; the MCP servers are the session's; every
   configuration place it read is inside the session's home; and no model but the endpoint provider's is
   offered. Anything else refuses the open `opencode-gate-not-active`, naming what differed, and no prompt
-  is sent. A planted allow rule and a second provider are each refused on the pinned SDK.
+  is sent. A planted allow rule and a second provider are each refused on the pinned SDK. The pre-call
+  gate counts as there only when the server lists it and states it `active` (`opencodeGateNotActive`):
+  one it states `failed`, or lists with no state, has a hook that decides nothing, and is read as missing
+  (below). The pinned SDK's server states it `active` (`opencode-local.test.ts`).
 - **The tools turned off** (`OPENCODE_DENIED_TOOLS`, one list the rules, the read-back, the census of the
   tools a model is offered and the gate all read). Each is denied by the rules, so the runtime never offers
   it, and a request naming one is refused without asking anyone:
@@ -886,7 +917,8 @@ every request they raise.
     its turn is interrupted, and at the close if it is still running. A success for a call this process
     never saw begin is one an earlier process ran, which the server states again to a resumed session,
     and is not named. At the open the same name says this host's pre-call gate is missing from the
-    server's plugins; then no call is known to have begun, and a call is named on its success alone, as
+    server's plugins, or is listed and not active (the server's own words for a failure in the detail),
+    and the session opens; then no call is known to have begun, and a call is named on its success alone, as
     a shell line that names no command would be. One call the pinned SDK runs this way with the gate in
     place: `opencode_list_mcp_resources` asks about each MCP server it would list (the SDK's own
     source), so in a session with no server attached it asks about none, lists nothing, and is named

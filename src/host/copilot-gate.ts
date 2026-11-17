@@ -19,15 +19,23 @@
  * (`canRewriteInput: false`). A call of a tool this host turns off (`COPILOT_EXCLUDED_TOOLS`) is refused
  * here without asking anyone.
  *
+ * A `hook` request carries no session, so it is tied to the hook that raised it by the call id, the tool's
+ * name and the arguments. Every hook announced under an id is kept until a request is tied to it: two calls
+ * a provider gives one id (a sub-agent's and the session's own, running at once) are each decided on their
+ * own hook. A request is refused, and nobody is asked, when no hook announced its id, when the one hook
+ * under its id named another tool, or when several hooks under its id announced calls and none, or more
+ * than one that differ, fits it.
+ *
  * What it names, each a degrade raised once per (name, key):
  * - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the hook
- *   did not ask; the request is refused, never decided), a `hook` request no pre-tool hook announced, a
- *   `hook` request whose arguments are not the ones its hook announced (the call is decided on the hook's,
- *   which are the call's own), a
+ *   did not ask; the request is refused, never decided), a `hook` request that cannot be tied to one hook
+ *   (above; refused), a `hook` request whose arguments are not the ones its one hook announced (the call is
+ *   decided on the hook's, and this host's own gate reads the request's as well, so a refusal of either
+ *   reading refuses the call), a
  *   pre-tool hook the runtime reports as failed, or a call that finished with no decision of this host's
  *   behind it: none at all, one still being awaited, or a refusal the call ran against. Each call's answer
- *   is kept until the call finishes and forgotten then, so a provider that hands out the same call id
- *   again starts with no answer;
+ *   is kept by its thread (the session's own, or a sub-agent's) and its id until the call finishes and
+ *   forgotten then, so a provider that hands out the same call id again starts with no answer;
  * - `gate-hook-foreign`: a hook this host did not install decided a request (`resolvedByHook`), or a
  *   machine-wide policy hook was found when the session opened;
  * - `gate-unhooked-call`: a provider-hosted tool ran (`assistant.server_tool_progress`), which no hook sees;
@@ -92,8 +100,10 @@ const COPILOT_SHELL_READERS: readonly string[] = ['read_powershell', 'read_bash'
 /** The prefix of the call ids this host mints for its own probe call at the open. */
 export const COPILOT_PROBE_ID_PREFIX = 'periscope-route-probe-';
 
-/** How many calls' hook inputs one session keeps while their requests are outstanding. */
+/** How many call ids one session keeps hook inputs for while their requests are outstanding. */
 const MAX_PENDING_HOOKS = 1024;
+/** How many calls one call id keeps hook inputs for: a request matching none of them is refused. */
+const MAX_HOOKS_PER_ID = 16;
 /** How many calls' answers one session keeps while the calls have not finished. */
 const MAX_DECIDED_IDS = 8192;
 /**
@@ -227,12 +237,87 @@ export interface CopilotSessionGateOptions {
 }
 
 interface HookedCall {
+  /** The runtime session the hook fired in: a sub-agent's call fires in the sub-agent's own. */
+  readonly sessionId: string;
   readonly toolName: string;
   /** The arguments the hook announced the call with: what the runtime said it would run. */
   readonly toolArgs: unknown;
   readonly workingDirectory: string;
   readonly agentId: string | null;
   readonly agentType: string | null;
+}
+
+/** Whether two hooks announced the same call: the same session, thread, tool, arguments and directory. */
+function sameAnnouncement(one: HookedCall, other: HookedCall): boolean {
+  return (
+    one.sessionId === other.sessionId &&
+    one.agentId === other.agentId &&
+    one.agentType === other.agentType &&
+    one.toolName === other.toolName &&
+    one.workingDirectory === other.workingDirectory &&
+    isDeepStrictEqual(one.toolArgs, other.toolArgs)
+  );
+}
+
+/** Whether two hooks would be decided alike: the same tool, arguments, directory and thread. */
+function decidedAlike(one: HookedCall, other: HookedCall): boolean {
+  return (
+    one.agentId === other.agentId &&
+    one.agentType === other.agentType &&
+    one.toolName === other.toolName &&
+    one.workingDirectory === other.workingDirectory &&
+    isDeepStrictEqual(one.toolArgs, other.toolArgs)
+  );
+}
+
+/** Whether a request fits a hook: the same tool, and the same arguments where both carry them. */
+function fits(request: CopilotPermissionRequest, call: HookedCall): boolean {
+  if (named(request.toolName) && request.toolName !== call.toolName) return false;
+  return (
+    request.toolArgs === undefined ||
+    call.toolArgs === undefined ||
+    isDeepStrictEqual(call.toolArgs, request.toolArgs)
+  );
+}
+
+/** The key a call's answer and start are kept by: its thread (a sub-agent's id, or none) and its id. */
+function callKey(agentId: string | null | undefined, id: string): string {
+  return `${agentId ?? ''}\u0000${id}`;
+}
+
+/** How a request was tied to the hooks under its id: to one, or to none, with why. */
+type Tie = { readonly call: HookedCall; readonly argumentsDiffer: boolean } | { readonly refused: string };
+
+/**
+ * The one hook a `hook` request is tied to among those announced under its id, or why there is none: no
+ * hook at all, the one hook under the id naming another tool, or several hooks none of which fits the
+ * request, or more than one of which fits it and differs in what the decision reads. One hook of the same
+ * tool whose arguments differ is the call's own: it is decided on the hook's and named, and this host's own
+ * gate reads the request's arguments as well as the hook's (`bothReadings`).
+ */
+function tie(request: CopilotPermissionRequest, id: string, calls: readonly HookedCall[]): Tie {
+  const fitting = calls.filter((call) => fits(request, call));
+  const first = fitting[0];
+  if (first !== undefined) {
+    if (fitting.every((call) => decidedAlike(call, first))) return { call: first, argumentsDiffer: false };
+    return {
+      refused: `Copilot asked about call ${id}, and more than one call announced under it fits the request; refused rather than decided on either`,
+    };
+  }
+  const only = calls.length === 1 ? calls[0] : undefined;
+  if (only === undefined) {
+    return calls.length === 0
+      ? { refused: `Copilot asked about call ${id}, which no pre-tool hook announced; refused` }
+      : {
+          refused: `Copilot asked about call ${id} with a tool and arguments none of the ${calls.length} calls announced under it carries; refused`,
+        };
+  }
+  if (named(request.toolName) && request.toolName !== only.toolName) {
+    return {
+      refused: `Copilot asked about call ${id} as ${request.toolName}, which its pre-tool hook announced as ${only.toolName}; refused`,
+    };
+  }
+  return { call: only, argumentsDiffer: true };
 }
 
 /**
@@ -277,12 +362,15 @@ function threadKey(event: CopilotEvent): string {
 /** Build one Copilot session's gate. */
 export function createCopilotSessionGate(options: CopilotSessionGateOptions): CopilotSessionGate {
   const raised = new Set<string>();
-  const hooked = new Map<string, HookedCall>();
-  // Each unfinished call's answer, by its call id. One runtime serves one session, so the id alone names the
-  // call; an entry leaves when its call finishes, so an id a provider hands out again is a new call.
+  // Every hook announced under a call id whose request has not come, in the order announced. A provider may
+  // hand two calls running at once (a sub-agent's and the session's own) one id, so an id holds a list.
+  const hooked = new Map<string, HookedCall[]>();
+  // Each unfinished call's answer, by its thread and its call id (`callKey`): the hook names a sub-agent's
+  // call by the sub-agent's id, as its events do. An entry leaves when its call finishes, so an id a
+  // provider hands out again is a new call.
   const answers = new Map<string, CallAnswer>();
-  // What each running call's start said of it, by its call id, until it finishes: the runtime names a
-  // call's tool when it starts and not when it ends.
+  // What each running call's start said of it, by its thread and its call id, until it finishes: the
+  // runtime names a call's tool when it starts and not when it ends.
   const started = new Map<string, { readonly tool: string | null; readonly shell: string | null }>();
   // The background commands the runtime has said ended, by their shell ids.
   const endedShells = new Set<string>();
@@ -359,22 +447,39 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
     }
   };
 
-  const remember = (id: string, answer: CallAnswer): void => {
-    if (!answers.has(id) && answers.size >= MAX_DECIDED_IDS) {
+  const remember = (key: string, answer: CallAnswer): void => {
+    if (!answers.has(key) && answers.size >= MAX_DECIDED_IDS) {
       const oldest = answers.keys().next().value;
       if (oldest !== undefined) answers.delete(oldest);
     }
-    answers.set(id, answer);
+    answers.set(key, answer);
   };
 
-  // The decision for a call that has already waited `spentMs` of its deadline.
-  const decisionAfter = (spentMs: number): CallDecision =>
+  // Lets go of the hooks a request was tied to; an id with none left leaves the map.
+  const forget = (id: string, tied: readonly HookedCall[]): void => {
+    const left = (hooked.get(id) ?? []).filter((call) => !tied.includes(call));
+    if (left.length === 0) hooked.delete(id);
+    else hooked.set(id, left);
+  };
+
+  // This host's own gate over both readings of a call whose request carries other arguments than its hook
+  // announced: the hook's, which the call is decided on, and the request's own. Which of the two the runtime
+  // then runs is not this host's to know, so a refusal of either refuses the call, and a difference that
+  // changes nothing the gate reads changes no answer.
+  const bothReadings = (requested: unknown): LocalGate | undefined => {
+    const local = options.localGate;
+    if (local === undefined) return undefined;
+    return (request) => local(request) ?? local({ ...request, toolInput: requested ?? null });
+  };
+
+  // The decision for a call that has already waited `spentMs` of its deadline, behind `local`.
+  const decisionAfter = (spentMs: number, local: LocalGate | undefined = options.localGate): CallDecision =>
     createCallDecision({
       decide: options.decide,
       onOutcome: options.onOutcome,
       sessionKey: options.sessionKey,
       runtime: COPILOT_RUNTIME,
-      ...(options.localGate === undefined ? {} : { localGate: options.localGate }),
+      ...(local === undefined ? {} : { localGate: local }),
       decisionTimeoutMs: Math.max(1, options.decisionTimeoutMs - spentMs),
       holdAfterMs: Math.max(0, options.holdAfterMs - spentMs),
       // The rewrite lives only in the fail-open hook; the request can only approve or refuse the call asked.
@@ -403,6 +508,7 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
     call: HookedCall,
     toolCallId: string,
   ): DecisionRequest | null => {
+    // The request was tied to this hook by its tool's name, so the two name the same tool when both do.
     const name = named(raw.toolName) ? raw.toolName : call.toolName;
     if (!named(name)) return null;
     const spelled = toolName(name);
@@ -431,17 +537,27 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
       try {
         const id = input.toolCallId;
         if (named(id)) {
-          if (hooked.size >= MAX_PENDING_HOOKS) {
-            const oldest = hooked.keys().next().value;
-            if (oldest !== undefined) hooked.delete(oldest);
-          }
-          hooked.set(id, {
+          const call: HookedCall = {
+            sessionId: named(input.sessionId) ? input.sessionId : '',
             toolName: named(input.toolName) ? input.toolName : '',
             toolArgs: input.toolArgs,
             workingDirectory: named(input.workingDirectory) ? input.workingDirectory : '',
             agentId: named(input.agentId) ? input.agentId : null,
             agentType: named(input.agentType) ? input.agentType : null,
-          });
+          };
+          const calls = hooked.get(id);
+          if (calls === undefined) {
+            if (hooked.size >= MAX_PENDING_HOOKS) {
+              const oldest = hooked.keys().next().value;
+              if (oldest !== undefined) hooked.delete(oldest);
+            }
+            hooked.set(id, [call]);
+          } else if (!calls.some((one) => sameAnnouncement(one, call))) {
+            // A hook the runtime fires again for the same call adds nothing; another call under the id is kept
+            // beside the first, and past the bound the oldest is let go (its request is then refused).
+            if (calls.length >= MAX_HOOKS_PER_ID) calls.shift();
+            calls.push(call);
+          }
           if (probe !== null && probe.id === id) probe.hooked = true;
         }
       } catch {
@@ -464,7 +580,12 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           `Copilot asked for a ${kind} permission${id === null ? '' : ` for call ${id}`} through its own flow, so the pre-tool hook did not ask; refused rather than decided`,
           id ?? kind,
         );
-        if (id !== null) remember(id, 'refused');
+        if (id !== null) {
+          // The hooks this request is the runtime's own question about are answered by its refusal.
+          const own = (hooked.get(id) ?? []).filter((call) => fits(raw, call));
+          forget(id, own);
+          for (const call of own.length > 0 ? own : [null]) remember(callKey(call?.agentId, id), 'refused');
+        }
         return {
           kind: 'reject',
           feedback: `gate-hook-missing: this host decides a call only through its pre-tool hook, and this ${kind} request did not come through it`,
@@ -474,18 +595,25 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
         raise('gate-hook-missing', 'Copilot asked about a call that carries no call id; refused', 'no-id');
         return { kind: 'reject', feedback: 'gate-hook-missing: the request names no call' };
       }
-      const call = hooked.get(id);
-      hooked.delete(id);
-      // Refused until an answer says otherwise: every way out of here but an allow is a refusal.
-      remember(id, 'refused');
-      if (call === undefined) {
-        raise(
-          'gate-hook-missing',
-          `Copilot asked about call ${id}, which no pre-tool hook announced; refused`,
-          id,
-        );
-        return { kind: 'reject', feedback: 'gate-hook-missing: no pre-tool hook announced this call' };
+      const calls = hooked.get(id) ?? [];
+      const tied = tie(raw, id, calls);
+      if ('refused' in tied) {
+        // The hooks under the id are other calls' and stay for their own requests.
+        remember(callKey(calls.length === 1 ? calls[0]?.agentId : null, id), 'refused');
+        raise('gate-hook-missing', tied.refused, id);
+        return {
+          kind: 'reject',
+          feedback:
+            calls.length === 0
+              ? 'gate-hook-missing: no pre-tool hook announced this call'
+              : 'gate-hook-missing: this request cannot be tied to the one call its pre-tool hook announced',
+        };
       }
+      const call = tied.call;
+      forget(id, [call]);
+      const key = callKey(call.agentId, id);
+      // Refused until an answer says otherwise: every way out of here but an allow is a refusal.
+      remember(key, 'refused');
       const asked = named(raw.toolName) ? raw.toolName : call.toolName;
       if (COPILOT_EXCLUDED_TOOLS.includes(asked)) {
         // Left out of every session's tools and read back absent at the open; refused here as well, so a
@@ -495,18 +623,14 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           feedback: `${asked} is turned off in every session this host runs: no decision request can say what it runs`,
         };
       }
-      if (
-        call.toolArgs !== undefined &&
-        raw.toolArgs !== undefined &&
-        !isDeepStrictEqual(call.toolArgs, raw.toolArgs)
-      ) {
+      if (tied.argumentsDiffer) {
         raise(
           'gate-hook-missing',
-          `Copilot asked about call ${id} with other arguments than its pre-tool hook announced for it; the call is decided on the arguments the hook announced`,
+          `Copilot asked about call ${id} with other arguments than its pre-tool hook announced for it; the call is decided on the arguments the hook announced, and this host's own gate reads both`,
           `arguments:${id}`,
         );
       }
-      remember(id, 'awaited');
+      remember(key, 'awaited');
       // The decision ends with the session's signal or with its own, which an interrupt ends.
       const own = new AbortController();
       const forward = (): void => own.abort(signal?.reason);
@@ -519,11 +643,16 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
         const waited = await learnServers(asked, own.signal);
         nameIfUnnamed(asked, 'was asked to run');
         const request = requestOf(raw, call, id);
-        const decideNow = waited ? decisionAfter(Date.now() - began) : decideCall;
+        // A request whose arguments are not its hook's is held to this host's own gate in both readings.
+        const decideNow = tied.argumentsDiffer
+          ? decisionAfter(waited ? Date.now() - began : 0, bothReadings(raw.toolArgs))
+          : waited
+            ? decisionAfter(Date.now() - began)
+            : decideCall;
         const outcome = await decideNow(request, own.signal);
         // Written once the answer is known and before the runtime is told, so a call that finishes after
         // this is read against what it was told.
-        remember(id, outcome.kind === 'allow' ? 'allowed' : 'refused');
+        remember(key, outcome.kind === 'allow' ? 'allowed' : 'refused');
         return copilotAnswerOf(outcome);
       } finally {
         waiting.delete(own);
@@ -540,7 +669,7 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           if (data['resolvedByHook'] === true) {
             const inner = recordOf(data['permissionRequest']);
             const id = named(inner['toolCallId']) ? inner['toolCallId'] : null;
-            if (id !== null) remember(id, 'foreign');
+            if (id !== null) remember(callKey(event.agentId, id), 'foreign');
             raise(
               'gate-hook-foreign',
               `a hook this host did not install answered Copilot's ${named(inner['kind']) ? inner['kind'] : 'unnamed'} request${id === null ? '' : ` for call ${id}`} before this host was asked`,
@@ -574,12 +703,13 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
         case 'tool.execution_start': {
           const id = named(data['toolCallId']) ? data['toolCallId'] : null;
           if (id === null || (probe !== null && id === probe.id)) return;
-          if (!started.has(id) && started.size >= MAX_DECIDED_IDS) {
+          const key = callKey(event.agentId, id);
+          if (!started.has(key) && started.size >= MAX_DECIDED_IDS) {
             const oldest = started.keys().next().value;
             if (oldest !== undefined) started.delete(oldest);
           }
           const shell = recordOf(data['arguments'])['shellId'];
-          started.set(id, {
+          started.set(key, {
             tool: named(data['toolName']) ? data['toolName'] : null,
             shell: named(shell) ? shell : null,
           });
@@ -590,10 +720,11 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
           const id = named(data['toolCallId']) ? data['toolCallId'] : null;
           // Only the probe this gate minted is its own; another id that merely starts the same is a call.
           if (id === null || (probe !== null && id === probe.id)) return;
-          const answer = answers.get(id);
-          answers.delete(id);
-          const start = started.get(id);
-          started.delete(id);
+          const key = callKey(event.agentId, id);
+          const answer = answers.get(key);
+          answers.delete(key);
+          const start = started.get(key);
+          started.delete(key);
           if (answer === 'allowed' || answer === 'foreign') return;
           const ran = data['success'] === true;
           // A refused call that did not run is what a refusal is.
@@ -620,7 +751,7 @@ export function createCopilotSessionGate(options: CopilotSessionGateOptions): Co
                   ? `Copilot ran ${call} with no decision from this host for it${ownRead}`
                   : `Copilot finished ${call}, which failed, with no decision from this host for it${ownRead}`,
             // Its own key: what a call did at its end is said beside whatever was said of its request.
-            `finished:${id}`,
+            `finished:${key}`,
           );
           return;
         }

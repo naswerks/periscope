@@ -104,7 +104,11 @@ export interface JailOptions {
   readonly placesRelative?: boolean;
 }
 
-/** The tool-input fields that carry a path, in precedence order. First readable one wins. */
+/**
+ * The tool-input fields that carry a path, in precedence order. `pathFromToolInput` takes the first one
+ * present; the local gate checks every one present (`pathsFromToolInput`), since tools differ in which
+ * one they open (Claude's `file_path`, Copilot's and pi's `path`).
+ */
 const PATH_FIELDS = ['file_path', 'notebook_path', 'path'] as const;
 
 /**
@@ -121,6 +125,22 @@ export function pathFromToolInput(toolInput: unknown): string | null {
     if (typeof value === 'string' && value.trim() !== '') return value;
   }
   return null;
+}
+
+/**
+ * Every path this tool call's input names in a path field, in precedence order; empty when it names none.
+ * A tool opens the field its own schema reads and an input may carry the others beside it, so each one is
+ * checked, and a field the tool does not read can never stand in for the one it opens.
+ */
+export function pathsFromToolInput(toolInput: unknown): string[] {
+  if (typeof toolInput !== 'object' || toolInput === null) return [];
+  const record = toolInput as Record<string, unknown>;
+  const paths: string[] = [];
+  for (const field of PATH_FIELDS) {
+    const value = record[field];
+    if (typeof value === 'string' && value.trim() !== '') paths.push(value);
+  }
+  return paths;
 }
 
 /** The command this shell call is about, or null when the input carries none. */
@@ -494,6 +514,41 @@ function expandVariables(
 }
 
 /**
+ * What ends a word of a shell line outside a quote: a blank, and the separators, operators and expansion
+ * marks of the shells a session runs (POSIX, PowerShell, `cmd.exe`). Ending a word early only splits a
+ * path in two, which the line's literal reading still sees whole.
+ */
+const WORD_END = /[\s;&|<>()`,{}$^]/;
+
+/**
+ * The line's words, each with `.` and `..` resolved within it alone, joined by a blank. A quoted span is
+ * part of its word, quotes dropped, so a quoted path with a blank in it stays one word.
+ */
+function wordsResolved(text: string): string {
+  const words: string[] = [];
+  let word = '';
+  let quote: string | null = null;
+  const end = (): void => {
+    if (word !== '') words.push(normalizePath(word));
+    word = '';
+  };
+  for (const char of text) {
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      else word += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (WORD_END.test(char)) {
+      end();
+    } else {
+      word += char;
+    }
+  }
+  end();
+  return words.join(' ');
+}
+
+/**
  * Check a shell command for credential material named anywhere in it.
  *
  * This one scans the whole command, and that is deliberately unlike the rest of the local gate.
@@ -517,11 +572,21 @@ function expandVariables(
  *
  * The comparison is on the resolved protected paths and on the command text with its home-directory
  * forms and its path variables spelled out, case-insensitively, because Windows paths reach here in both
- * slash styles and either case.
+ * slash styles and either case. The text is read three ways, and a protected path found in any of them
+ * refuses: as written, with no `.` or `..` resolved, so a path written literally is found wherever it
+ * stands and no `..` anywhere on the line can hide it; word by word, each word's `.` and `..` resolved
+ * within it alone, so a path that climbs to a protected one is found and a `..` in another word cannot
+ * reach it; and as one path, resolved whole, as this scan has always read it, so no line refused that
+ * way is let through. A word that names a protected path and climbs out of it (`.ssh/../x`) names the
+ * path literally, and refuses.
  */
 export function checkShellForProtectedPaths(command: string, options: JailOptions): Refusal | null {
   const expanded = expandVariables(expandHome(command, options.home), options.variables);
-  const haystack = normalizePath(expanded).toLowerCase();
+  const readings = [
+    expanded.replace(/\\/g, '/').toLowerCase(),
+    wordsResolved(expanded).toLowerCase(),
+    normalizePath(expanded).toLowerCase(),
+  ];
   for (const candidate of options.protectedPaths) {
     const outcome = resolveOrRefuse(candidate, options.resolve);
     // A protected path this host cannot resolve is still protected — fall back to its literal form
@@ -538,7 +603,7 @@ export function checkShellForProtectedPaths(command: string, options: JailOption
             needle,
             ...['/', '/cygdrive/', '/mnt/'].map((root) => `${root}${drive[1] ?? ''}/${drive[2] ?? ''}`),
           ];
-    if (spellings.some((spelling) => haystack.includes(spelling))) {
+    if (spellings.some((spelling) => readings.some((reading) => reading.includes(spelling)))) {
       return refusal(
         'credential-path-denied',
         `the command names ${needle}, which holds credential material; the agent shares the host's OS user, so this gate is the only control over it`,

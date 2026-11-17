@@ -32,7 +32,7 @@ import {
   checkSearch,
   checkShellForProtectedPaths,
   commandFromToolInput,
-  pathFromToolInput,
+  pathsFromToolInput,
 } from './jail.js';
 import { classifyShellCommand } from './shell.js';
 import { parseCommand, readCmdCommand } from './command.js';
@@ -338,11 +338,13 @@ export function localGate(options: LocalGateOptions): LocalGate {
     }
 
     if (writeTools.has(request.toolName)) {
-      return checkPath(pathFromToolInput(request.toolInput), at(request, resolvesWritesAgainstCallCwd));
+      const placed = at(request, resolvesWritesAgainstCallCwd);
+      return eachPath(request.toolInput, (path) => checkPath(path, placed));
     }
 
     if (readTools.has(request.toolName)) {
-      return checkReadPath(pathFromToolInput(request.toolInput), at(request, resolvesAgainstCallCwd));
+      const placed = at(request, resolvesAgainstCallCwd);
+      return eachPath(request.toolInput, (path) => checkReadPath(path, placed));
     }
 
     if (searchTools.has(request.toolName)) {
@@ -372,6 +374,21 @@ function strongerRefusal(first: Refusal | null, second: Refusal | null): Refusal
   if (first !== null && first.reason !== 'shell-boundary-command') return first;
   if (second !== null && second.reason !== 'shell-boundary-command') return second;
   return first ?? second;
+}
+
+/**
+ * Each path a write or read tool's input names, through `check`, the first refusal the answer. An input that
+ * names none is `check`'s answer for no path (`path-input-missing`). Every path field is read, not the first
+ * one alone: a tool opens the field its own schema reads, and a field beside it must not stand in for it.
+ */
+function eachPath(toolInput: unknown, check: (path: string | null) => Refusal | null): Refusal | null {
+  const paths = pathsFromToolInput(toolInput);
+  if (paths.length === 0) return check(null);
+  for (const path of paths) {
+    const refused = check(path);
+    if (refused !== null) return refused;
+  }
+  return null;
 }
 
 /**

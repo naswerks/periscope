@@ -8,6 +8,58 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-11-17
+
+Protocol 20, the window `[19, 20]`, as in 1.11.0: no wire member, payload kind or reason is added or
+changed, and the public API is unchanged. Each fix closes a way around a protection the host already
+keeps; what a working call meets is unchanged but for the one shell command named below.
+
+- Fixed: a Copilot call is decided on its own pre-tool hook, never on another call's. A permission
+  request carries no session, and a provider can give two calls running at once one id (a sub-agent's
+  and the session's own); the host kept one hook per id and decided the request's tool on whichever
+  hook came last, so a write outside the session's roots could be approved on a sub-agent's read. Every
+  hook under an id is now kept until its request comes, a request is tied to the hook whose tool and
+  arguments it carries, and each call's answer is kept by its thread and id. A request that cannot be
+  tied to one hook (none announced its id, its one hook named another tool, or several calls under the
+  id and none, or more than one decided differently, fits it) is refused `gate-hook-missing` and nobody
+  is asked. On the pinned runtime every request carries its own hook's tool and arguments, so no call
+  it makes meets the refusal.
+- Fixed: a Copilot request whose arguments are not the ones its one hook announced is held to the host's
+  own gate in both readings. Such a call was decided on the hook's arguments alone, so a request naming a
+  file outside the session's roots, under a hook that announced one inside them, was approved. The call
+  is still decided on the hook's and named `gate-hook-missing`; the host's own gate now reads the
+  request's arguments as well, and a refusal of either reading refuses the call. A difference that
+  changes nothing the gate reads changes no answer, and on the pinned runtime a request carries its
+  hook's arguments, so no call it makes meets this.
+- Fixed: a write or read tool's input is checked at every path field it carries (`file_path`,
+  `notebook_path`, `path`), not at the first one alone. Copilot's and pi's file tools open `path`, and a
+  `file_path` beside it in the workspace stood in for it: measured on the pinned Copilot runtime, a
+  `create` wrote a file outside the session's roots and a `view` read a protected file that way. Each
+  field is now checked on its own and the first refusal is the answer. A call naming one path is
+  decided as before. `pathFromToolInput` is unchanged.
+- Fixed: a `..` elsewhere on a shell line no longer hides a protected path from the shell scan. The scan
+  resolved the whole line as one path, so `cat ~/.ssh/id_rsa; ls /../..` climbed back over the protected
+  path's own segments and was not refused, on every runtime. The line is now read three ways, and a
+  protected path in any of them refuses: as written with no `.` or `..` resolved; word by word, each
+  word's `..` resolved within it, so a path that climbs to a protected one is still found; and whole, as
+  before, so nothing refused before is let through. One command admitted before is refused now: a word
+  that names a protected path and climbs out of it (`cat ~/.ssh/../work/x`), which names the path
+  literally.
+- Fixed: an opencode session's pre-call gate counts as loaded only when the server states it `active`.
+  The read-back kept each plugin's id and source and not its state, so a `periscope.gate` the server
+  listed as `failed` was taken as loaded, and a shell line the runtime reads no command in ran with no
+  decision and nothing named. A gate listed `failed`, or with no state, is now read as missing: named
+  `gate-hook-missing` at the open with the server's words, and the session opens. The pinned SDK's server
+  states the gate `active`.
+- Documents: the README gives Copilot and opencode the clause naming what can still run undecided, and
+  says opencode's shell lines are held by one plugin of this host's; `docs/configuration.md` and the
+  opencode adapter's own account no longer say every plugin is the runtime's own. 1.11.0's note that a
+  Copilot read-back holds the runtime to the session's own directories was wider than the code: a
+  directory the runtime allows beyond them is named `gate-mode-widened`, and the session opens.
+- Documents: `SECURITY.md` and `docs/gate.md` name five more spellings the shell scan cannot match, each
+  a path a shell completes only as it runs the command: a wildcard, a brace list, a backslash a POSIX
+  shell removes, a `$'...'` quote, and a relative path after a change of directory on the same line.
+
 ## [1.11.0] - 2026-11-15
 
 Protocol 20; the window is `[19, 20]`, so a version-19 controller is still spoken to, and a version-18

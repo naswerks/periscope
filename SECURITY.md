@@ -164,14 +164,24 @@ gets no local opinion, so the decision escalates to your controller. That is fai
 Within the families the credential-path denial is scoped, and the scope is what to review. Writes
 are jailed to the session's workspace. Reads are not jailed: a read goes anywhere this host's OS user
 can read, the agent's own tool output and installed packages included, and the protected set is what
-stops it. A search is refused when its root (`path`, else the workspace) is at or beneath a protected
+stops it. A write or read tool's input is checked at every path field it carries (`file_path`,
+`notebook_path`, `path`), each on its own, since tools differ in the one they open (Claude's
+`file_path`, Copilot's and pi's `path`) and a runtime runs a call that carries the others beside it:
+measured on the pinned Copilot runtime, a `create` whose `path` was outside the roots and whose
+`file_path` was inside wrote the file outside, before every field was checked. A search is refused when its root (`path`, else the workspace) is at or beneath a protected
 path, and also when a protected path sits beneath its root, because the search would read it. Each
 path a tool names is placed first, where the operating system puts it for a tool running in the call's
 directory, so the file the gate judges is the file the tool opens: on Windows a path with one leading
 separator starts at the drive the call runs on and `C:name` on that drive is beneath the call's
 directory, and on every system `~` is the home directory. A drive-relative path on another drive and
 another user's home (`~name/...`) cannot be placed and are refused `path-unplaceable`. The
-shell scan matches a protected path written literally, through a home-directory form (`~`, `$HOME`,
+shell scan matches a protected path written literally wherever it stands on the line: it reads the line
+as written, with no `.` or `..` resolved, so a `..` elsewhere on the line (`cat ~/.ssh/id_rsa; ls
+/../..`) never hides one; it reads each word with that word's own `.` and `..` resolved, so a path that
+climbs to a protected one (`~/work/../.ssh/id_rsa`) is matched and a `..` in another word cannot undo
+it; and it reads the whole line resolved as one path, as it always has. A word that names a protected
+path and climbs out of it (`cat ~/.ssh/../work/x`) names the path literally, and is refused. It matches
+through a home-directory form (`~`, `$HOME`,
 `${HOME}`, `$env:HOME`, `$env:USERPROFILE`, their braced `${env:...}` spellings, `%USERPROFILE%`),
 or through a variable of the session's spawn environment whose value is one absolute path, spelled
 `$NAME`, `${NAME}`, `$env:NAME`, `${env:NAME}` or `%NAME%`. Those variables are the ones each runtime
@@ -219,7 +229,12 @@ it:
   `PI_SESSION_FILE`, Qwen Code's `QWEN_CODE_PROJECT_DIR`);
 - a variable read through a command (`$(printenv NAME)`, `Get-Item env:NAME`) or an expansion
   operator (`${NAME:-...}`, `${NAME%...}`, `%NAME:~...%`, `cmd`'s delayed `!NAME!`);
-- a list variable such as `PATH`, which is never spelled out.
+- a list variable such as `PATH`, which is never spelled out;
+- a path a shell completes only as it runs the command: a wildcard in it (`~/.ss?/id_rsa`,
+  `~/.s*/id_rsa`), a brace list (`~/.s{s,}h/id_rsa`), a backslash a POSIX shell removes
+  (`~/.s\sh/id_rsa`) or a `$'...'` quote inside it;
+- a relative path after a change of directory on the same line (`cd ~ && cat .ssh/id_rsa`): the scan
+  follows no directory a command moves to.
 
 What this means for fact 1's picture: offline, those calls escalate and are refused as outages, which
 is still fail-closed; online, for exactly those vectors, what stands between the agent and the token
@@ -637,9 +652,15 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   that finished with no decision behind it: none at all, one the host was still waiting on, or a refusal
   the call ran against. A request the hook did not raise, and a hook the runtime reports as failed, are
   named the same way. A permission request this host did not raise through the hook is refused, never
-  decided. What the naming cannot tell apart is two calls running at once under one call id, which a
-  model's provider would have to hand out twice in the same turn; an id handed out again later is a new
-  call.
+  decided. A request carries no session, so it is tied to its hook by the call id, the tool and the
+  arguments, and every hook announced under an id is kept until its request comes: two calls a model's
+  provider gives one id while both run (a sub-agent's and the session's own) are each decided on their
+  own hook and read apart when they finish, by the thread each runs in. A request that cannot be tied to
+  one hook (none announced its id, its one hook named another tool, or several calls under its id and
+  none, or more than one decided differently, fits it) is refused and nobody is asked. A request whose
+  arguments are not the ones its one hook announced is decided on the hook's and named, and this host's
+  own gate reads the request's arguments as well: a protected path or a write outside the roots in
+  either reading refuses the call. An id handed out again later is a new call.
 - **What no hook sees is named.** A tool the model's provider runs itself is named
   `gate-unhooked-call`; a machine-wide policy hook, which runs whatever a session's settings say, is
   named `gate-hook-foreign` at the open; a permission or agent mode the host did not set is named
@@ -744,7 +765,9 @@ hello says so ([gate.md](docs/gate.md), the opencode gate). What holds, and what
 - **Proven before the first prompt.** The host reads the server back (the session's rules, every agent's,
   no saved approval, only the runtime's own plugins, the host's own pre-call gate and none it turns off,
   only the session's MCP servers, no configuration but its own, no model but the endpoint's). A server
-  that is not as the host created it refuses the open `opencode-gate-not-active`.
+  that is not as the host created it refuses the open `opencode-gate-not-active`. The pre-call gate is
+  read with the state the server states for it: only one listed `active` runs; one listed `failed`, or
+  with no state, is read as missing (below), and the session opens.
 - **A shell call is decided before it runs, whole.** opencode's `shell` tool asks only about the
   commands its own reading finds in a line, and a line it finds none in raises no request at all: on
   Windows, where the shell is PowerShell, an assignment through a provider path
@@ -759,7 +782,9 @@ hello says so ([gate.md](docs/gate.md), the opencode gate). What holds, and what
 - **What runs undecided is named.** A tool the model's provider runs itself is named `gate-unhooked-call`;
   a call the server began with no decision of the host's behind it, `gate-hook-missing`, whether it
   succeeded, failed, was interrupted or was still running at the close (the same name says, at the open,
-  that the host's pre-call gate is not among the server's plugins); rules that are no longer this host's, or an
+  that the host's pre-call gate is not among the server's plugins, or is listed and not active, and then
+  a shell line the runtime reads no command in runs with no decision of the host's, named when it
+  succeeds); rules that are no longer this host's, or an
   approval it never gave, `gate-mode-widened`; a plugin that is neither the runtime's own nor the host's
   gate, loaded after the open, `gate-foreign-extension`.
 - **Tools that cannot be decided are turned off.** Code Mode's `execute`, `question`, image generation,

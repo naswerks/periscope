@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import type { RefusalReason } from '../core/refusal.js';
 import type { Decider, DecisionRequest } from '../gate/decision.js';
+import { COPILOT_TOOL_FAMILIES, localGate } from '../gate/local.js';
 import type { GateOutcome } from '../gate/outcome.js';
 import { COPILOT_EXCLUDED_TOOLS } from '../gate/tool-kind.js';
 import { isCodexSessionGate } from './codex-gate.js';
@@ -18,6 +19,7 @@ import {
   isCopilotSessionGate,
 } from './copilot-gate.js';
 import type { CopilotEvent, CopilotPermissionRequest } from './copilot-sdk.js';
+import { nodePathResolver } from './paths.js';
 
 function gate(decide: Decider, servers: readonly string[] = []) {
   const requests: DecisionRequest[] = [];
@@ -424,6 +426,207 @@ test('a call is decided on the arguments its hook announced, and a request that 
   await run.built.decide({ kind: 'hook', toolCallId: 'call_5', toolName: 'view' });
   assert.deepEqual(run.requests[4]?.toolInput, { path: 'C:/work/b.txt' });
   assert.equal(run.raised.length, 1);
+});
+
+const WIN = process.platform === 'win32';
+const WORK = WIN ? 'C:\\work\\repo' : '/work/repo';
+const OUTSIDE = WIN
+  ? 'C:\\Users\\op\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\x.cmd'
+  : '/home/op/.config/autostart/x.desktop';
+const README = WIN ? 'C:\\work\\repo\\README.md' : '/work/repo/README.md';
+
+/** A session's gate with the host's own local gate in front of the controller, as a session runs it. */
+function jailed(decide: Decider) {
+  const requests: DecisionRequest[] = [];
+  const raised: { name: RefusalReason; detail: string }[] = [];
+  const built = createCopilotSessionGate({
+    sessionKey: 'k',
+    cwd: WORK,
+    decide: (request, signal) => {
+      requests.push(request);
+      return decide(request, signal);
+    },
+    localGate: localGate({
+      workspaceRoot: WORK,
+      resolve: nodePathResolver,
+      protectedPaths: [],
+      toolFamilies: COPILOT_TOOL_FAMILIES,
+      readsShellDialect: true,
+      resolvesAgainstCallCwd: true,
+      resolvesWritesAgainstCallCwd: true,
+    }),
+    decisionTimeoutMs: 1_000,
+    holdAfterMs: 10_000,
+    servers: [],
+    onOutcome: () => undefined,
+    onDegrade: (name, detail) => raised.push({ name, detail }),
+    onSpawnDegrades: () => undefined,
+  });
+  return { built, requests, raised };
+}
+
+/** A call the session's own thread announces, or a sub-agent's when `agentId` is given. */
+const announced = (toolName: string, toolArgs: unknown, toolCallId = 'call_0', agentId?: string) => ({
+  sessionId: agentId === undefined ? 'main' : `child-${agentId}`,
+  toolCallId,
+  toolName,
+  toolArgs,
+  workingDirectory: WORK,
+  ...(agentId === undefined ? {} : { agentId, agentType: 'general-purpose' }),
+});
+
+const asked = (toolName: string, toolArgs: unknown, toolCallId = 'call_0'): CopilotPermissionRequest => ({
+  kind: 'hook',
+  toolCallId,
+  toolName,
+  toolArgs,
+  hookMessage: COPILOT_HOOK_REASON,
+  workingDirectory: WORK,
+});
+
+test("regression: two calls running under one call id are decided apart, each on its own hook, so a write outside the roots is never decided on another call's read", async () => {
+  const run = jailed(allow);
+  // The session's own write outside the roots and a sub-agent's read, under the id a provider gave both.
+  run.built.preToolUse(announced('create', { path: OUTSIDE, file_text: 'calc' }));
+  run.built.preToolUse(announced('view', { path: README }, 'call_0', 'agent-1'));
+  const write = await run.built.decide(asked('create', { path: OUTSIDE, file_text: 'calc' }));
+  assert.equal(write.kind, 'reject', "the write outside the roots was approved on another call's input");
+  assert.match(write.kind === 'reject' ? (write.feedback ?? '') : '', /^path-escapes-root: /);
+  // The sub-agent's read is decided on its own hook, and is the only call the controller hears of.
+  const read = await run.built.decide(asked('view', { path: README }));
+  assert.deepEqual(read, { kind: 'approve-once' });
+  assert.deepEqual(
+    run.requests.map((one) => [one.toolName, one.toolInput, one.agentId]),
+    [['view', { path: README }, 'agent-1']],
+  );
+  assert.deepEqual(run.raised, [], 'each call was decided on its own hook, so nothing ran undecided');
+
+  // Control: the same write with no other call under its id is refused the same way.
+  const alone = jailed(allow);
+  alone.built.preToolUse(announced('create', { path: OUTSIDE, file_text: 'calc' }, 'call_9'));
+  const control = await alone.built.decide(asked('create', { path: OUTSIDE, file_text: 'calc' }, 'call_9'));
+  assert.match(control.kind === 'reject' ? (control.feedback ?? '') : '', /^path-escapes-root: /);
+});
+
+test("regression: a request whose arguments are not its one hook's is held to this host's own gate in both readings, so a write outside the roots is refused whichever of the two names it", async () => {
+  const run = jailed(allow);
+  // The hook announced a write in the workspace; the request under its id names one outside the roots.
+  run.built.preToolUse(announced('create', { path: README, file_text: 'x' }));
+  const requested = await run.built.decide(asked('create', { path: OUTSIDE, file_text: 'x' }));
+  assert.equal(requested.kind, 'reject', "a write outside the roots was approved on the hook's arguments");
+  assert.match(requested.kind === 'reject' ? (requested.feedback ?? '') : '', /^path-escapes-root: /);
+  // The other way round: the hook's is the reading outside the roots.
+  run.built.preToolUse(announced('create', { path: OUTSIDE, file_text: 'x' }, 'call_1'));
+  const announcedOutside = await run.built.decide(
+    asked('create', { path: README, file_text: 'x' }, 'call_1'),
+  );
+  assert.match(
+    announcedOutside.kind === 'reject' ? (announcedOutside.feedback ?? '') : '',
+    /^path-escapes-root: /,
+  );
+  assert.equal(run.requests.length, 0, 'nobody is asked about a call this host refuses by itself');
+
+  // Control: a difference in what the gate reads nothing of is named, and the call is decided on the hook's.
+  run.built.preToolUse(announced('create', { path: README, file_text: 'one' }, 'call_2'));
+  const inside = await run.built.decide(asked('create', { path: README, file_text: 'two' }, 'call_2'));
+  assert.deepEqual(inside, { kind: 'approve-once' });
+  assert.deepEqual(
+    run.requests.map((one) => one.toolInput),
+    [{ path: README, file_text: 'one' }],
+  );
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-hook-missing', 'gate-hook-missing', 'gate-hook-missing'],
+  );
+  assert.match(run.raised[2]?.detail ?? '', /this host's own gate reads both/);
+});
+
+test('regression: a request naming another tool than its pre-tool hook announced is refused, by name, and nobody is asked', async () => {
+  const run = jailed(allow);
+  run.built.preToolUse(announced('view', { path: README }, 'call_1'));
+  const answer = await run.built.decide(asked('create', { path: README, file_text: 'x' }, 'call_1'));
+  assert.equal(answer.kind, 'reject', 'a request was decided under a name its hook never announced');
+  assert.match(answer.kind === 'reject' ? (answer.feedback ?? '') : '', /^gate-hook-missing: /);
+  assert.equal(run.requests.length, 0);
+  assert.deepEqual(
+    run.raised.map((one) => one.name),
+    ['gate-hook-missing'],
+  );
+  assert.match(
+    run.raised[0]?.detail ?? '',
+    /call call_1 as create, which its pre-tool hook announced as view/,
+  );
+});
+
+test('regression: a request that matches none of the calls announced under its id, or several that differ, is refused and nobody is asked', async () => {
+  const run = jailed(allow);
+  run.built.preToolUse(announced('view', { path: README }));
+  run.built.preToolUse(announced('view', { path: OUTSIDE }, 'call_0', 'agent-1'));
+  const none = await run.built.decide(asked('view', { path: WORK }));
+  assert.equal(none.kind, 'reject', 'a request was decided on a call it is not');
+  assert.equal(run.requests.length, 0);
+  assert.match(run.raised[0]?.detail ?? '', /none of the 2 calls announced under it carries/);
+  // The calls under the id are others', and each is still decided on its own request.
+  assert.deepEqual(await run.built.decide(asked('view', { path: README })), { kind: 'approve-once' });
+  assert.deepEqual(
+    run.requests.map((one) => one.toolInput),
+    [{ path: README }],
+  );
+
+  // Two calls the request matches alike, which differ in where they run, cannot be told apart either.
+  const twin = jailed(allow);
+  twin.built.preToolUse({ ...announced('view', { path: 'a.txt' }), workingDirectory: WORK });
+  twin.built.preToolUse({
+    ...announced('view', { path: 'a.txt' }, 'call_0', 'agent-1'),
+    workingDirectory: WIN ? 'C:\\elsewhere' : '/elsewhere',
+  });
+  assert.equal((await twin.built.decide(asked('view', { path: 'a.txt' }))).kind, 'reject');
+  assert.equal(twin.requests.length, 0);
+  assert.deepEqual(
+    twin.raised.map((one) => one.name),
+    ['gate-hook-missing'],
+  );
+  assert.match(twin.raised[0]?.detail ?? '', /more than one call announced under it/);
+
+  // Control: the same announcement made twice is one call, decided once.
+  const again = jailed(allow);
+  again.built.preToolUse(announced('view', { path: README }));
+  again.built.preToolUse(announced('view', { path: README }));
+  assert.deepEqual(await again.built.decide(asked('view', { path: README })), { kind: 'approve-once' });
+  assert.deepEqual(again.raised, []);
+});
+
+test('regression: two calls under one call id are read apart when they finish, so a refusal that held on one and an allow on the other name nothing', async () => {
+  const byTool: Decider = (request) =>
+    Promise.resolve(
+      request.toolName === 'view' ? { behavior: 'allow' } : { behavior: 'deny', message: 'not that one' },
+    );
+  const finishedBy = (success: boolean, toolName: string, agentId?: string): CopilotEvent => ({
+    ...event('tool.execution_complete', { toolCallId: 'call_0', toolName, success }),
+    ...(agentId === undefined ? {} : { agentId }),
+  });
+  const run = jailed(byTool);
+  run.built.preToolUse(announced('create', { path: README, file_text: 'x' }));
+  run.built.preToolUse(announced('view', { path: README }, 'call_0', 'agent-1'));
+  assert.equal((await run.built.decide(asked('create', { path: README, file_text: 'x' }))).kind, 'reject');
+  assert.equal((await run.built.decide(asked('view', { path: README }))).kind, 'approve-once');
+  run.built.observe(finishedBy(false, 'create'));
+  run.built.observe(finishedBy(true, 'view', 'agent-1'));
+  assert.deepEqual(run.raised, [], "one call's answer was read as the other's");
+
+  // Control: the refused call that runs anyway is named, beside the sub-agent's allowed one.
+  const ran = jailed(byTool);
+  ran.built.preToolUse(announced('create', { path: README, file_text: 'x' }));
+  ran.built.preToolUse(announced('view', { path: README }, 'call_0', 'agent-1'));
+  await ran.built.decide(asked('create', { path: README, file_text: 'x' }));
+  await ran.built.decide(asked('view', { path: README }));
+  ran.built.observe(finishedBy(true, 'view', 'agent-1'));
+  ran.built.observe(finishedBy(true, 'create'));
+  assert.deepEqual(
+    ran.raised.map((one) => one.name),
+    ['gate-hook-missing'],
+  );
+  assert.match(ran.raised[0]?.detail ?? '', /ran call call_0 \(create\) although this host refused it/);
 });
 
 test("a degrade past the session's cap is kept off its lane and still reaches the host's log, each time it occurs", () => {
