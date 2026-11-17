@@ -8,6 +8,12 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-11-17
+
+Protocol 20, the window `[19, 20]`, as in 1.11.0: no wire member, payload kind or reason is added or
+changed, and the public API is unchanged. Each fix closes a way around a protection the host already
+keeps; what a working call meets is unchanged but for the one shell command named below.
+
 - Fixed: a Copilot call is decided on its own pre-tool hook, never on another call's. A permission
   request carries no session, and a provider can give two calls running at once one id (a sub-agent's
   and the session's own); the host kept one hook per id and decided the request's tool on whichever
@@ -38,6 +44,11 @@ removed export. The package version and the wire protocol version are separate n
   decision and nothing named. A gate listed `failed`, or with no state, is now read as missing: named
   `gate-hook-missing` at the open with the server's words, and the session opens. The pinned SDK's server
   states the gate `active`.
+- Documents: the README gives Copilot and opencode the clause naming what can still run undecided, and
+  says opencode's shell lines are held by one plugin of this host's; `docs/configuration.md` and the
+  opencode adapter's own account no longer say every plugin is the runtime's own. 1.11.0's note that a
+  Copilot read-back holds the runtime to the session's own directories was wider than the code: a
+  directory the runtime allows beyond them is named `gate-mode-widened`, and the session opens.
 
 ## [1.11.0] - 2026-11-15
 
