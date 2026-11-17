@@ -637,9 +637,13 @@ says so ([gate.md](docs/gate.md), the Copilot gate). What holds, and what does n
   that finished with no decision behind it: none at all, one the host was still waiting on, or a refusal
   the call ran against. A request the hook did not raise, and a hook the runtime reports as failed, are
   named the same way. A permission request this host did not raise through the hook is refused, never
-  decided. What the naming cannot tell apart is two calls running at once under one call id, which a
-  model's provider would have to hand out twice in the same turn; an id handed out again later is a new
-  call.
+  decided. A request carries no session, so it is tied to its hook by the call id, the tool and the
+  arguments, and every hook announced under an id is kept until its request comes: two calls a model's
+  provider gives one id while both run (a sub-agent's and the session's own) are each decided on their
+  own hook and read apart when they finish, by the thread each runs in. A request that cannot be tied to
+  one hook (none announced its id, its one hook named another tool, or several calls under its id and
+  none, or more than one decided differently, fits it) is refused and nobody is asked. An id handed out
+  again later is a new call.
 - **What no hook sees is named.** A tool the model's provider runs itself is named
   `gate-unhooked-call`; a machine-wide policy hook, which runs whatever a session's settings say, is
   named `gate-hook-foreign` at the open; a permission or agent mode the host did not set is named

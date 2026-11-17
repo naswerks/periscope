@@ -8,6 +8,17 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+- Fixed: a Copilot call is decided on its own pre-tool hook, never on another call's. A permission
+  request carries no session, and a provider can give two calls running at once one id (a sub-agent's
+  and the session's own); the host kept one hook per id and decided the request's tool on whichever
+  hook came last, so a write outside the session's roots could be approved on a sub-agent's read. Every
+  hook under an id is now kept until its request comes, a request is tied to the hook whose tool and
+  arguments it carries, and each call's answer is kept by its thread and id. A request that cannot be
+  tied to one hook (none announced its id, its one hook named another tool, or several calls under the
+  id and none, or more than one decided differently, fits it) is refused `gate-hook-missing` and nobody
+  is asked. On the pinned runtime every request carries its own hook's tool and arguments, so no call
+  it makes meets the refusal.
+
 ## [1.11.0] - 2026-11-15
 
 Protocol 20; the window is `[19, 20]`, so a version-19 controller is still spoken to, and a version-18

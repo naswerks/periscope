@@ -599,12 +599,23 @@ the one this host decides.
   call runs in, the sub-agent that made it, `toolKind`, `shellDialect`, through the same call decision as
   a Claude call (the local gate, then the decider, with the session's deadline and hold). The input is
   the one the hook announced, which is the call's own. On the pinned runtime the request carried the
-  same arguments by value for every tool measured (a shell line, `view`, `create`, `apply_patch`,
-  `task`, a skill, an MCP tool, a sub-agent's call); a request that carries others is named
-  `gate-hook-missing`, and the call is still decided, on the hook's. The answer is
+  same tool name and the same arguments by value for every tool measured (a shell line, `view`, `create`,
+  `apply_patch`, `task`, a skill, an MCP tool, a sub-agent's call); a request that carries other arguments
+  than its one hook is named `gate-hook-missing`, and the call is still decided, on the hook's. The answer is
   one call approved, or refused with the outcome's words, which the model reads. Nothing broader is ever
   sent: no approval for the session, for a location or for good. An allow that rewrites the input is
   refused: the rewrite would live only in the fail-open hook (`canRewriteInput: false`).
+- **A call is decided on its own hook, never another's.** The request carries no session, and a provider
+  may hand two calls running at once one id (a sub-agent's and the session's own), so every hook announced
+  under an id is kept until a request is tied to it, and a request is tied to the one hook whose tool and
+  arguments it carries. Two calls under one id are each decided on their own hook, and their answers are
+  kept apart by the thread that made each (a sub-agent's id, as its hook and its events state it). A
+  request is refused `gate-hook-missing`, and nobody is asked, when it cannot be tied to one hook: no hook
+  announced its id; the one hook under its id named another tool; or several hooks under its id
+  announced calls and none of them, or more than one that would be decided differently (another
+  directory, another thread), fits it. The hooks under the id are left for their own requests. No call the
+  pinned runtime makes meets any of these: each request it raised carried its own hook's name and
+  arguments.
 - **What the model is told of the machine's folders** (`copilotSystemMessage`,
   `src/host/copilot-process.ts`). Its working directory, and nothing of the runner's home. The session's
   system message is the runtime's, with two of its sections named:
@@ -684,12 +695,12 @@ the one this host decides.
   protected path it is.
 - **What the reused names mean on Copilot.** Each is raised once per call, request or mode:
   - `gate-hook-missing`: a permission request of any kind but `hook` (the runtime's own flow, so the
-    hook did not ask; the request is refused, never decided), a `hook` request whose call no hook
-    announced, a `hook` request whose arguments are not the ones its hook announced (decided on the
-    hook's), a pre-tool hook the runtime reports as failed (after which it lets the call proceed), or
-    a call that finished with no decision of this host's behind it: none at all, one still awaited, or
-    a refusal the call ran against. Each call's answer is kept by its call id until
-    `tool.execution_complete` and forgotten then, so an id a provider hands out again is a new call; only
+    hook did not ask; the request is refused, never decided), a `hook` request that cannot be tied to
+    one hook (above; refused), a `hook` request whose arguments are not the ones its one hook announced
+    (decided on the hook's), a pre-tool hook the runtime reports as failed (after which it lets the call
+    proceed), or a call that finished with no decision of this host's behind it: none at all, one still
+    awaited, or a refusal the call ran against. Each call's answer is kept by its thread and its call id
+    until `tool.execution_complete` and forgotten then, so an id a provider hands out again is a new call; only
     the probe id this gate minted is exempt, never an id that merely starts the same. The detail names
     the call's tool, which the runtime states at the call's start and not at its end. One such call is
     the runtime's own: when a command started in the shell's background mode ends
