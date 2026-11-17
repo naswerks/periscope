@@ -147,7 +147,9 @@ knows before anything spawns, the environment the registry composes, and the var
 process adds as it starts (`LocalGateOptions.spawnEnv`, internal). Outside the scan: a path a command
 builds at run time, a variable the command or the runtime sets itself (pi's `PI_SESSION_FILE`), a
 variable read through a command (`$(printenv NAME)`) or an expansion operator (`${NAME:-...}`), a
-list variable such as `PATH`, and a recursive search of an ancestor. A boundary-crossing shell shape
+list variable such as `PATH`, a recursive search of an ancestor, a path a shell completes only as it
+runs the command (a wildcard, a brace list, a backslash a POSIX shell removes, a `$'...'` quote), and a
+relative path after a change of directory on the same line (`cd ~ && cat .ssh/id_rsa`). A boundary-crossing shell shape
 (`shell-boundary-command`: a push, a force, a remote change, a branch deletion, a hard reset, a merge
 with `gh pr merge`, the completion of an Azure DevOps pull request with `az repos pr update --status
 completed` or `--auto-complete`) is read from the parsed invocation — its program, its subcommand and its

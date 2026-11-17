@@ -56,6 +56,9 @@ keeps; what a working call meets is unchanged but for the one shell command name
   opencode adapter's own account no longer say every plugin is the runtime's own. 1.11.0's note that a
   Copilot read-back holds the runtime to the session's own directories was wider than the code: a
   directory the runtime allows beyond them is named `gate-mode-widened`, and the session opens.
+- Documents: `SECURITY.md` and `docs/gate.md` name five more spellings the shell scan cannot match, each
+  a path a shell completes only as it runs the command: a wildcard, a brace list, a backslash a POSIX
+  shell removes, a `$'...'` quote, and a relative path after a change of directory on the same line.
 
 ## [1.11.0] - 2026-11-15
 

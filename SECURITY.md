@@ -229,7 +229,12 @@ it:
   `PI_SESSION_FILE`, Qwen Code's `QWEN_CODE_PROJECT_DIR`);
 - a variable read through a command (`$(printenv NAME)`, `Get-Item env:NAME`) or an expansion
   operator (`${NAME:-...}`, `${NAME%...}`, `%NAME:~...%`, `cmd`'s delayed `!NAME!`);
-- a list variable such as `PATH`, which is never spelled out.
+- a list variable such as `PATH`, which is never spelled out;
+- a path a shell completes only as it runs the command: a wildcard in it (`~/.ss?/id_rsa`,
+  `~/.s*/id_rsa`), a brace list (`~/.s{s,}h/id_rsa`), a backslash a POSIX shell removes
+  (`~/.s\sh/id_rsa`) or a `$'...'` quote inside it;
+- a relative path after a change of directory on the same line (`cd ~ && cat .ssh/id_rsa`): the scan
+  follows no directory a command moves to.
 
 What this means for fact 1's picture: offline, those calls escalate and are refused as outages, which
 is still fail-closed; online, for exactly those vectors, what stands between the agent and the token
