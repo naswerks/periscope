@@ -13,12 +13,14 @@
  *   in the app-server's environment and nowhere else, and every one of those names is excluded from
  *   the environment the agent's shell commands inherit (`shell_environment_policy.exclude`, by exact
  *   name). The variable is beneath the env floor, so no controller can set it.
- * - The endpoint's window becomes Codex's: `maxContextTokens` its `model_context_window`, and
- *   `autoCompactWindow` its `model_auto_compact_token_limit`.
+ * - The window becomes Codex's: `maxContextTokens` its `model_context_window`, and `autoCompactWindow`
+ *   its `model_auto_compact_token_limit`. It is the window of the model the thread opens on: that
+ *   model's own entry in `modelWindows`, else the endpoint's `contextWindow`, else none, and Codex
+ *   assumes its own. It rides the thread's config, so a later model switch keeps it.
  */
 import type { JsonObject } from '../control/frames.js';
 import { CODEX_RUNTIME } from '../sessions/runtimes.js';
-import type { EndpointContextWindow, ModelEndpoint } from './model-endpoints.js';
+import type { EndpointContextWindow, EndpointModelWindow, ModelEndpoint } from './model-endpoints.js';
 
 /** The variable a Codex session's provider reads its key from. */
 export const CODEX_ENDPOINT_KEY_VARIABLE = 'PERISCOPE_CODEX_ENDPOINT_KEY';
@@ -34,6 +36,8 @@ export interface CodexEndpointRoute {
   readonly key: string;
   readonly baseUrl: string;
   readonly contextWindow: EndpointContextWindow | null;
+  /** The window of each model that states one, ahead of `contextWindow`. */
+  readonly modelWindows: Readonly<Record<string, EndpointModelWindow>>;
   /** The names of the endpoint's own `env`, each excluded from the agent's shell. */
   readonly envNames: readonly string[];
 }
@@ -67,6 +71,7 @@ export function codexEndpointRoutes(endpoints: readonly ModelEndpoint[]): CodexE
       key: codexProviderKey(endpoint.name),
       baseUrl: endpoint.baseUrl,
       contextWindow: endpoint.contextWindow,
+      modelWindows: endpoint.modelWindows ?? {},
       envNames: Object.keys(endpoint.env),
     }));
 }
@@ -84,9 +89,24 @@ export function codexEndpointExcludes(route: CodexEndpointRoute): string[] {
   ];
 }
 
-/** The thread config keys that define `route`'s provider and its window. */
-export function codexProviderConfig(route: CodexEndpointRoute): JsonObject {
-  const window = route.contextWindow;
+/**
+ * The window a thread on `route` opens with for `model`: the model's own, else the endpoint's, else
+ * null, and Codex assumes its own. No model is the endpoint's window.
+ */
+export function codexWindowFor(
+  route: CodexEndpointRoute,
+  model: string | null,
+): EndpointContextWindow | null {
+  if (model !== null && Object.hasOwn(route.modelWindows, model)) return route.modelWindows[model] ?? null;
+  return route.contextWindow;
+}
+
+/**
+ * The thread config keys that define `route`'s provider and the window of `model`, the model the thread
+ * opens on: each member the window states, as Codex's key for it.
+ */
+export function codexProviderConfig(route: CodexEndpointRoute, model: string | null): JsonObject {
+  const window = codexWindowFor(route, model);
   return {
     [`model_providers.${route.key}`]: {
       name: route.name,
@@ -94,10 +114,11 @@ export function codexProviderConfig(route: CodexEndpointRoute): JsonObject {
       wire_api: 'responses',
       env_key: CODEX_ENDPOINT_KEY_VARIABLE,
     },
-    ...(window === null
+    ...(window !== null && 'maxContextTokens' in window
+      ? { model_context_window: window.maxContextTokens }
+      : {}),
+    ...(window?.autoCompactWindow === undefined
       ? {}
-      : 'maxContextTokens' in window
-        ? { model_context_window: window.maxContextTokens }
-        : { model_auto_compact_token_limit: window.autoCompactWindow }),
+      : { model_auto_compact_token_limit: window.autoCompactWindow }),
   };
 }

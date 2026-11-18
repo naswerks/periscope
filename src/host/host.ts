@@ -1408,6 +1408,17 @@ export type HostEvent =
       readonly kind: 'endpoint-aliases-unmapped';
       readonly endpoint: string;
       readonly aliases: readonly string[];
+    }
+  /**
+   * Models an operator's model endpoint that Codex reaches lists with no window, neither their own in
+   * `modelWindows` nor the endpoint's `contextWindow`, so a Codex session on one runs on the window
+   * Codex itself assumes for the id. Once per such endpoint, where the endpoints file is read; never a
+   * refusal.
+   */
+  | {
+      readonly kind: 'endpoint-windows-unstated';
+      readonly endpoint: string;
+      readonly models: readonly string[];
     };
 
 /**

@@ -8,6 +8,23 @@ removed export. The package version and the wire protocol version are separate n
 
 ## [Unreleased]
 
+- Added: a model endpoint's `modelWindows`, the window of each model it lists, for Codex. An endpoint
+  stated one window for all its models, so a Codex session on a model whose provider holds part of its
+  window back for the reply was told the whole window and never compacted before the provider refused
+  the request. Each entry names a model the endpoint lists and states its `maxContextTokens`, with an
+  `autoCompactWindow` at most that size beside it or not; a model's entry wins over the endpoint's
+  `contextWindow`, and a model with neither opens with no window stated, as before, on the one Codex
+  assumes for the id. The window is the one of the model the thread opens on, the model named or the
+  catalog's default, and a later model switch keeps it. A model an endpoint Codex reaches lists with no
+  window is named at start as an `[endpoint]` line (`HostEvent` `endpoint-windows-unstated`,
+  `ModelEndpointsReading.windowless`), and `modelWindows` on an endpoint Codex does not reach is ignored
+  and said so, never refused. `EndpointModelWindow` is exported, and `ModelEndpoint.modelWindows` is
+  optional.
+- Changed: on an endpoint Claude does not reach, `contextWindow` may state both `maxContextTokens` and an
+  `autoCompactWindow` at most that size, and Codex is given both keys; and its `autoCompactWindow` is any
+  positive whole number of tokens, where it had to fall within the 100000 to 1000000 the agent CLI
+  accepts. An endpoint Claude reaches keeps exactly one form and that range.
+
 ## [1.11.1] - 2026-11-17
 
 Protocol 20, the window `[19, 20]`, as in 1.11.0: no wire member, payload kind or reason is added or

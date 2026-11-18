@@ -420,7 +420,8 @@ export function startCodexProcess(
       ...codexSessionFlags(mode, excluded, writeRoots),
       ...(effort === null ? {} : { model_reasoning_effort: effort }),
       ...attached.value,
-      ...(route === null ? {} : codexProviderConfig(route)),
+      // The window is the one of the model the thread opens on; a later switch keeps it.
+      ...(route === null ? {} : codexProviderConfig(route, selected ?? catalogDefault)),
     };
     const overrides: JsonObject = {
       ...(selected === null ? {} : { model: selected }),

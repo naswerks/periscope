@@ -94,6 +94,7 @@ export { PeriscopeHost, composeSession, readAgentCatalog } from './host/index.js
 // The model endpoints an operator declares, read the way the binary reads them.
 export type {
   EndpointContextWindow,
+  EndpointModelWindow,
   ModelAliasTier,
   ModelEndpoint,
   ModelEndpointsReadOptions,
