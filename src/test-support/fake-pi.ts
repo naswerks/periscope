@@ -70,6 +70,8 @@ export interface FakePiOptions {
   readonly loadNoExtension?: boolean;
   /** End at start, writing this to stderr, as pi does when it cannot start. */
   readonly startFailure?: { readonly stderr: string; readonly code: number };
+  /** Commands never answered, by type. */
+  readonly silent?: readonly string[];
   /** Answer every prompt with `success: false` and this error. */
   readonly promptError?: string;
   /** The answer's message ends on an error with this text. */
@@ -311,6 +313,7 @@ export class FakePiCli {
   }
 
   async #handle(line: JsonObject): Promise<void> {
+    if (this.#options.silent?.includes(word(line['type'])) === true) return;
     switch (line['type']) {
       case 'get_state':
         this.#answer(line, {

@@ -67,6 +67,7 @@ import {
   sweepOpencodeHomes,
 } from './opencode-home.js';
 import { opencodeMcpServers } from './opencode-mcp.js';
+import { OpenBudget, OpenOverrun } from './open-budget.js';
 import { opencodeSkillDirectories } from './opencode-pack.js';
 import type {
   ConnectOpencode,
@@ -91,12 +92,20 @@ export const OPENCODE_AGENTS: Readonly<Record<(typeof OPENCODE_PERMISSION_MODES)
   plan: 'plan',
 };
 
-/** How long the open may take, from the host process's start to the read-back's last answer. */
-export const OPENCODE_OPEN_DEADLINE_MS = 90_000;
+/**
+ * How long the open may take in all, from the host process's start to the read-back's last answer. Each step
+ * is given what is left of it, and it ends before the session's start window, so an open slower than this
+ * ends naming the step it was on.
+ */
+export const OPENCODE_OPEN_DEADLINE_MS = 50_000;
 /** How long a setter, an interrupt, a reply or a read may take to be answered. */
 export const OPENCODE_CALL_DEADLINE_MS = 30_000;
 /** How long each step of the close may take before the next one runs. */
 export const OPENCODE_CLOSE_GRACE_MS = 10_000;
+/** How many of the host process's last stderr lines are kept, to say why it ended or its open did not finish. */
+const OPENCODE_STDERR_KEPT = 20;
+/** How much of one stderr line is kept. */
+const OPENCODE_STDERR_LINE_MAX = 500;
 /** How many request ids one session remembers having taken up. */
 const MAX_TAKEN_UP = 8192;
 /** How many sessions of an earlier process one resume reads from the database. */
@@ -257,6 +266,10 @@ export function startOpencodeProcess(
   let home: OpencodeSessionHome | null = null;
   let connection: OpencodeConnection | null = null;
   let sessionId: string | null = null;
+  // The open's budget, from its start until it opened or ended; each of its steps is given what is left.
+  let budget: OpenBudget | null = null;
+  // The host process's last stderr lines, the endpoint's key never among them.
+  const stderr: string[] = [];
   let agent = OPENCODE_AGENTS[request.permissionMode === 'plan' ? 'plan' : 'default'];
   // The sessions the session's own subagents started, with the call that started each.
   const family = new Map<string, string | null>();
@@ -298,9 +311,25 @@ export function startOpencodeProcess(
   })();
 
   const fail = (detail: string): void => {
+    budget?.finish();
     if (failure === null) failure = new Error(detail);
     void shutDown();
   };
+
+  /** Keep one line the host process wrote to its stderr. */
+  function keepStderr(line: string): void {
+    if (line.trim() === '') return;
+    const key = route === null ? '' : route.authToken();
+    const kept = key === '' ? line : line.split(key).join('<the endpoint key>');
+    stderr.push(kept.slice(0, OPENCODE_STDERR_LINE_MAX));
+    if (stderr.length > OPENCODE_STDERR_KEPT) stderr.shift();
+  }
+
+  /** The host process's last stderr line, as a failure carries it after its own words; empty when none. */
+  function lastWords(): string {
+    const last = stderr.at(-1);
+    return last === undefined ? '' : `; the host process last wrote: ${last}`;
+  }
 
   async function call(
     method: string,
@@ -312,6 +341,27 @@ export function startOpencodeProcess(
     const answered = await live.call(method, input, deadlineMs);
     if (!answered.ok) throw new Error(answered.refusal.detail);
     return answered.value;
+  }
+
+  /**
+   * One call the open itself makes, as `step` of it: given what the open has left, at most `boundMs`. One the
+   * open's budget runs out on throws an `OpenOverrun` naming the step.
+   */
+  async function openCall(
+    method: string,
+    input: JsonObject,
+    step: string = method,
+    boundMs?: number,
+  ): Promise<JsonValue> {
+    const live = connection;
+    const spending = budget;
+    if (live === null || spending === null) return call(method, input, boundMs);
+    const answered = await live.call(method, input, spending.enter(step, boundMs));
+    if (answered.ok) return answered.value;
+    if (spending.overran(answered.refusal.reason === 'rpc-request-timed-out')) {
+      throw new OpenOverrun(spending.overrun(step));
+    }
+    throw new Error(answered.refusal.detail);
   }
 
   function sessionOf(event: OpencodeEvent): string | null {
@@ -441,8 +491,8 @@ export function startOpencodeProcess(
    * whose line of parents reaches the session is given the shell's environment, as one this process sees
    * created is. Read once, when a kept session is opened again.
    */
-  async function adoptEarlierSessions(id: string, deadline: number): Promise<void> {
-    const listed = listOf(await call('session.list', { limit: MAX_ADOPTED_SESSIONS }, deadline));
+  async function adoptEarlierSessions(id: string): Promise<void> {
+    const listed = listOf(await openCall('session.list', { limit: MAX_ADOPTED_SESSIONS }));
     const parentOf = new Map<string, string>();
     for (const one of listed) {
       const child = opencodeWord(one['id']);
@@ -520,14 +570,16 @@ export function startOpencodeProcess(
 
   async function readPosture(id: string, models: JsonValue): Promise<OpencodePostureRead> {
     const location = { location: { directory: request.cwd } };
+    const step = 'the read-back';
+    const bound = OPENCODE_CALL_DEADLINE_MS;
     const [session, agents, saved, plugins, mcp, config] = await Promise.all([
-      call('session.get', { sessionID: id }),
-      call('agent.list', location),
+      openCall('session.get', { sessionID: id }, step, bound),
+      openCall('agent.list', location, step, bound),
       // No project named: every saved approval the session's database holds.
-      call('permission.saved.list', {}),
-      call('plugin.list', location),
-      call('mcp.list', location),
-      call('config.get', location),
+      openCall('permission.saved.list', {}, step, bound),
+      openCall('plugin.list', location, step, bound),
+      openCall('mcp.list', location, step, bound),
+      openCall('config.get', location, step, bound),
     ]);
     return {
       rules: rulesOf(recordOf(session, 'session.get')['permissions']),
@@ -564,7 +616,8 @@ export function startOpencodeProcess(
 
   async function open(): Promise<void> {
     if (gate === null) return;
-    const deadline = runtime.openDeadlineMs ?? OPENCODE_OPEN_DEADLINE_MS;
+    const spending = new OpenBudget('opencode', runtime.openDeadlineMs ?? OPENCODE_OPEN_DEADLINE_MS);
+    budget = spending;
     const nodeProblem = (runtime.nodeProblem ?? nodeCanRunOpencode)();
     if (nodeProblem !== null) return fail(`runtime-unavailable: ${nodeProblem}`);
     const install = (runtime.readInstall ?? readOpencodeInstall)(runtime.sdk);
@@ -612,7 +665,7 @@ export function startOpencodeProcess(
       database: home.database,
       configDirectory: home.configDirectory,
       config: opencodeConfigText(config),
-      openDeadlineMs: deadline,
+      openDeadlineMs: spending.enter("the host process's open"),
       onEvent,
       gatedTools: OPENCODE_HELD_TOOLS,
       onHeldCall,
@@ -621,11 +674,17 @@ export function startOpencodeProcess(
         if (!closed) fail(`runtime-unavailable: the opencode server's event stream ended (${detail})`);
       },
       onExit: (exit: ChildExit) => {
+        // While the host process opens, the open's own answer says how it ended: an exit then, its own or
+        // the one a refused open ends it with, would take the place of the step's name.
+        if (connection === null) return;
         if (!closed && failure === null)
-          failure = new Error(`the opencode host process exited (${describeExit(exit)})`);
+          failure = new Error(`the opencode host process exited (${describeExit(exit)})${lastWords()}`);
         if (!closed) void shutDown();
       },
-      ...(request.onStderr === null ? {} : { onStderr: (line: string) => request.onStderr?.(`${line}\n`) }),
+      onStderr: (line: string) => {
+        keepStderr(line);
+        request.onStderr?.(`${line}\n`);
+      },
       // A line of the host process's that this host dropped is something the session lost: it is said on
       // the session's state lane, once per reason, as well as in the host's log.
       onRefusal: (refusal) => {
@@ -635,7 +694,12 @@ export function startOpencodeProcess(
       ...(runtime.killTree === undefined ? {} : { killTree: runtime.killTree }),
       closeGraceMs: grace,
     });
-    if (!connected.ok) return fail(`${connected.refusal.reason}: ${connected.refusal.detail}`);
+    if (!connected.ok) {
+      if (spending.overran(connected.refusal.reason === 'rpc-request-timed-out')) {
+        return fail(`runtime-unavailable: ${spending.overrun()}${lastWords()}`);
+      }
+      return fail(`${connected.refusal.reason}: ${connected.refusal.detail}${lastWords()}`);
+    }
     connection = connected.value;
     if (closed) {
       await connection.close();
@@ -644,29 +708,23 @@ export function startOpencodeProcess(
 
     // The plugins are active once the model list answers: every read after it sees the configured server.
     const location = { location: { directory: request.cwd } };
-    const models = await call('model.list', location, deadline);
+    const models = await openCall('model.list', location);
     const rules = opencodeRuleset();
     let info: Record<string, unknown>;
     if (resumeId === null) {
       info = recordOf(
-        await call(
-          'session.create',
-          {
-            location: { directory: request.cwd },
-            permissions: rules as unknown as JsonValue,
-            agent,
-            ...(providerId === null || model === null
-              ? {}
-              : { model: { id: model, providerID: providerId } }),
-          },
-          deadline,
-        ),
+        await openCall('session.create', {
+          location: { directory: request.cwd },
+          permissions: rules as unknown as JsonValue,
+          agent,
+          ...(providerId === null || model === null ? {} : { model: { id: model, providerID: providerId } }),
+        }),
         'session.create',
       );
     } else if (request.fork) {
-      info = recordOf(await call('session.fork', { sessionID: resumeId }, deadline), 'session.fork');
+      info = recordOf(await openCall('session.fork', { sessionID: resumeId }), 'session.fork');
     } else {
-      info = recordOf(await call('session.get', { sessionID: resumeId }, deadline), 'session.get');
+      info = recordOf(await openCall('session.get', { sessionID: resumeId }), 'session.get');
     }
     const id = opencodeWord(info['id']);
     if (id === null) return fail('runtime-unavailable: the opencode server named no session');
@@ -674,14 +732,14 @@ export function startOpencodeProcess(
     home.holds(id);
     agent = opencodeWord(info['agent']) ?? agent;
     gate.identify(id);
-    await call('session.environment', { sessionID: id, variables: opencodeShellEnv(request.env) }, deadline);
-    if (resumeId !== null) await adoptEarlierSessions(id, deadline);
+    await openCall('session.environment', { sessionID: id, variables: opencodeShellEnv(request.env) });
+    if (resumeId !== null) await adoptEarlierSessions(id);
     if (
       resumeId !== null &&
       opencodeWord(info['agent']) !== OPENCODE_AGENTS[request.permissionMode === 'plan' ? 'plan' : 'default']
     ) {
       const wanted = OPENCODE_AGENTS[request.permissionMode === 'plan' ? 'plan' : 'default'];
-      await call('session.switchAgent', { sessionID: id, agent: wanted }, deadline);
+      await openCall('session.switchAgent', { sessionID: id, agent: wanted });
       agent = wanted;
     }
     if (closed) return;
@@ -709,6 +767,7 @@ export function startOpencodeProcess(
     if (closed) return;
 
     opened = true;
+    spending.finish();
     settleProven(true);
     output.push({
       kind: 'opened',
@@ -738,6 +797,7 @@ export function startOpencodeProcess(
   function shutDown(): Promise<void> {
     closing ??= (async () => {
       closed = true;
+      budget?.finish();
       held.length = 0;
       // A call still waiting on the open's proof ends refused: the session never opened, or is closing.
       settleProven(false);
@@ -791,7 +851,11 @@ export function startOpencodeProcess(
     void Promise.resolve()
       .then(() => open())
       .catch((error: unknown) =>
-        fail(`runtime-unavailable: the opencode session could not open: ${wordsOf(error)}`),
+        fail(
+          error instanceof OpenOverrun
+            ? `runtime-unavailable: ${error.message}${lastWords()}`
+            : `runtime-unavailable: the opencode session could not open: ${wordsOf(error)}${lastWords()}`,
+        ),
       );
   }
 
@@ -865,6 +929,9 @@ export function startOpencodeProcess(
     pluginsApplied(): Promise<boolean | null> {
       // The skills handed over are read by the server itself; it gives no answer for the set as a whole.
       return Promise.resolve(null);
+    },
+    openStep(): string | null {
+      return budget?.describe() ?? null;
     },
     close(): void {
       if (closed) return;

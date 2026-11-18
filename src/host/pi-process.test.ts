@@ -764,3 +764,17 @@ test('closing ends pi and removes the run directory', async () => {
   await waitFor(() => !existsSync(dir), 'the run directory to be removed');
   assert.equal(await run.ended, null);
 });
+
+test('an open that runs its budget out ends the session naming the command it was on, and says what it waits on until then', async () => {
+  const run = await started({ fake: { silent: ['get_state'] }, runtime: { openDeadlineMs: 2_000 } });
+  await waitFor(
+    () =>
+      run.fake.child.spawned !== null && run.fake.cli.received.some((line) => line['type'] === 'get_state'),
+    'pi to be asked its state',
+  );
+  assert.match(run.process.openStep?.() ?? '', /^pi open: waiting on get_state, \d+s in$/);
+  assert.match(
+    String((await run.ended)?.message),
+    /^runtime-unavailable: the pi open did not finish get_state within 2000ms$/,
+  );
+});

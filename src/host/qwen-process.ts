@@ -56,8 +56,12 @@ import type { SpawnChild } from './stdio-rpc.js';
 import type { QwenPermissionMode } from './wire-request.js';
 import { QWEN_MODE_MAP, QWEN_PERMISSION_MODES, isQwenPermissionMode } from './wire-request.js';
 
-/** How long `initialize` may take to be answered: the CLI answers it before it loads its configuration. */
-export const QWEN_HANDSHAKE_DEADLINE_MS = 60_000;
+/**
+ * How long `initialize` may take to be answered: the CLI answers it before it loads its configuration. It is
+ * the whole of the open, and it ends before the session's start window, so an open slower than this ends
+ * naming it.
+ */
+export const QWEN_HANDSHAKE_DEADLINE_MS = 50_000;
 /** How long a setter, an interrupt or a context-usage read may take to be answered. */
 export const QWEN_CONTROL_DEADLINE_MS = 30_000;
 /**

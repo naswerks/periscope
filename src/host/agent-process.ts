@@ -589,6 +589,11 @@ export interface AgentProcess<M = SDKMessage> {
    * control, so it sits here without widening what the handle can change.
    */
   pluginsApplied(): Promise<boolean | null>;
+  /**
+   * What the open is waiting on, and how long it has run, while it is under way: said when the session's
+   * start window ends first. Null once the open is over, and absent on a process that does not say.
+   */
+  openStep?(): string | null;
   /** End the process and release everything it holds. Idempotent. */
   close(): void;
 }

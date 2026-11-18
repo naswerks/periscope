@@ -273,9 +273,10 @@ export interface NativeRuntime<M = unknown> {
 /**
  * 60 seconds. The process is a large native binary starting cold, and a loaded host has been
  * observed holding a trivial invocation of it past ten. Too short turns a slow machine into a
- * spurious outage; there is no upper bound that is too generous for a case that otherwise hangs.
+ * spurious outage; there is no upper bound that is too generous for a case that otherwise hangs. Every
+ * native runtime's open has a budget of its own below it, so a slow open ends naming its step first.
  */
-const DEFAULT_START_TIMEOUT_MS = 60_000;
+export const DEFAULT_START_TIMEOUT_MS = 60_000;
 
 export class SessionRegistry {
   readonly #live = new Map<string, HostedSession<unknown>>();

@@ -13,10 +13,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { DEFAULT_RUNTIME } from '../control/frames.js';
 import type { AgentProcess, AgentProcessRequest } from '../host/agent-process.js';
+import { CODEX_OPEN_DEADLINE_MS } from '../host/codex-process.js';
+import { COPILOT_OPEN_DEADLINE_MS } from '../host/copilot-process.js';
+import { OPENCODE_OPEN_DEADLINE_MS } from '../host/opencode-process.js';
+import { PI_OPEN_DEADLINE_MS } from '../host/pi-process.js';
+import { QWEN_HANDSHAKE_DEADLINE_MS } from '../host/qwen-process.js';
 import { fixedClock } from '../core/time.js';
 import { FAKE_PROMPT_CAPACITY, fakeAgents, initMessage } from '../test-support/fake-agent.js';
-import { SessionRegistry } from './registry.js';
+import { DEFAULT_START_TIMEOUT_MS, SessionRegistry } from './registry.js';
+import {
+  CODEX_RUNTIME,
+  COPILOT_RUNTIME,
+  OPENCODE_RUNTIME,
+  PI_RUNTIME,
+  QWEN_RUNTIME,
+  spawnableRuntimes,
+} from './runtimes.js';
 
 function registryWith(
   factory: (r: AgentProcessRequest) => AgentProcess,
@@ -683,4 +697,55 @@ test("the agent's plugin answer still reaches the facts when the init message la
 
   await settle();
   assert.equal(created.value.facts?.pluginsApplied, false, 'the later answer was dropped');
+});
+
+test("every native runtime's open budget ends before the start window, so a slow open ends naming its step", () => {
+  const budgets: Readonly<Record<string, number>> = {
+    [CODEX_RUNTIME]: CODEX_OPEN_DEADLINE_MS,
+    [QWEN_RUNTIME]: QWEN_HANDSHAKE_DEADLINE_MS,
+    [PI_RUNTIME]: PI_OPEN_DEADLINE_MS,
+    [COPILOT_RUNTIME]: COPILOT_OPEN_DEADLINE_MS,
+    [OPENCODE_RUNTIME]: OPENCODE_OPEN_DEADLINE_MS,
+  };
+  assert.deepEqual(
+    Object.keys(budgets).sort(),
+    spawnableRuntimes()
+      .filter((runtime) => runtime !== DEFAULT_RUNTIME)
+      .sort(),
+    'every native runtime has its open budget pinned here',
+  );
+  for (const [runtime, budget] of Object.entries(budgets)) {
+    assert.ok(
+      budget < DEFAULT_START_TIMEOUT_MS,
+      `${runtime}'s open budget of ${budget}ms does not end before the ${DEFAULT_START_TIMEOUT_MS}ms start window`,
+    );
+  }
+});
+
+test('a start window that ends while the process still opens names the step it waits on; one that says nothing is named bare', async () => {
+  const fake = fakeAgents();
+  const step = 'opencode open: waiting on model.list, 0s in';
+  const saying = registryWith(
+    (request) => ({ ...fake.start(request), openStep: () => step }),
+    { PATH: 'p' },
+    50,
+  );
+  const opening = saying.create({ cwd: 'C:/work' });
+  assert.ok(opening.ok);
+  opening.value.prompt('go');
+  const ended = await opening.value.whenLive(50);
+  assert.equal(ended.ok, false);
+  assert.equal(
+    ended.ok ? '' : ended.refusal.detail,
+    `the session ended before reporting itself (start_timed_out: the agent did not report itself within 50ms (${step}))`,
+  );
+
+  const silent = registryWith(fake.start, { PATH: 'p' }, 50).create({ cwd: 'C:/work' });
+  assert.ok(silent.ok);
+  silent.value.prompt('go');
+  const bare = await silent.value.whenLive(50);
+  assert.equal(
+    bare.ok ? '' : bare.refusal.detail,
+    'the session ended before reporting itself (start_timed_out: the agent did not report itself within 50ms)',
+  );
 });

@@ -24,6 +24,24 @@ removed export. The package version and the wire protocol version are separate n
   `autoCompactWindow` at most that size, and Codex is given both keys; and its `autoCompactWindow` is any
   positive whole number of tokens, where it had to fall within the 100000 to 1000000 the agent CLI
   accepts. An endpoint Claude reaches keeps exactly one form and that range.
+- Fixed: a native session's open is bounded as a whole, below the session's start window, and an open that
+  runs out names the step it was on. Each step of an opencode open had 90 seconds of its own while the start
+  window gives the whole open 60, so an open slower than the window ended with the start window's words
+  alone and the step's own failure was lost; the opens of Codex, Copilot and pi bounded each step alone
+  too, and their bounds added up past the window. The open of a Codex, Copilot, pi or opencode session now
+  has 50 seconds in all, each step given what is left, at most its own bound, and Qwen Code's whole open,
+  its `initialize`, has 50 seconds where it had 60. An open that runs out ends `runtime-unavailable`,
+  naming the step: `the opencode open did not finish session.create within 50000ms`. Should the start
+  window end first, its words name the step the open waits on and how long it has run:
+  `the agent did not report itself within 60000ms (opencode open: waiting on model.list, 58s in)`.
+- Fixed: a failed opencode open, and an opencode host process that exits, carry the last line the host
+  process wrote to its stderr, the endpoint's key replaced wherever it appears in it. An open the host
+  process does not finish names why, never the exit the host process is ended with: that exit took the
+  failure's place, so a refused or timed-out open read `the opencode host process exited (exit code 0)`.
+- Fixed: an opencode session home whose removal failed part way is cleared by a later open. The removal
+  could take the home's owner file and then stop at a file still held open, and a home with no owner file
+  is never swept; the owner file is now written again, marked as being removed, and the next opencode
+  session to open removes the home whoever made it, keeping nothing from it.
 
 ## [1.11.1] - 2026-11-17
 

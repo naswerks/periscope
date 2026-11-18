@@ -24,6 +24,12 @@ the interactive session a controller opens and leaves for a person to type into;
 is what makes the emits-nothing-until-prompted behaviour legible instead of a hang. From its first
 turn a session has the start timeout (60 s by default, the registry's `startTimeoutMs`) to report
 itself, on the host's path as through `registry.open()`, or it ends with the `start_timed_out` event.
+The open of a Codex, Qwen Code, pi, Copilot or opencode session has a budget of its own below that
+window, 50 s, and each of its steps is given what the budget has left, at most the step's own bound:
+an open slower than that ends the session naming the step it was on:
+`the opencode open did not finish session.create within 50000ms`. Should the start window end first,
+its words name the step the open waits on and how long it has run:
+`the agent did not report itself within 60000ms (opencode open: waiting on model.list, 58s in)`.
 
 The CLI re-sends `system/init` on every turn with current values; on Claude Code 2.1.284, one turn
 gave one init and two gave two. Only the first records `ready`. A later one records nothing and

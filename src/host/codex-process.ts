@@ -57,6 +57,7 @@ import {
 } from './codex-wire.js';
 import { CODEX_COVERAGE } from '../state/codex-coverage.js';
 import { codexServerRequestAnswer } from './codex-answers.js';
+import { OpenBudget } from './open-budget.js';
 import type { RpcAnswer, RpcId, SpawnChild, StdioRpcPeer } from './stdio-rpc.js';
 import { startStdioRpc } from './stdio-rpc.js';
 import type { CodexPermissionMode } from './wire-request.js';
@@ -69,8 +70,13 @@ import {
 
 /** How long the opening requests may take: `initialize` and the queries around the thread. */
 export const CODEX_HANDSHAKE_DEADLINE_MS = 20_000;
-/** How long opening the thread may take: a cold start loads the config, the skills and the MCP servers. */
-export const CODEX_OPEN_DEADLINE_MS = 60_000;
+/**
+ * How long the open may take in all, from `initialize` to the thread's server list. Each step is given what is
+ * left of it, at most its own bound, and opening the thread, which on a cold start loads the config, the
+ * skills and the MCP servers, takes what is left. It ends before the session's start window, so an open
+ * slower than this ends naming the step it was on.
+ */
+export const CODEX_OPEN_DEADLINE_MS = 50_000;
 /** How long a turn's start or its interrupt may take to be answered. */
 export const CODEX_TURN_DEADLINE_MS = 30_000;
 /** The longest prompt Codex takes, in characters. */
@@ -103,6 +109,8 @@ export interface CodexRuntimeConfig {
   readonly spawn?: SpawnChild;
   readonly killTree?: (pid: number) => Promise<void>;
   readonly closeGraceMs?: number;
+  /** How long the open may take in all. Defaults to `CODEX_OPEN_DEADLINE_MS`. */
+  readonly openDeadlineMs?: number;
   /** The operator's model endpoints a Codex session may open on (`codexEndpointRoutes`). */
   readonly endpoints?: readonly CodexEndpointRoute[];
   /**
@@ -207,12 +215,15 @@ export function startCodexProcess(
   const efforts = new Map<string, readonly string[]>();
   /** The catalog's default model: what a thread naming none opens on. */
   let catalogDefault: string | null = null;
+  // The open's budget, from its start until it opened or ended; each request it makes is given what is left.
+  let budget: OpenBudget | null = null;
   let resolvePlugins: (applied: boolean | null) => void = () => undefined;
   const plugins = new Promise<boolean | null>((settle) => {
     resolvePlugins = settle;
   });
 
   const fail = (detail: string): void => {
+    budget?.finish();
     if (failure === null) failure = new Error(detail);
     resolvePlugins(null);
     void shutDown();
@@ -300,8 +311,19 @@ export function startCodexProcess(
   ): Promise<Result<JsonObject>> {
     if (peer === null)
       return { ok: false, refusal: { reason: 'rpc-request-failed', detail: `${method}: no app-server` } };
-    const answered = await peer.request(method, params, deadlineMs);
-    if (!answered.ok) return answered;
+    // While the session opens, a request is given what the open has left, and one it runs out on says so.
+    const spending = budget !== null && budget.open ? budget : null;
+    const answered = await peer.request(
+      method,
+      params,
+      spending === null ? deadlineMs : spending.enter(method, deadlineMs),
+    );
+    if (!answered.ok) {
+      if (spending?.overran(answered.refusal.reason === 'rpc-request-timed-out') === true) {
+        return { ok: false, refusal: { reason: 'runtime-unavailable', detail: spending.overrun(method) } };
+      }
+      return answered;
+    }
     const result = answered.value;
     return typeof result === 'object' && result !== null && !Array.isArray(result)
       ? { ok: true, value: result }
@@ -353,6 +375,7 @@ export function startCodexProcess(
   }
 
   async function open(): Promise<void> {
+    budget = new OpenBudget('Codex', runtime.openDeadlineMs ?? CODEX_OPEN_DEADLINE_MS);
     const initParams: JsonObject = {
       clientInfo: { name: 'periscope', title: null, version: runtime.clientVersion },
       capabilities: {
@@ -470,6 +493,7 @@ export function startCodexProcess(
     resolvePlugins(skillsLoaded && skillRoots.problems.length === 0);
 
     opened = true;
+    budget?.finish();
     for (const message of arrived.splice(0)) output.push(message);
     next();
   }
@@ -706,6 +730,7 @@ export function startCodexProcess(
 
   async function shutDown(): Promise<void> {
     closed = true;
+    budget?.finish();
     gate?.close();
     held.length = 0;
     if (turn !== null) await interruptTurn();
@@ -800,6 +825,9 @@ export function startCodexProcess(
     },
     pluginsApplied(): Promise<boolean | null> {
       return plugins;
+    },
+    openStep(): string | null {
+      return budget?.describe() ?? null;
     },
     close(): void {
       if (closed) return;

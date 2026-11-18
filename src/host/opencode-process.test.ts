@@ -1225,14 +1225,79 @@ test("the server's stream ending while the process lives ends the session, namin
   await closed(run);
 });
 
-test('an open that meets no answer by its deadline ends the session, naming the call', async () => {
-  const run = await started({ fake: { hanging: ['model.list'] }, runtime: { openDeadlineMs: 100 } });
-  const ended = await run.ended;
-  assert.match(
-    String(ended?.message),
-    /^runtime-unavailable: the opencode session could not open: model\.list met no answer within 100 ms/,
+test("an open that runs its budget out ends the session naming the step it was on: the host process's open, model.list, session.create", async () => {
+  const cases: [FakeOpencodeOptions, RegExp][] = [
+    [
+      { openHangs: true },
+      /^runtime-unavailable: the opencode open did not finish the host process's open within 150ms$/,
+    ],
+    [
+      { hanging: ['model.list'] },
+      /^runtime-unavailable: the opencode open did not finish model\.list within 150ms$/,
+    ],
+    [
+      { hanging: ['session.create'] },
+      /^runtime-unavailable: the opencode open did not finish session\.create within 150ms$/,
+    ],
+  ];
+  for (const [fake, pattern] of cases) {
+    const run = await started({ fake, runtime: { openDeadlineMs: 150 } });
+    const ended = await run.ended;
+    assert.match(String(ended?.message), pattern);
+    assert.equal(opened(run), false);
+    await closed(run);
+  }
+});
+
+test('the open is one budget: a step is given what the earlier steps left, never a budget of its own', async () => {
+  const run = await started({ fake: { hanging: ['session.create'] }, runtime: { openDeadlineMs: 400 } });
+  const began = Date.now();
+  await run.ended;
+  const took = Date.now() - began;
+  assert.ok(took < 1_500, `the open took ${took}ms on a 400ms budget`);
+  const connect = run.record.connects[0];
+  assert.ok(
+    connect !== undefined && connect.openDeadlineMs <= 400,
+    "the host process's open is given the budget",
   );
-  assert.equal(opened(run), false);
+  await closed(run);
+});
+
+test('while the open waits on a step the process says which and how long it has run; once open, nothing', async () => {
+  const waiting = await started({ fake: { hanging: ['model.list'] }, runtime: { openDeadlineMs: 2_000 } });
+  await until(() => waiting.record.calls.some((call) => call.method === 'model.list'), 'model.list asked');
+  assert.match(waiting.process.openStep?.() ?? '', /^opencode open: waiting on model\.list, \d+s in$/);
+  await closed(waiting);
+  assert.equal(waiting.process.openStep?.() ?? null, null, 'a closed process waits on nothing');
+
+  const run = await started();
+  await until(() => opened(run), 'the session to open');
+  assert.equal(run.process.openStep?.() ?? null, null);
+  await closed(run);
+});
+
+test("an open that does not finish carries the host process's last stderr line, the endpoint's key never in it", async () => {
+  const run = await started({
+    fake: { hanging: ['model.list'], stderr: ['loading the SDK', `provider error: key ${KEY} refused`, ''] },
+    runtime: { openDeadlineMs: 150 },
+  });
+  const ended = String((await run.ended)?.message);
+  assert.match(
+    ended,
+    /^runtime-unavailable: the opencode open did not finish model\.list within 150ms; the host process last wrote: provider error: key <the endpoint key> refused$/,
+  );
+  assert.equal(ended.includes(KEY), false, "the endpoint's key was repeated");
+  await closed(run);
+});
+
+test('a host process that cannot open ends the session with its last stderr line', async () => {
+  const run = await started({
+    fake: { connectFailure: 'the SDK could not be loaded', stderr: ['Error: no such module'] },
+  });
+  assert.match(
+    String((await run.ended)?.message),
+    /^runtime-unavailable: the opencode host process did not open: the SDK could not be loaded; the host process last wrote: Error: no such module$/,
+  );
   await closed(run);
 });
 

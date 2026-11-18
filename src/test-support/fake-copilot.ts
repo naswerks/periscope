@@ -73,6 +73,8 @@ export interface FakeCopilotOptions {
   readonly runError?: { readonly errorType: string; readonly message: string };
   /** `createSession` rejects with this. */
   readonly createFailure?: string;
+  /** `createSession` never settles. */
+  readonly createHangs?: boolean;
   /** The runtime process's id, as the SDK's private member holds it; null for none. */
   readonly pid?: number | null;
   /** A call the turn still makes while it is being aborted, through the hook and the request as any other. */
@@ -468,6 +470,7 @@ export function fakeCopilot(options: FakeCopilotOptions = {}): {
     createSession(config: CopilotSessionConfig): Promise<CopilotSession> {
       record.configs.push(config);
       if (options.createFailure !== undefined) return Promise.reject(new Error(options.createFailure));
+      if (options.createHangs === true) return new Promise<never>(() => undefined);
       const id = options.sessionId ?? 'copilot-session-1';
       live = { config, id };
       emitTo(config, 'session.start', {

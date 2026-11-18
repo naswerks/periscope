@@ -724,6 +724,14 @@ using`), which Node 22 cannot parse, so on Node 22 the SDK cannot load at all. T
   from being offered. What keeps it from fetching its model catalogue, and from reading a project's
   configuration or a `.claude` folder, is an option the server is created with; what keeps it from
   looking for an update is the session's configuration.
+- **The open is bounded as a whole.** From the host process's start to the read-back's last answer the
+  open has 50 seconds (`OPENCODE_OPEN_DEADLINE_MS`), below the session's start window, and each step is
+  given what is left: the host process's own open, `model.list`, `session.create` (or the resume's read),
+  the session's environment and the read-back. An open that runs it out ends the session
+  `runtime-unavailable`, naming the step:
+  `the opencode open did not finish session.create within 50000ms`. A failure of the open or of the
+  host process carries the last line the host process wrote to its stderr, with the endpoint's key never
+  in it.
 - **The home is the runner's own.** Each session runs with a fresh home under `<base>/sessions`, so the
   operator's own opencode directories (their sign-ins, their settings, their sessions) are never what a
   session runs from. The home is removed when the session closes; its database moves to
@@ -731,7 +739,10 @@ using`), which Node 22 cannot parse, so on Node 22 the SDK cannot load at all. T
   crashed, or was killed) leaves the home behind. Each home says which process made it and which
   session it holds (`owner.json`), and the next opencode session to open clears every home whose
   process is gone: its database is kept for a resume first, then the home is removed. A home whose
-  process is still there is another live session's and is left alone.
+  process is still there is another live session's and is left alone. A home whose removal fails part
+  way, a file of it still held open, is given its owner file again marked as being removed, and the next
+  session to open removes it whoever made it; nothing is kept from it, since its database was kept before
+  the removal began.
 - **Endpoints.** An opencode session reaches a model only through an endpoint whose `runtimes` name
   `opencode`, over `openai-chat`: the session's one provider, `endpoint-<name>`, and the only one its
   configuration allows. The key is read when the session opens and crosses into the host process with the

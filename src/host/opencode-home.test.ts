@@ -208,6 +208,61 @@ test("a session home a host left behind is cleared at the next open: its databas
   await rm(base, { recursive: true, force: true });
 });
 
+/** A removal that fails part way, as one with a file still held open does: the owner file goes first. */
+const failsPartWay = (home: string): void => {
+  rmSync(join(home, 'owner.json'), { force: true });
+  throw new Error('EBUSY: resource busy or locked');
+};
+
+test('a home whose removal fails part way is given its owner file again, marked removing, and the next sweep clears it', async () => {
+  const base = await tempDir('opencode-unremoved');
+  try {
+    const made = createOpencodeSessionHome(base, failsPartWay);
+    assert.ok(made.ok);
+    made.value.holds('ses_closed');
+    const removed = made.value.remove();
+    assert.equal(removed.ok, false);
+    assert.match(removed.ok ? '' : removed.refusal.detail, /could not be removed: EBUSY/);
+    assert.deepEqual(JSON.parse(readFileSync(join(made.value.home, 'owner.json'), 'utf8')), {
+      pid: process.pid,
+      removing: true,
+    });
+
+    // This process is alive, and the home is still cleared: a removal begun is finished whoever made the home,
+    // and nothing is kept from it, since its database was kept before the removal began.
+    const swept = sweepOpencodeHomes(base, () => true);
+    assert.deepEqual(swept.removed, [made.value.home]);
+    assert.deepEqual(swept.kept, []);
+    assert.deepEqual(swept.problems, []);
+    assert.equal(existsSync(made.value.home), false);
+    assert.equal(existsSync(join(base, 'state', 'ses_closed')), false);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('a home the sweep fails to remove is marked for the sweep after it', async () => {
+  const base = await tempDir('opencode-unswept');
+  try {
+    const made = createOpencodeSessionHome(base);
+    assert.ok(made.ok);
+    writeFileSync(join(made.value.home, 'owner.json'), JSON.stringify({ pid: 111 }));
+    const first = sweepOpencodeHomes(base, () => false, failsPartWay);
+    assert.deepEqual(first.removed, []);
+    assert.equal(first.problems.length, 1);
+    assert.match(first.problems[0] ?? '', /which a host left behind, could not be removed: EBUSY/);
+    const owner = JSON.parse(readFileSync(join(made.value.home, 'owner.json'), 'utf8')) as {
+      removing?: unknown;
+    };
+    assert.equal(owner.removing, true);
+    const second = sweepOpencodeHomes(base, () => false);
+    assert.deepEqual(second.removed, [made.value.home]);
+    assert.equal(existsSync(made.value.home), false);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 test("the variables this host never hands an opencode session: opencode's, Node's preload and this host's own but the further worktrees' paths, in any case", () => {
   for (const name of [
     'OPENCODE_SERVER_PASSWORD',

@@ -97,6 +97,7 @@ import {
 } from './copilot-sdk.js';
 import type { CopilotMessage } from './copilot-wire.js';
 import { copilotData, copilotRecord, copilotWord, isCopilotMainThread } from './copilot-wire.js';
+import { OpenBudget, OpenOverrun } from './open-budget.js';
 import { killDescendants, killProcessTree } from './stdio-rpc.js';
 
 /** The effort words a Copilot session takes: the runtime's reasoning efforts this host offers. */
@@ -105,8 +106,12 @@ export const COPILOT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as cons
 /** The permission modes a Copilot session takes: `default` is the agent mode `interactive`, `plan` is `plan`. */
 export const COPILOT_PERMISSION_MODES = ['default', 'plan'] as const;
 
-/** How long the open may take, from the client's start to the probe's answer. */
-export const COPILOT_OPEN_DEADLINE_MS = 60_000;
+/**
+ * How long the open may take in all, from the client's start to the probe's answer. Each step is given what
+ * is left of it, and it ends before the session's start window, so an open slower than this ends naming the
+ * step it was on.
+ */
+export const COPILOT_OPEN_DEADLINE_MS = 50_000;
 /** How long a setter, an abort or a read may take to be answered. */
 export const COPILOT_CALL_DEADLINE_MS = 30_000;
 /** How long the runtime has to say which policy hooks it finds, before the open goes on without its answer. */
@@ -399,6 +404,8 @@ export function startCopilotProcess(
   let startModel: string | null = null;
   // The open's probe call, and the hook runs and requests its events carry, so none of them rides on.
   let probeId: string | null = null;
+  // The open's budget, from its start until it opened or ended; each of its steps is given what is left.
+  let budget: OpenBudget | null = null;
   const probeHooks = new Set<string>();
   const probeRequests = new Set<string>();
 
@@ -425,6 +432,7 @@ export function startCopilotProcess(
   })();
 
   const fail = (detail: string): void => {
+    budget?.finish();
     if (failure === null) failure = new Error(detail);
     void shutDown();
   };
@@ -486,7 +494,8 @@ export function startCopilotProcess(
 
   async function open(): Promise<void> {
     if (gate === null) return;
-    const deadline = runtime.openDeadlineMs ?? COPILOT_OPEN_DEADLINE_MS;
+    const spending = new OpenBudget('Copilot', runtime.openDeadlineMs ?? COPILOT_OPEN_DEADLINE_MS);
+    budget = spending;
     const install = (runtime.readInstall ?? readCopilotInstall)(runtime.sdk);
     if (!install.ok) return fail(`${install.refusal.reason}: ${install.refusal.detail}`);
     const sdk = await (runtime.loadSdk ?? loadCopilotSdk)(install.value);
@@ -520,7 +529,7 @@ export function startCopilotProcess(
       connection: sdk.value.RuntimeConnection.forStdio({ path: install.value.runtime, env }),
     });
     client = started;
-    await within(started.start(), deadline, "the Copilot runtime's start");
+    await spending.within(started.start(), "the Copilot runtime's start");
     onCopilotRuntimeExit(started, (detail) => {
       runtimeExited ??= detail;
       if (!closed && failure === null) failure = new Error(`the Copilot runtime exited (${detail})`);
@@ -533,7 +542,10 @@ export function startCopilotProcess(
     const policy = copilotPolicyDetail(
       mergeCopilotPolicyLooks(
         onMachine,
-        await runtimePolicyHooks(started, Math.min(deadline, COPILOT_POLICY_ASK_MS)),
+        await runtimePolicyHooks(
+          started,
+          spending.enter("the runtime's policy hooks", COPILOT_POLICY_ASK_MS),
+        ),
       ),
     );
     gate.stateSpawnDegrades(policy === null ? [] : [{ name: 'gate-hook-foreign', detail: policy }]);
@@ -558,21 +570,21 @@ export function startCopilotProcess(
     });
     let session: CopilotSession;
     if (resumeId === null) {
-      session = await within(started.createSession(config), deadline, "the Copilot session's create");
+      session = await spending.within(started.createSession(config), "the Copilot session's create");
     } else if (request.fork) {
-      const forked = await within(started.rpc.sessions.fork({ sessionId: resumeId }), deadline, 'the fork');
-      session = await within(started.resumeSession(forked.sessionId, config), deadline, 'the forked resume');
+      const forked = await spending.within(started.rpc.sessions.fork({ sessionId: resumeId }), 'the fork');
+      session = await spending.within(started.resumeSession(forked.sessionId, config), 'the forked resume');
     } else {
-      session = await within(started.resumeSession(resumeId, config), deadline, 'the resume');
+      session = await spending.within(started.resumeSession(resumeId, config), 'the resume');
     }
     live = session;
     sessionId = session.sessionId;
     gate.identify(session.sessionId);
     if (closed) return;
-    if (agentMode === 'plan') await within(session.rpc.mode.set({ mode: 'plan' }), deadline, 'the plan mode');
+    if (agentMode === 'plan') await spending.within(session.rpc.mode.set({ mode: 'plan' }), 'the plan mode');
 
     // The posture, read back before the first prompt.
-    const read = await within(readPosture(session), deadline, "the runtime's read-back");
+    const read = await spending.within(readPosture(session), "the runtime's read-back");
     const posture = { agentMode, cwd: request.cwd, writeRoots, home: home?.home ?? '' };
     const unread = copilotReadBackProblem(read, posture);
     if (unread !== null) return refuseOpen('copilot-gate-not-active', unread);
@@ -611,9 +623,8 @@ export function startCopilotProcess(
     // The route, proven: one call through the hook and the request both, refused here, never run.
     const probe = gate.probe();
     probeId = probe.id;
-    const result = await within(
+    const result = await spending.within(
       session.rpc.tools.execute({ name: 'view', arguments: { path: request.cwd }, toolCallId: probe.id }),
-      deadline,
       "the open's probe call",
     );
     const reach = probe.reach();
@@ -632,6 +643,7 @@ export function startCopilotProcess(
     if (closed) return;
 
     opened = true;
+    spending.finish();
     output.push({
       kind: 'opened',
       sessionId: session.sessionId,
@@ -664,6 +676,7 @@ export function startCopilotProcess(
   function shutDown(): Promise<void> {
     closing ??= (async () => {
       closed = true;
+      budget?.finish();
       held.length = 0;
       decisions.abort();
       const session = live;
@@ -745,7 +758,11 @@ export function startCopilotProcess(
     void Promise.resolve()
       .then(() => open())
       .catch((error: unknown) =>
-        fail(`runtime-unavailable: the Copilot session could not open: ${wordsOf(error)}`),
+        fail(
+          error instanceof OpenOverrun
+            ? `runtime-unavailable: ${error.message}`
+            : `runtime-unavailable: the Copilot session could not open: ${wordsOf(error)}`,
+        ),
       );
   }
 
@@ -800,6 +817,9 @@ export function startCopilotProcess(
       // The runtime reports the skills it loaded (`session.skills_loaded`), which the receipt carries; it
       // gives no answer for the set as a whole.
       return Promise.resolve(null);
+    },
+    openStep(): string | null {
+      return budget?.describe() ?? null;
     },
     close(): void {
       if (closed) return;
