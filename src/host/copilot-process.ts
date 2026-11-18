@@ -47,6 +47,7 @@ import type { RefusalReason } from '../core/refusal.js';
 import { AsyncQueue } from '../core/async-queue.js';
 import type { Result } from '../core/result.js';
 import { COPILOT_EXCLUDED_TOOLS } from '../gate/tool-kind.js';
+import { COPILOT_RUNTIME, openBudgetFor } from '../sessions/runtimes.js';
 import type { AgentInitFacts, AgentProcess, AgentProcessRequest, ThinkingConfig } from './agent-process.js';
 import { MAX_PENDING_PROMPTS, isRuntimeDefaultPrompt } from './agent-process.js';
 import type { CopilotEndpointRoute } from './copilot-endpoints.js';
@@ -107,11 +108,11 @@ export const COPILOT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as cons
 export const COPILOT_PERMISSION_MODES = ['default', 'plan'] as const;
 
 /**
- * How long the open may take in all, from the client's start to the probe's answer. Each step is given what
- * is left of it, and it ends before the session's start window, so an open slower than this ends naming the
- * step it was on.
+ * How long the open may take in all, from the client's start to the probe's answer: 50 seconds, ten below
+ * Copilot's start window. Each step is given what is left of it, so an open slower than this ends naming
+ * the step it was on.
  */
-export const COPILOT_OPEN_DEADLINE_MS = 50_000;
+export const COPILOT_OPEN_DEADLINE_MS = openBudgetFor(COPILOT_RUNTIME);
 /** How long a setter, an abort or a read may take to be answered. */
 export const COPILOT_CALL_DEADLINE_MS = 30_000;
 /** How long the runtime has to say which policy hooks it finds, before the open goes on without its answer. */

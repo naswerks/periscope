@@ -51,6 +51,7 @@ import { qwenMcpServers } from './qwen-mcp.js';
 import { qwenSkillDirectories } from './qwen-pack.js';
 import type { QwenHostRequest, QwenMessage } from './qwen-wire.js';
 import { QwenSpawnWatch } from '../state/qwen-observer.js';
+import { QWEN_RUNTIME, openBudgetFor } from '../sessions/runtimes.js';
 import { InitializeAnswer, SystemInit, parsed, qwenMessageKey } from './qwen-wire.js';
 import type { SpawnChild } from './stdio-rpc.js';
 import type { QwenPermissionMode } from './wire-request.js';
@@ -58,10 +59,10 @@ import { QWEN_MODE_MAP, QWEN_PERMISSION_MODES, isQwenPermissionMode } from './wi
 
 /**
  * How long `initialize` may take to be answered: the CLI answers it before it loads its configuration. It is
- * the whole of the open, and it ends before the session's start window, so an open slower than this ends
+ * the whole of the open, 50 seconds, ten below Qwen Code's start window, so an open slower than this ends
  * naming it.
  */
-export const QWEN_HANDSHAKE_DEADLINE_MS = 50_000;
+export const QWEN_HANDSHAKE_DEADLINE_MS = openBudgetFor(QWEN_RUNTIME);
 /** How long a setter, an interrupt or a context-usage read may take to be answered. */
 export const QWEN_CONTROL_DEADLINE_MS = 30_000;
 /**

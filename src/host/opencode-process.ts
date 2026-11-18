@@ -45,6 +45,7 @@ import type { JsonObject, JsonValue } from '../control/frames.js';
 import { AsyncQueue } from '../core/async-queue.js';
 import type { RefusalReason } from '../core/refusal.js';
 import type { Result } from '../core/result.js';
+import { OPENCODE_RUNTIME, openBudgetFor } from '../sessions/runtimes.js';
 import type { AgentInitFacts, AgentProcess, AgentProcessRequest, ThinkingConfig } from './agent-process.js';
 import { MAX_PENDING_PROMPTS, isRuntimeDefaultPrompt } from './agent-process.js';
 import type { OpencodeEndpointRoute } from './opencode-endpoints.js';
@@ -93,11 +94,11 @@ export const OPENCODE_AGENTS: Readonly<Record<(typeof OPENCODE_PERMISSION_MODES)
 };
 
 /**
- * How long the open may take in all, from the host process's start to the read-back's last answer. Each step
- * is given what is left of it, and it ends before the session's start window, so an open slower than this
- * ends naming the step it was on.
+ * How long the open may take in all, from the host process's start to the read-back's last answer: 170
+ * seconds, ten below opencode's start window of 180. Each step is given what is left of it, so an open
+ * slower than this ends naming the step it was on.
  */
-export const OPENCODE_OPEN_DEADLINE_MS = 50_000;
+export const OPENCODE_OPEN_DEADLINE_MS = openBudgetFor(OPENCODE_RUNTIME);
 /** How long a setter, an interrupt, a reply or a read may take to be answered. */
 export const OPENCODE_CALL_DEADLINE_MS = 30_000;
 /** How long each step of the close may take before the next one runs. */

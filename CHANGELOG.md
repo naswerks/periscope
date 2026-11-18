@@ -24,16 +24,21 @@ removed export. The package version and the wire protocol version are separate n
   `autoCompactWindow` at most that size, and Codex is given both keys; and its `autoCompactWindow` is any
   positive whole number of tokens, where it had to fall within the 100000 to 1000000 the agent CLI
   accepts. An endpoint Claude reaches keeps exactly one form and that range.
-- Fixed: a native session's open is bounded as a whole, below the session's start window, and an open that
+- Fixed: a native session's open is bounded as a whole, below its runtime's start window, and an open that
   runs out names the step it was on. Each step of an opencode open had 90 seconds of its own while the start
-  window gives the whole open 60, so an open slower than the window ended with the start window's words
+  window gave the whole open 60, so an open slower than the window ended with the start window's words
   alone and the step's own failure was lost; the opens of Codex, Copilot and pi bounded each step alone
-  too, and their bounds added up past the window. The open of a Codex, Copilot, pi or opencode session now
-  has 50 seconds in all, each step given what is left, at most its own bound, and Qwen Code's whole open,
-  its `initialize`, has 50 seconds where it had 60. An open that runs out ends `runtime-unavailable`,
-  naming the step: `the opencode open did not finish session.create within 50000ms`. Should the start
-  window end first, its words name the step the open waits on and how long it has run:
-  `the agent did not report itself within 60000ms (opencode open: waiting on model.list, 58s in)`.
+  too, and their bounds added up past the window.
+- Changed: the start window is the runtime's own. It is 60 seconds, as before, on every runtime but
+  opencode, whose window is 180: its open loads the SDK and creates the whole server in a process of the
+  session's own, then waits for the server's plugins, and on a loaded host that has taken more than 60
+  seconds and finished. Each native open has its window less 10 seconds in all, each step given what is
+  left, at most its own bound: 170 seconds for opencode, 50 for Codex, Copilot and pi, and 50 for Qwen
+  Code's whole open, its `initialize`, where it had 60. An open that runs out ends `runtime-unavailable`,
+  naming the step: `the opencode open did not finish session.create within 170000ms`. Should the start
+  window end first, its words name the window, the step the open waits on and how long it has run:
+  `the agent did not report itself within 180000ms (opencode open: waiting on model.list, 178s in)`. An
+  embedder's `SessionRegistryOptions.startTimeoutMs` is still one window for every runtime.
 - Fixed: a failed opencode open, and an opencode host process that exits, carry the last line the host
   process wrote to its stderr, the endpoint's key replaced wherever it appears in it. An open the host
   process does not finish names why, never the exit the host process is ended with: that exit took the

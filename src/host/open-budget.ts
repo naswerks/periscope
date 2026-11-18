@@ -1,8 +1,8 @@
 /**
  * One native session's open, bounded as a whole. Each step of the open is given what the open has left, at
  * most the step's own bound, so an open slower than its budget ends naming the step it was on. Every native
- * runtime's budget is below the session's start window (`DEFAULT_START_TIMEOUT_MS`), which ends a session
- * that has not reported itself with no step named; `sessions/registry.test.ts` holds each one below it.
+ * runtime's budget ends below its own start window (`openBudgetFor` in `sessions/runtimes.ts`), which ends
+ * a session that has not reported itself; `sessions/registry.test.ts` holds each one below it.
  */
 
 /** The least time a step is given: a step entered with nothing left still asks once, and ends at once. */

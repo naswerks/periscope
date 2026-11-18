@@ -734,12 +734,15 @@ using`), which Node 22 cannot parse, so on Node 22 the SDK cannot load at all. T
   from being offered. What keeps it from fetching its model catalogue, and from reading a project's
   configuration or a `.claude` folder, is an option the server is created with; what keeps it from
   looking for an update is the session's configuration.
-- **The open is bounded as a whole.** From the host process's start to the read-back's last answer the
-  open has 50 seconds (`OPENCODE_OPEN_DEADLINE_MS`), below the session's start window, and each step is
-  given what is left: the host process's own open, `model.list`, `session.create` (or the resume's read),
-  the session's environment and the read-back. An open that runs it out ends the session
-  `runtime-unavailable`, naming the step:
-  `the opencode open did not finish session.create within 50000ms`. A failure of the open or of the
+- **The open is bounded as a whole.** An opencode session has 180 seconds from its first turn to report
+  itself, its start window, where a session on any other runtime has 60: its open loads the SDK and
+  creates the whole server in a process of the session's own, then waits for the server's plugins, and on
+  a loaded host that has taken more than 60 seconds and finished. From the host process's start to the
+  read-back's last answer the open has 170 seconds of it (`OPENCODE_OPEN_DEADLINE_MS`), ten below the
+  window, and each step is given what is left: the host process's own open, `model.list`,
+  `session.create` (or the resume's read), the session's environment and the read-back. An open that
+  runs it out ends the session `runtime-unavailable`, naming the step:
+  `the opencode open did not finish session.create within 170000ms`. A failure of the open or of the
   host process carries the last line the host process wrote to its stderr, with the endpoint's key never
   in it.
 - **The home is the runner's own.** Each session runs with a fresh home under `<base>/sessions`, so the

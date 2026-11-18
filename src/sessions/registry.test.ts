@@ -10,7 +10,7 @@
  * The substitute deliberately reproduces the one behaviour that shapes this whole contract: it emits
  * nothing until a turn is queued, exactly as the real agent does.
  */
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { DEFAULT_RUNTIME } from '../control/frames.js';
@@ -22,14 +22,17 @@ import { PI_OPEN_DEADLINE_MS } from '../host/pi-process.js';
 import { QWEN_HANDSHAKE_DEADLINE_MS } from '../host/qwen-process.js';
 import { fixedClock } from '../core/time.js';
 import { FAKE_PROMPT_CAPACITY, fakeAgents, initMessage } from '../test-support/fake-agent.js';
-import { DEFAULT_START_TIMEOUT_MS, SessionRegistry } from './registry.js';
+import type { NativeRuntime } from './registry.js';
+import { SessionRegistry } from './registry.js';
 import {
   CODEX_RUNTIME,
   COPILOT_RUNTIME,
+  DEFAULT_START_WINDOW_MS,
   OPENCODE_RUNTIME,
   PI_RUNTIME,
   QWEN_RUNTIME,
   spawnableRuntimes,
+  startWindowFor,
 } from './runtimes.js';
 
 function registryWith(
@@ -699,7 +702,7 @@ test("the agent's plugin answer still reaches the facts when the init message la
   assert.equal(created.value.facts?.pluginsApplied, false, 'the later answer was dropped');
 });
 
-test("every native runtime's open budget ends before the start window, so a slow open ends naming its step", () => {
+test("every native runtime's open budget ends before its own start window, so a slow open ends naming its step", () => {
   const budgets: Readonly<Record<string, number>> = {
     [CODEX_RUNTIME]: CODEX_OPEN_DEADLINE_MS,
     [QWEN_RUNTIME]: QWEN_HANDSHAKE_DEADLINE_MS,
@@ -715,11 +718,75 @@ test("every native runtime's open budget ends before the start window, so a slow
     'every native runtime has its open budget pinned here',
   );
   for (const [runtime, budget] of Object.entries(budgets)) {
+    const window = startWindowFor(runtime);
     assert.ok(
-      budget < DEFAULT_START_TIMEOUT_MS,
-      `${runtime}'s open budget of ${budget}ms does not end before the ${DEFAULT_START_TIMEOUT_MS}ms start window`,
+      budget < window,
+      `${runtime}'s open budget of ${budget}ms does not end before its ${window}ms start window`,
     );
   }
+});
+
+/** A native runtime whose process never reports itself: the start window is all that ends it. */
+const silentRuntime = (fake: ReturnType<typeof fakeAgents>): NativeRuntime => ({
+  start: (request) => fake.start(request),
+  readInit: () => null,
+});
+
+/** The registry the host builds: no window of its own, so each session has its runtime's. */
+function hostRegistry(fake: ReturnType<typeof fakeAgents>): SessionRegistry {
+  return new SessionRegistry({
+    baseEnv: { PATH: 'p' },
+    homeDir: 'C:/nonexistent-home-for-tests',
+    clock: fixedClock(Date.UTC(2026, 7, 3)),
+    startProcess: fake.start,
+    runtimes: { [CODEX_RUNTIME]: silentRuntime(fake), [OPENCODE_RUNTIME]: silentRuntime(fake) },
+  });
+}
+
+test("each session's start timer is its runtime's own window: opencode's 180 seconds, Codex's and Claude's 60", async () => {
+  const registry = hostRegistry(fakeAgents());
+  assert.equal(registry.startTimeoutMsFor(OPENCODE_RUNTIME), 180_000);
+  assert.equal(registry.startTimeoutMsFor(CODEX_RUNTIME), 60_000);
+  assert.equal(registry.startTimeoutMsFor(DEFAULT_RUNTIME), DEFAULT_START_WINDOW_MS);
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    for (const [runtime, window] of [
+      [OPENCODE_RUNTIME, 180_000],
+      [CODEX_RUNTIME, 60_000],
+    ] as const) {
+      let ended: string | null = null;
+      void registry.open({ cwd: 'C:/work', runtime, prompt: 'go' }).then((opened) => {
+        ended = opened.ok ? 'opened' : opened.refusal.detail;
+      });
+      const settle = () => new Promise((resolve) => setImmediate(resolve));
+      await settle();
+      mock.timers.tick(window - 1);
+      await settle();
+      assert.equal(ended, null, `${runtime}'s start window ended before ${window}ms`);
+      mock.timers.tick(1);
+      await settle();
+      assert.equal(
+        ended,
+        `the session ended before reporting itself (start_timed_out: the agent did not report itself within ${window}ms)`,
+        `${runtime}'s start window`,
+      );
+    }
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("control: a window the embedder sets is every runtime's, opencode's included", () => {
+  const fake = fakeAgents();
+  const registry = new SessionRegistry({
+    baseEnv: { PATH: 'p' },
+    homeDir: 'C:/nonexistent-home-for-tests',
+    startTimeoutMs: 2_000,
+    startProcess: fake.start,
+    runtimes: { [OPENCODE_RUNTIME]: silentRuntime(fake) },
+  });
+  assert.equal(registry.startTimeoutMsFor(OPENCODE_RUNTIME), 2_000);
+  assert.equal(registry.startTimeoutMsFor(CODEX_RUNTIME), 2_000);
 });
 
 test('a start window that ends while the process still opens names the step it waits on; one that says nothing is named bare', async () => {

@@ -56,6 +56,7 @@ import {
   parsed,
 } from './codex-wire.js';
 import { CODEX_COVERAGE } from '../state/codex-coverage.js';
+import { CODEX_RUNTIME, openBudgetFor } from '../sessions/runtimes.js';
 import { codexServerRequestAnswer } from './codex-answers.js';
 import { OpenBudget } from './open-budget.js';
 import type { RpcAnswer, RpcId, SpawnChild, StdioRpcPeer } from './stdio-rpc.js';
@@ -71,12 +72,12 @@ import {
 /** How long the opening requests may take: `initialize` and the queries around the thread. */
 export const CODEX_HANDSHAKE_DEADLINE_MS = 20_000;
 /**
- * How long the open may take in all, from `initialize` to the thread's server list. Each step is given what is
- * left of it, at most its own bound, and opening the thread, which on a cold start loads the config, the
- * skills and the MCP servers, takes what is left. It ends before the session's start window, so an open
- * slower than this ends naming the step it was on.
+ * How long the open may take in all, from `initialize` to the thread's server list: 50 seconds, ten below
+ * Codex's start window. Each step is given what is left of it, at most its own bound, and opening the
+ * thread, which on a cold start loads the config, the skills and the MCP servers, takes what is left. An
+ * open slower than this ends naming the step it was on.
  */
-export const CODEX_OPEN_DEADLINE_MS = 50_000;
+export const CODEX_OPEN_DEADLINE_MS = openBudgetFor(CODEX_RUNTIME);
 /** How long a turn's start or its interrupt may take to be answered. */
 export const CODEX_TURN_DEADLINE_MS = 30_000;
 /** The longest prompt Codex takes, in characters. */

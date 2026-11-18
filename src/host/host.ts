@@ -2001,11 +2001,11 @@ export class PeriscopeHost {
     const sent = composed.session.prompt(text);
     if (!sent.ok) return this.#refuse(sessionKey, sent.refusal);
     composed.observer.promptSubmitted('the controller sent a turn');
-    // The first turn starts the agent, so it starts the start window too (`#startArmed`). The wait settles
-    // as a result and never throws; the session's own end is what reaches the controller.
+    // The first turn starts the agent, so it starts its runtime's start window too (`#startArmed`). The wait
+    // settles as a result and never throws; the session's own end is what reaches the controller.
     if (composed.session.state === 'provisioning' && !this.#startArmed.has(composed.session)) {
       this.#startArmed.add(composed.session);
-      void composed.session.whenLive(this.#registry.startTimeoutMs);
+      void composed.session.whenLive(this.#registry.startTimeoutMsFor(composed.session.runtime));
     }
   }
 

@@ -31,6 +31,7 @@ import { AsyncQueue } from '../core/async-queue.js';
 import type { Refusal, RefusalReason } from '../core/refusal.js';
 import type { Result } from '../core/result.js';
 import { refuse } from '../core/result.js';
+import { PI_RUNTIME, openBudgetFor } from '../sessions/runtimes.js';
 import type { AgentInitFacts, AgentProcess, AgentProcessRequest, ThinkingConfig } from './agent-process.js';
 import { MAX_PENDING_PROMPTS, isRuntimeDefaultPrompt } from './agent-process.js';
 import type { SpawnDegrade } from './codex-gate.js';
@@ -56,11 +57,11 @@ export const PI_HELLO_DEADLINE_MS = 30_000;
 /** How long a command may take to be answered. */
 export const PI_COMMAND_DEADLINE_MS = 30_000;
 /**
- * How long the open may take in all, from the channel's start to pi's answer to `get_state`. Each step is
- * given what is left of it, at most its own bound, and it ends before the session's start window, so an open
+ * How long the open may take in all, from the channel's start to pi's answer to `get_state`: 50 seconds,
+ * ten below pi's start window. Each step is given what is left of it, at most its own bound, so an open
  * slower than this ends naming the step it was on.
  */
-export const PI_OPEN_DEADLINE_MS = 50_000;
+export const PI_OPEN_DEADLINE_MS = openBudgetFor(PI_RUNTIME);
 /** How long `abort` may take: pi answers it once the run has stopped. */
 export const PI_ABORT_DEADLINE_MS = 120_000;
 /** How many of pi's last stderr lines are kept, to name why it ended before the session opened. */

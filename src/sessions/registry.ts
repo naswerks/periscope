@@ -38,6 +38,7 @@ import { ok, refuse } from '../core/result.js';
 import { requireAbsolute } from '../core/paths.js';
 import type { SpawnEnvPolicy } from './spawn-env.js';
 import { composeSpawnEnv } from './spawn-env.js';
+import { startWindowFor } from './runtimes.js';
 import { HostedSession } from './session.js';
 
 /** What a caller asks for when starting a session. */
@@ -212,7 +213,10 @@ export interface SessionRegistryOptions {
   /** Absolute path to the user's home, for the trust read. */
   readonly homeDir: string;
   readonly clock?: Clock;
-  /** How long the agent has to report itself before the start is called failed. */
+  /**
+   * How long the agent has to report itself before the start is called failed, on every runtime. Absent,
+   * each session has its runtime's own start window (60 seconds, opencode's 180).
+   */
   readonly startTimeoutMs?: number;
   /**
    * How a process is started. Defaults to the real one.
@@ -270,14 +274,6 @@ export interface NativeRuntime<M = unknown> {
   readInit(message: M): AgentInitFacts | null;
 }
 
-/**
- * 60 seconds. The process is a large native binary starting cold, and a loaded host has been
- * observed holding a trivial invocation of it past ten. Too short turns a slow machine into a
- * spurious outage; there is no upper bound that is too generous for a case that otherwise hangs. Every
- * native runtime's open has a budget of its own below it, so a slow open ends naming its step first.
- */
-export const DEFAULT_START_TIMEOUT_MS = 60_000;
-
 export class SessionRegistry {
   readonly #live = new Map<string, HostedSession<unknown>>();
   readonly #maxSessions: number;
@@ -285,7 +281,8 @@ export class SessionRegistry {
   readonly #baseEnv: Readonly<Record<string, string | undefined>>;
   readonly #homeDir: string;
   readonly #clock: Clock;
-  readonly #startTimeoutMs: number;
+  /** The one start window an embedder set for every runtime, or null for each runtime's own. */
+  readonly #startTimeoutMs: number | null;
   readonly #startProcess: (request: AgentProcessRequest, posture: AgentProcessPosture) => AgentProcess;
   readonly #posture: AgentProcessPosture;
   readonly #runtimes: Readonly<Record<string, NativeRuntime>>;
@@ -294,7 +291,7 @@ export class SessionRegistry {
     this.#baseEnv = options.baseEnv;
     this.#homeDir = options.homeDir;
     this.#clock = options.clock ?? systemClock;
-    this.#startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
+    this.#startTimeoutMs = options.startTimeoutMs ?? null;
     this.#startProcess = options.startProcess ?? startAgentProcess;
     this.#posture = { agentProgressSummaries: options.agentProgressSummaries ?? true };
     this.#runtimes = options.runtimes ?? {};
@@ -330,12 +327,14 @@ export class SessionRegistry {
   }
 
   /**
-   * How long an agent has, from its first turn, to report itself. Read by the host, which arms the
-   * same window on a session it opened by `create()` as `open()` arms on its own.
+   * How long an agent on `runtime` has, from its first turn, to report itself: the window this registry
+   * was given, or the runtime's own (`startWindowFor`). Read by the host, which arms the same window on a
+   * session it opened by `create()` as `open()` arms on its own. Every native runtime's open has a budget
+   * of its own below its window, so a slow open ends naming its step first.
    * @internal
    */
-  get startTimeoutMs(): number {
-    return this.#startTimeoutMs;
+  startTimeoutMsFor(runtime: string): number {
+    return this.#startTimeoutMs ?? startWindowFor(runtime);
   }
 
   /** Sessions that have started but not yet reported themselves. Separate because they have no id. */
@@ -469,7 +468,7 @@ export class SessionRegistry {
       return refuse<HostedSession>(sent.refusal.reason, sent.refusal.detail);
     }
 
-    const live = await created.value.whenLive(this.#startTimeoutMs);
+    const live = await created.value.whenLive(this.startTimeoutMsFor(created.value.runtime));
     if (!live.ok) return refuse<HostedSession>(live.refusal.reason, live.refusal.detail);
     return ok(created.value);
   }
