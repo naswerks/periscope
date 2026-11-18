@@ -56,6 +56,11 @@ removed export. The package version and the wire protocol version are separate n
   it loaded (`session.skills_loaded`), and the runtime's own from then. Every receipt was marked
   `runtime`, the first one included, though its skills were the host's hand-over; the first receipt after
   `session.skills_loaded` is sent even when it names exactly what was handed over.
+- Documents: `docs/configuration.md` says that a Claude session on a model endpoint that asks for
+  `bypassPermissions` runs in the agent CLI's `default` permission mode and reports `default`: the CLI
+  forces that mode while `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is set, which the host sets on every such
+  session to keep the endpoint's key out of what the agent starts. Every call still reaches the host's
+  gate.
 
 ## [1.11.1] - 2026-11-17
 

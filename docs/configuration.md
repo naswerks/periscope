@@ -365,6 +365,14 @@ them can be overridden from the link:
   commands, hooks and stdio tool servers the agent starts;
 - the entry's `env`.
 
+**The permission mode on an endpoint.** With `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` set, the agent CLI runs
+in its `default` permission mode: a Claude session on an endpoint that asks for `bypassPermissions`
+runs in `default`, and the mode it reports, the init's and so the session's facts and receipt, says
+`default`. The CLI says why on its stderr (`Permission mode forced to default`), which the host does not
+report. Every call still reaches this host's gate, which decides it as in any other mode. The host keeps
+the switch, since it is what keeps the endpoint's key out of what the agent starts, and does not refuse
+the mode asked for.
+
 Nothing else is set or blanked: no other model-route variable reaches a session, because the host's
 inherited environment carries none and the floor refuses them on the controller's lanes. A user-tier
 Claude settings file (`<home>/.claude/settings.json`) still loads for a session that asks for the `user`
