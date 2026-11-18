@@ -22,6 +22,7 @@ import type { PiSessionGate } from './pi-gate.js';
 import { createPiSessionGate } from './pi-gate.js';
 import type { PiRuntimeConfig } from './pi-process.js';
 import { piRequestProblem, startPiProcess } from './pi-process.js';
+import { PiFactLift } from './pi-facts.js';
 import type { PiMessage } from './pi-wire.js';
 
 const BINARY = 'C:/tools/pi/dist/bundle/cli.js';
@@ -777,4 +778,44 @@ test('an open that runs its budget out ends the session naming the command it wa
     String((await run.ended)?.message),
     /^runtime-unavailable: the pi open did not finish get_state within 2000ms$/,
   );
+});
+
+test('a run that never settles still files the spend of each model call it made, and pi is never asked its totals', async () => {
+  const run = await started({
+    fake: {
+      neverSettles: true,
+      calls: () => [{ toolName: 'read', input: { path: 'a.txt' } }],
+      usage: { input: 100, output: 20, cacheRead: 30, cacheWrite: 5, cost: 0.0012 },
+    },
+  });
+  try {
+    await opened(run);
+    run.process.prompt('hello');
+    const answered = (): number =>
+      events(run.messages, 'message_end').filter(
+        (one) => (one['message'] as JsonObject | undefined)?.['role'] === 'assistant',
+      ).length;
+    await waitFor(() => answered() === 2, 'the call and the answer');
+    const lift = new PiFactLift();
+    const steps = run.messages.flatMap((message) =>
+      lift
+        .fromMessage(message)
+        .facts.flatMap((fact) => (fact.kind === 'turn_record' && fact.turnScope === 'step' ? [fact] : [])),
+    );
+    assert.deepEqual(
+      steps.map((step) => [step.turn?.cost, step.turn?.byModel[0]?.inputTokens, step.totals]),
+      [
+        [0.0001, 10, null],
+        [0.0012, 100, null],
+      ],
+    );
+    assert.equal(settledRuns(run), 0, 'the run settled');
+    assert.equal(
+      run.messages.some((message) => message.kind === 'response' && message.command === 'get_session_stats'),
+      false,
+      'pi was asked its totals with no run settled',
+    );
+  } finally {
+    await closed(run);
+  }
 });

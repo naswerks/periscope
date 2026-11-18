@@ -42,6 +42,11 @@ removed export. The package version and the wire protocol version are separate n
   could take the home's owner file and then stop at a file still held open, and a home with no owner file
   is never swept; the owner file is now written again, marked as being removed, and the next opencode
   session to open removes the home whoever made it, keeping nothing from it.
+- Fixed: a pi session files the spend of each model call as it is made. Its only spend was the totals pi
+  is asked for once a run settles, so a session whose one run lasted until it closed reported none. Each assistant `message_end` that carries usage is now a `turn_record` of that call
+  (`turnScope: 'step'`, `totals` null), with its tokens and the cost pi 1.5.2 states for it
+  (`usage.cost.total`, `catalogue-estimated` in US dollars, or null and `unreported` where pi states none):
+  the shape Copilot's and opencode's step records already have. The totals after each run are unchanged.
 
 ## [1.11.1] - 2026-11-17
 

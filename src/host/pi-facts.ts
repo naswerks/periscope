@@ -11,10 +11,15 @@
  *     whenever pi says its thinking level moved. A model this host set (pi writes no event for one) sends
  *     one composed by this host (`source: 'host'`), with the model pi answered with. pi has no permission
  *     mode, so the receipt states none.
- *   - `turn_record`: the answer to `get_session_stats`, asked after each run. `totals` is the session's
- *     tokens and cost as pi states them, every entry of the session file counted by pi (its compacted
- *     history, abandoned branches, failed retries and compaction calls included, so a total can exceed
- *     what the visible conversation used, and a resumed or forked session's includes the source
+ *   - `turn_record`, per model call: each assistant `message_end` that carries usage, that call's figure
+ *     (`turn`, `turnScope: 'step'`, `totals` null): its tokens and the cost pi states for it
+ *     (`usage.cost.total`, US dollars, filed `catalogue-estimated` as the totals are; `cost` null and
+ *     `unreported` where pi states none), under the model the message names. A run that never settles
+ *     still files each call it made.
+ *   - `turn_record`, per run: the answer to `get_session_stats`, asked after each run. `totals` is the
+ *     session's tokens and cost as pi states them, every entry of the session file counted by pi (its
+ *     compacted history, abandoned branches, failed retries and compaction calls included, so a total can
+ *     exceed what the visible conversation used, and a resumed or forked session's includes the source
  *     session's). `turn` and `turnScope` are null: the totals carry the spend. The cost is pi's own
  *     figure in US dollars: its estimate from its model catalogue, except that on an OpenRouter model pi
  *     takes the cost OpenRouter reported for each call it accounted for, so a total can be partly billed.
@@ -52,6 +57,7 @@ import {
   PiSessionStats,
   PiState,
   PiThinkingLevelChanged,
+  PiUsage,
   parsed,
   piTypeOf,
   responseData,
@@ -204,8 +210,10 @@ export class PiFactLift implements FactLift<PiMessage> {
         if (typeof read.message.provider === 'string' && read.message.provider !== '') {
           this.#provider = read.message.provider;
         }
-        if (read.message.usage !== undefined) this.#lastCacheRead = wholeOrNull(read.message.usage.cacheRead);
-        return NOTHING;
+        const usage = read.message.usage;
+        if (usage === undefined) return NOTHING;
+        this.#lastCacheRead = wholeOrNull(usage.cacheRead);
+        return facts(this.#stepRecord(usage));
       }
       case 'thinking_level_changed': {
         const read = parsed(PiThinkingLevelChanged, event);
@@ -268,6 +276,49 @@ export class PiFactLift implements FactLift<PiMessage> {
     if (key === this.#receiptSent) return [];
     this.#receiptSent = key;
     return [receipt];
+  }
+
+  /**
+   * One model call's figure, from its message's usage: the call's tokens and the cost pi states for it.
+   * No model in the register means none was reported, and no record invents one.
+   */
+  #stepRecord(usage: z.infer<typeof PiUsage>): AgentFact[] {
+    const model = this.#model;
+    if (model === null) return [];
+    const stated = usage.cost?.total;
+    const cost = stated === undefined ? null : costOrNull(stated);
+    const costBasis = cost === null ? 'unreported' : 'catalogue-estimated';
+    return [
+      {
+        kind: 'turn_record',
+        runtime: PI_RUNTIME,
+        totals: null,
+        turn: {
+          cost,
+          currency: cost === null ? null : PI_COST_CURRENCY,
+          costBasis,
+          byModel: [
+            {
+              model: text(model),
+              canonicalModel: null,
+              provider: this.#provider === null ? null : text(this.#provider),
+              inputTokens: whole(usage.input),
+              outputTokens: whole(usage.output),
+              cacheReadTokens: whole(usage.cacheRead),
+              cacheWriteTokens: whole(usage.cacheWrite),
+              reasoningTokens: null,
+              cost,
+              costBasis,
+              contextWindow: null,
+            },
+          ],
+        },
+        turnScope: 'step',
+        numTurns: null,
+        durationMs: null,
+        sourceSessionId: this.#handle,
+      },
+    ];
   }
 
   #spend(stats: z.infer<typeof PiSessionStats>, model: string): SpendFacts {

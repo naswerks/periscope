@@ -601,9 +601,11 @@ lines on stdin and stdout, and the hello's `agents` lists pi after Claude, Codex
   read: an HTTP server's headers beside its URL, written so pi expands nothing in them, and a stdio
   server's command. Their tools are named `mcp__<server>__<tool>` and asked about like every other
   call. An SSE server is refused `mcp-descriptor-invalid`.
-- **Spend.** pi states a session's running totals: its tokens, and its cost in US dollars at its own
-  catalogue's rates, never a bill. They cover every entry of the session's file, compacted history and
-  failed retries included, so a total can exceed what the visible conversation used.
+- **Spend.** pi states each model call's tokens and cost as the call ends, and a session's running totals
+  after each run: its tokens, and its cost in US dollars at its own catalogue's rates, never a bill. Each
+  call is filed as it is made, so a run that never settles still reports what it spent. The totals cover
+  every entry of the session's file, compacted history and failed retries included, so a total can exceed
+  what the visible conversation used.
 
 ## Copilot
 
