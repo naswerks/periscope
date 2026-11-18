@@ -47,6 +47,15 @@ removed export. The package version and the wire protocol version are separate n
   (`turnScope: 'step'`, `totals` null), with its tokens and the cost pi 1.5.2 states for it
   (`usage.cost.total`, `catalogue-estimated` in US dollars, or null and `unreported` where pi states none):
   the shape Copilot's and opencode's step records already have. The totals after each run are unchanged.
+- Fixed: a Qwen Code session's first receipt of the CLI's own is sent even when the CLI found exactly
+  the skills handed over. A receipt was sent only when a member moved, and the source was not a member, so
+  a CLI that found what it was handed never sent one marked `runtime`. The CLI's context usage, whose
+  skills are that receipt, is now asked once at the first init, while its turn runs, as well as after each
+  result, so the receipt does not wait on the first turn's end.
+- Fixed: a Copilot session's receipt is the host's (`source: 'host'`) until the runtime says which skills
+  it loaded (`session.skills_loaded`), and the runtime's own from then. Every receipt was marked
+  `runtime`, the first one included, though its skills were the host's hand-over; the first receipt after
+  `session.skills_loaded` is sent even when it names exactly what was handed over.
 
 ## [1.11.1] - 2026-11-17
 

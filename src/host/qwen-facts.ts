@@ -8,7 +8,8 @@
  *     names another (a fork or a resume reports a new one).
  *   - `agent_receipt`: one composed by this host at the `initialize` answer (`source: 'host'`), stating
  *     the model and mode asked for and the skills handed over; then the CLI's own, once its context usage
- *     has listed the skills it found (`source: 'runtime'`), sent again whenever an init moves a member.
+ *     has listed the skills it found (`source: 'runtime'`), sent even when every member matches the
+ *     host's, and again whenever an init moves a member.
  *     The permission mode is Qwen's own word. A setter the CLI applied sends one composed by this host.
  *   - `turn_record`: each `result`. Its `usage` is the CLI's running total for the session, every model
  *     it used summed by the CLI, filed under the session's model register: so `totals` carries it, and
@@ -16,7 +17,8 @@
  *     tokens. `inputTokens` is the input minus the cached input, floored at zero: the CLI counts cached
  *     tokens inside its input, so this is its own split, and counts uncached input only, as on every
  *     runtime. The CLI reports no cache writes and no cost.
- *   - `usage_sample`: each answer to `get_context_usage`, sent after each result: the CLI's own count of
+ *   - `usage_sample`: each answer to `get_context_usage`, sent after the first init and after each result:
+ *     the CLI's own count of
  *     the context and its window, and the last main-thread call's cache reads.
  *   - `tasks`: the background tasks the CLI reports started and settled; the settled ones are cleared at
  *     the next init, the start of the next turn. Each names the call that started it (`toolUseId`) where
@@ -102,6 +104,8 @@ export class QwenFactLift implements FactLift<QwenMessage> {
   #runtimeOpened = false;
   /** The receipt last sent, as its key: a receipt is sent only when a member moved. */
   #receiptSent = '';
+  /** Whether a receipt of the CLI's own has been sent. */
+  #runtimeSent = false;
   /** The last main-thread model call's cache reads, for the next usage sample. */
   #lastCacheRead: number | null = null;
   readonly #running = new Map<string, RunningTaskEntry>();
@@ -307,8 +311,11 @@ export class QwenFactLift implements FactLift<QwenMessage> {
     const receipt = this.#receiptFact(source);
     const { source: _source, ...members } = receipt;
     const key = JSON.stringify(members);
-    if (key === this.#receiptSent) return [];
+    // The CLI's first receipt is its own word on what it found, sent even when that is what was handed over.
+    const first = source === 'runtime' && !this.#runtimeSent;
+    if (key === this.#receiptSent && !first) return [];
     this.#receiptSent = key;
+    if (source === 'runtime') this.#runtimeSent = true;
     return [receipt];
   }
 

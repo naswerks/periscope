@@ -49,7 +49,7 @@ export const QWEN_MESSAGE_COVERAGE = {
   },
   'system/init': {
     handling: 'wired',
-    note: "written once per processed user message: state -> working; the receipt refreshed from model, permission_mode (Qwen's own mode word), mcp_servers and qwen_code_version; the first one's tools checked against the ask rules (gate-tool-unruled); a mode outside default and plan raises gate-mode-widened; a changed session_id is a new session handle. Its uuid is the session id, so no fact names it as a source",
+    note: "written once per processed user message: state -> working; the receipt refreshed from model, permission_mode (Qwen's own mode word), mcp_servers and qwen_code_version; the first one's tools checked against the ask rules (gate-tool-unruled); a mode outside default and plan raises gate-mode-widened; a changed session_id is a new session handle; the first one asks get_context_usage while its turn runs. Its uuid is the session id, so no fact names it as a source",
   },
   'system/task_started': {
     handling: 'wired',
@@ -145,7 +145,7 @@ export const QWEN_ANSWER_COVERAGE = {
   set_effort: { handling: 'wired', note: 'a receipt composed by this host (source host) with the effort' },
   get_context_usage: {
     handling: 'wired',
-    note: "sent after each result: a usage_sample (totalTokens, contextWindowSize, mainThread true); its skills list is the runtime's receipt of the skills it found (source runtime)",
+    note: "sent after the first init, while its turn runs, and after each result: a usage_sample (totalTokens, contextWindowSize, mainThread true); its skills list is the runtime's receipt of the skills it found (source runtime), the first sent even when it matches the host's",
   },
   continue_last_turn: { handling: 'declined', note: NEVER_SENT },
   supported_commands: { handling: 'declined', note: NEVER_SENT },

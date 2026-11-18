@@ -293,7 +293,7 @@ export const COPILOT_EVENT_COVERAGE = {
   'workflow.run_settled': { handling: 'declined', note: NATIVE_ONLY },
   'session.skills_loaded': {
     handling: 'wired',
-    note: 'the skills the receipt states, by name; a receipt of its own',
+    note: "the skills the receipt states, by name; a receipt of its own, the runtime's from then on (source runtime): until it arrives the receipt states the skills handed over and is the host's (source host)",
   },
   'session.custom_agents_updated': { handling: 'declined', note: NATIVE_ONLY },
   'session.mcp_servers_loaded': {

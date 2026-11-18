@@ -5,11 +5,12 @@
  * Every figure is one the runtime reported, or null; nothing is computed from another figure but the one
  * split every runtime's spend makes (uncached input), and nothing is summed. What each fact is read from:
  *   - `session_handle`: the session id the open names. A resume or a fork reports its own.
- *   - `agent_receipt`: the runtime's own (`source: 'runtime'`) once the session opens: the model and effort
- *     `session.start` or `session.resume` named, the agent mode as its permission mode (`interactive` or
- *     `plan`; the permission mode itself is always `manual`), the skills `session.skills_loaded` names (the
- *     ones this host handed over until then) and the servers `session.mcp_servers_loaded` names, each with
- *     its status in the runtime's word; sent again whenever one of them moves.
+ *   - `agent_receipt`: once the session opens, the model and effort `session.start` or `session.resume`
+ *     named, the agent mode as its permission mode (`interactive` or `plan`; the permission mode itself is
+ *     always `manual`), the skills `session.skills_loaded` names and the servers `session.mcp_servers_loaded`
+ *     names, each with its status in the runtime's word; sent again whenever one of them moves. Until
+ *     `session.skills_loaded` its skills are the ones this host handed over, and it is this host's
+ *     (`source: 'host'`); from then it is the runtime's own (`source: 'runtime'`).
  *   - `turn_record`: one per model call (`assistant.usage`), filed as that step's figure (`turnScope:
  *     'step'`), never as a running total; and the session's totals per model when it shuts down
  *     (`session.shutdown`). Neither is priced: the runtime's `cost` is a multiplier and its credit totals a
@@ -90,8 +91,10 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
   #skills: readonly string[] | null;
   #servers = new Map<string, string>();
   #serversReported = false;
-  /** Whether the open was proven, so a receipt of the runtime's may be sent. */
+  /** Whether the open was proven, so a receipt may be sent. */
   #opened = false;
+  /** Whether the runtime has said which skills it loaded, so the receipt is its own. */
+  #skillsLoaded = false;
   /** The receipt last sent, as its key: a receipt is sent only when a member moved. */
   #receiptSent = '';
   /** The last model call's cache reads, for the next usage sample. */
@@ -192,6 +195,7 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
       case 'session.skills_loaded': {
         if (!main) return NOTHING;
         const skills = Array.isArray(data['skills']) ? data['skills'] : [];
+        this.#skillsLoaded = true;
         this.#skills = bounded(
           skills
             .map((skill) => copilotRecord(skill))
@@ -424,7 +428,8 @@ export class CopilotFactLift implements FactLift<CopilotMessage> {
       mcpServers: this.#serversReported
         ? bounded([...this.#servers].map(([name, status]) => ({ name: text(name), status: word(status) })))
         : null,
-      source: 'runtime',
+      // The skills are this host's hand-over until the runtime lists its own.
+      source: this.#skillsLoaded ? 'runtime' : 'host',
       effortReported: this.#effortReported,
     };
   }

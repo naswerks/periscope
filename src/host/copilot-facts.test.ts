@@ -40,7 +40,7 @@ const opened: CopilotMessage = {
 
 const kinds = (facts: readonly AgentFact[]): string[] => facts.map((fact) => fact.kind);
 
-test("the open names the session's handle and the runtime's receipt; a receipt is sent again only when a member moves", () => {
+test("the open names the session's handle and a receipt, this host's until the runtime says which skills it loaded; a receipt is sent again only when a member moves", () => {
   const lift = new CopilotFactLift({ handedOverSkills: ['review'] });
   assert.deepEqual(
     lift.fromMessage(
@@ -61,7 +61,7 @@ test("the open names the session's handle and the runtime's receipt; a receipt i
   assert.equal(receipt.effortReported, true);
   assert.deepEqual(receipt.skills, ['review']);
   assert.equal(receipt.mcpServers, null);
-  assert.equal(receipt.source, 'runtime');
+  assert.equal(receipt.source, 'host', "the skills are the ones handed over, so the receipt is the host's");
   assert.deepEqual(lift.fromMessage(opened).facts, [], 'the same open again moves nothing');
   const moved = lift.fromMessage(
     event('session.model_change', { newModel: 'claude-sonnet-4.6', reasoningEffort: null }),
@@ -74,6 +74,7 @@ test("the open names the session's handle and the runtime's receipt; a receipt i
     event('session.mode_changed', { newMode: 'plan', previousMode: 'interactive' }),
   ).facts;
   assert.ok(mode[0]?.kind === 'agent_receipt' && mode[0].permissionMode === 'plan');
+  assert.equal(mode[0].source, 'host', 'still the skills handed over');
   const skills = lift.fromMessage(
     event('session.skills_loaded', {
       skills: [
@@ -89,11 +90,13 @@ test("the open names the session's handle and the runtime's receipt; a receipt i
     ['review', 'lint'],
     "the runtime's own list replaces the one handed over",
   );
+  assert.equal(skills[0].source, 'runtime');
   const servers = lift.fromMessage(
     event('session.mcp_servers_loaded', { servers: [{ name: 'nas', status: 'connected' }] }),
   ).facts;
   assert.ok(servers[0]?.kind === 'agent_receipt');
   assert.deepEqual(servers[0].mcpServers, [{ name: 'nas', status: 'connected' }]);
+  assert.equal(servers[0].source, 'runtime');
   const failed = lift.fromMessage(
     event('session.mcp_server_status_changed', { serverName: 'nas', status: 'failed' }),
   ).facts;
@@ -640,4 +643,37 @@ test("the fill: a sub-agent's items carry the call that spawned it, only where t
       ['agent_text', 'call_task'],
     ],
   );
+});
+
+test("the runtime's first list of the skills it loaded is its own receipt, even when it names exactly the ones handed over", () => {
+  const lift = new CopilotFactLift({ handedOverSkills: ['review'] });
+  const open = lift.fromMessage(opened).facts.filter((fact) => fact.kind === 'agent_receipt');
+  assert.deepEqual(
+    open.map((fact) => (fact.kind === 'agent_receipt' ? fact.source : null)),
+    ['host'],
+  );
+  const loaded = lift
+    .fromMessage(event('session.skills_loaded', { skills: [{ name: 'review', enabled: true }] }))
+    .facts.filter((fact) => fact.kind === 'agent_receipt');
+  assert.equal(loaded.length, 1);
+  assert.ok(loaded[0]?.kind === 'agent_receipt');
+  assert.equal(loaded[0].source, 'runtime');
+  assert.deepEqual(loaded[0].skills, ['review']);
+  assert.deepEqual(
+    lift.fromMessage(event('session.skills_loaded', { skills: [{ name: 'review', enabled: true }] })).facts,
+    [],
+    'the same list again moves nothing',
+  );
+});
+
+test("a session handed no skills opens on a receipt of the host's, and the runtime's list makes it its own", () => {
+  const lift = new CopilotFactLift();
+  const open = lift.fromMessage(opened).facts.find((fact) => fact.kind === 'agent_receipt');
+  assert.ok(open?.kind === 'agent_receipt');
+  assert.equal(open.source, 'host');
+  assert.equal(open.skills, null);
+  const loaded = lift.fromMessage(event('session.skills_loaded', { skills: [] })).facts[0];
+  assert.ok(loaded?.kind === 'agent_receipt');
+  assert.equal(loaded.source, 'runtime');
+  assert.deepEqual(loaded.skills, []);
 });

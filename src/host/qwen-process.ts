@@ -342,6 +342,8 @@ export function startQwenProcess(
 
   // The main thread's sub-agent calls still running, to tell a sub-agent's end from the turn's.
   const spawns = new QwenSpawnWatch();
+  // Whether the context usage has been asked since the first init: its skills are the CLI's receipt.
+  let usageAskedAtInit = false;
 
   function onMessage(message: JsonObject): void {
     const key = qwenMessageKey(message);
@@ -360,6 +362,12 @@ export function startQwenProcess(
       }
     }
     output.push({ kind: 'message', message });
+    // The first init, mid-turn: the CLI's own list of the skills it found is asked for now, not at the
+    // turn's end, so its receipt does not wait on the first turn.
+    if (key === 'system/init' && !usageAskedAtInit) {
+      usageAskedAtInit = true;
+      void readContextUsage();
+    }
     if (turnEnded) {
       outstanding = Math.max(0, outstanding - 1);
       void readContextUsage();

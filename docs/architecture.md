@@ -306,7 +306,8 @@ state lane ([gate.md](gate.md), the Qwen Code gate).
   prompt is a user line on stdin, held until the CLI answers `initialize` and bounded in the host;
   the model, mode and effort setters are control requests (`set_model`, `set_permission_mode`,
   `set_effort`), applied as they arrive; thinking has no switch and is refused by name; an interrupt is
-  `interrupt`. After each `result` the host asks the CLI's context usage (`get_context_usage`). A
+  `interrupt`. After the first init, while its turn runs, and after each `result` the host asks the CLI's
+  context usage (`get_context_usage`). A
   request member Qwen Code cannot honour (Claude's settings tiers, its hooks and spawner,
   `forwardSubagentText`, a store) is refused `request-key-unsupported`, naming it.
 - The gate (`createQwenSessionGate`, `src/host/qwen-gate.ts`) answers each `can_use_tool` through the
