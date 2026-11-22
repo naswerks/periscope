@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { decode } from '../control/codec.js';
 import type { AgentFact, JsonObject } from '../control/frames.js';
 import { PI_PINNED_VERSION } from './pi-binary.js';
 import { PiFactLift } from './pi-facts.js';
@@ -237,4 +238,112 @@ test('a compaction the observer reports is a compaction fact, as reported', () =
       },
     ],
   );
+});
+
+/** An assistant answer's `message_end`, as pi 1.5.2 writes it, its usage carrying the call's cost. */
+const assistantEnd = (usage: JsonObject | undefined, role = 'assistant'): PiMessage =>
+  event({
+    type: 'message_end',
+    message: {
+      role,
+      content: [],
+      model: 'deepseek/deepseek-chat',
+      provider: 'openrouter',
+      ...(usage === undefined ? {} : { usage }),
+    },
+  });
+
+const CALL_USAGE = {
+  input: 120,
+  output: 30,
+  cacheRead: 64,
+  cacheWrite: 8,
+  totalTokens: 222,
+  cost: { input: 0.0001, output: 0.0002, cacheRead: 0.00001, cacheWrite: 0.00002, total: 0.00033 },
+};
+
+test("each assistant message's usage is that model call's step figure: its tokens and pi's cost for it, catalogue-estimated, totals null", () => {
+  const { lift } = opened();
+  assert.deepEqual(lift.fromMessage(assistantEnd(CALL_USAGE)).facts, [
+    {
+      kind: 'turn_record',
+      runtime: 'pi',
+      totals: null,
+      turn: {
+        cost: 0.00033,
+        currency: 'USD',
+        costBasis: 'catalogue-estimated',
+        byModel: [
+          {
+            model: 'deepseek/deepseek-chat',
+            canonicalModel: null,
+            provider: 'openrouter',
+            inputTokens: 120,
+            outputTokens: 30,
+            cacheReadTokens: 64,
+            cacheWriteTokens: 8,
+            reasoningTokens: null,
+            cost: 0.00033,
+            costBasis: 'catalogue-estimated',
+            contextWindow: null,
+          },
+        ],
+      },
+      turnScope: 'step',
+      numTurns: null,
+      durationMs: null,
+      sourceSessionId: 'pi-session-1',
+    },
+  ]);
+});
+
+test('a step whose usage states no cost is unpriced: cost null, no currency, basis unreported, its tokens kept', () => {
+  const { lift } = opened();
+  const { cost: _cost, ...uncosted } = CALL_USAGE;
+  const record = lift.fromMessage(assistantEnd(uncosted)).facts[0];
+  assert.equal(record?.kind, 'turn_record');
+  if (record?.kind !== 'turn_record') return;
+  assert.deepEqual(
+    [record.turn?.cost, record.turn?.currency, record.turn?.costBasis, record.turn?.byModel[0]?.costBasis],
+    [null, null, 'unreported', 'unreported'],
+  );
+  assert.equal(record.turn?.byModel[0]?.inputTokens, 120);
+});
+
+test("control: a user's or a tool's message, and an assistant message with no usage, file no step", () => {
+  const { lift } = opened();
+  assert.deepEqual(lift.fromMessage(assistantEnd(CALL_USAGE, 'user')).facts, []);
+  assert.deepEqual(lift.fromMessage(assistantEnd(CALL_USAGE, 'toolResult')).facts, []);
+  assert.deepEqual(lift.fromMessage(assistantEnd(undefined)).facts, []);
+});
+
+test('each model call of a run files its own step, never a sum of the two', () => {
+  const { lift } = opened();
+  const steps = [CALL_USAGE, { ...CALL_USAGE, input: 400, cost: { total: 0.001 } }].map((usage) => {
+    const record = lift.fromMessage(assistantEnd(usage)).facts[0];
+    return record?.kind === 'turn_record' ? [record.turn?.cost, record.turn?.byModel[0]?.inputTokens] : null;
+  });
+  assert.deepEqual(steps, [
+    [0.00033, 120],
+    [0.001, 400],
+  ]);
+});
+
+test('a step record crosses the wire as the step record Copilot and opencode send: priced, and unpriced', () => {
+  const { lift } = opened();
+  const { cost: _cost, ...uncosted } = CALL_USAGE;
+  for (const usage of [CALL_USAGE, uncosted]) {
+    const fact = lift.fromMessage(assistantEnd(usage)).facts[0];
+    assert.equal(fact?.kind, 'turn_record');
+    const decoded = decode(
+      JSON.stringify({
+        frame: 'session',
+        sessionId: 's-1',
+        seq: 1,
+        at: '2000-01-01T00:00:00.000Z',
+        payload: { kind: 'session_update', body: { update: 'agent_facts', fact, sourceId: null } },
+      }),
+    );
+    assert.ok(decoded.ok, decoded.ok ? '' : `the fact does not cross the wire: ${decoded.refusal.detail}`);
+  }
 });

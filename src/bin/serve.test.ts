@@ -890,7 +890,7 @@ test('declared endpoints reach the host: the trace names them, a session on one 
     assert.match(decision?.permissionDecisionReason ?? '', /credential-path-denied/);
   }));
 
-test('a member no runtime reaching an endpoint reads is said once at start, and the host still dials', () =>
+test('a member no runtime reaching an endpoint reads, and a Codex model with no window, are each said once at start, and the host still dials', () =>
   inDir(async (dir) => {
     const path = join(dir, 'endpoints.json');
     const codexEndpoint = {
@@ -909,8 +909,9 @@ test('a member no runtime reaching an endpoint reads is said once at start, and 
 
     assert.equal(run.outcome.ok, true, run.err.join('\n'));
     const said = run.out.filter((line) => line.includes('[endpoint]'));
-    assert.equal(said.length, 1, run.out.join('\n'));
+    assert.equal(said.length, 2, run.out.join('\n'));
     assert.match(said[0] ?? '', /\[endpoint\] gateway: modelAliases, firstParty ignored/);
+    assert.match(said[1] ?? '', /\[endpoint\] gateway: gpt-6-sol with no window/);
     assert.equal(run.link.started, true, 'an ignored member never stops a host');
     assert.equal(run.out.join('\n').includes('example-secret'), false, 'the credential is never printed');
   }));

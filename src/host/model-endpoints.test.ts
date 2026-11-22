@@ -474,3 +474,112 @@ test('the hello lists a runtime on an endpoint only where it speaks its API: Cod
     ],
   );
 });
+
+// ---------------------------------------------------------------------------
+// The window of each model, read by Codex
+// ---------------------------------------------------------------------------
+
+/** A Codex endpoint whose provider holds back output tokens: its usable input is below the window. */
+const WINDOWED_CODEX = {
+  ...CODEX_ENDPOINT,
+  models: ['qwen/qwen3-coder', 'gpt-6-sol'],
+  contextWindow: undefined,
+  modelWindows: { 'qwen/qwen3-coder': { maxContextTokens: 262144, autoCompactWindow: 180000 } },
+};
+
+test('a window per model reads on an endpoint Codex reaches, both forms in one entry', async () => {
+  const read = await readEntries([WINDOWED_CODEX]);
+  assert.notEqual(typeof read, 'string', said(read));
+  if (typeof read === 'string') return;
+  assert.deepEqual(read.endpoints[0]?.modelWindows, {
+    'qwen/qwen3-coder': { maxContextTokens: 262144, autoCompactWindow: 180000 },
+  });
+  assert.deepEqual(read.ignored, []);
+});
+
+test('a window for a model the entry does not list refuses start, naming it', async () => {
+  assert.match(
+    await problemFor({
+      ...WINDOWED_CODEX,
+      modelWindows: { 'qwen/qwen3-coder-plus': { maxContextTokens: 262144 } },
+    }),
+    /states a window for "qwen\/qwen3-coder-plus" in "modelWindows", which its "models" list does not name/,
+  );
+});
+
+test('a window per model states its context size, and compacts within it', async () => {
+  assert.match(
+    await problemFor({
+      ...WINDOWED_CODEX,
+      modelWindows: { 'qwen/qwen3-coder': { autoCompactWindow: 180000 } },
+    }),
+    /"modelWindows" entry for qwen\/qwen3-coder needs \{"maxContextTokens": N\}/,
+  );
+  assert.match(
+    await problemFor({
+      ...WINDOWED_CODEX,
+      modelWindows: { 'qwen/qwen3-coder': { maxContextTokens: 262144, autoCompactWindow: 300000 } },
+    }),
+    /compacts at 300000 tokens, beyond its "maxContextTokens" of 262144/,
+  );
+  assert.match(
+    await problemFor({
+      ...WINDOWED_CODEX,
+      modelWindows: { 'qwen/qwen3-coder': { maxContextTokens: 262144, limit: 1 } },
+    }),
+    /needs \{"maxContextTokens": N\}/,
+  );
+});
+
+test('both window forms read on an endpoint Claude does not reach, below the range the agent CLI takes', async () => {
+  const read = await readEntries([
+    { ...CODEX_ENDPOINT, contextWindow: { maxContextTokens: 131072, autoCompactWindow: 90000 } },
+  ]);
+  assert.notEqual(typeof read, 'string', said(read));
+  if (typeof read === 'string') return;
+  assert.deepEqual(read.endpoints[0]?.contextWindow, { maxContextTokens: 131072, autoCompactWindow: 90000 });
+});
+
+test('control: both window forms refuse start on an endpoint Claude reaches, and its range still holds', async () => {
+  assert.match(
+    await problemFor({
+      ...VALID,
+      name: 'alibaba',
+      models: ['qwen3.8-max', 'qwen3.8-flash'],
+      modelAliases: { opus: 'qwen3.8-max', sonnet: 'qwen3.8-max', haiku: 'qwen3.8-flash' },
+      contextWindow: { maxContextTokens: 983616, autoCompactWindow: 786432 },
+    }),
+    /exactly one of .*both together are read only where Claude does not reach/,
+  );
+  assert.match(
+    await problemFor({ ...VALID, contextWindow: { autoCompactWindow: 90000 } }),
+    /from 100000 to 1000000/,
+  );
+});
+
+test('a window per model on an endpoint Codex does not reach is ignored and reported, never refused', async () => {
+  const read = await readEntries([{ ...VALID, modelWindows: { 'deepseek-flash': { maxContextTokens: 1 } } }]);
+  assert.notEqual(typeof read, 'string', said(read));
+  if (typeof read === 'string') return;
+  assert.deepEqual(read.ignored, [{ endpoint: 'deepseek', members: ['modelWindows'] }]);
+  assert.deepEqual(read.endpoints[0]?.modelWindows, {});
+});
+
+test('a Codex model with no window of its own and no endpoint window is listed, once per endpoint', async () => {
+  const read = await readEntries([WINDOWED_CODEX]);
+  assert.notEqual(typeof read, 'string', said(read));
+  if (typeof read === 'string') return;
+  assert.deepEqual(read.windowless, [{ endpoint: 'gateway', members: ['gpt-6-sol'] }]);
+  const sized = await readEntries([{ ...WINDOWED_CODEX, contextWindow: { maxContextTokens: 400000 } }]);
+  assert.deepEqual(
+    typeof sized === 'string' ? sized : sized.windowless,
+    [],
+    "the endpoint's window covers it",
+  );
+  const claude = await readEntries([{ ...VALID, contextWindow: null }]);
+  assert.deepEqual(
+    typeof claude === 'string' ? claude : claude.windowless,
+    [],
+    'Claude reads no window per model',
+  );
+});

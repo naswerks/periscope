@@ -322,7 +322,7 @@ test('a settings file that turns code mode on refuses the open qwen-ask-rules-no
   assert.match(String(error?.message), /^qwen-ask-rules-not-active: .*does not keep code mode off/);
 });
 
-test("a foreground sub-agent's own end is no turn done: it asks no context usage, and only the session's result does", async () => {
+test("a foreground sub-agent's own end is no turn done: it asks no context usage, and only the first init and the session's result do", async () => {
   // The sub-agent's end is the `result` v0.27.3 writes when a foreground sub-agent fails
   // (`buildSubagentErrorResult`): no parent, the error subtype, no turns and no time.
   const run = await started({
@@ -361,9 +361,9 @@ test("a foreground sub-agent's own end is no turn done: it asks no context usage
     () => results(run.messages).some((result) => result['uuid'] === 'result-1'),
     "the session's result",
   );
-  await waitFor(() => usageAsked() >= 1, 'the context usage the turn asks for');
+  await waitFor(() => usageAsked() >= 2, 'the context usage the first init and the turn ask for');
   assert.equal(await closed(run), null);
-  assert.equal(usageAsked(), 1, "the sub-agent's end was counted as a turn done");
+  assert.equal(usageAsked(), 2, "the sub-agent's end was counted as a turn done");
 });
 
 test('the settings name every built-in tool and every attached server as one to ask about, and turn every hook off', async () => {
@@ -713,6 +713,27 @@ test('the prompts waiting for an answer are bounded: past the bound a prompt is 
   let taken = 0;
   for (let index = 0; index < 20; index += 1) if (run.process.prompt(`p${index}`)) taken += 1;
   assert.equal(taken, 16);
+  run.fake.cli.release();
+  assert.equal(await closed(run), null);
+});
+
+test("the CLI's context usage is asked once at the first init, mid-turn, so its own receipt does not wait on the turn's end", async () => {
+  const run = await started({
+    fake: {
+      skills: ['review'],
+      holdDecisions: true,
+      calls: () => [{ name: 'edit', input: { file_path: `${ROOT}/a` } }],
+    },
+  });
+  run.process.prompt('look');
+  const asked = () =>
+    run.fake.cli.requests.filter((request) => request['subtype'] === 'get_context_usage').length;
+  await waitFor(() => asked() === 1, 'the context usage asked at the first init');
+  assert.equal(results(run.messages).length, 0, 'the turn had already ended');
+  await waitFor(
+    () => run.messages.some((one) => one.kind === 'answer' && one.subtype === 'get_context_usage'),
+    'its answer',
+  );
   run.fake.cli.release();
   assert.equal(await closed(run), null);
 });

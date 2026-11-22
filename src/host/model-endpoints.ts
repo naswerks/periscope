@@ -32,6 +32,7 @@ import { hostEndpointsProblem } from '../control/codec.js';
 import { isAbsolutePath } from '../core/paths.js';
 import { STRIPPED_HOST_SESSION_KEYS } from '../sessions/spawn-env.js';
 import {
+  CODEX_RUNTIME,
   COPILOT_RUNTIME,
   ENDPOINT_ROUTED_RUNTIMES,
   OPENCODE_RUNTIME,
@@ -99,10 +100,21 @@ const HELPER_TIMEOUT_MS = 30_000;
 
 /**
  * How an endpoint declares its model's window, in the form its vendor documents: the agent CLI's
- * auto-compaction window, or the context size it should assume. Never both on one endpoint.
+ * auto-compaction window, or the context size it should assume. Never both on an endpoint Claude
+ * reaches; on any other a context size may carry, beside it, the point the agent compacts at.
  */
 export type EndpointContextWindow =
-  { readonly autoCompactWindow: number } | { readonly maxContextTokens: number };
+  | { readonly autoCompactWindow: number }
+  | { readonly maxContextTokens: number; readonly autoCompactWindow?: number };
+
+/**
+ * One model's window on an endpoint Codex reaches: the context size the model holds, and the point the
+ * agent compacts at, at most that size.
+ */
+export interface EndpointModelWindow {
+  readonly maxContextTokens: number;
+  readonly autoCompactWindow?: number;
+}
 
 /** One model endpoint, checked and with its credential resolved. */
 export interface ModelEndpoint {
@@ -118,6 +130,11 @@ export interface ModelEndpoint {
   /** The model each mapped tier resolves to on this endpoint. */
   readonly modelAliases: Readonly<Partial<Record<ModelAliasTier, string>>>;
   readonly contextWindow: EndpointContextWindow | null;
+  /**
+   * The window of each model that states one, by model id, each one of `models`. Read by Codex alone,
+   * ahead of `contextWindow`; absent is none.
+   */
+  readonly modelWindows?: Readonly<Record<string, EndpointModelWindow>>;
   /** Further variables the operator sets for sessions on this endpoint. */
   readonly env: Readonly<Record<string, string>>;
   /** Anthropic's own route: a Claude model id may be named on it. Never on the wire. */
@@ -148,6 +165,12 @@ export interface ModelEndpointsReading {
    * the listing is reported at start, never refused.
    */
   readonly unmappedAliases: readonly IgnoredEndpointMembers[];
+  /**
+   * Models an endpoint Codex reaches lists with no window of their own and no `contextWindow` beside
+   * them, each endpoint's once. A Codex session on one runs on the window Codex itself assumes for the
+   * id; the listing is reported at start, never refused.
+   */
+  readonly windowless: readonly IgnoredEndpointMembers[];
 }
 
 export interface ModelEndpointsReadOptions {
@@ -165,11 +188,14 @@ type CredentialReference =
 
 /** One endpoint as the file declares it, checked, before its credential is resolved. */
 interface DeclaredEndpoint extends Omit<ModelEndpoint, 'authToken'> {
+  readonly modelWindows: Readonly<Record<string, EndpointModelWindow>>;
   readonly credential: CredentialReference;
   /** The members it states that no runtime reaching it reads. */
   readonly ignored: readonly string[];
   /** The agent aliases its `models` lists and its `modelAliases` does not map. */
   readonly unmappedAliases: readonly string[];
+  /** The models Codex reaches on it with no window stated, neither their own nor the endpoint's. */
+  readonly windowless: readonly string[];
 }
 
 const ENDPOINT_KEYS = [
@@ -181,6 +207,7 @@ const ENDPOINT_KEYS = [
   'models',
   'modelAliases',
   'contextWindow',
+  'modelWindows',
   'env',
   'firstParty',
 ] as const;
@@ -221,10 +248,12 @@ export function readModelEndpoints(
   const files = [path];
   const ignored: IgnoredEndpointMembers[] = [];
   const unmappedAliases: IgnoredEndpointMembers[] = [];
+  const windowless: IgnoredEndpointMembers[] = [];
   for (const entry of declared) {
     if (entry.ignored.length > 0) ignored.push({ endpoint: entry.name, members: entry.ignored });
     if (entry.unmappedAliases.length > 0)
       unmappedAliases.push({ endpoint: entry.name, members: entry.unmappedAliases });
+    if (entry.windowless.length > 0) windowless.push({ endpoint: entry.name, members: entry.windowless });
     const token = resolveCredential(entry, env, options.helperTimeoutMs ?? HELPER_TIMEOUT_MS);
     if (!token.ok) return `${where}: endpoint "${entry.name}" ${token.problem}`;
     if ('file' in entry.credential && !files.includes(entry.credential.file))
@@ -238,12 +267,13 @@ export function readModelEndpoints(
       models: entry.models,
       modelAliases: entry.modelAliases,
       contextWindow: entry.contextWindow,
+      modelWindows: entry.modelWindows,
       env: entry.env,
       firstParty: entry.firstParty,
       authToken: () => value,
     });
   }
-  return { endpoints, files, ignored, unmappedAliases };
+  return { endpoints, files, ignored, unmappedAliases, windowless };
 }
 
 /** The endpoints a parsed file declares, checked, or the first problem with them. */
@@ -394,7 +424,7 @@ function declaredEndpoint(
         })
       : [];
 
-  const window = contextWindowOf(value['contextWindow'], the);
+  const window = contextWindowOf(value['contextWindow'], the, reachesClaude);
   if (typeof window === 'string') return window;
   if (reachesClaude && window !== null && 'maxContextTokens' in window) {
     const suffixed = [...modelIds, ...Object.values(modelAliases)].find((id) => /\[1m\]$/i.test(id));
@@ -406,6 +436,15 @@ function declaredEndpoint(
       );
     }
   }
+
+  // A window per model is Codex's alone: it is set in each thread's own config, for the model the
+  // thread opens on. No other runtime reads it.
+  const reachesCodex = runtimes.includes(CODEX_RUNTIME);
+  if (!reachesCodex && value['modelWindows'] !== undefined) ignored.push('modelWindows');
+  const modelWindows = reachesCodex ? modelWindowsOf(value['modelWindows'], the, modelIds) : {};
+  if (typeof modelWindows === 'string') return modelWindows;
+  const windowless =
+    reachesCodex && window === null ? modelIds.filter((id) => !Object.hasOwn(modelWindows, id)) : [];
 
   const extra = value['env'] ?? {};
   if (!isPlainObject(extra)) return `${the} has an "env" that is not an object`;
@@ -441,10 +480,12 @@ function declaredEndpoint(
     models: modelIds,
     modelAliases,
     contextWindow: window,
+    modelWindows,
     env: { ...(extra as Record<string, string>) },
     firstParty,
     ignored,
     unmappedAliases,
+    windowless,
   };
 }
 
@@ -498,32 +539,112 @@ function credentialReference(
   return `${the} names the credential form '${String(form)}' — ${forms}`;
 }
 
-/** An entry's window, checked, or the problem with it. Absent or null is no window. */
-function contextWindowOf(value: unknown, the: string): EndpointContextWindow | null | string {
+/** The two members a window may state. */
+const WINDOW_KEYS = ['autoCompactWindow', 'maxContextTokens'] as const;
+
+/**
+ * An entry's window, checked, or the problem with it. Absent or null is no window. On an endpoint
+ * Claude reaches it takes exactly one form, the agent CLI reading each from a variable of its own; on
+ * any other it may take both: a context size, and the point the agent compacts at within it.
+ */
+function contextWindowOf(
+  value: unknown,
+  the: string,
+  reachesClaude: boolean,
+): EndpointContextWindow | null | string {
   if (value === undefined || value === null) return null;
-  if (!isPlainObject(value) || Object.keys(value).length !== 1) {
-    return `${the} needs a "contextWindow" of exactly one of {"autoCompactWindow": N} or {"maxContextTokens": N}`;
-  }
-  if ('autoCompactWindow' in value) {
-    const tokens = value['autoCompactWindow'];
-    if (
-      typeof tokens !== 'number' ||
-      !Number.isInteger(tokens) ||
-      tokens < AUTO_COMPACT_WINDOW_RANGE.min ||
-      tokens > AUTO_COMPACT_WINDOW_RANGE.max
-    ) {
-      return `${the} needs an "autoCompactWindow" that is a whole number of tokens from ${AUTO_COMPACT_WINDOW_RANGE.min} to ${AUTO_COMPACT_WINDOW_RANGE.max}`;
+  const forms = reachesClaude
+    ? 'exactly one of {"autoCompactWindow": N} or {"maxContextTokens": N}'
+    : '{"autoCompactWindow": N}, {"maxContextTokens": N}, or both';
+  const shape = `${the} needs a "contextWindow" of ${forms}`;
+  if (!isPlainObject(value) || !onlyWindowKeys(value)) return shape;
+  const count = Object.keys(value).length;
+  if (count === 0) return shape;
+  if (reachesClaude && count > 1) return `${shape}: both together are read only where Claude does not reach`;
+  const tokens = windowTokens(value, the, reachesClaude);
+  if (typeof tokens === 'string') return tokens;
+  if (tokens.max === null) return tokens.auto === null ? shape : { autoCompactWindow: tokens.auto };
+  return tokens.auto === null
+    ? { maxContextTokens: tokens.max }
+    : { maxContextTokens: tokens.max, autoCompactWindow: tokens.auto };
+}
+
+/**
+ * An entry's windows by model, checked, or the problem with them. Absent or null is none. Each names a
+ * model the entry lists and states its context size, with the point the agent compacts at beside it or
+ * not.
+ */
+function modelWindowsOf(
+  value: unknown,
+  the: string,
+  models: readonly string[],
+): Record<string, EndpointModelWindow> | string {
+  if (value === undefined || value === null) return {};
+  if (!isPlainObject(value)) return `${the} has a "modelWindows" that is not an object of model ids`;
+  const windows: [string, EndpointModelWindow][] = [];
+  for (const [model, entry] of Object.entries(value)) {
+    if (!models.includes(model)) {
+      return `${the} states a window for ${JSON.stringify(model)} in "modelWindows", which its "models" list does not name`;
     }
-    return { autoCompactWindow: tokens };
+    const at = `${the}'s "modelWindows" entry for ${model}`;
+    const shape = `${at} needs {"maxContextTokens": N}, with an "autoCompactWindow" beside it or not`;
+    if (!isPlainObject(entry) || !onlyWindowKeys(entry)) return shape;
+    const tokens = windowTokens(entry, at, false);
+    if (typeof tokens === 'string') return tokens;
+    if (tokens.max === null) return shape;
+    windows.push([
+      model,
+      tokens.auto === null
+        ? { maxContextTokens: tokens.max }
+        : { maxContextTokens: tokens.max, autoCompactWindow: tokens.auto },
+    ]);
   }
+  return Object.fromEntries(windows);
+}
+
+function onlyWindowKeys(value: Record<string, unknown>): boolean {
+  return Object.keys(value).every((key) => (WINDOW_KEYS as readonly string[]).includes(key));
+}
+
+/**
+ * The members a window states, each checked where present: a context size that is a positive whole
+ * number of tokens, and a compaction point that is one too, within the range the agent CLI accepts
+ * where Claude reads it, and never beyond the context size beside it, which it would never reach.
+ */
+function windowTokens(
+  value: Record<string, unknown>,
+  the: string,
+  claudeRange: boolean,
+): { readonly max: number | null; readonly auto: number | null } | string {
+  let max: number | null = null;
   if ('maxContextTokens' in value) {
     const tokens = value['maxContextTokens'];
     if (typeof tokens !== 'number' || !Number.isSafeInteger(tokens) || tokens <= 0) {
       return `${the} needs a "maxContextTokens" that is a positive whole number of tokens`;
     }
-    return { maxContextTokens: tokens };
+    max = tokens;
   }
-  return `${the} needs a "contextWindow" of exactly one of {"autoCompactWindow": N} or {"maxContextTokens": N}`;
+  let auto: number | null = null;
+  if ('autoCompactWindow' in value) {
+    const tokens = value['autoCompactWindow'];
+    if (claudeRange) {
+      if (
+        typeof tokens !== 'number' ||
+        !Number.isInteger(tokens) ||
+        tokens < AUTO_COMPACT_WINDOW_RANGE.min ||
+        tokens > AUTO_COMPACT_WINDOW_RANGE.max
+      ) {
+        return `${the} needs an "autoCompactWindow" that is a whole number of tokens from ${AUTO_COMPACT_WINDOW_RANGE.min} to ${AUTO_COMPACT_WINDOW_RANGE.max}`;
+      }
+    } else if (typeof tokens !== 'number' || !Number.isSafeInteger(tokens) || tokens <= 0) {
+      return `${the} needs an "autoCompactWindow" that is a positive whole number of tokens`;
+    }
+    auto = tokens;
+  }
+  if (max !== null && auto !== null && auto > max) {
+    return `${the} compacts at ${auto} tokens, beyond its "maxContextTokens" of ${max}, a point never reached`;
+  }
+  return { max, auto };
 }
 
 type Resolved =

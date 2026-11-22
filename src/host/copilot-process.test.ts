@@ -1017,3 +1017,13 @@ test('the runtime process id is read only from a process that is still running',
   assert.equal(copilotRuntimePid(holding({ pid: 7, exitCode: null, signalCode: 'SIGKILL' })), null);
   assert.equal(copilotRuntimePid(holding(null)), null);
 });
+
+test("an open that runs its budget out ends the session naming the step it was on: the session's create", async () => {
+  const run = await started({ fake: { createHangs: true }, runtime: { openDeadlineMs: 200 } });
+  assert.match(
+    String((await run.ended)?.message),
+    /^runtime-unavailable: the Copilot open did not finish the Copilot session's create within 200ms$/,
+  );
+  assert.equal(opened(run), false);
+  await closed(run);
+});

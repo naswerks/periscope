@@ -283,3 +283,26 @@ test("a fact names its message's own uuid, never the init's, which is the sessio
   assert.equal(qwenFactSourceId(answer('initialize', { session_id: 's1' })), null);
   assert.equal(qwenFactSourceId({ kind: 'prompt', text: 'p' }), null);
 });
+
+test("regression: the CLI's first receipt is sent even when it found exactly what was handed over, and only then is a match nothing", () => {
+  const lift = new QwenFactLift({ handedOverSkills: ['review'], startModel: 'qwen3-coder-plus' });
+  const handed = of(facts(lift, [answer('initialize', { session_id: 's1' })]), 'agent_receipt');
+  assert.deepEqual(
+    handed.map((receipt) => receipt.source),
+    ['host'],
+  );
+  const found = of(
+    facts(lift, [answer('get_context_usage', { skills: [{ name: 'review' }] })]),
+    'agent_receipt',
+  );
+  assert.equal(found.length, 1, "the CLI's own receipt matched the host's and was not sent");
+  assert.equal(found[0]?.source, 'runtime');
+  const { source: _found, ...members } = found[0] ?? { source: null };
+  const { source: _handed, ...handedMembers } = handed[0] ?? { source: null };
+  assert.deepEqual(members, handedMembers, 'the two state the same members');
+  assert.deepEqual(
+    of(facts(lift, [answer('get_context_usage', { skills: [{ name: 'review' }] })]), 'agent_receipt'),
+    [],
+    'a second answer that moves nothing sends nothing',
+  );
+});

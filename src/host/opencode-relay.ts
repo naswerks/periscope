@@ -106,7 +106,10 @@ export function namedRefusal(method: string, refusal: Refusal): Result<never> {
 /** How a host process is opened; the default starts this package's own program. */
 export type ConnectOpencode = (options: OpencodeConnectOptions) => Promise<Result<OpencodeConnection>>;
 
-/** Start a session's host process and open its server. Refuses `runtime-unavailable` with why it could not. */
+/**
+ * Start a session's host process and open its server. Refuses `runtime-unavailable` with why it could not,
+ * or `rpc-request-timed-out` when its open met no answer by `openDeadlineMs`.
+ */
 export const connectOpencodeHost: ConnectOpencode = async (options) => {
   const started = startStdioRpc({
     command: process.execPath,
@@ -177,8 +180,9 @@ export const connectOpencodeHost: ConnectOpencode = async (options) => {
   if (!opened.ok) {
     await peer.close();
     const exit = peer.ended ? await Promise.race([peer.exited, Promise.resolve(null)]) : null;
+    // An open that met no answer by its deadline keeps that reason, so a session can tell it from a refusal.
     return refuse(
-      'runtime-unavailable',
+      opened.refusal.reason === 'rpc-request-timed-out' ? 'rpc-request-timed-out' : 'runtime-unavailable',
       `the opencode host process did not open: ${opened.refusal.detail}${exit === null ? '' : ` (${describeExit(exit)})`}`,
     );
   }

@@ -51,13 +51,18 @@ import { qwenMcpServers } from './qwen-mcp.js';
 import { qwenSkillDirectories } from './qwen-pack.js';
 import type { QwenHostRequest, QwenMessage } from './qwen-wire.js';
 import { QwenSpawnWatch } from '../state/qwen-observer.js';
+import { QWEN_RUNTIME, openBudgetFor } from '../sessions/runtimes.js';
 import { InitializeAnswer, SystemInit, parsed, qwenMessageKey } from './qwen-wire.js';
 import type { SpawnChild } from './stdio-rpc.js';
 import type { QwenPermissionMode } from './wire-request.js';
 import { QWEN_MODE_MAP, QWEN_PERMISSION_MODES, isQwenPermissionMode } from './wire-request.js';
 
-/** How long `initialize` may take to be answered: the CLI answers it before it loads its configuration. */
-export const QWEN_HANDSHAKE_DEADLINE_MS = 60_000;
+/**
+ * How long `initialize` may take to be answered: the CLI answers it before it loads its configuration. It is
+ * the whole of the open, 50 seconds, ten below Qwen Code's start window, so an open slower than this ends
+ * naming it.
+ */
+export const QWEN_HANDSHAKE_DEADLINE_MS = openBudgetFor(QWEN_RUNTIME);
 /** How long a setter, an interrupt or a context-usage read may take to be answered. */
 export const QWEN_CONTROL_DEADLINE_MS = 30_000;
 /**
@@ -338,6 +343,8 @@ export function startQwenProcess(
 
   // The main thread's sub-agent calls still running, to tell a sub-agent's end from the turn's.
   const spawns = new QwenSpawnWatch();
+  // Whether the context usage has been asked since the first init: its skills are the CLI's receipt.
+  let usageAskedAtInit = false;
 
   function onMessage(message: JsonObject): void {
     const key = qwenMessageKey(message);
@@ -356,6 +363,12 @@ export function startQwenProcess(
       }
     }
     output.push({ kind: 'message', message });
+    // The first init, mid-turn: the CLI's own list of the skills it found is asked for now, not at the
+    // turn's end, so its receipt does not wait on the first turn.
+    if (key === 'system/init' && !usageAskedAtInit) {
+      usageAskedAtInit = true;
+      void readContextUsage();
+    }
     if (turnEnded) {
       outstanding = Math.max(0, outstanding - 1);
       void readContextUsage();

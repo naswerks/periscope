@@ -31,9 +31,11 @@ import { AsyncQueue } from '../core/async-queue.js';
 import type { Refusal, RefusalReason } from '../core/refusal.js';
 import type { Result } from '../core/result.js';
 import { refuse } from '../core/result.js';
+import { PI_RUNTIME, openBudgetFor } from '../sessions/runtimes.js';
 import type { AgentInitFacts, AgentProcess, AgentProcessRequest, ThinkingConfig } from './agent-process.js';
 import { MAX_PENDING_PROMPTS, isRuntimeDefaultPrompt } from './agent-process.js';
 import type { SpawnDegrade } from './codex-gate.js';
+import { OpenBudget } from './open-budget.js';
 import { PI_PINNED_VERSION, piCommand, piExtensionPath } from './pi-binary.js';
 import type { PiEndpointRoute } from './pi-endpoints.js';
 import { piEndpointArgs } from './pi-endpoints.js';
@@ -54,6 +56,12 @@ import type { SpawnChild } from './stdio-rpc.js';
 export const PI_HELLO_DEADLINE_MS = 30_000;
 /** How long a command may take to be answered. */
 export const PI_COMMAND_DEADLINE_MS = 30_000;
+/**
+ * How long the open may take in all, from the channel's start to pi's answer to `get_state`: 50 seconds,
+ * ten below pi's start window. Each step is given what is left of it, at most its own bound, so an open
+ * slower than this ends naming the step it was on.
+ */
+export const PI_OPEN_DEADLINE_MS = openBudgetFor(PI_RUNTIME);
 /** How long `abort` may take: pi answers it once the run has stopped. */
 export const PI_ABORT_DEADLINE_MS = 120_000;
 /** How many of pi's last stderr lines are kept, to name why it ended before the session opened. */
@@ -81,6 +89,8 @@ export interface PiRuntimeConfig {
   readonly endpoints?: readonly PiEndpointRoute[];
   /** How long the extension has to say hello. Defaults to `PI_HELLO_DEADLINE_MS`. */
   readonly helloDeadlineMs?: number;
+  /** How long the open may take in all. Defaults to `PI_OPEN_DEADLINE_MS`. */
+  readonly openDeadlineMs?: number;
   /** The extension pi loads; this package's own (`piExtensionPath`) unless a test names another. */
   readonly extensionPath?: string;
   readonly platform?: string;
@@ -241,6 +251,8 @@ export function startPiProcess(
   let rpc: PiRpc | null = null;
   let run: PiSessionRun | null = null;
   const stderr: string[] = [];
+  // The open's budget, from its start until it opened or ended; each of its steps is given what is left.
+  let budget: OpenBudget | null = null;
   /** How pi ended, once it has. */
   let exitDetail: string | null = null;
   /** The provider of the model in force, from pi's own state. */
@@ -289,6 +301,7 @@ export function startPiProcess(
 
   const shutDown = async (): Promise<void> => {
     closed = true;
+    budget?.finish();
     held.length = 0;
     await rpc?.close();
     removeRun();
@@ -296,6 +309,7 @@ export function startPiProcess(
   };
 
   const fail = (detail: string): void => {
+    budget?.finish();
     if (failure === null) failure = new Error(detail);
     resolvePlugins(null);
     void shutDown();
@@ -352,6 +366,9 @@ export function startPiProcess(
   }
 
   async function open(live: PiSessionGate): Promise<void> {
+    const spending = new OpenBudget('pi', runtime.openDeadlineMs ?? PI_OPEN_DEADLINE_MS);
+    budget = spending;
+    spending.enter("this host's channel");
     const listening = await live.ready();
     if (!listening.ok) return refuseOpen('pi-extension-not-active', listening.refusal.detail);
     if (closed) return;
@@ -423,7 +440,7 @@ export function startPiProcess(
     rpc = started.value;
 
     // No prompt is written until the extension has said it is loaded, over its own channel.
-    const deadline = runtime.helloDeadlineMs ?? PI_HELLO_DEADLINE_MS;
+    const deadline = spending.enter("the extension's hello", runtime.helloDeadlineMs ?? PI_HELLO_DEADLINE_MS);
     const exited = rpc.exited.then(() => 'exited' as const);
     const hello: PiHello | null | 'exited' = await Promise.race([live.hello(deadline), exited]);
     if (closed) return;
@@ -444,12 +461,20 @@ export function startPiProcess(
     const removed = run.removeConfig();
     if (!removed.ok) degrade(removed.refusal.detail);
 
-    const commands = await ask('get_commands', {});
+    const commands = await ask('get_commands', {}, spending.enter('get_commands', PI_COMMAND_DEADLINE_MS));
     if (!commands.ok) {
+      if (spending.overran(commands.refusal.reason === 'rpc-request-timed-out')) {
+        return fail(exitDetail ?? `runtime-unavailable: ${spending.overrun()}`);
+      }
       return fail(exitDetail ?? `${commands.refusal.reason}: get_commands: ${commands.refusal.detail}`);
     }
-    const state = await ask('get_state', {});
-    if (!state.ok) return fail(exitDetail ?? `${state.refusal.reason}: get_state: ${state.refusal.detail}`);
+    const state = await ask('get_state', {}, spending.enter('get_state', PI_COMMAND_DEADLINE_MS));
+    if (!state.ok) {
+      if (spending.overran(state.refusal.reason === 'rpc-request-timed-out')) {
+        return fail(exitDetail ?? `runtime-unavailable: ${spending.overrun()}`);
+      }
+      return fail(exitDetail ?? `${state.refusal.reason}: get_state: ${state.refusal.detail}`);
+    }
     if (closed) return;
     const stateRead = state.value['success'] === true ? parsed(PiState, state.value['data']) : null;
     if (stateRead === null) return fail('rpc-request-failed: get_state answered with no session id');
@@ -489,6 +514,7 @@ export function startPiProcess(
     push({ kind: 'response', command: 'get_commands', request: {}, response: commands.value });
     push({ kind: 'response', command: 'get_state', request: {}, response: state.value });
     opened = true;
+    spending.finish();
     pump();
   }
 
@@ -587,6 +613,9 @@ export function startPiProcess(
     },
     pluginsApplied(): Promise<boolean | null> {
       return plugins;
+    },
+    openStep(): string | null {
+      return budget?.describe() ?? null;
     },
     close(): void {
       if (closed) return;

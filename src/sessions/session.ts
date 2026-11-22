@@ -409,7 +409,9 @@ export class HostedSession<M = SDKMessage> {
       //
       // `settle` clears the timer on every path, so a session that does report itself pays nothing.
       const timer = setTimeout(() => {
-        const detail = `the agent did not report itself within ${timeoutMs}ms`;
+        // A process still opening says which step it waits on, so the end names more than the window.
+        const step = this.#process.openStep?.() ?? null;
+        const detail = `the agent did not report itself within ${timeoutMs}ms${step === null ? '' : ` (${step})`}`;
         this.#finish('start_timed_out', detail);
         settle(refuse<HostedSessionFacts>('session-spawn-failed', detail));
       }, timeoutMs);

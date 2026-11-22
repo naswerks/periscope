@@ -499,33 +499,38 @@ sub-agents, and the sub-agents settled since the turn began. Codex's usage names
 figures are filed under the model the thread opened on, moved by a model a `turn/start` sends and by
 a reroute.
 
-Qwen Code's sources: `session_handle` is the session id the answer to the host's `initialize` names,
-and again when an init names another (a resume or a fork); `agent_receipt` is composed by the host at
-that answer (`source: 'host'`, the skills it handed over), then the CLI's own once its context usage
-lists the skills it found (`source: 'runtime'`), and again whenever an init moves a member, the
-permission mode in Qwen Code's own word; `turn_record` is each `result` of the session's own (not the one
-the CLI writes when a foreground sub-agent fails or is cancelled, which carries no parent, the error
-subtype, no turns and no time while the main thread's `agent` call is still open; a background
-sub-agent writes no `result` of its own, and its end, a failure included, is a `task_notification`, which the
-`tasks` fact reports), its `totals` the CLI's
-running total for the session and its `turn` and `turnScope` null, a resumed or forked session's total
-including the source's tokens, with no cost and no cache writes; `usage_sample` is each answer to the
-context-usage request the host sends after each `result`; `tasks` is the background tasks the CLI
-reports started and settled, each naming the call that started it (`toolUseId`) where the CLI says which,
-and a settled agent task carrying its `usage` when the CLI reports all three counts (it reports no summary
-and no output file). `inputTokens` is the CLI's input less its cached input, floored at zero.
+Qwen Code's sources: `session_handle` is the session id the answer to the host's `initialize` names, and
+again when an init names another (a resume or a fork); `agent_receipt` is composed by the host at that
+answer (`source: 'host'`, the skills it handed over), then the CLI's own once its context usage lists
+the skills it found (`source: 'runtime'`), sent even when it names exactly what was handed over, and
+again whenever an init moves a member, the permission mode in Qwen Code's own word; `turn_record` is
+each `result` of the session's own (not the one the CLI writes when a foreground sub-agent fails or is
+cancelled, which carries no parent, the error subtype, no turns and no time while the main thread's
+`agent` call is still open; a background sub-agent writes no `result` of its own, and its end, a failure
+included, is a `task_notification`, which the `tasks` fact reports), its `totals` the CLI's running
+total for the session and its `turn` and `turnScope` null, a resumed or forked session's total including
+the source's tokens, with no cost and no cache writes; `usage_sample` is each answer to the
+context-usage request the host sends after the first init, while its turn runs, and after each `result`;
+`tasks` is the background tasks the CLI reports started and settled, each naming the call that started
+it (`toolUseId`) where the CLI says which, and a settled agent task carrying its `usage` when the CLI
+reports all three counts (it reports no summary and no output file). `inputTokens` is the CLI's input
+less its cached input, floored at zero.
 
 pi's sources: `session_handle` is the session id the answer to the host's `get_state` names;
 `agent_receipt` is pi's own (`source: 'runtime'`) once the session opens: the model and thinking
 level its state names (`effort` is the thinking level), the skills its command list names, and the
 MCP servers the host's extension registered, with no permission mode. It is sent again when pi says
 its thinking level moved, and one composed by the host (`source: 'host'`) follows a model the host
-set, for which pi writes no event. `turn_record` is the answer to `get_session_stats`, which the host
-asks after each run: its `totals` are pi's running totals for the session, tokens and a cost in US
-dollars pi estimates from its own model catalogue (`costBasis: 'catalogue-estimated'`), except that on an
-OpenRouter model pi takes the cost OpenRouter reported for each call it accounted for, so the total can
-be partly billed while its basis claims no bill,
-and its `turn` and `turnScope` null. pi counts every entry of the session's file, its compacted
+set, for which pi writes no event. `turn_record` is filed per model call and per run. Each assistant
+`message_end` that carries usage is that call's figure (`turn`, `turnScope: 'step'`, `totals` null): its
+tokens and the cost pi states for it (`usage.cost.total`, in US dollars, filed
+`costBasis: 'catalogue-estimated'` as the totals are; `cost` null and `unreported` where pi states none),
+under the model the message names, so a run that never settles still files each call it made. The answer to
+`get_session_stats`, which the host asks after each run, files pi's running totals for the session
+(`totals`, `turn` and `turnScope` null): tokens and a cost in US dollars pi estimates from its own model
+catalogue (`costBasis: 'catalogue-estimated'`), except that on an OpenRouter model pi takes the cost
+OpenRouter reported for each call it accounted for, so the total can be partly billed while its basis
+claims no bill. pi counts every entry of the session's file, its compacted
 history, abandoned branches, failed retries and compaction calls included, so a total can exceed what
 the visible conversation used, and a resumed or forked session's includes the source's.
 `inputTokens` is pi's `input`, which pi counts without the cached input; pi states no reasoning
@@ -533,15 +538,17 @@ figure. `usage_sample` is the same answer's context usage; `compaction` is each 
 reports, its `tokensAfter` null, since pi states only an estimate; `tasks` is not sent. pi's messages
 carry no id, so a pi fact's `sourceId` is null.
 
-Copilot's sources: `session_handle` is the session id the open names; `agent_receipt` is the
-runtime's own (`source: 'runtime'`) once the open is proven: the model and effort `session.start` or
-`session.resume` named, the agent mode as `permissionMode` (`interactive` or `plan`; the runtime's
-permission mode is always `manual`), the skills `session.skills_loaded` names (the ones the host
-handed over until then) and the servers `session.mcp_servers_loaded` names, each with its status in
-the runtime's word. It is sent again when the model, the effort, the agent mode, the skills or a
-server's status moves. `turn_record` is filed per model call: each `assistant.usage` is one step's
-figure (`turn`, `turnScope: 'step'`, `totals` null), and the session's end (`session.shutdown`) files
-its totals per model (`totals`, `turn` null). Neither is priced: Copilot's `cost` is a multiplier and
+Copilot's sources: `session_handle` is the session id the open names; `agent_receipt` is sent once the
+open is proven: the model and effort `session.start` or `session.resume` named, the agent mode as
+`permissionMode` (`interactive` or `plan`; the runtime's permission mode is always `manual`), the skills
+`session.skills_loaded` names and the servers `session.mcp_servers_loaded` names, each with its status
+in the runtime's word. Until `session.skills_loaded` its skills are the ones the host handed over and it
+is the host's (`source: 'host'`); from then it is the runtime's own (`source: 'runtime'`), its first
+sent even when it names exactly what was handed over. It is sent again when the model, the effort, the
+agent mode, the skills or a server's status moves. `turn_record` is filed per model call: each
+`assistant.usage` is one step's figure (`turn`, `turnScope: 'step'`, `totals` null), and the session's
+end (`session.shutdown`) files its totals per model (`totals`, `turn` null). Neither is priced: Copilot's
+`cost` is a multiplier and
 its credit totals a unit of its own, so `cost` is null and `costBasis` is `unreported`. `inputTokens`
 is the runtime's input less its cache reads, floored at zero, since the runtime counts the cached
 input inside its input. `usage_sample` is each `session.usage_info`, the context's tokens and the

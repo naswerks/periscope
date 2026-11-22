@@ -157,6 +157,37 @@ export function controlTierFor(runtime: string): ControlTier | null {
   return (CONTROL_TIERS as Readonly<Record<string, ControlTier>>)[runtime] ?? null;
 }
 
+/**
+ * How long a session has, from its first turn, to report itself, on a runtime that declares no window of
+ * its own: 60 seconds. The process is a large program starting cold, and a loaded host has been observed
+ * holding a trivial invocation of one past ten. Too short turns a slow machine into a spurious outage.
+ */
+export const DEFAULT_START_WINDOW_MS = 60_000;
+
+/**
+ * The runtimes whose start window is not the default. opencode's open loads its SDK and creates its whole
+ * server in a process of the session's own, then waits for the server's plugins: on a loaded host that
+ * open has been seen to outlast 60 seconds and still finish.
+ */
+const START_WINDOWS: Readonly<Record<string, number>> = {
+  [OPENCODE_RUNTIME]: 180_000,
+};
+
+/** How far below its runtime's start window a native open's budget ends, so the open names its step first. */
+export const OPEN_BUDGET_MARGIN_MS = 10_000;
+
+/** The start window of a session on `runtime`: its runtime's own, or `DEFAULT_START_WINDOW_MS`. */
+export function startWindowFor(runtime: string): number {
+  return Object.hasOwn(START_WINDOWS, runtime)
+    ? (START_WINDOWS[runtime] ?? DEFAULT_START_WINDOW_MS)
+    : DEFAULT_START_WINDOW_MS;
+}
+
+/** How long a native session's open on `runtime` may take in all: its start window less the margin. */
+export function openBudgetFor(runtime: string): number {
+  return startWindowFor(runtime) - OPEN_BUDGET_MARGIN_MS;
+}
+
 /** The runtime a session request names: its own `runtime`, or `DEFAULT_RUNTIME` when it names none. */
 export function runtimeOf(request: { readonly runtime?: string } | null | undefined): string {
   return request?.runtime ?? DEFAULT_RUNTIME;

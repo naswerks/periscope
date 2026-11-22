@@ -605,6 +605,9 @@ export function runServe(views: ServeViews, deps: ServeDeps): ServeOutcome {
   for (const listed of endpoints?.unmappedAliases ?? []) {
     report({ kind: 'endpoint-aliases-unmapped', endpoint: listed.endpoint, aliases: listed.members }, hold);
   }
+  for (const listed of endpoints?.windowless ?? []) {
+    report({ kind: 'endpoint-windows-unstated', endpoint: listed.endpoint, models: listed.members }, hold);
+  }
 
   // The one line status prints whole, from the same description, so the two cannot disagree.
   const reading = readConfigFile(raw);
@@ -1091,6 +1094,14 @@ export function report(event: HostEvent, log: Logger): void {
         'endpoint',
         `${event.endpoint}: ${event.members.join(', ')} ignored`,
         'no runtime that reaches this endpoint reads it',
+      );
+    case 'endpoint-windows-unstated':
+      // A Codex model with no window compacts where Codex's own reading of the id says: said once, so a
+      // session that outgrows the endpoint's real window is not the first anyone hears of it.
+      return log(
+        'endpoint',
+        `${event.endpoint}: ${event.models.join(', ')} with no window`,
+        'a Codex session on one runs on the window Codex assumes for the id; state one in "modelWindows" or "contextWindow"',
       );
     case 'runtime-catalog':
       // A runtime beside Claude, said once: what the hello lists for it, and what is wrong, if anything.

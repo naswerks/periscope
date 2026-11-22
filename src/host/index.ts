@@ -75,6 +75,7 @@ export { canonicalPath } from './canonical-path.js';
 // applied to a session that names one.
 export type {
   EndpointContextWindow,
+  EndpointModelWindow,
   ModelAliasTier,
   ModelEndpoint,
   ModelEndpointsReadOptions,

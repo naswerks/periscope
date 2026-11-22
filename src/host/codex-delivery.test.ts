@@ -458,8 +458,93 @@ test('control: an endpoint the Codex runtime does not route ends the open by nam
   );
   const route = codexEndpointRoutes([{ ...ENDPOINT, contextWindow: { autoCompactWindow: 200000 } }])[0];
   assert.ok(route !== undefined);
-  assert.equal(codexProviderConfig(route)['model_auto_compact_token_limit'], 200000);
-  assert.equal('model_context_window' in codexProviderConfig(route), false);
+  assert.equal(codexProviderConfig(route, null)['model_auto_compact_token_limit'], 200000);
+  assert.equal('model_context_window' in codexProviderConfig(route, null), false);
+});
+
+/** An endpoint listing two models, one with a window of its own, beside the endpoint's. */
+const WINDOWED: ModelEndpoint = {
+  ...ENDPOINT,
+  models: ['qwen/qwen3-coder', 'deepseek-v3'],
+  contextWindow: { maxContextTokens: 128000 },
+  modelWindows: { 'qwen/qwen3-coder': { maxContextTokens: 262144, autoCompactWindow: 180000 } },
+};
+
+const windowKeys = (config: JsonObject): JsonObject =>
+  Object.fromEntries(
+    Object.entries(config).filter(
+      ([key]) => key === 'model_context_window' || key === 'model_auto_compact_token_limit',
+    ),
+  );
+
+test("a model's own window beats the endpoint's, and both its keys are stated", () => {
+  const route = codexEndpointRoutes([WINDOWED])[0];
+  assert.ok(route !== undefined);
+  assert.deepEqual(windowKeys(codexProviderConfig(route, 'qwen/qwen3-coder')), {
+    model_context_window: 262144,
+    model_auto_compact_token_limit: 180000,
+  });
+});
+
+test("a model with no window of its own, or no model named, opens on the endpoint's", () => {
+  const route = codexEndpointRoutes([WINDOWED])[0];
+  assert.ok(route !== undefined);
+  assert.deepEqual(windowKeys(codexProviderConfig(route, 'deepseek-v3')), { model_context_window: 128000 });
+  assert.deepEqual(windowKeys(codexProviderConfig(route, null)), { model_context_window: 128000 });
+  assert.deepEqual(
+    windowKeys(codexProviderConfig(route, 'constructor')),
+    { model_context_window: 128000 },
+    'a name the object inherits is no window of its own',
+  );
+});
+
+test('no window anywhere states neither key, and Codex assumes its own', () => {
+  const route = codexEndpointRoutes([{ ...WINDOWED, contextWindow: null, modelWindows: {} }])[0];
+  assert.ok(route !== undefined);
+  assert.deepEqual(windowKeys(codexProviderConfig(route, 'qwen/qwen3-coder')), {});
+  const bare = codexEndpointRoutes([{ ...ENDPOINT, contextWindow: null }])[0];
+  assert.ok(bare !== undefined);
+  assert.deepEqual(
+    windowKeys(codexProviderConfig(bare, 'deepseek-v3')),
+    {},
+    'an endpoint with no modelWindows',
+  );
+});
+
+test('an endpoint window of both forms states both keys', () => {
+  const route = codexEndpointRoutes([
+    { ...ENDPOINT, contextWindow: { maxContextTokens: 262144, autoCompactWindow: 180000 } },
+  ])[0];
+  assert.ok(route !== undefined);
+  assert.deepEqual(windowKeys(codexProviderConfig(route, 'deepseek-v3')), {
+    model_context_window: 262144,
+    model_auto_compact_token_limit: 180000,
+  });
+});
+
+test("a thread opens with the window of the model the session names, or of the catalog's default when it names none", async () => {
+  const windowAt = async (endpoint: ModelEndpoint, model: string | null): Promise<JsonObject> => {
+    const session = started(
+      { env: { PATH: 'p', ...codexEndpointEnv(endpoint) }, model },
+      { endpoint: 'deepseek.v3', routes: codexEndpointRoutes([endpoint]) },
+    );
+    await opened(session);
+    const keys = windowKeys(threadStart(session)['config'] as JsonObject);
+    session.process.close();
+    await session.ended;
+    return keys;
+  };
+  assert.deepEqual(await windowAt(WINDOWED, 'qwen/qwen3-coder'), {
+    model_context_window: 262144,
+    model_auto_compact_token_limit: 180000,
+  });
+  assert.deepEqual(await windowAt(WINDOWED, null), { model_context_window: 128000 }, 'the default has none');
+  const forTheDefault: ModelEndpoint = {
+    ...WINDOWED,
+    models: [...WINDOWED.models, 'gpt-6-sol'],
+    modelWindows: { 'gpt-6-sol': { maxContextTokens: 400000 } },
+  };
+  assert.deepEqual(await windowAt(forTheDefault, null), { model_context_window: 400000 });
 });
 
 // ---------------------------------------------------------------------------

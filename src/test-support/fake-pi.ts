@@ -15,7 +15,8 @@
  * - A run is `agent_start`, the user's `message_end`, then for each scripted call an assistant
  *   `message_end` carrying it, `tool_execution_start` (before the handlers), the handlers, and
  *   `tool_execution_end`; then the answer, streamed as one text `message_update` and ended by its
- *   `message_end`, and `agent_settled`.
+ *   `message_end`, and `agent_settled`. Each assistant message's usage carries the call's cost, as pi 1.5.2
+ *   writes it (`usage.cost.total`).
  * - `abort` aborts the run's signal and answers once the run has settled.
  * - The `bash` command goes through the `user_bash` handlers, and a throw refuses it.
  * - Closing stdin ends the process.
@@ -70,6 +71,10 @@ export interface FakePiOptions {
   readonly loadNoExtension?: boolean;
   /** End at start, writing this to stderr, as pi does when it cannot start. */
   readonly startFailure?: { readonly stderr: string; readonly code: number };
+  /** Commands never answered, by type. */
+  readonly silent?: readonly string[];
+  /** A run never settles: its calls and its answer are written, and no `agent_settled`. */
+  readonly neverSettles?: boolean;
   /** Answer every prompt with `success: false` and this error. */
   readonly promptError?: string;
   /** The answer's message ends on an error with this text. */
@@ -311,6 +316,7 @@ export class FakePiCli {
   }
 
   async #handle(line: JsonObject): Promise<void> {
+    if (this.#options.silent?.includes(word(line['type'])) === true) return;
     switch (line['type']) {
       case 'get_state':
         this.#answer(line, {
@@ -420,7 +426,7 @@ export class FakePiCli {
             ],
             model: this.#model.id,
             provider: this.#model.provider,
-            usage: { input: 10, output: 5, cacheRead: 3, cacheWrite: 0 },
+            usage: { input: 10, output: 5, cacheRead: 3, cacheWrite: 0, cost: { total: 0.0001 } },
             stopReason: 'toolUse',
           },
         });
@@ -496,6 +502,7 @@ export class FakePiCli {
             output: usage.output,
             cacheRead: usage.cacheRead,
             cacheWrite: usage.cacheWrite,
+            cost: { total: usage.cost },
           },
           stopReason: signal.aborted ? 'aborted' : failed === undefined ? 'stop' : 'error',
           ...(failed === undefined ? {} : { errorMessage: failed }),
@@ -503,7 +510,7 @@ export class FakePiCli {
       });
       prompt = signal.aborted ? undefined : this.#queue.shift();
     }
-    this.#send({ type: 'agent_settled', aborted: signal.aborted });
+    if (this.#options.neverSettles !== true) this.#send({ type: 'agent_settled', aborted: signal.aborted });
     this.#running = null;
     this.#abort = null;
   }

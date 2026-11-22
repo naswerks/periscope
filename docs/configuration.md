@@ -310,18 +310,19 @@ helper command:
 }
 ```
 
-| Member          | Meaning                                                                                                                                                                                                                                                                                                                   |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`          | What a `session_new` names the endpoint by, and what the hello lists. Letters, digits, `.`, `_` and `-`, at most 64; unique in the file, ignoring case.                                                                                                                                                                   |
-| `wireApi`       | The API the endpoint speaks: `anthropic-messages`, `openai-responses` or `openai-chat`.                                                                                                                                                                                                                                   |
-| `runtimes`      | The runtimes that may reach it. Each must speak `wireApi`: Claude speaks `anthropic-messages`, Codex `openai-responses`.                                                                                                                                                                                                  |
-| `baseUrl`       | Where the agent's model calls go, as an `http` or `https` URL. Never in the hello.                                                                                                                                                                                                                                        |
-| `credential`    | Exactly one of `{ "env": NAME }`, `{ "file": PATH }` or `{ "helper": { "command": PATH, "args": [...] } }` (below). Required.                                                                                                                                                                                             |
-| `models`        | The model ids a session may name on the endpoint, as the agent sends them, a `[1m]` suffix included where the vendor documents one.                                                                                                                                                                                       |
-| `modelAliases`  | The model each tier (`opus`, `sonnet`, `haiku`, `fable`) resolves to on the endpoint, each one of `models`. The hello lists the mapped tiers as model ids too. Read only on an endpoint Claude reaches.                                                                                                                   |
-| `contextWindow` | Optional. `{ "autoCompactWindow": N }` (100000 to 1000000 tokens), or `{ "maxContextTokens": N }`, in the form the vendor documents; never both.                                                                                                                                                                          |
-| `env`           | Optional. Up to 32 more variables for sessions on the endpoint, such as `API_TIMEOUT_MS`, `CLAUDE_CODE_EFFORT_LEVEL` or `CLAUDE_CODE_SUBAGENT_MODEL`. Not a variable the members set, and not one the host strips from every session.                                                                                     |
-| `firstParty`    | Optional, default `false`. `true` marks Anthropic's own route, where a Claude model id may be named. It changes which model ids may be named, never how the credential is sent: the key always reaches the agent as `ANTHROPIC_AUTH_TOKEN`, the bearer form. Never in the hello. Read only on an endpoint Claude reaches. |
+| Member          | Meaning                                                                                                                                                                                                                                                                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`          | What a `session_new` names the endpoint by, and what the hello lists. Letters, digits, `.`, `_` and `-`, at most 64; unique in the file, ignoring case.                                                                                                                                                                                  |
+| `wireApi`       | The API the endpoint speaks: `anthropic-messages`, `openai-responses` or `openai-chat`.                                                                                                                                                                                                                                                  |
+| `runtimes`      | The runtimes that may reach it. Each must speak `wireApi`: Claude speaks `anthropic-messages`, Codex `openai-responses`.                                                                                                                                                                                                                 |
+| `baseUrl`       | Where the agent's model calls go, as an `http` or `https` URL. Never in the hello.                                                                                                                                                                                                                                                       |
+| `credential`    | Exactly one of `{ "env": NAME }`, `{ "file": PATH }` or `{ "helper": { "command": PATH, "args": [...] } }` (below). Required.                                                                                                                                                                                                            |
+| `models`        | The model ids a session may name on the endpoint, as the agent sends them, a `[1m]` suffix included where the vendor documents one.                                                                                                                                                                                                      |
+| `modelAliases`  | The model each tier (`opus`, `sonnet`, `haiku`, `fable`) resolves to on the endpoint, each one of `models`. The hello lists the mapped tiers as model ids too. Read only on an endpoint Claude reaches.                                                                                                                                  |
+| `contextWindow` | Optional. `{ "autoCompactWindow": N }` or `{ "maxContextTokens": N }`, in the form the vendor documents. On an endpoint Claude reaches, exactly one, and `autoCompactWindow` is 100000 to 1000000 tokens. On any other, both may be stated: the context size, and the point at or below it where the agent compacts.                     |
+| `modelWindows`  | Optional. Read by Codex alone: `{ "<model id>": { "maxContextTokens": N, "autoCompactWindow": N } }`, each key one of `models`, `autoCompactWindow` optional and at most `maxContextTokens`. A Codex session takes its model's entry ahead of `contextWindow`. On an endpoint Codex does not reach it is ignored, and the start says so. |
+| `env`           | Optional. Up to 32 more variables for sessions on the endpoint, such as `API_TIMEOUT_MS`, `CLAUDE_CODE_EFFORT_LEVEL` or `CLAUDE_CODE_SUBAGENT_MODEL`. Not a variable the members set, and not one the host strips from every session.                                                                                                    |
+| `firstParty`    | Optional, default `false`. `true` marks Anthropic's own route, where a Claude model id may be named. It changes which model ids may be named, never how the credential is sent: the key always reaches the agent as `ANTHROPIC_AUTH_TOKEN`, the bearer form. Never in the hello. Read only on an endpoint Claude reaches.                |
 
 **Credentials** are resolved once, at start, and held in memory: a rotated key takes a restart.
 
@@ -346,10 +347,10 @@ endpoint does not map (`default`, `best`, `opusplan`, an unmapped `fable`, with 
 refused `model-endpoint-mismatch`, at the open and on a later `session_configure`. A session that
 names no model is not refused; every such endpoint maps the three tiers the agent works on.
 
-**The window.** Vendors document one of two forms. A `[1m]` suffix on a model id tells the agent the
-model holds a million tokens, and `autoCompactWindow` says where it compacts; `maxContextTokens` tells
-it the window of an id it does not know. A `[1m]` id beside `maxContextTokens` is refused, because
-the suffix overrides the stated window.
+**The window**, on an endpoint Claude reaches. Vendors document one of two forms. A `[1m]` suffix
+on a model id tells the agent the model holds a million tokens, and `autoCompactWindow` says where it
+compacts; `maxContextTokens` tells it the window of an id it does not know. A `[1m]` id beside
+`maxContextTokens` is refused, because the suffix overrides the stated window.
 
 **What a session on an endpoint is spawned with**, after the controller's own literals, so none of
 them can be overridden from the link:
@@ -363,6 +364,14 @@ them can be overridden from the link:
 - `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, which keeps the credential out of the environments of the
   commands, hooks and stdio tool servers the agent starts;
 - the entry's `env`.
+
+**The permission mode on an endpoint.** With `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` set, the agent CLI runs
+in its `default` permission mode: a Claude session on an endpoint that asks for `bypassPermissions`
+runs in `default`, and the mode it reports, the init's and so the session's facts and receipt, says
+`default`. The CLI says why on its stderr (`Permission mode forced to default`), which the host does not
+report. Every call still reaches this host's gate, which decides it as in any other mode. The host keeps
+the switch, since it is what keeps the endpoint's key out of what the agent starts, and does not refuse
+the mode asked for.
 
 Nothing else is set or blanked: no other model-route variable reaches a session, because the host's
 inherited environment carries none and the floor refuses them on the controller's lanes. A user-tier
@@ -383,8 +392,9 @@ for minutes before it fails; `CLAUDE_CODE_MAX_RETRIES` in the entry's `env` lowe
   "runtimes": ["codex"],
   "baseUrl": "https://gateway.example/v1",
   "credential": { "env": "GATEWAY_API_KEY" },
-  "models": ["gpt-6-sol"],
-  "contextWindow": { "maxContextTokens": 400000 }
+  "models": ["gpt-6-sol", "open-coder"],
+  "contextWindow": { "maxContextTokens": 400000 },
+  "modelWindows": { "open-coder": { "maxContextTokens": 262144, "autoCompactWindow": 180000 } }
 }
 ```
 
@@ -398,8 +408,18 @@ for minutes before it fails; `CLAUDE_CODE_MAX_RETRIES` in the entry's `env` lowe
   which the provider reads (`env_key`), and the entry's `env` beside it. Every one of those names is
   kept out of the environment the agent's shell commands run with (`shell_environment_policy.exclude`,
   by exact name). `PERISCOPE_CODEX_ENDPOINT_KEY` is beneath the env floor: no controller can set it.
-- `contextWindow` becomes Codex's: `maxContextTokens` its `model_context_window`, the window of a
-  model it does not know, and `autoCompactWindow` its `model_auto_compact_token_limit`.
+- The window becomes Codex's: `maxContextTokens` its `model_context_window`, the window of a model it
+  does not know, and `autoCompactWindow` its `model_auto_compact_token_limit`, the point it compacts
+  at; a window stating both sets both. It is the window of the model the session opens on, the one it
+  names or Codex's default when it names none: that model's entry in `modelWindows`, else the
+  endpoint's `contextWindow`, else nothing, and the session runs on the window Codex itself assumes for
+  the id. It is set once, in the thread's config, so a model switch later in the session keeps the
+  window the session opened with. A model listed with neither is named at start, once per endpoint, as
+  an `[endpoint]` line.
+- State the window the provider lets the input fill, not the model's nominal size. A provider that
+  holds part of the window back for the reply leaves the input less, and an agent told the whole
+  window compacts too late or never: for a 262144-token model whose provider reserves 65536 tokens for
+  output, state `"maxContextTokens": 196608`, or the full size with an `autoCompactWindow` below 196608.
 - Claude's rules do not apply: no model tier is mapped, any model id may be listed, and
   `model-endpoint-mismatch` is never raised. `modelAliases` and `firstParty` on such an endpoint are
   ignored, and the start says so once, as an `[endpoint]` line naming them.
@@ -589,9 +609,11 @@ lines on stdin and stdout, and the hello's `agents` lists pi after Claude, Codex
   read: an HTTP server's headers beside its URL, written so pi expands nothing in them, and a stdio
   server's command. Their tools are named `mcp__<server>__<tool>` and asked about like every other
   call. An SSE server is refused `mcp-descriptor-invalid`.
-- **Spend.** pi states a session's running totals: its tokens, and its cost in US dollars at its own
-  catalogue's rates, never a bill. They cover every entry of the session's file, compacted history and
-  failed retries included, so a total can exceed what the visible conversation used.
+- **Spend.** pi states each model call's tokens and cost as the call ends, and a session's running totals
+  after each run: its tokens, and its cost in US dollars at its own catalogue's rates, never a bill. Each
+  call is filed as it is made, so a run that never settles still reports what it spent. The totals cover
+  every entry of the session's file, compacted history and failed retries included, so a total can exceed
+  what the visible conversation used.
 
 ## Copilot
 
@@ -712,6 +734,17 @@ using`), which Node 22 cannot parse, so on Node 22 the SDK cannot load at all. T
   from being offered. What keeps it from fetching its model catalogue, and from reading a project's
   configuration or a `.claude` folder, is an option the server is created with; what keeps it from
   looking for an update is the session's configuration.
+- **The open is bounded as a whole.** An opencode session has 180 seconds from its first turn to report
+  itself, its start window, where a session on any other runtime has 60: its open loads the SDK and
+  creates the whole server in a process of the session's own, then waits for the server's plugins, and on
+  a loaded host that has taken more than 60 seconds and finished. From the host process's start to the
+  read-back's last answer the open has 170 seconds of it (`OPENCODE_OPEN_DEADLINE_MS`), ten below the
+  window, and each step is given what is left: the host process's own open, `model.list`,
+  `session.create` (or the resume's read), the session's environment and the read-back. An open that
+  runs it out ends the session `runtime-unavailable`, naming the step:
+  `the opencode open did not finish session.create within 170000ms`. A failure of the open or of the
+  host process carries the last line the host process wrote to its stderr, with the endpoint's key never
+  in it.
 - **The home is the runner's own.** Each session runs with a fresh home under `<base>/sessions`, so the
   operator's own opencode directories (their sign-ins, their settings, their sessions) are never what a
   session runs from. The home is removed when the session closes; its database moves to
@@ -719,7 +752,10 @@ using`), which Node 22 cannot parse, so on Node 22 the SDK cannot load at all. T
   crashed, or was killed) leaves the home behind. Each home says which process made it and which
   session it holds (`owner.json`), and the next opencode session to open clears every home whose
   process is gone: its database is kept for a resume first, then the home is removed. A home whose
-  process is still there is another live session's and is left alone.
+  process is still there is another live session's and is left alone. A home whose removal fails part
+  way, a file of it still held open, is given its owner file again marked as being removed, and the next
+  session to open removes it whoever made it; nothing is kept from it, since its database was kept before
+  the removal began.
 - **Endpoints.** An opencode session reaches a model only through an endpoint whose `runtimes` name
   `opencode`, over `openai-chat`: the session's one provider, `endpoint-<name>`, and the only one its
   configuration allows. The key is read when the session opens and crosses into the host process with the
@@ -785,9 +821,11 @@ The `[agent]` line comes from the model catalog the host reads before it dials (
 fails it says `the hello carries no model catalog` with the reason, and the host dials anyway. A host
 that declares model endpoints prints `[endpoints] 2 model endpoint(s) declared: deepseek, zai`, names
 only, and `[endpoint] deepseek: default listed and not mapped` for an agent alias an endpoint lists as
-a model without mapping it, which a session naming it is refused (`model-endpoint-mismatch`). A host
-offering Codex prints `[codex] codex 0.169.0, 6 model(s) in the hello, control tier
-intercepted-with-residual`, or `[codex] codex is listed unavailable` with the reason, and then whether
+a model without mapping it, which a session naming it is refused (`model-endpoint-mismatch`), and
+`[endpoint] gateway: open-coder with no window` for a model an endpoint Codex reaches lists with no
+window of its own and no `contextWindow`. A host offering Codex prints `[codex] codex 0.169.0, 6
+model(s) in the hello, control tier intercepted-with-residual`, or `[codex] codex is listed
+unavailable` with the reason, and then whether
 periscope's hook was written to the runner's home and answered its probe. A host offering Qwen Code
 prints `[qwen-code] qwen-code 0.27.3, 0 model(s) in the hello, control tier intercepted-with-residual`,
 or `[qwen-code] qwen-code is listed unavailable` with the reason. A host offering pi prints `[pi] pi

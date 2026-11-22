@@ -75,6 +75,10 @@ export interface FakeOpencodeOptions {
   readonly resumedAgent?: string;
   /** The open fails with these words. */
   readonly connectFailure?: string;
+  /** The host process's open is never answered: it is refused once its deadline passes, as the relay refuses it. */
+  readonly openHangs?: boolean;
+  /** Lines the host process writes to its stderr as it opens. */
+  readonly stderr?: readonly string[];
   /** Calls that are refused, by method, with these words. */
   readonly failing?: Readonly<Record<string, string>>;
   /** Calls that are never answered: each is refused once its deadline passes, as the transport refuses it. */
@@ -500,7 +504,23 @@ export function fakeOpencode(options: FakeOpencodeOptions = {}): {
   const connect: ConnectOpencode = (opened) => {
     record.connects.push(opened);
     record.lifecycle.push('connect');
+    for (const line of options.stderr ?? []) opened.onStderr?.(line);
+    // A refused open ends the host process before the relay answers, as the relay's close does.
+    if (options.openHangs === true) {
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          opened.onExit({ code: 0, signal: null, error: null });
+          resolve(
+            refuse(
+              'rpc-request-timed-out',
+              `the opencode host process did not open: open met no answer within ${opened.openDeadlineMs} ms`,
+            ),
+          );
+        }, opened.openDeadlineMs);
+      });
+    }
     if (options.connectFailure !== undefined) {
+      opened.onExit({ code: 1, signal: null, error: null });
       return Promise.resolve(
         refuse('runtime-unavailable', `the opencode host process did not open: ${options.connectFailure}`),
       );

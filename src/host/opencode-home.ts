@@ -70,9 +70,37 @@ export interface OpencodeSessionHome {
 
 /**
  * The file in a session's home that says whose it is: the process that made it and, once known, the session
- * its database holds. A home whose process is gone was left by a host that did not close it.
+ * its database holds. A home whose process is gone was left by a host that did not close it. A home whose
+ * removal failed part way, which may have taken this file with it, is given it again marked `removing`, so
+ * the next sweep clears it whoever made it.
  */
 export const OPENCODE_HOME_OWNER_FILE = 'owner.json';
+
+/** How a session's home is removed, whole; the file system's own by default. Throws when it could not be. */
+export type OpencodeHomeRemover = (home: string) => void;
+
+const NODE_HOME_REMOVER: OpencodeHomeRemover = (home) =>
+  rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+
+/**
+ * Mark a home whose removal failed for the next sweep: its owner file written again, saying it is being
+ * removed and naming no session, since its database was kept before the removal began. A home that is gone,
+ * or cannot be written, is left as it is.
+ */
+function markRemoving(home: string): void {
+  try {
+    if (!existsSync(home)) return;
+    writeFileSync(
+      join(home, OPENCODE_HOME_OWNER_FILE),
+      JSON.stringify({ pid: process.pid, removing: true }),
+      {
+        mode: 0o600,
+      },
+    );
+  } catch {
+    // A home that cannot be marked cannot be swept either; the failure is the caller's to report.
+  }
+}
 
 /** The files a session's database is, as SQLite keeps it: the database and its write-ahead log. */
 export const OPENCODE_DATABASE_FILES: readonly string[] = ['session.db', 'session.db-wal', 'session.db-shm'];
@@ -93,8 +121,14 @@ export function ensureOpencodeBase(base: string): Result<OpencodeBase> {
   return ok({ sessions, state });
 }
 
-/** Make one session's fresh home. Refuses with why it could not; nothing is left behind then. */
-export function createOpencodeSessionHome(base: string): Result<OpencodeSessionHome> {
+/**
+ * Make one session's fresh home. Refuses with why it could not; nothing is left behind then. `removeHome`
+ * removes it when the session ends.
+ */
+export function createOpencodeSessionHome(
+  base: string,
+  removeHome: OpencodeHomeRemover = NODE_HOME_REMOVER,
+): Result<OpencodeSessionHome> {
   const ensured = ensureOpencodeBase(base);
   if (!ensured.ok) return ensured;
   const home = join(ensured.value.sessions, randomUUID());
@@ -110,9 +144,10 @@ export function createOpencodeSessionHome(base: string): Result<OpencodeSessionH
   };
   const remove = (): Result<void> => {
     try {
-      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      removeHome(home);
       return ok(undefined);
     } catch (error) {
+      markRemoving(home);
       return refuse(
         'runtime-unavailable',
         `the session home ${home} could not be removed: ${error instanceof Error ? error.message : String(error)}`,
@@ -176,13 +211,16 @@ function processAlive(pid: number): boolean {
 /**
  * Clear the session homes a host left behind when it did not close them (it crashed, or was killed): each
  * home whose owner file names a process that is gone. Its database is kept for a resume first, where the
- * file names the session it holds; then the home is removed. A home whose process is still there is another
- * live session's and is left alone, and so is a directory with no owner file this host can read. Returns
- * what could not be done, in words.
+ * file names the session it holds; then the home is removed. A home whose removal failed part way, marked
+ * `removing`, is removed again, whoever made it, and nothing is kept from it. A home whose process is still
+ * there is another live session's and is left alone, and so is a directory with no owner file this host can
+ * read. A removal that fails here marks the home for the next sweep. Returns what could not be done, in
+ * words.
  */
 export function sweepOpencodeHomes(
   base: string,
   alive: (pid: number) => boolean = processAlive,
+  removeHome: OpencodeHomeRemover = NODE_HOME_REMOVER,
 ): {
   readonly kept: readonly string[];
   readonly removed: readonly string[];
@@ -200,14 +238,15 @@ export function sweepOpencodeHomes(
   }
   for (const entry of entries) {
     const home = join(sessions, entry);
-    let owner: { pid?: unknown; session?: unknown };
+    let owner: { pid?: unknown; session?: unknown; removing?: unknown };
     try {
       owner = JSON.parse(readFileSync(join(home, OPENCODE_HOME_OWNER_FILE), 'utf8')) as typeof owner;
     } catch {
       continue;
     }
-    if (typeof owner.pid !== 'number' || alive(owner.pid)) continue;
-    if (typeof owner.session === 'string') {
+    const unfinished = owner.removing === true;
+    if (!unfinished && (typeof owner.pid !== 'number' || alive(owner.pid))) continue;
+    if (!unfinished && typeof owner.session === 'string') {
       const carried = carryOpencodeStateOut(
         base,
         join(home, 'data', OPENCODE_DATABASE_FILES[0] ?? 'session.db'),
@@ -221,9 +260,10 @@ export function sweepOpencodeHomes(
       }
     }
     try {
-      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      removeHome(home);
       removed.push(home);
     } catch (error) {
+      markRemoving(home);
       problems.push(
         `the session home ${home}, which a host left behind, could not be removed: ${error instanceof Error ? error.message : String(error)}`,
       );

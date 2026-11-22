@@ -99,12 +99,13 @@ export const PiSessionStats = L({
 /** The answer to `get_available_models`. */
 export const PiAvailableModels = L({ models: z.array(PiModel) });
 
-/** A message's usage, as pi reports it per model call. */
+/** A message's usage, as pi reports it per model call: its tokens, and the cost pi states for the call. */
 export const PiUsage = L({
   input: count,
   output: count,
   cacheRead: count,
   cacheWrite: count,
+  cost: L({ total: count.optional() }).optional(),
 });
 
 /** One content block of a message. */

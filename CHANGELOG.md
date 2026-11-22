@@ -6,7 +6,71 @@ for no wire or API change, minor for a protocol bump (the previous version stays
 minor), an agent SDK pin bump or an additive API, major for a wire change outside the window or a
 removed export. The package version and the wire protocol version are separate numbers.
 
-## [Unreleased]
+## [1.12.0] - 2026-11-22
+
+Protocol 20, the window `[19, 20]`, as in 1.11.1: no wire member, payload kind or reason is added or
+changed. The public API adds the `EndpointModelWindow` type and the optional `ModelEndpoint.modelWindows`;
+nothing is removed. A session's start window is now its runtime's own, and every native open is bounded
+as a whole below it.
+
+- Added: a model endpoint's `modelWindows`, the window of each model it lists, for Codex. An endpoint
+  stated one window for all its models, so a Codex session on a model whose provider holds part of its
+  window back for the reply was told the whole window and never compacted before the provider refused
+  the request. Each entry names a model the endpoint lists and states its `maxContextTokens`, with an
+  `autoCompactWindow` at most that size beside it or not; a model's entry wins over the endpoint's
+  `contextWindow`, and a model with neither opens with no window stated, as before, on the one Codex
+  assumes for the id. The window is the one of the model the thread opens on, the model named or the
+  catalog's default, and a later model switch keeps it. A model an endpoint Codex reaches lists with no
+  window is named at start as an `[endpoint]` line (`HostEvent` `endpoint-windows-unstated`,
+  `ModelEndpointsReading.windowless`), and `modelWindows` on an endpoint Codex does not reach is ignored
+  and said so, never refused. `EndpointModelWindow` is exported, and `ModelEndpoint.modelWindows` is
+  optional.
+- Changed: on an endpoint Claude does not reach, `contextWindow` may state both `maxContextTokens` and an
+  `autoCompactWindow` at most that size, and Codex is given both keys; and its `autoCompactWindow` is any
+  positive whole number of tokens, where it had to fall within the 100000 to 1000000 the agent CLI
+  accepts. An endpoint Claude reaches keeps exactly one form and that range.
+- Fixed: a native session's open is bounded as a whole, below its runtime's start window, and an open that
+  runs out names the step it was on. Each step of an opencode open had 90 seconds of its own while the start
+  window gave the whole open 60, so an open slower than the window ended with the start window's words
+  alone and the step's own failure was lost; the opens of Codex, Copilot and pi bounded each step alone
+  too, and their bounds added up past the window.
+- Changed: the start window is the runtime's own. It is 60 seconds, as before, on every runtime but
+  opencode, whose window is 180: its open loads the SDK and creates the whole server in a process of the
+  session's own, then waits for the server's plugins, and on a loaded host that has taken more than 60
+  seconds and finished. Each native open has its window less 10 seconds in all, each step given what is
+  left, at most its own bound: 170 seconds for opencode, 50 for Codex, Copilot and pi, and 50 for Qwen
+  Code's whole open, its `initialize`, where it had 60. An open that runs out ends `runtime-unavailable`,
+  naming the step: `the opencode open did not finish session.create within 170000ms`. Should the start
+  window end first, its words name the window, the step the open waits on and how long it has run:
+  `the agent did not report itself within 180000ms (opencode open: waiting on model.list, 178s in)`. An
+  embedder's `SessionRegistryOptions.startTimeoutMs` is still one window for every runtime.
+- Fixed: a failed opencode open, and an opencode host process that exits, carry the last line the host
+  process wrote to its stderr, the endpoint's key replaced wherever it appears in it. An open the host
+  process does not finish names why, never the exit the host process is ended with: that exit took the
+  failure's place, so a refused or timed-out open read `the opencode host process exited (exit code 0)`.
+- Fixed: an opencode session home whose removal failed part way is cleared by a later open. The removal
+  could take the home's owner file and then stop at a file still held open, and a home with no owner file
+  is never swept; the owner file is now written again, marked as being removed, and the next opencode
+  session to open removes the home whoever made it, keeping nothing from it.
+- Fixed: a pi session files the spend of each model call as it is made. Its only spend was the totals pi
+  is asked for once a run settles, so a session whose one run lasted until it closed reported none. Each assistant `message_end` that carries usage is now a `turn_record` of that call
+  (`turnScope: 'step'`, `totals` null), with its tokens and the cost pi 1.5.2 states for it
+  (`usage.cost.total`, `catalogue-estimated` in US dollars, or null and `unreported` where pi states none):
+  the shape Copilot's and opencode's step records already have. The totals after each run are unchanged.
+- Fixed: a Qwen Code session's first receipt of the CLI's own is sent even when the CLI found exactly
+  the skills handed over. A receipt was sent only when a member moved, and the source was not a member, so
+  a CLI that found what it was handed never sent one marked `runtime`. The CLI's context usage, whose
+  skills are that receipt, is now asked once at the first init, while its turn runs, as well as after each
+  result, so the receipt does not wait on the first turn's end.
+- Fixed: a Copilot session's receipt is the host's (`source: 'host'`) until the runtime says which skills
+  it loaded (`session.skills_loaded`), and the runtime's own from then. Every receipt was marked
+  `runtime`, the first one included, though its skills were the host's hand-over; the first receipt after
+  `session.skills_loaded` is sent even when it names exactly what was handed over.
+- Documents: `docs/configuration.md` says that a Claude session on a model endpoint that asks for
+  `bypassPermissions` runs in the agent CLI's `default` permission mode and reports `default`: the CLI
+  forces that mode while `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is set, which the host sets on every such
+  session to keep the endpoint's key out of what the agent starts. Every call still reaches the host's
+  gate.
 
 ## [1.11.1] - 2026-11-17
 

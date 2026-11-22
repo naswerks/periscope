@@ -55,7 +55,7 @@ export const PI_EVENT_COVERAGE = {
   },
   message_end: {
     handling: 'wired',
-    note: "a user message is the user_text item; an assistant message's text, thinking and toolCall blocks are agent_text (final null: pi marks no answer), thinking (summary false) and tool_call items, its model the model register, its usage's cacheRead the next usage sample's, and a stopReason of error the run's failure. The message carries no id of its own, so no fact names it as a source",
+    note: "a user message is the user_text item; an assistant message's text, thinking and toolCall blocks are agent_text (final null: pi marks no answer), thinking (summary false) and tool_call items, its model the model register, its usage's cacheRead the next usage sample's, and a stopReason of error the run's failure. An assistant message's usage is a turn_record of that model call: turnScope step, totals null, its input, output, cacheRead and cacheWrite, and usage.cost.total as the cost, catalogue-estimated in USD, or null and unreported where pi states none; a run that never settles still files each call. The message carries no id of its own, so no fact names it as a source",
   },
   tool_execution_start: {
     handling: 'wired',
@@ -173,7 +173,7 @@ export const PI_COMMAND_COVERAGE = {
   abort_bash: { handling: 'declined', note: NEVER_SENT },
   get_session_stats: {
     handling: 'wired',
-    note: "sent after each run settles: turn_record with totals = the session's tokens and cost as pi states them, costBasis catalogue-estimated (pi prices each call from its model catalogue, except that on an OpenRouter model it takes the cost OpenRouter reported for a call it accounted for, so a total can be partly billed), currency USD, turn and turnScope null, never summed. The totals span every entry of the session file: compacted history, abandoned branches, failed retries and compaction calls, so they can exceed what the visible conversation used, and a resumed or forked session's include the source session's. inputTokens = tokens.input, which pi counts without the cached input (cacheRead and cacheWrite are its own members). reasoningTokens null: the totals carry none. contextUsage is the usage sample (mainThread true)",
+    note: "sent after each run settles: turn_record with totals = the session's tokens and cost as pi states them, beside the step record each model call files, costBasis catalogue-estimated (pi prices each call from its model catalogue, except that on an OpenRouter model it takes the cost OpenRouter reported for a call it accounted for, so a total can be partly billed), currency USD, turn and turnScope null, never summed. The totals span every entry of the session file: compacted history, abandoned branches, failed retries and compaction calls, so they can exceed what the visible conversation used, and a resumed or forked session's include the source session's. inputTokens = tokens.input, which pi counts without the cached input (cacheRead and cacheWrite are its own members). reasoningTokens null: the totals carry none. contextUsage is the usage sample (mainThread true)",
   },
   export_html: { handling: 'declined', note: NEVER_SENT },
   switch_session: {

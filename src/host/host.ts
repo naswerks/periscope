@@ -1408,6 +1408,17 @@ export type HostEvent =
       readonly kind: 'endpoint-aliases-unmapped';
       readonly endpoint: string;
       readonly aliases: readonly string[];
+    }
+  /**
+   * Models an operator's model endpoint that Codex reaches lists with no window, neither their own in
+   * `modelWindows` nor the endpoint's `contextWindow`, so a Codex session on one runs on the window
+   * Codex itself assumes for the id. Once per such endpoint, where the endpoints file is read; never a
+   * refusal.
+   */
+  | {
+      readonly kind: 'endpoint-windows-unstated';
+      readonly endpoint: string;
+      readonly models: readonly string[];
     };
 
 /**
@@ -1990,11 +2001,11 @@ export class PeriscopeHost {
     const sent = composed.session.prompt(text);
     if (!sent.ok) return this.#refuse(sessionKey, sent.refusal);
     composed.observer.promptSubmitted('the controller sent a turn');
-    // The first turn starts the agent, so it starts the start window too (`#startArmed`). The wait settles
-    // as a result and never throws; the session's own end is what reaches the controller.
+    // The first turn starts the agent, so it starts its runtime's start window too (`#startArmed`). The wait
+    // settles as a result and never throws; the session's own end is what reaches the controller.
     if (composed.session.state === 'provisioning' && !this.#startArmed.has(composed.session)) {
       this.#startArmed.add(composed.session);
-      void composed.session.whenLive(this.#registry.startTimeoutMs);
+      void composed.session.whenLive(this.#registry.startTimeoutMsFor(composed.session.runtime));
     }
   }
 

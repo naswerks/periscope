@@ -306,7 +306,8 @@ state lane ([gate.md](gate.md), the Qwen Code gate).
   prompt is a user line on stdin, held until the CLI answers `initialize` and bounded in the host;
   the model, mode and effort setters are control requests (`set_model`, `set_permission_mode`,
   `set_effort`), applied as they arrive; thinking has no switch and is refused by name; an interrupt is
-  `interrupt`. After each `result` the host asks the CLI's context usage (`get_context_usage`). A
+  `interrupt`. After the first init, while its turn runs, and after each `result` the host asks the CLI's
+  context usage (`get_context_usage`). A
   request member Qwen Code cannot honour (Claude's settings tiers, its hooks and spawner,
   `forwardSubagentText`, a store) is refused `request-key-unsupported`, naming it.
 - The gate (`createQwenSessionGate`, `src/host/qwen-gate.ts`) answers each `can_use_tool` through the
@@ -499,7 +500,9 @@ control tier is `intercepted-with-residual` ([gate.md](gate.md), the opencode ga
   The open runs in order: the Node tested and the install checked, the home made (and a kept database copied
   in), the host process started and its server created, the plugins awaited (`model.list`), the session
   created with this host's rules (or read, or forked), its shell's environment set, the posture read back
-  (`opencodeReadBackProblem`); only then is the session ready and the first prompt sent. A prompt is queued
+  (`opencodeReadBackProblem`); only then is the session ready and the first prompt sent. The whole open is
+  one budget (`OpenBudget`, `src/host/open-budget.ts`), each step given what is left of it, and an open
+  that runs it out names the step it was on. A prompt is queued
   behind any run, held until the open and bounded in the host. The model setter is the server's own call,
   the permission mode is the agent, and an interrupt is the server's. Each subagent's session is given the
   shell's environment as it is created, and each form the server raises is cancelled. Close interrupts the

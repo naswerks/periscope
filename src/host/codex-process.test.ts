@@ -15,6 +15,7 @@ import {
   codexRequestProblem,
   startCodexProcess,
 } from './codex-process.js';
+import type { CodexRuntimeConfig } from './codex-process.js';
 import type { CodexMessage } from './codex-wire.js';
 
 const HOME = 'C:/runner/codex-home';
@@ -59,6 +60,7 @@ function started(
   overrides: Partial<AgentProcessRequest> = {},
   options: Partial<FakeCodexOptions> = {},
   writeRoots: readonly string[] = [],
+  runtime: Partial<CodexRuntimeConfig> = {},
 ): Started {
   const fake = fakeCodex({ codexHome: HOME, ...options });
   const degrades: string[] = [];
@@ -71,6 +73,7 @@ function started(
       spawn: fake.spawn,
       killTree: () => Promise.resolve(),
       closeGraceMs: 30,
+      ...runtime,
     },
     (detail) => degrades.push(detail),
     null,
@@ -682,4 +685,26 @@ test('a closed thread ends the process with it', async () => {
 
 test('the fake catalog the tests run on has a default model, a model that takes none, and a hidden one', () => {
   assert.equal(FAKE_MODELS.filter((model) => model['isDefault'] === true).length, 1);
+});
+
+test('an open that runs its budget out ends the session naming the request it was on, and says what it waits on until then', async () => {
+  const session = started({}, { silent: ['thread/start'] }, [], { openDeadlineMs: 300 });
+  await until(
+    () => session.fake.server.requestsOf('thread/start').length === 1,
+    'the thread to be asked for',
+  );
+  assert.match(session.process.openStep?.() ?? '', /^Codex open: waiting on thread\/start, \d+s in$/);
+  assert.match(
+    String((await session.ended)?.message),
+    /^runtime-unavailable: the Codex open did not finish thread\/start within 300ms$/,
+  );
+  assert.equal(session.process.openStep?.() ?? null, null, 'an open that ended waits on nothing');
+});
+
+test('control: an open that finishes waits on nothing', async () => {
+  const session = started();
+  await opened(session);
+  assert.equal(session.process.openStep?.() ?? null, null);
+  session.process.close();
+  await session.ended;
 });
