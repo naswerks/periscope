@@ -6,7 +6,12 @@ for no wire or API change, minor for a protocol bump (the previous version stays
 minor), an agent SDK pin bump or an additive API, major for a wire change outside the window or a
 removed export. The package version and the wire protocol version are separate numbers.
 
-## [Unreleased]
+## [1.12.0] - 2026-11-22
+
+Protocol 20, the window `[19, 20]`, as in 1.11.1: no wire member, payload kind or reason is added or
+changed. The public API adds the `EndpointModelWindow` type and the optional `ModelEndpoint.modelWindows`;
+nothing is removed. A session's start window is now its runtime's own, and every native open is bounded
+as a whole below it.
 
 - Added: a model endpoint's `modelWindows`, the window of each model it lists, for Codex. An endpoint
   stated one window for all its models, so a Codex session on a model whose provider holds part of its
